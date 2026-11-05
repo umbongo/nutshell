@@ -38,7 +38,7 @@ int ui_demo_state_valid(const char *state)
 }
 
 /* States whose canned reply is long enough to push the Thinking disclosure
- * (right above it) off the top of the thread once chat_rebuild_display()
+ * (right above it) off the top of the thread once ai_chat_rebuild_display()
  * lands its usual scroll-to-bottom (src/ui/ai_chat.c's
  * ai_chat_apply_demo_extras()) -- these need to be pulled back to the top
  * afterwards so the gallery capture actually shows the disclosure instead
@@ -62,8 +62,8 @@ int ui_demo_scrolls_to_top(const char *state)
 }
 
 /* System prompt shared by every state -- index 0 of every conversation,
- * always skipped by the chat panel's replay (see ai_chat.c
- * chat_rebuild_display). Content doesn't matter for the screenshots; it
+ * always skipped by the chat panel's replay (see ai_chat_view.c
+ * ai_chat_rebuild_display). Content doesn't matter for the screenshots; it
  * just has to exist so the real turns line up at index >= 1 like a live
  * conversation. */
 static const char DEMO_SYSTEM_PROMPT[] =
@@ -315,7 +315,7 @@ static void build_executing(AiConversation *conv, ApprovalQueue *approval)
 
 /* ---------------------------------------------------------------------
  * "tool": a web_search tool call, and a truncated tool result. The
- * win32 replay (ai_chat.c chat_rebuild_display) shows the "using tool:"
+ * win32 replay (ai_chat_view.c ai_chat_rebuild_display) shows the "using tool:"
  * line for the call and a preview + "truncated to 1MB" note for a result
  * whose content is long enough that the 200-char preview actually cuts
  * it off.

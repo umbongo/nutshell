@@ -2391,7 +2391,7 @@ int test_inline_approval_blocks_send(void)
     /* Pending command batches (docs/superpowers/specs/
      * 2026-09-09-pending-command-batches.md, rule 1): a pending card never
      * blocks the input any more -- only a streaming reply or an active
-     * command dispatcher does. Simulate send_user_message's guard:
+     * command dispatcher does. Simulate ai_chat_send_user_message's guard:
      * if (!d || d->active_state->busy || d->dispatch_active) return; */
     int busy = 0;
     int dispatch_active = 0;

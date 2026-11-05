@@ -2,443 +2,12 @@
 #include <winsock2.h>   /* Must come before windows.h */
 #endif
 
-#include "ai_chat.h"
+#include "ai_chat_internal.h"
 
 #ifdef _WIN32
-
-#include "ai_prompt.h"
-#include "ai_tools.h"
-#include "ai_tool_web_search.h"
-#include "ai_tool_web_fetch.h"
-#include "ai_agentic.h"
-#include "ai_http.h"
-#include "ai_stream.h"
-#include "app_font.h"
-#include "ns_font.h"
-#include "ns_draw.h"
-#include "ns_tokens.h"
-#include "ns_scale.h"
-#include "ns_type.h"
-#include "ns_reduced_motion.h"
-#include "ns_hover.h"
-#include "ai_panel_layout.h"
-#include "text_lines.h"
-#include "secure_zero.h"
-#include "ai_panel_states.h"
-#include "settings_layout.h"
-#include "ui_theme.h"
-#include "themed_button.h"
-#include "custom_scrollbar.h"
-#include "edit_scroll.h"
-#include "term_extract.h"
-#include "profile_kind.h"
-#include "session_io.h"
-#include "resource.h"
-#include "ai_dock.h"
-#include "string_utils.h"
-#include "paste_filter.h"
-#include "chat_msg.h"
-#include "chat_thinking.h"
-#include "chat_activity.h"
-#include "chat_approval.h"
-#include "cmd_detail_dlg.h"
-#include "cmd_batch.h"
-#include "dispatch_line_clear.h"
-#include "dlog.h"
-#include "dlog_query.h"
-#include "chat_listview.h"
-#include "ui_demo.h"
-#include "icons.h"
-#include "dpi_util.h"
-#include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
-#include <string.h>
-#include <process.h>
-#include <richedit.h>
-#include <commctrl.h>
-#include <commdlg.h>
-#include <shlwapi.h>
-#include "base64.h"
-#include "json_validate.h"
-
-/* GDI+ flat API declarations (C-compatible -- no C++ headers) */
-typedef int GpStatus;
-typedef void GpBitmap;
-typedef void GpImage;
-typedef struct { UINT32 Data1; UINT16 Data2; UINT16 Data3; BYTE Data4[8]; } GPCLSID;
-typedef struct { UINT32 Num; UINT32 Size; } EncoderParameters;
-
-extern GpStatus __stdcall GdiplusStartup(ULONG_PTR *token, const void *input,
-                                          void *output);
-extern void     __stdcall GdiplusShutdown(ULONG_PTR token);
-extern GpStatus __stdcall GdipCreateBitmapFromHBITMAP(HBITMAP hbm, HPALETTE hpal,
-                                                       GpBitmap **bitmap);
-extern GpStatus __stdcall GdipSaveImageToStream(GpImage *image, IStream *stream,
-                                                 const GPCLSID *clsid,
-                                                 const EncoderParameters *params);
-extern GpStatus __stdcall GdipDisposeImage(GpImage *image);
-extern GpStatus __stdcall GdipGetImageWidth(GpImage *image, UINT *width);
-extern GpStatus __stdcall GdipGetImageHeight(GpImage *image, UINT *height);
-
-typedef struct {
-    UINT32 GdiplusVersion;
-    void *DebugEventCallback;
-    BOOL SuppressBackgroundThread;
-    BOOL SuppressExternalCodecs;
-} GdiplusStartupInput;
-
-/* PNG encoder CLSID: {557CF406-1A04-11D3-9A73-0000F81EF32E} */
-static const GPCLSID CLSID_PNG = {
-    0x557CF406, 0x1A04, 0x11D3,
-    {0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E}
-};
 
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
-
-#define IDC_CHAT_DISPLAY  4001
-#define IDC_CHAT_INPUT    4002
-#define IDC_CHAT_SEND     4003
-#define IDC_CHAT_NEWCHAT  4004
-#define IDC_CHAT_PERMIT   4005
-#define IDC_CHAT_THINKING 4006
-/* 4007/4008 (IDC_CONTEXT_BAR/IDC_CONTEXT_LABEL) retired with the boxed
- * context label -- the meter is painted in the status line now. */
-#define IDC_SESSION_LABEL 4009
-#define IDC_CHAT_SAVE     4010
-#define IDC_CHAT_ALLOW    4011
-#define IDC_THINKING_BOX  4014
-#define IDC_CHAT_DENY     4012
-#define IDC_CHAT_UNDOCK   4013
-#define IDC_CHAT_AUTOAPPROVE 4015  /* toggles the Auto-approve button */
-/* The level's absolute setter: post 4030 + stop to put the level on a
- * named stop. The integration harness drives the control through these
- * and 4015 (docs/superpowers/specs/2026-10-18-ai-auto-approve-button-
- * design.md section 2). */
-#define IDC_CHAT_POLICY_ALLOW_BASE 4030  /* 4030..4033: allowed = stop 0..3 */
-/* 4040..4044 set the old unattended marker. Retired 2026-10-18 with the
- * rail: they are swallowed without effect so a stale caller can never
- * fall through to another handler. */
-#define IDC_CHAT_POLICY_RETIRED_BASE 4040
-/* Empty/no-key/no-session state (ai_panel_states.h), posted by
- * chat_listview.c when the message list is empty -- see
- * chatlv_empty_state_hit()/on_lbuttondown() there (AI Assist Panel
- * task 4). IDC_CHAT_SUGGESTION_BASE + 0..2 are the three suggestion
- * chips (AI_STATE_EMPTY); IDC_CHAT_STATE_ACTION is the single action
- * button (AI_STATE_NO_KEY/AI_STATE_NO_SESSION). */
-#define IDC_CHAT_SUGGESTION_BASE 4020  /* 4020..4022 */
-#define IDC_CHAT_STATE_ACTION    4023
-
-#define WM_AI_RESPONSE   (WM_USER + 100)
-#define WM_AI_CONTINUE   (WM_USER + 101)
-#define WM_AI_STREAM     (WM_USER + 102)  /* wParam: 0=thinking, 1=content; lParam: char* */
-#define WM_AI_TOOL_MSG   (WM_USER + 103)  /* wParam: ChatItemType; lParam: heap char* text */
-/* Sent by the integration harness: returns cmd_policy_status_word() of
- * the displayed session's policy -- bits 0-7 the level, bit 8 Auto-approve. */
-#define WM_AI_GET_POLICY (WM_USER + 104)
-
-#define TIMER_CMD_QUEUE   2     /* Command dispatcher poll (prompt-gated) */
-#define TIMER_SCROLL_SYNC 4     /* Sync custom scrollbar with RichEdit */
-#define TIMER_THINKING    5     /* Animated thinking indicator */
-#define TIMER_HEARTBEAT   6     /* Activity monitor heartbeat (1s) */
-#define TIMER_STREAM_REAP 7     /* Finds replies whose final message was lost */
-#define STREAM_REAP_MS    1000
-#define THINKING_ANIM_MS  400   /* Dot animation interval */
-#define HEARTBEAT_MS      1000  /* Heartbeat interval */
-#define CMD_QUEUE_POLL_MS 250   /* Dispatcher tick interval */
-#define PROMPT_QUIET_MS   400   /* Terminal must be quiet this long at a prompt */
-
-/* Forward declaration for input subclass */
-static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
-                                           WPARAM wParam, LPARAM lParam,
-                                           UINT_PTR uIdSubclass,
-                                           DWORD_PTR dwRefData);
-
-/* Subclass for owner-drawn buttons: suppress WM_ERASEBKGND to prevent
- * white flicker during parent resize.  WM_DRAWITEM already fills the
- * entire button rect, so erasing is redundant. */
-#define BTN_NOERASE_SUBCLASS_ID 43
-static LRESULT CALLBACK btn_noerase_subclass(
-    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
-    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
-{
-    (void)dwRefData;
-    if (msg == WM_ERASEBKGND) return 1;
-    if (msg == WM_NCDESTROY)
-        RemoveWindowSubclass(hwnd, btn_noerase_subclass, uIdSubclass);
-    return DefSubclassProc(hwnd, msg, wParam, lParam);
-}
-
-/* Every AiChatData field is read and written on the UI thread only. The AI
- * stream thread (ai_stream_thread_proc) owns nothing here -- it reads and
- * writes only its own AiStream (src/core/ai_stream.h), including its own
- * copy of the tool registry and search/fetch contexts snapshotted before
- * the thread starts (ai_stream_copy_tools(), called under launch_stream_thread
- * before _beginthreadex) -- so no lock guards this struct. */
-typedef struct {
-    HWND hwnd;
-    HWND hDisplay;
-    HWND hThinkingBox;  /* Embedded textbox for thinking/processing content */
-    HWND hInput;
-    HWND hSendBtn;
-    HWND hNewChatBtn;
-    HWND hSaveBtn;
-    HWND hUndockBtn;
-    /* Old floating Allow/Deny buttons, and the owner-drawn Permit Write /
-     * Auto Approve tab buttons, are gone — approval is inline in
-     * chat_listview and the session policy is shown/clicked in the status
-     * line (painted, not child windows; see ai_chat_status_hit()). */
-    /* Pending command batches: approval_q.entries/count are unused --
-     * decisions live per-batch in d->active_state->batches (CmdBatchSet).
-     * approval_q survives only as the panel-wide template of the session's
-     * CmdPolicy, copied into every new batch by cmd_batch_add(). It is the
-     * one place the live policy lives; the status-line control reads and
-     * writes it directly. */
-    ApprovalQueue approval_q;
-    CmdPolicy policy_default;  /* settings.ai_policy_default: seeds a fresh
-                                 * session's policy (see
-                                 * ai_chat_set_policy_default()). */
-    unsigned session_gen;      /* bumped by do_session_switch(): a policy
-                                 * confirmation answered after a switch
-                                 * applies nothing (request_policy_change()) */
-    int policy_confirm_open;   /* 1 while the Critical confirmation is up:
-                                 * every policy gesture is then a no-op */
-    HWND hThinkingBtn;
-    HWND hTooltip;        /* Win32 tooltip control */
-    /* Hover/press tracking for the painted status line (the policy control's
-     * four cells and the Auto-approve button) -- see ai_chat_status_hit()/ai_chat_status_rect(). */
-    NsHover status_hover;
-    int status_hover_tracking;  /* TrackMouseEvent armed for WM_MOUSELEAVE */
-    int show_thinking;    /* 1 = user has manually opened a Thinking
-                            * disclosure this session -- suppresses
-                            * auto-collapse at reply-start (chat_listview.c)
-                            * and is also passed to ai_build_save_text() so
-                            * a session where the user looked at reasoning
-                            * saves it too. Mirrors the policy: persisted
-                            * per-session in AiSessionState, reset on New Chat. */
-    HFONT hFont;
-    HFONT hSmallFont;     /* small bold font for indicator label */
-    char font_name[64];
-    char ai_font_name[64];   /* font for AI markdown code blocks */
-    const ThemeColors *theme;
-    HBRUSH hBrBgPrimary;
-    HBRUSH hBrBgSecondary;
-
-    /* AI state */
-    AiConversation conv;
-    char api_key[256];
-    char provider[64];
-    char custom_url[256];
-    char custom_model[256];
-
-    /* Active session references */
-    Terminal   *active_term;
-    SessionIo  *active_io;   /* transport of the active session, or NULL */
-    /* Local sessions only: the shell the resolver picked, as
-     * ai_build_system_prompt() names it. Empty means "not a local shell" --
-     * for an SSH session, and for a local one before window.c has set it. */
-    char        shell_name[32];
-
-    /* Auto-continue: when AI only gives partial commands, re-prompt */
-    char pending_request[2048]; /* original user request for context */
-
-    /* Position of the animated indicator so we can remove/update it */
-    int indicator_pos;  /* char offset where indicator starts, or -1 */
-    int indicator_line_y; /* Y pixel position of indicator line for thinking box placement */
-    int thinking_tick;  /* animation frame counter 0-2 for dot cycling */
-    char indicator_base[64]; /* base text without dots, e.g. "thinking" */
-    int thinking_box_height; /* Current height of thinking box for auto-resize */
-    int last_phase; /* Track phase transitions (0=processing, 1=thinking) */
-
-    /* Batch command execution with paste delay */
-    int paste_delay_ms;
-    int dpi;
-
-    /* Prompt-gated command dispatcher (TIMER_CMD_QUEUE): sends approved
-     * commands from one batch's queue (d->active_state->batches) at a
-     * time, only once active_term is back at a shell prompt. Any number
-     * of batches may be pending at once (see src/core/cmd_batch.h and
-     * docs/superpowers/specs/2026-09-09-pending-command-batches.md); the
-     * dispatcher only ever runs one at a time -- dispatch_batch_id says
-     * which. See dispatch_start()/dispatch_tick(). */
-    int dispatch_active;             /* 1 while the dispatcher is running */
-    int dispatch_batch_id;           /* CmdBatch id currently being dispatched, or 0 */
-    unsigned long dispatch_seq;      /* last-seen active_term->write_seq */
-    int dispatch_await_echo;         /* 1 until the terminal changes after a send */
-    DWORD dispatch_last_change_tick; /* GetTickCount() of the last write_seq change */
-    int dispatch_last_idx;           /* batch queue index last set EXECUTING, or -1 */
-    int dispatch_sent_count;         /* commands sent so far in this dispatch run */
-    int dispatch_stall_reported;     /* 1 once the "shell is waiting for more
-                                       * input" status line has been posted for
-                                       * the current stall; cleared the moment
-                                       * the terminal produces output again, so
-                                       * the line appears once per stall */
-    /* No-prefix safety wait (dispatch_line_clear.h): set the first tick
-     * the command about to be sent finds the line ambiguous (or a
-     * keystroke too recent) rather than clearly clear; 0 while not
-     * currently waiting on it. Mirrors dispatch_stall_reported's
-     * report-once behaviour, but unlike a continuation-prompt stall this
-     * one is bounded -- see dispatch_ambiguous_prompt_timed_out(). */
-    DWORD dispatch_ambiguous_since_tick;
-    int   dispatch_ambiguous_reported; /* 1 once this stall's status line
-                                         * has been posted */
-    /* Diagnostic-only (dispatch_log_stall_if_due(), %TEMP%\nutshell.log):
-     * dispatch_start_tick is set once per dispatch_start() and never
-     * touched again, for "settled after X ms". dispatch_last_progress_tick
-     * is set at dispatch_start() and every actual send (execute_command())
-     * -- a batch that hasn't moved either in >3 s is "stalled".
-     * dispatch_last_diag_log_tick rate-limits the stall log itself to
-     * once per 2 s so a long-stuck batch does not flood the file. */
-    DWORD dispatch_start_tick;
-    DWORD dispatch_last_progress_tick;
-    DWORD dispatch_last_diag_log_tick;
-    int stream_phase;  /* 0=not started, 1=in thinking, 2=in content */
-
-    /* AI notes for system prompt context */
-    char session_notes[2560];
-    char system_notes[2560];
-
-    /* How many terminal lines are sent to the AI as context (1-50000).
-     * Always clamped via ai_context_clamp_lines(); never 0. */
-    int context_lines;
-
-    /* Scratch buffers for the terminal context and the system prompt built
-     * from it.  They live as long as the panel and grow with context_lines,
-     * so the send paths never allocate and cannot leak on an early return.
-     * Freed in WM_DESTROY. */
-    char  *ctx_term;
-    size_t ctx_term_cap;
-    char  *ctx_prompt;
-    size_t ctx_prompt_cap;
-
-    /* Per-session conversation tracking */
-    AiSessionState *active_state;     /* points to current session's ai_state */
-
-    /* Session name label */
-    HWND hSessionLabel;
-    char session_name[256];
-
-    /* Custom scrollbar for chat display */
-    HWND hDisplayScrollbar;
-    int  display_line_h;   /* cached line height in px */
-
-    /* Context window usage meter, painted in the status line (no child
-     * window any more -- see ai_chat_get_status_paint()). */
-    int  context_limit;       /* token limit for model, 0=unknown */
-    /* Busy-indicator override text ("Waiting for output", "Continuing"...):
-     * when non-empty, painted in place of the meter's used/limit numbers.
-     * Set by start_indicator(), cleared by update_context_bar(). */
-    char context_label[64];
-    int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
-    int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
-
-    /* Buffer for the status-line tooltips' text (cells, button, meter). Filled on
-     * each TTN_GETDISPINFO callback so the tip always reflects the
-     * latest token state. */
-    char tooltip_buf[CMD_POLICY_TIP_MAX];
-
-    /* Thinking history: per-assistant-message thinking text.
-     * Indexed by conv.messages[] index (only meaningful for ASSISTANT roles).
-     * Heap-allocated strings; NULL if no thinking for that message. */
-    char *thinking_history[AI_MAX_MESSAGES];
-
-    /* Live stream thinking accumulation (UI thread only) */
-    char stream_thinking[AI_MSG_MAX];
-    size_t stream_thinking_len;
-
-    /* Live stream content accumulation (for rebuild mid-stream) */
-    char stream_content[AI_MSG_MAX];
-    size_t stream_content_len;
-
-    /* RichEdit char position where AI response text began (for markdown re-render) */
-    int stream_display_start;
-
-    /* Wheel delta accumulator for high-precision scroll devices */
-    int wheel_accum;
-
-    /* Current UI font size (points) for zoom — starts at APP_FONT_UI_SIZE */
-    int ui_font_size;
-
-    /* Custom scrollbar for input text box */
-    HWND hInputScrollbar;
-    int  input_line_h;     /* cached line height in px for input */
-    /* Composer (message box) height at 96 DPI, set by dragging the sash
-     * above it; 0 means AI_INPUT_BASE_H. Scaled and clamped by
-     * ai_chat_input_h(). Not persisted. */
-    int  input_base_h;
-    int  sash_dragging;         /* 1 while the sash is captured */
-    int  sash_drag_start_y;     /* client y at button-down */
-    int  sash_drag_start_base;  /* input_base_h at button-down */
-
-    /* Docked mode: 1 = child window in main frame, 0 = floating */
-    int docked;
-
-    /* New chat list view fields */
-    ChatMsgList msg_list;           /* Message item linked list */
-    HWND hChatList;                 /* Owner-drawn chat list view */
-    ChatMsgItem *stream_ai_item;    /* Current AI item being streamed into */
-
-    /* Owned fonts for ChatListView (caller manages lifetime).
-     * hChatFont/hBoldFont/hMonoFont are zoomable and apply to chat
-     * content (user messages + AI responses) and the user input
-     * textbox. The UI font (d->hFont) and d->hSmallFont stay fixed so
-     * buttons, context bar, and indicator labels are not affected by
-     * Ctrl+/Ctrl- zoom. */
-    HFONT hChatFont;
-    HFONT hBoldFont;
-    HFONT hMonoFont;
-
-    /* Activity monitor state */
-    ActivityState activity;
-    int pulse_toggle;          /* 0/1 for pulsing dot animation */
-
-    /* Replies in flight, one per session at most (src/core/ai_stream.h).
-     * Each stream has its own abort flag; stream-thread messages carry a
-     * stream id that is resolved here before anything is touched. */
-    AiStreamTable streams;
-
-    /* GDI+ token for image conversion */
-    ULONG_PTR gdip_token;
-
-    /* Pending image attachment for the next send */
-    AiAttachment *pending_attachment;
-
-    /* Tool use */
-    AiToolRegistry tool_registry;
-    WebSearchContext search_ctx;
-    WebFetchContext  fetch_ctx;
-    unsigned tools_gen;         /* bumped on every reconfigure; each stream
-                                  * records the generation it snapshotted */
-    int tool_support_notified;  /* 1 after showing "tools unavailable" message */
-
-    /* Empty/no-key/no-session state (ai_panel_states.h), pushed to
-     * hChatList whenever it might change -- see update_panel_state()
-     * below (AI Assist Panel task 4). -1 = no forced override: the state
-     * is decided from active_io/api_key. --ui-demo's "empty" state
-     * forces AI_STATE_EMPTY via ai_chat_force_state() even though the
-     * demo session has no transport (it would otherwise read as
-     * AI_STATE_NO_SESSION). */
-    int forced_state;
-} AiChatData;
-
-static void status_tools_update(AiChatData *d);
-
-/* Session kind for the system prompt: SSH unless the active transport
- * says otherwise (a panel with no session keeps today's SSH wording). */
-static SessionKind active_session_kind(const AiChatData *d)
-{
-    return (d && d->active_io) ? d->active_io->kind : SESSION_SSH;
-}
-
-/* The shell name that goes with that kind: NULL unless a local session has
- * actually told us which shell it is, in which case
- * ai_build_system_prompt() names it instead of listing the possibilities. */
-static const char *active_shell_name(const AiChatData *d)
-{
-    return (d && d->shell_name[0]) ? d->shell_name : NULL;
-}
-
-/* Helper: check if the currently active session has a busy AI stream */
-#define ACTIVE_BUSY(d) ((d)->active_state && (d)->active_state->busy)
 
 /* Forward declarations */
 static void do_session_switch(AiChatData *d,
@@ -449,2998 +18,6 @@ static void do_session_switch(AiChatData *d,
                               const char *session_name);
 
 #include "markdown.h"
-
-/* Messages from a stream thread carry its stream id, never a pointer into
- * the panel or a session: the UI resolves the id in d->streams
- * (src/core/ai_stream.h) and drops the message if the stream is gone --
- * stopped, retried, its tab closed, or the panel rebuilt since. */
-
-/* WM_AI_RESPONSE payload: the finished reply (wParam 2) or an error (0). */
-typedef struct {
-    unsigned stream_id;
-    char *content;
-    char *thinking;
-    int input_tokens;          /* actual input token count from API (0 if unavailable) */
-    int output_tokens;         /* actual output token count from API (0 if unavailable) */
-} AiResponseMsg;
-
-/* WM_AI_STREAM payload (one delta) and WM_AI_TOOL_MSG payload (one status
- * line; wParam is the ChatItemType). */
-typedef struct {
-    unsigned stream_id;
-    char *delta;
-} AiStreamChunk;
-
-/* Context for SSE streaming callback */
-typedef struct {
-    AiStream *stream;            /* owns the abort flag and the post target */
-    char line_buf[8192];     /* SSE line accumulation buffer */
-    size_t line_len;
-    char full_content[AI_MSG_MAX];   /* accumulated full content */
-    size_t content_len;
-    char full_thinking[AI_MSG_MAX];  /* accumulated full thinking */
-    size_t thinking_len;
-    int in_thinking;         /* 1 while receiving thinking chunks */
-    int header_sent;         /* bitmask: 1=thinking header, 2=content header */
-    /* Tool streaming state (NULL when no tools registered) */
-    AiToolStreamState *tool_stream;
-    char provider[64];
-    int tool_stop;          /* set to 1 when tool_use stop detected */
-    int input_tokens;        /* actual input token count from API (0 until received) */
-    int output_tokens;       /* actual output token count from API (0 until received) */
-} StreamContext;
-
-/* Post a text payload tagged with the stream's id. If the panel is gone the
- * post fails and the payload is freed here, so nothing leaks. */
-static void stream_post_text(AiStream *s, UINT msg, WPARAM wp, const char *text)
-{
-    if (ai_stream_aborted(s)) return;   /* nobody is listening any more */
-    AiStreamChunk *chunk = (AiStreamChunk *)calloc(1, sizeof(*chunk));
-    if (!chunk) return;
-    chunk->stream_id = s->id;
-    chunk->delta = _strdup(text ? text : "");
-    if (!chunk->delta ||
-        !PostMessage((HWND)s->post_target, msg, wp, (LPARAM)chunk)) {
-        free(chunk->delta);
-        free(chunk);
-    }
-}
-
-/* Process a single SSE line from the stream */
-static void stream_process_line(StreamContext *ctx, const char *line, size_t len)
-{
-    /* Skip empty lines */
-    if (len == 0) return;
-
-    /* SSE lines start with "data: " */
-    if (len < 6 || strncmp(line, "data: ", 6) != 0) return;
-
-    const char *json = line + 6;
-    char content_delta[1024] = "";
-    char thinking_delta[1024] = "";
-    int chunk_input_tokens = 0, chunk_output_tokens = 0;
-
-    int rc;
-    if (ctx->tool_stream) {
-        rc = ai_parse_stream_chunk_ex(json,
-                                     content_delta, sizeof(content_delta),
-                                     thinking_delta, sizeof(thinking_delta),
-                                     ctx->tool_stream, ctx->provider);
-        if (rc == 2) {
-            /* Tool-use stop: signal to outer loop */
-            ctx->tool_stop = 1;
-            return;
-        }
-    } else {
-        rc = ai_parse_stream_chunk(json, content_delta, sizeof(content_delta),
-                                   thinking_delta, sizeof(thinking_delta),
-                                   &chunk_input_tokens, &chunk_output_tokens);
-    }
-
-    /* Accumulate actual token counts when provided by the API */
-    if (chunk_input_tokens > 0)
-        ctx->input_tokens += chunk_input_tokens;
-    if (chunk_output_tokens > 0)
-        ctx->output_tokens += chunk_output_tokens;
-
-    if (rc == 1) {
-        /* [DONE] — stream finished */
-        return;
-    }
-    if (rc < 0) return;
-
-    /* Post thinking delta to UI */
-    if (thinking_delta[0]) {
-        /* Accumulate */
-        size_t dlen = strlen(thinking_delta);
-        if (ctx->thinking_len + dlen < AI_MSG_MAX - 1) {
-            memcpy(ctx->full_thinking + ctx->thinking_len, thinking_delta, dlen);
-            ctx->thinking_len += dlen;
-            ctx->full_thinking[ctx->thinking_len] = '\0';
-        }
-        /* Post to UI for realtime display */
-        stream_post_text(ctx->stream, WM_AI_STREAM, 0, thinking_delta);
-    }
-
-    /* Post content delta to UI */
-    if (content_delta[0]) {
-        /* Accumulate */
-        size_t dlen = strlen(content_delta);
-        if (ctx->content_len + dlen < AI_MSG_MAX - 1) {
-            memcpy(ctx->full_content + ctx->content_len, content_delta, dlen);
-            ctx->content_len += dlen;
-            ctx->full_content[ctx->content_len] = '\0';
-        }
-        /* Post to UI for realtime display */
-        stream_post_text(ctx->stream, WM_AI_STREAM, 1, content_delta);
-    }
-}
-
-/* SSE stream callback — accumulates lines and processes them */
-static int stream_callback(const char *data, size_t len, void *userdata)
-{
-    StreamContext *ctx = (StreamContext *)userdata;
-
-    /* Stop at once if this stream was aborted (Stop, New Chat, tab closed,
-     * panel closed or undocked, app exit). */
-    if (ai_stream_aborted(ctx->stream))
-        return 1; /* abort stream */
-
-    for (size_t i = 0; i < len; i++) {
-        char c = data[i];
-        if (c == '\n') {
-            /* Strip trailing \r */
-            if (ctx->line_len > 0 && ctx->line_buf[ctx->line_len - 1] == '\r')
-                ctx->line_len--;
-            ctx->line_buf[ctx->line_len] = '\0';
-            stream_process_line(ctx, ctx->line_buf, ctx->line_len);
-            ctx->line_len = 0;
-        } else {
-            if (ctx->line_len < sizeof(ctx->line_buf) - 1)
-                ctx->line_buf[ctx->line_len++] = c;
-        }
-    }
-    return 0;
-}
-
-/* Post a WM_AI_RESPONSE. The handler clears the session's busy flag -- if
- * this stream is still the session's current one. */
-static void post_response(AiStream *s, WPARAM kind, const char *content,
-                          const char *thinking, int in_tok, int out_tok)
-{
-    AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
-    if (!rmsg) return;
-    rmsg->stream_id = s->id;
-    rmsg->content = _strdup(content ? content : "");
-    rmsg->thinking = (thinking && thinking[0]) ? _strdup(thinking) : NULL;
-    rmsg->input_tokens = in_tok;
-    rmsg->output_tokens = out_tok;
-    if (!PostMessage((HWND)s->post_target, WM_AI_RESPONSE, kind, (LPARAM)rmsg)) {
-        free(rmsg->content);
-        free(rmsg->thinking);
-        free(rmsg);
-        return;
-    }
-    ai_stream_note_delivered(s);
-}
-
-static void post_error_response(AiStream *s, const char *msg)
-{
-    post_response(s, 0, msg, NULL, 0, 0);
-}
-
-/* Post a tool-related status message to the UI thread.
- * type is CHAT_ITEM_TOOL_CALL, CHAT_ITEM_TOOL_RESULT or CHAT_ITEM_STATUS. */
-static void post_tool_msg(AiStream *s, ChatItemType type, const char *text)
-{
-    stream_post_text(s, WM_AI_TOOL_MSG, (WPARAM)type, text);
-}
-
-/* web_fetch progress (WebFetchContext.on_hop): runs on the stream thread, so it
- * only posts a row (stream_post_text copies the text; display_url is the fetch
- * loop's stack buffer). user is the stream, which outlives the tool call. */
-static void fetch_on_hop(void *user, const char *display_url, int refused)
-{
-    AiStream *s = (AiStream *)user;
-    char row[256];
-    if (!s) return;
-    if (refused)
-        snprintf(row, sizeof(row), "fetch refused: %s (local or private address)",
-                 display_url ? display_url : "");
-    else
-        snprintf(row, sizeof(row), "fetching: %s",
-                 display_url ? display_url : "");
-    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, row);
-}
-
-/* Background thread: streaming AI API call.
- *
- * Owns one reference to its AiStream and reads and writes nothing else: no
- * AiChatData, no session. It drops its reference on every way out; if the
- * panel orphaned the stream meanwhile, that frees it. When s->has_tools,
- * runs the agentic tool-use loop on the stream's own conversation. */
-static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
-{
-    AiStream *s = (AiStream *)raw_arg;
-    dlog_set_thread_tag("ai");
-
-    /* Debug log (spec section 2): the provider and model by name, never the
-     * request, the reply or a tool's arguments or result. */
-    const ULONGLONG t_stream = GetTickCount64();
-    const unsigned stream_id = s->id;
-    int stream_failed = 0;
-    DLOG(DLOG_AI, DLOG_INFO, 0, "stream.start",
-         "stream=%u provider=%s model=%s tools=%d src=%s panel_visible=%d",
-         stream_id, s->provider, s->conv.model, s->has_tools ? s->tools.count : 0,
-         s->src[0] ? s->src : "user", s->panel_visible);
-
-    const char *url = ai_provider_url(s->provider);
-    if (!url && strcmp(s->provider, "custom") == 0 && s->custom_url[0])
-        url = s->custom_url;
-    if (!url) {
-        DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=unknown_provider ms=%llu",
-             stream_id, (unsigned long long)(GetTickCount64() - t_stream));
-        post_error_response(s, "Error: unknown AI provider");
-        ai_stream_mark_finished(s);
-        ai_stream_release(s);
-        return 0;
-    }
-
-    char hdr0[300], hdr1[64];
-    const char *req_headers[3];
-    ai_build_auth_headers(s->provider, s->api_key,
-                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1),
-                          req_headers);
-
-    /* Agentic state (only used when tools are enabled) */
-    AgenticState agentic;
-    agentic_state_reset(&agentic);
-
-    /* Tool streaming state (heap-allocated so we can reset between loops) */
-    AiToolStreamState tool_stream_state;
-    AiToolStreamState *tool_stream_ptr = NULL;
-    if (s->has_tools) {
-        ai_tools_stream_init(&tool_stream_state);
-        tool_stream_ptr = &tool_stream_state;
-    }
-
-    /* Agentic loop — runs once for non-tool responses, multiple times with tools */
-    char final_content[AI_MSG_MAX] = "";
-    char final_thinking[AI_MSG_MAX] = "";
-    int total_input_tokens = 0, total_output_tokens = 0;
-    int loop_done = 0;
-
-    while (!loop_done) {
-        StreamContext ctx;
-        memset(&ctx, 0, sizeof(ctx));
-        ctx.stream = s;
-        ctx.tool_stream = tool_stream_ptr;
-        if (tool_stream_ptr)
-            strncpy(ctx.provider, s->provider, sizeof(ctx.provider) - 1);
-
-        /* Reset tool stream state for this loop iteration */
-        if (tool_stream_ptr)
-            ai_tools_stream_reset(tool_stream_ptr);
-
-        int status = 0;
-        char errbuf[256] = "";
-        int rc = ai_http_post_stream(url, req_headers, s->body, s->body_len,
-                                     stream_callback, &ctx,
-                                     &status, errbuf, sizeof(errbuf));
-
-        /* If stream was aborted (user cancelled), discard partial results */
-        if (ai_stream_aborted(s))
-            goto out;
-
-        if (rc != 0 || status < 200 || status >= 300) {
-            char msg[1024];
-            if (errbuf[0])
-                snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
-            else
-                snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
-            stream_failed = 1;
-            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
-                 "stream=%u class=%s status=%d ms=%llu", stream_id,
-                 rc != 0 ? "transport" : "http", status,
-                 (unsigned long long)(GetTickCount64() - t_stream));
-            post_error_response(s, msg);
-            goto out;
-        }
-
-        /* Accumulate final content/thinking across all iterations */
-        if (ctx.content_len > 0) {
-            size_t existing = strlen(final_content);
-            size_t space = sizeof(final_content) - existing - 1;
-            size_t copy_n = ctx.content_len < space ? ctx.content_len : space;
-            memcpy(final_content + existing, ctx.full_content, copy_n);
-            final_content[existing + copy_n] = '\0';
-        }
-        if (ctx.thinking_len > 0 && final_thinking[0] == '\0') {
-            /* Only capture first thinking block */
-            size_t copy_n = ctx.thinking_len < sizeof(final_thinking) - 1
-                          ? ctx.thinking_len : sizeof(final_thinking) - 1;
-            memcpy(final_thinking, ctx.full_thinking, copy_n);
-            final_thinking[copy_n] = '\0';
-        }
-
-        /* Accumulate token counts (last non-zero value wins) */
-        if (ctx.input_tokens > 0)
-            total_input_tokens = ctx.input_tokens;
-        if (ctx.output_tokens > 0)
-            total_output_tokens = ctx.output_tokens;
-
-        /* ---- Tool-use branch ---- */
-        if (ctx.tool_stop && tool_stream_ptr &&
-            tool_stream_ptr->pending_tool_count > 0) {
-
-            /* Add assistant message with tool_use blocks */
-            agentic_add_assistant_tool_msg(&s->conv,
-                                          ctx.full_content,
-                                          tool_stream_ptr->pending_tool_calls,
-                                          tool_stream_ptr->pending_tool_count);
-
-            /* Execute each tool call */
-            AiToolResult *results = (AiToolResult *)calloc(
-                (size_t)tool_stream_ptr->pending_tool_count, sizeof(AiToolResult));
-            if (!results) {
-                stream_failed = 1;
-                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=oom ms=%llu",
-                     stream_id, (unsigned long long)(GetTickCount64() - t_stream));
-                post_error_response(s, "Error: out of memory for tool results");
-                goto out;
-            }
-
-            for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++) {
-                AiToolCall *call = &tool_stream_ptr->pending_tool_calls[ti];
-
-                /* Rate limit check */
-                char rate_err[256] = "";
-                if (!agentic_check_rate_limit(&agentic, call->name,
-                                              rate_err, sizeof(rate_err))) {
-                    results[ti].tool_use_id[0] = '\0';
-                    strncpy(results[ti].tool_use_id, call->id,
-                            sizeof(results[ti].tool_use_id) - 1);
-                    results[ti].content = _strdup(rate_err);
-                    results[ti].content_len = results[ti].content
-                                           ? strlen(results[ti].content) : 0;
-                    results[ti].is_error = 1;
-                    DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=0 rate_limited=1",
-                         stream_id, call->name);
-                    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, "[tool rate-limited]");
-                    continue;
-                }
-
-                /* Notify UI of tool call (include provider for web_search) */
-                char tool_call_text[256];
-                const AiToolDef *tdef = ai_tools_find(&s->tools, call->name);
-                const char *provider_suffix = NULL;
-                if (tdef && tdef->tool_data &&
-                    strcmp(call->name, "web_search") == 0) {
-                    const WebSearchContext *wsc =
-                        (const WebSearchContext *)tdef->tool_data;
-                    if (wsc->search_provider[0])
-                        provider_suffix = wsc->search_provider;
-                }
-                /* read_debug_log: the query in words, not just the name. */
-                char debug_desc[160];
-                if (!provider_suffix && strcmp(call->name, DLOG_TOOL_NAME) == 0) {
-                    (void)ai_debug_tool_describe(call->input_json, debug_desc,
-                                                 sizeof(debug_desc));
-                    if (debug_desc[0]) provider_suffix = debug_desc;
-                }
-                /* web_fetch: the requested URL (display form). */
-                char fetch_desc[160];
-                if (!provider_suffix && strcmp(call->name, "web_fetch") == 0) {
-                    (void)web_fetch_describe(call->input_json, fetch_desc,
-                                             sizeof(fetch_desc));
-                    if (fetch_desc[0]) provider_suffix = fetch_desc;
-                }
-                if (provider_suffix)
-                    snprintf(tool_call_text, sizeof(tool_call_text),
-                             "using tool: %s - %s", call->name,
-                             provider_suffix);
-                else
-                    snprintf(tool_call_text, sizeof(tool_call_text),
-                             "using tool: %s", call->name);
-                post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
-
-                /* Execute (the stream's own registry snapshot and abort flag) */
-                const ULONGLONG t_tool = GetTickCount64();
-                ai_tool_execute(&s->tools, call, ai_stream_abort_flag(s),
-                                &results[ti]);
-                agentic_record_tool_call(&agentic, call->name);
-                /* The tool's name and outcome only: never its arguments or result. */
-                DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=%d ms=%llu",
-                     stream_id, call->name, results[ti].is_error ? 0 : 1,
-                     (unsigned long long)(GetTickCount64() - t_tool));
-
-                /* Truncation warning */
-                if (results[ti].was_truncated) {
-                    char warn[256];
-                    agentic_truncation_warning(call->name, warn, sizeof(warn));
-                    post_tool_msg(s, CHAT_ITEM_STATUS, warn);
-                }
-
-                /* Show brief result in UI (skip error results) */
-                if (results[ti].content && results[ti].content_len > 0
-                    && !results[ti].is_error) {
-                    char preview[256];
-                    if (strcmp(call->name, DLOG_TOOL_NAME) == 0) {
-                        /* The header line only: the log lines are for the
-                         * model, not for the chat. */
-                        ai_debug_tool_summary_line(results[ti].content,
-                                                   results[ti].content_len,
-                                                   preview, 200);
-                    } else {
-                        size_t plen = results[ti].content_len < 200
-                                    ? results[ti].content_len : 200;
-                        memcpy(preview, results[ti].content, plen);
-                        preview[plen] = '\0';
-                    }
-                    post_tool_msg(s, CHAT_ITEM_TOOL_RESULT, preview);
-                }
-            }
-
-            /* Add tool results to conversation */
-            agentic_add_tool_results(&s->conv,
-                                     tool_stream_ptr->pending_tool_calls,
-                                     results,
-                                     tool_stream_ptr->pending_tool_count);
-
-            /* Free tool results */
-            for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++)
-                free(results[ti].content);
-            free(results);
-
-            ai_tools_stream_reset(tool_stream_ptr);
-            agentic.loop_iter++;
-
-            if (ai_stream_aborted(s))
-                goto out;
-
-            /* Check if we can continue */
-            if (!agentic_can_continue(&agentic)) {
-                post_tool_msg(s, CHAT_ITEM_STATUS,
-                    "[tool loop limit reached — stopping]");
-                loop_done = 1;
-            } else {
-                /* Rebuild request body with updated conversation (including tool results) */
-                int last_msg = s->conv.msg_count - 1;
-                const AiAttachment *att2 = (last_msg >= 0)
-                    ? s->conv.messages[last_msg].attachment : NULL;
-                s->body_len = ai_build_request_body_tools(
-                    &s->conv, att2,
-                    s->tools_json[0] ? s->tools_json : NULL,
-                    s->body, AI_BODY_MAX,
-                    1, s->provider);
-                {
-                    char json_err[256] = "";
-                    if (s->body_len == 0 ||
-                        !json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
-                        post_tool_msg(s, CHAT_ITEM_STATUS,
-                            json_err[0] ? json_err : "JSON rebuild failed in tool loop");
-                        loop_done = 1;
-                    }
-                }
-                /* loop continues */
-            }
-        } else {
-            /* Normal end (no tool-use stop) — add assistant message and exit loop */
-            loop_done = 1;
-            ai_conv_add(&s->conv, AI_ROLE_ASSISTANT, ctx.full_content);
-        }
-    } /* end agentic loop */
-
-    /* Signal stream done — wParam=2 means "streaming complete, do command
-     * extraction". This is the thread's last message: after it, the UI may
-     * take s->conv. busy is cleared by the WM_AI_RESPONSE handler on the UI
-     * thread to prevent a race where the user sends a new message before
-     * cleanup completes. */
-    if (!ai_stream_aborted(s))
-        post_response(s, 2, final_content, final_thinking,
-                      total_input_tokens, total_output_tokens);
-
-out:
-    if (!stream_failed) {
-        if (ai_stream_aborted(s))
-            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.cancel", "stream=%u ms=%llu", stream_id,
-                 (unsigned long long)(GetTickCount64() - t_stream));
-        else
-            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.done",
-                 "stream=%u ms=%llu tokens_in=%d tokens_out=%d", stream_id,
-                 (unsigned long long)(GetTickCount64() - t_stream),
-                 total_input_tokens, total_output_tokens);
-    }
-    if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
-    ai_stream_mark_finished(s);   /* the panel reaps it if nothing got through */
-    ai_stream_release(s);
-    return 0;
-}
-
-
-/* Default message-box height at 96 DPI (about two lines) before the user
- * drags the sash. */
-#define AI_INPUT_BASE_H 46
-
-/* Convert device pixels back to a 96-DPI base value (inverse of ns_scale,
- * round-half-up). dpi <= 0 is treated as 96. */
-static int ai_chat_unscale(int px, int dpi)
-{
-    if (dpi <= 0) dpi = 96;
-    return (px * 96 + dpi / 2) / dpi;
-}
-
-/* The message box's height in device pixels: the stored 96-DPI base, scaled
- * and clamped to what the panel can hold (never under two input lines, never
- * over half the panel). The one place it is decided -- used by the layout,
- * relayout() and the placeholder at creation so they cannot drift. */
-static int ai_chat_input_h(const AiChatData *d)
-{
-    RECT rc = {0, 0, 1, 1};
-    if (d->hwnd) GetClientRect(d->hwnd, &rc);
-    int base = d->input_base_h > 0 ? d->input_base_h : AI_INPUT_BASE_H;
-    return ai_composer_clamp_h(ns_scale(base, d->dpi), rc.bottom,
-                               d->input_line_h, d->dpi);
-}
-
-/* Compute the panel's top-level tiling (header/thread/status/sash/composer)
- * for the current client size -- the one place composer_h is decided, shared
- * by relayout(), WM_PAINT and every status-line hit-test helper below so
- * they never disagree with each other. */
-static void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out)
-{
-    RECT rc = {0, 0, 1, 1};
-    if (d->hwnd) GetClientRect(d->hwnd, &rc);
-    NsRect panel = { 0, 0, rc.right, rc.bottom };
-
-    int margin = ns_scale(5, d->dpi);
-    int input_h = ai_chat_input_h(d);
-    int composer_h = input_h + margin;
-    ai_panel_layout(panel, d->dpi, composer_h, out);
-}
-
-/* Invalidate just the status line -- called whenever the policy or the
- * context numbers change. */
-static void invalidate_status_line(AiChatData *d)
-{
-    if (!d || !d->hwnd) return;
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-    RECT r = { l.status.x, l.status.y, l.status.x + l.status.w,
-               l.status.y + l.status.h };
-    InvalidateRect(d->hwnd, &r, FALSE);
-    status_tools_update(d);
-}
-
-/* Move the session to `next` and bring every pending card into line with it.
- *
- * Raising the ceiling unblocks held rows in EVERY pending batch (not just
- * the newest) and tells the AI so, because it has a stale "blocked by
- * policy" message in its history and will otherwise keep advising the user
- * to change a setting they just changed. Lowering it re-blocks pending rows
- * the new ceiling no longer allows. Auto-approve only affects commands that
- * have not arrived yet, so turning it on releases nothing already waiting
- * (spec 2026-10-18 section 6: one click on the card's own Run button does
- * that); it shares this path so a single gesture that moves both the level
- * and the switch is applied once. */
-static void apply_policy_change(AiChatData *d, CmdPolicy next)
-{
-    if (!d) return;
-    cmd_policy_clamp(&next);
-    CmdPolicy prev = d->approval_q.policy;
-    if (next.allowed == prev.allowed && next.unattended == prev.unattended)
-        return;
-    /* The tip on screen describes the old policy; the next hover fetches
-     * the new text (spec section 4). */
-    if (d->hTooltip) SendMessage(d->hTooltip, TTM_POP, 0, 0);
-
-    d->approval_q.policy = next;
-    if (d->active_state) {
-        d->active_state->policy = next;
-        d->active_state->policy_seeded = 1;
-        for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            d->active_state->batches.b[bi]->q.policy = next;
-    }
-    invalidate_status_line(d);
-
-    if (next.allowed > prev.allowed) {
-        if (d->active_state)
-            for (int bi = 0; bi < d->active_state->batches.count; bi++)
-                chat_approval_unblock_all(&d->active_state->batches.b[bi]->q);
-        ChatMsgItem *it = d->msg_list.head;
-        while (it) {
-            if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.blocked &&
-                !it->u.cmd.quoted &&
-                (int)it->u.cmd.safety <= next.allowed) {
-                it->u.cmd.blocked = 0;
-                it->u.cmd.approved = -1;
-                it->u.cmd.selected = 1;  /* no longer held -- starts checked */
-            }
-            it = it->next;
-        }
-        if (d->conv.msg_count > 0) {
-            char note[256];
-            if (ai_build_policy_raised_note(next.allowed, note, sizeof(note)) > 0) {
-                ai_conv_add(&d->conv, AI_ROLE_USER, note);
-            }
-        }
-    } else if (next.allowed < prev.allowed) {
-        if (d->active_state)
-            for (int bi = 0; bi < d->active_state->batches.count; bi++)
-                chat_approval_block_disallowed(&d->active_state->batches.b[bi]->q);
-        ChatMsgItem *it = d->msg_list.head;
-        while (it) {
-            if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
-                it->u.cmd.approved == -1 &&
-                (int)it->u.cmd.safety > next.allowed) {
-                it->u.cmd.blocked = 1;
-            }
-            it = it->next;
-        }
-    }
-
-    if (d->hChatList)
-        chat_listview_invalidate(d->hChatList);
-}
-
-/* Every policy gesture goes through here: the cells, the Auto-approve
- * button, the cycle id 4005 and the harness's posted ids. Moving into
- * "Critical with Auto-approve on" asks first (spec 2026-10-18 section 2).
- * The box runs a modal loop, so: a second gesture while it is up is a
- * no-op, the tooltip is hidden first, and after Yes the change applies
- * only if the panel still exists, the same session is displayed and its
- * policy has not moved. Dispatch ticks and replies keep running during the
- * box; nothing here touches them. */
-static void request_policy_change(HWND hwnd, AiChatData *d, CmdPolicy next)
-{
-    if (!d || d->policy_confirm_open) return;
-    CmdPolicy cur = d->approval_q.policy;
-    if (!cmd_policy_needs_confirm(cur, next)) {
-        apply_policy_change(d, next);
-        return;
-    }
-    unsigned gen = d->session_gen;
-    d->policy_confirm_open = 1;
-    if (d->hTooltip) SendMessage(d->hTooltip, TTM_POP, 0, 0);
-    int answer = MessageBoxA(hwnd, CMD_POLICY_CONFIRM_TEXT, "Auto-approve",
-                             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
-    /* The panel may have been destroyed (closed, undocked) while the box was
-     * up, freeing d: look it up again from the window. */
-    if (!IsWindow(hwnd)) return;
-    d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-    if (!d) return;
-    d->policy_confirm_open = 0;
-    if (answer != IDYES || d->session_gen != gen) return;
-    if (d->approval_q.policy.allowed != cur.allowed ||
-        d->approval_q.policy.unattended != cur.unattended) return;
-    apply_policy_change(d, next);
-}
-
-/* Recompute the context meter/usage state and clear any busy-indicator
- * override text (see start_indicator()) so the status line goes back to
- * showing the normal used/limit numbers. The numbers themselves are
- * measured fresh from d->context_limit/actual_*_tokens/d->conv at paint
- * time (ai_chat_get_status_paint()) -- this just triggers that repaint. */
-static void update_context_bar(AiChatData *d)
-{
-    if (!d) return;
-    d->context_label[0] = '\0';
-    invalidate_status_line(d);
-}
-
-/* Decide and push the empty/no-key/no-session state (ai_panel_states.h)
- * to the chat list view. chat_listview only paints/hit-tests it while
- * the message list actually has zero items, so it is harmless (and
- * cheap) to call this any time the inputs to the decision might have
- * changed: the panel is shown, the session changes, the API key changes,
- * or the conversation is reset. See the spec's "Empty and blocked
- * states (frame C)" section. */
-static void update_panel_state(AiChatData *d)
-{
-    if (!d || !d->hChatList) return;
-
-    int state;
-    if (d->forced_state >= 0)
-        state = d->forced_state;
-    else if (!d->active_io)
-        state = AI_STATE_NO_SESSION;
-    else if (d->api_key[0] == '\0')
-        state = AI_STATE_NO_KEY;
-    else
-        state = AI_STATE_EMPTY;
-
-    chat_listview_set_state(d->hChatList, state, d->context_lines);
-}
-
-/* Start (or replace) the busy-indicator text shown in place of the status
- * line's context meter numbers while a command/response is in flight (the
- * per-message activity dot + word in the header covers most of the same
- * ground, but callers here have more specific text, e.g. "waiting for
- * output"). */
-static void start_indicator(AiChatData *d, const char *base)
-{
-    if (!d) return;
-    if (strcmp(base, "thinking") == 0)
-        d->context_label[0] = '\0';   /* inline indicator shows timing */
-    else
-        snprintf(d->context_label, sizeof(d->context_label), "%c%s",
-            base[0] >= 'a' && base[0] <= 'z' ? (char)(base[0]-32) : base[0],
-            base + 1);
-    invalidate_status_line(d);
-}
-
-/* Free all thinking history entries. */
-static void thinking_history_clear(AiChatData *d)
-{
-    for (int i = 0; i < AI_MAX_MESSAGES; i++) {
-        free(d->thinking_history[i]);
-        d->thinking_history[i] = NULL;
-    }
-    d->stream_thinking[0] = '\0';
-    d->stream_thinking_len = 0;
-}
-
-/* Append one CHAT_ITEM_COMMAND per entry in a batch's queue, in order,
- * tagged with the batch's id (chat_msg_set_batch) -- the inverse of what
- * WM_AI_RESPONSE builds live, used to rebuild a pending card wherever the
- * command items themselves aren't carried across a rebuild: a session
- * switch (chat_rebuild_display, below) and --ui-demo's "batches"/etc.
- * states (ai_chat_apply_demo_extras, which builds real CmdBatch entries
- * from the canned ApprovalQueue and lets this same replay draw them).
- * Status maps straight onto the fields the list view reads: PENDING/
- * BLOCKED stay unsettled (part of the active card, approved=-1, which
- * chat_msg_set_command already defaults to); DENIED/APPROVED/EXECUTING/
- * COMPLETED all render inline (settled=1) -- APPROVED is included because
- * a card settles the moment every entry is decided, well before the
- * dispatcher actually gets around to sending it (see
- * settle_batch_if_done()). */
-static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
-{
-    if (!list || !batch) return;
-    for (int i = 0; i < batch->q.count; i++) {
-        const ApprovalEntry *e = &batch->q.entries[i];
-        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
-        if (!item) continue;
-        chat_msg_set_command(item, e->command, e->safety,
-                             e->status == APPROVE_BLOCKED);
-        chat_msg_set_quoted(item, e->quoted);
-        chat_msg_set_batch(item, batch->id);
-        chat_msg_set_note(item, e->note);
-        switch (e->status) {
-        case APPROVE_APPROVED:
-        case APPROVE_EXECUTING:
-        case APPROVE_COMPLETED:
-            item->u.cmd.approved = 1;
-            item->u.cmd.settled = 1;
-            break;
-        case APPROVE_DENIED:
-            item->u.cmd.approved = 0;
-            item->u.cmd.settled = 1;
-            break;
-        case APPROVE_PENDING:
-        case APPROVE_BLOCKED:
-        default:
-            break;  /* stays unsettled -- part of the active card */
-        }
-    }
-
-    /* Run state comes from the same queue, so a rebuilt display (session
-     * switch, --ui-demo=executing) shows "running"/"ran" exactly where the
-     * live panel does instead of falling back to "queued". The batch is
-     * alive here by definition -- a rebuild only ever replays batches still
-     * in the set -- hence batch_ending = 0. */
-    chat_msg_batch_sync_run(list, batch->id, &batch->q, 0);
-}
-
-/* Rebuild the chat display from the conversation history.
- * Used when switching sessions to replay the loaded conversation.
- * Populates the ChatMsgList and invalidates the ChatListView. */
-static void chat_rebuild_display(AiChatData *d)
-{
-    if (!d) return;
-
-    chat_msg_list_clear(&d->msg_list);
-    d->stream_ai_item = NULL;
-
-    /* No welcome placeholder any more -- an empty msg_list here (no real
-     * messages replayed below) is painted by chat_listview as the empty/
-     * no-key/no-session state instead (see update_panel_state()). */
-
-    /* Replay messages, skipping the system prompt at index 0 */
-    for (int i = 1; i < d->conv.msg_count; i++) {
-        const AiMessage *msg = &d->conv.messages[i];
-
-        if (msg->role == AI_ROLE_USER) {
-            chat_msg_append(&d->msg_list, CHAT_ITEM_USER,
-                            ai_msg_content(msg));
-        } else if (msg->role == AI_ROLE_ASSISTANT) {
-            /* Tool-use blocks first, matching the live "using tool: <name>"
-             * status row posted while the call is in flight. */
-            if (msg->n_tool_calls > 0 && msg->tool_calls) {
-                for (int ti = 0; ti < msg->n_tool_calls; ti++) {
-                    char tool_call_text[256];
-                    char fetch_desc[160] = "";
-                    if (strcmp(msg->tool_calls[ti].name, "web_fetch") == 0)
-                        (void)web_fetch_describe(msg->tool_calls[ti].input_json,
-                                                 fetch_desc, sizeof(fetch_desc));
-                    if (fetch_desc[0])
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s - %s",
-                                 msg->tool_calls[ti].name, fetch_desc);
-                    else
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s", msg->tool_calls[ti].name);
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_CALL,
-                                    tool_call_text);
-                }
-            }
-            const char *content = ai_msg_content(msg);
-            if (content && content[0] != '\0') {
-                ChatMsgItem *item = chat_msg_append(&d->msg_list,
-                                                     CHAT_ITEM_AI_TEXT,
-                                                     content);
-                if (item && d->thinking_history[i] &&
-                    d->thinking_history[i][0]) {
-                    chat_msg_set_thinking(item, d->thinking_history[i]);
-                    item->u.ai.thinking_complete = 1;
-                }
-            }
-        } else if (msg->role == AI_ROLE_TOOL) {
-            const char *content = ai_msg_content(msg);
-            size_t clen = content ? strlen(content) : 0;
-            char preview[256];
-            size_t plen = clen < 200 ? clen : 200;
-            memcpy(preview, content ? content : "", plen);
-            preview[plen] = '\0';
-            chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
-            if (clen > 200) {
-                char warn[256];
-                agentic_truncation_warning(msg->tool_name, warn, sizeof(warn));
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
-            }
-        }
-        /* Skip system messages injected mid-conversation */
-    }
-
-    /* Pending command batches: rebuild one card per batch still in the
-     * active session's set, oldest first -- the interleaving with earlier
-     * conversation turns isn't reconstructed (every batch's cards land
-     * after the full replay above), only which cards exist and their
-     * state (see docs/superpowers/specs/
-     * 2026-09-09-pending-command-batches.md, "Session switch"). */
-    if (d->active_state) {
-        for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            append_batch_command_items(&d->msg_list, d->active_state->batches.b[bi]);
-    }
-
-    if (d->hChatList) {
-        chat_listview_invalidate(d->hChatList);
-        chat_listview_scroll_to_bottom(d->hChatList);
-    }
-    update_context_bar(d);
-}
-
-/* 1 when the next reply will carry read_debug_log (launch_stream_thread adds
- * it under the same two conditions), so the system prompt may mention it. */
-static int debug_tool_active(const AiChatData *d)
-{
-    return d && dlog_enabled() && ai_provider_supports_tools(d->provider);
-}
-
-/* Initialise the tool registry from the configured search/fetch settings. */
-static void chat_register_tools(AiChatData *d,
-                                const char *search_provider,
-                                const char *search_url,
-                                int max_search_results,
-                                int web_fetch_enabled)
-{
-    ai_tools_init(&d->tool_registry);
-
-    if (search_provider && strcmp(search_provider, "none") != 0) {
-        snprintf(d->search_ctx.search_provider,
-                 sizeof(d->search_ctx.search_provider),
-                 "%s", search_provider);
-        snprintf(d->search_ctx.search_url,
-                 sizeof(d->search_ctx.search_url),
-                 "%s", search_url ? search_url : "");
-        d->search_ctx.max_search_results =
-            max_search_results > 0 ? max_search_results : 7;
-
-        AiToolDef search_tool;
-        memset(&search_tool, 0, sizeof(search_tool));
-        snprintf(search_tool.name, sizeof(search_tool.name), "web_search");
-        snprintf(search_tool.description, sizeof(search_tool.description),
-                 "Search the web for current information. Use this when the user "
-                 "asks about recent events, current data, or anything that requires "
-                 "up-to-date information beyond your training data.");
-        snprintf(search_tool.input_schema_json,
-                 sizeof(search_tool.input_schema_json),
-                 "{\"type\":\"object\","
-                 "\"properties\":{\"query\":{\"type\":\"string\","
-                 "\"description\":\"The search query\"}},"
-                 "\"required\":[\"query\"]}");
-        search_tool.safety = TOOL_SAFE;
-        search_tool.execute = tool_web_search_execute;
-        search_tool.tool_data = &d->search_ctx;
-        ai_tools_register(&d->tool_registry, &search_tool);
-    }
-
-    if (web_fetch_enabled) {
-        d->fetch_ctx.timeout_ms = 10000;
-
-        AiToolDef fetch_tool;
-        memset(&fetch_tool, 0, sizeof(fetch_tool));
-        snprintf(fetch_tool.name, sizeof(fetch_tool.name), "web_fetch");
-        snprintf(fetch_tool.description, sizeof(fetch_tool.description),
-                 "Fetch the contents of a specific web page URL. Use this to retrieve "
-                 "detailed information from a URL found via web search or provided by the user.");
-        snprintf(fetch_tool.input_schema_json,
-                 sizeof(fetch_tool.input_schema_json),
-                 "{\"type\":\"object\","
-                 "\"properties\":{\"url\":{\"type\":\"string\","
-                 "\"description\":\"The URL to fetch\"}},"
-                 "\"required\":[\"url\"]}");
-        fetch_tool.safety = TOOL_SAFE;
-        fetch_tool.execute = tool_web_fetch_execute;
-        fetch_tool.tool_data = &d->fetch_ctx;
-        ai_tools_register(&d->tool_registry, &fetch_tool);
-    }
-
-    /* Reset notification flag whenever tools are reconfigured */
-    d->tool_support_notified = 0;
-    d->tools_gen++;
-}
-
-/* A reply that never started: stop the thinking indicator the send path
- * started, and say why in a status line. */
-static void launch_failed(AiChatData *d, const char *why)
-{
-    KillTimer(d->hwnd, TIMER_THINKING);
-    d->indicator_pos = -1;
-    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, why);
-    if (d->hChatList) chat_listview_invalidate(d->hChatList);
-    update_context_bar(d);
-}
-
-/* Build an AiStream from the current AiChatData state -- its own copies of
- * the key, provider, request body, tool registry and conversation -- and
- * launch the background thread on it. Sets active_state->busy = 1. */
-static void launch_stream_thread(AiChatData *d, const char *src)
-{
-    if (!d || !d->active_state) return;
-
-    AiStream *s = ai_stream_new();
-    if (!s) {
-        launch_failed(d, "[out of memory starting the AI request]");
-        return;
-    }
-    s->post_target = (uintptr_t)d->hwnd;
-    snprintf(s->src, sizeof(s->src), "%s", src ? src : "user");
-    s->panel_visible = (d->hwnd && IsWindowVisible(d->hwnd)) ? 1 : 0;
-
-    strncpy(s->api_key, d->api_key, sizeof(s->api_key) - 1);
-    strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
-    strncpy(s->custom_url, d->custom_url, sizeof(s->custom_url) - 1);
-    int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
-    {
-        int last_msg = d->conv.msg_count - 1;
-        const AiAttachment *att = (last_msg >= 0)
-            ? d->conv.messages[last_msg].attachment : NULL;
-
-        /* Use tool-aware request builder when tools are registered and provider supports them */
-        int has_tools = (d->tool_registry.count > 0) || dlog_enabled();
-        int provider_supports = ai_provider_supports_tools(d->provider);
-
-        if (has_tools && provider_supports) {
-            /* Snapshot the registry: the thread runs the tools from its own
-             * copy, never the panel's (which settings can change, and which
-             * dies with the panel). */
-            /* read_debug_log joins the snapshot only while debugging is on
-             * right now, whatever the panel's own registry holds; its call
-             * counter is the stream's copy (one per user message). */
-            /* The registry is ~42 KB: on the heap, not the UI thread's stack. */
-            AiToolRegistry *launch_reg = (AiToolRegistry *)malloc(sizeof(*launch_reg));
-            if (!launch_reg) {
-                ai_stream_discard(s);
-                launch_failed(d, "[out of memory starting the AI request]");
-                return;
-            }
-            *launch_reg = d->tool_registry;
-            DebugLogToolContext debug_ctx;
-            ai_debug_tool_ctx_init(&debug_ctx);
-            int with_debug = ai_debug_tool_register_if_enabled(launch_reg, &debug_ctx);
-            ai_stream_copy_tools(s, launch_reg, d->tools_gen,
-                                 &d->search_ctx, &d->fetch_ctx,
-                                 with_debug ? &debug_ctx : NULL);
-            free(launch_reg);
-            /* The stream's own fetch copy reports each hop as a chat row. */
-            s->fetch.on_hop = fetch_on_hop;
-            s->fetch.user = s;
-            s->has_tools = 1;
-            /* Serialize tool definitions for this provider */
-            s->tools_json[0] = '\0';
-            if (strcmp(d->provider, "anthropic") == 0)
-                ai_tools_serialize_anthropic(&s->tools, s->tools_json,
-                                             sizeof(s->tools_json));
-            else
-                ai_tools_serialize_openai(&s->tools, s->tools_json,
-                                          sizeof(s->tools_json));
-
-            s->body_len = ai_build_request_body_tools(&d->conv, att,
-                                                      s->tools_json[0] ? s->tools_json : NULL,
-                                                      s->body, AI_BODY_MAX,
-                                                      1, s->provider);
-        } else {
-            s->has_tools = 0;
-            s->body_len = ai_build_request_body_ex(&d->conv, att, s->body,
-                                                   AI_BODY_MAX, 1,
-                                                   s->provider);
-        }
-    }
-
-    if (!conv_ok) {
-        ai_stream_discard(s);
-        launch_failed(d, "[out of memory starting the AI request]");
-        return;
-    }
-
-    {
-        char json_err[256] = "";
-        if (s->body_len == 0 ||
-            !json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
-            ai_stream_discard(s);
-            launch_failed(d, json_err[0] ? json_err : "JSON build failed");
-            return;
-        }
-    }
-
-    /* Register it for this session. Any stream the session still had (a
-     * retry) is aborted and orphaned here, so its late messages are stale. */
-    if (ai_stream_table_add(&d->streams, s, d->active_state) != 0) {
-        ai_stream_discard(s);
-        launch_failed(d, "[too many AI replies in progress]");
-        return;
-    }
-    unsigned stream_id = s->id;
-
-    HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, ai_stream_thread_proc, s, 0, NULL);
-    if (!hThread) {
-        /* No thread: drop its reference for it, then ours. */
-        ai_stream_release(s);
-        ai_stream_table_finish(&d->streams, stream_id);
-        launch_failed(d, "[could not start the AI request thread]");
-        return;
-    }
-    CloseHandle(hThread);
-    s = NULL;   /* the thread may free it from here on; only the id is ours */
-    SetTimer(d->hwnd, TIMER_STREAM_REAP, STREAM_REAP_MS, NULL);
-
-    /* One-time notification when tools are configured but provider doesn't support them */
-    if (d->tool_registry.count > 0 && !ai_provider_supports_tools(d->provider)
-        && !d->tool_support_notified) {
-        d->tool_support_notified = 1;
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-            "[Note: web search/fetch tools require Anthropic, OpenAI, or DeepSeek provider]");
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-    }
-
-    /* Allocate per-session stream accumulators */
-    free(d->active_state->stream_content);
-    d->active_state->stream_content = (char *)calloc(1, AI_MSG_MAX);
-    d->active_state->stream_content_len = 0;
-    free(d->active_state->stream_thinking);
-    d->active_state->stream_thinking = (char *)calloc(1, AI_MSG_MAX);
-    d->active_state->stream_thinking_len = 0;
-    d->active_state->stream_phase = 0;
-
-    d->active_state->busy = 1;
-
-    /* Start activity monitor */
-    {
-        float now = (float)GetTickCount() / 1000.0f;
-        chat_activity_set_phase(&d->activity, ACTIVITY_PROCESSING, now);
-        d->pulse_toggle = 0;
-        SetTimer(d->hwnd, TIMER_HEARTBEAT, HEARTBEAT_MS, NULL);
-        if (d->hChatList) {
-            chat_listview_set_activity(d->hChatList, &d->activity);
-            chat_listview_set_pulse(d->hChatList, 0);
-        }
-    }
-
-    /* Reset display-side stream buffers */
-    d->stream_thinking[0] = '\0';
-    d->stream_thinking_len = 0;
-    d->stream_content[0] = '\0';
-    d->stream_content_len = 0;
-    d->stream_phase = 0;
-    d->last_phase = 0;
-
-    /* Create a placeholder AI item in the ChatMsgList for streaming */
-    d->stream_ai_item = chat_msg_append(&d->msg_list, CHAT_ITEM_AI_TEXT,
-                                         "");
-    if (d->hChatList) {
-        chat_listview_invalidate(d->hChatList);
-        chat_listview_scroll_to_bottom(d->hChatList);
-    }
-
-    /* Switch Send button to Stop while streaming */
-    if (d->hSendBtn) {
-        SetWindowTextW(d->hSendBtn, L"\x25A0"); /* ■ solid square = stop */
-        InvalidateRect(d->hSendBtn, NULL, TRUE);
-    }
-}
-
-/* Abort and orphan the reply `state` has in flight, and put the session
- * back to idle: its busy flag and its stream accumulators. Touches no
- * panel UI -- see cancel_active_stream() for that. Safe with no stream. */
-static void abort_session_stream(AiChatData *d, AiSessionState *state)
-{
-    if (!d || !state) return;
-    ai_stream_table_abort_owner(&d->streams, state);
-    state->busy = 0;
-    free(state->stream_content);
-    state->stream_content = NULL;
-    state->stream_content_len = 0;
-    free(state->stream_thinking);
-    state->stream_thinking = NULL;
-    state->stream_thinking_len = 0;
-    state->stream_phase = 0;
-    state->activity_phase = (int)ACTIVITY_IDLE;
-}
-
-/* Free the payloads of stream messages still queued for a panel that is
- * being destroyed; the system would drop them unread once the window is
- * gone. Their streams are already orphaned, so nothing else is owed. */
-static void drain_stream_messages(HWND hwnd)
-{
-    MSG m;
-    while (PeekMessage(&m, hwnd, WM_AI_RESPONSE, WM_AI_TOOL_MSG, PM_REMOVE)) {
-        if (m.message == WM_AI_RESPONSE) {
-            AiResponseMsg *r = (AiResponseMsg *)m.lParam;
-            if (r) { free(r->content); free(r->thinking); free(r); }
-        } else if (m.message == WM_AI_STREAM || m.message == WM_AI_TOOL_MSG) {
-            AiStreamChunk *c = (AiStreamChunk *)m.lParam;
-            if (c) { free(c->delta); free(c); }
-        }
-    }
-}
-
-/* Resolve which batch a card-action WM_COMMAND targets: lParam is the
- * batch id the card posted (chat_listview.c tags every card action with
- * item->u.cmd.batch), or 0 to mean "the oldest batch still needing the
- * user" -- used by handlers that can't supply a specific id (the
- * integration harness; see docs/superpowers/specs/
- * 2026-09-09-pending-command-batches.md). NULL if there's no active
- * session or no such batch. */
-static CmdBatch *resolve_batch(AiChatData *d, LPARAM lParam)
-{
-    if (!d || !d->active_state) return NULL;
-    int id = (int)lParam;
-    return id ? cmd_batch_find(&d->active_state->batches, id)
-              : cmd_batch_first_pending(&d->active_state->batches);
-}
-
-/* Once every entry in a batch has been decided (chat_approval_all_decided
- * -- PENDING is the only thing that blocks this; BLOCKED counts as
- * decided), render its command items inline (chat_msg_batch_settle) and,
- * if nothing in it is left to run, remove the batch itself. A batch with
- * an approved-but-not-yet-sent entry stays in the set -- dispatch_tick()
- * removes it once execution actually finishes, since its ApprovalQueue is
- * still needed to drive that. Always follows up with a re-layout
- * (chat_listview_invalidate), since WM_PAINT does not recalc_layout on
- * its own. */
-static void settle_batch_if_done(AiChatData *d, CmdBatch *batch)
-{
-    if (!d || !batch) return;
-    if (!chat_approval_all_decided(&batch->q)) return;
-
-    int batch_id = batch->id;
-    int has_runnable = chat_approval_next_approved(&batch->q) >= 0;
-
-    chat_msg_batch_settle(&d->msg_list, batch_id);
-    if (!has_runnable && d->active_state)
-        cmd_batch_remove(&d->active_state->batches, batch_id);
-    if (d->hChatList) chat_listview_invalidate(d->hChatList);
-}
-
-/* Cancel the active AI stream: signal abort, clear busy, reset UI state.
- * Safe to call even when no stream is active. */
-static void cancel_active_stream(AiChatData *d)
-{
-    if (!d) return;
-
-    /* Abort and orphan this session's stream only -- another tab's reply
-     * keeps running -- and put the session back to idle. */
-    abort_session_stream(d, d->active_state);
-
-    /* Kill timers */
-    KillTimer(d->hwnd, TIMER_HEARTBEAT);
-    KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-    d->dispatch_active = 0;
-    chat_activity_reset(&d->activity);
-    if (d->hChatList) {
-        chat_listview_set_pulse(d->hChatList, 0);
-        chat_listview_invalidate(d->hChatList);
-    }
-
-    /* Remove the incomplete streaming AI item */
-    if (d->stream_ai_item) {
-        chat_msg_remove(&d->msg_list, d->stream_ai_item);
-        d->stream_ai_item = NULL;
-    }
-
-    /* Reset streaming state */
-    d->stream_phase = 0;
-    d->stream_content[0] = '\0';
-    d->stream_content_len = 0;
-    d->stream_thinking[0] = '\0';
-    d->stream_thinking_len = 0;
-
-    /* Remove the last assistant message from conv if partially added */
-    if (d->conv.msg_count > 0 &&
-        d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
-        ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
-
-    /* Update UI */
-    update_context_bar(d);
-    if (d->hChatList) chat_listview_invalidate(d->hChatList);
-
-    /* Restore Send button from Stop */
-    if (d->hSendBtn) {
-        SetWindowText(d->hSendBtn, ">");
-        InvalidateRect(d->hSendBtn, NULL, TRUE);
-    }
-}
-
-/* Grow the context scratch buffers to fit the configured line budget.
- * Buffers only ever grow, so a shrinking setting keeps the larger block.
- * On allocation failure the previous (smaller) buffer stays usable; only a
- * first-call failure leaves a NULL, which callers must tolerate.
- * Returns non-zero when both buffers are usable. */
-static int ctx_buffers_ensure(AiChatData *d)
-{
-    int cols = (d->active_term && d->active_term->cols > 0)
-               ? d->active_term->cols : 80;
-    size_t need_term   = ai_context_buf_size(d->context_lines, cols);
-    size_t need_prompt = need_term + AI_MSG_MAX;
-
-    if (d->ctx_term_cap < need_term) {
-        char *nb = (char *)realloc(d->ctx_term, need_term);
-        if (nb) { d->ctx_term = nb; d->ctx_term_cap = need_term; }
-    }
-    if (d->ctx_prompt_cap < need_prompt) {
-        char *nb = (char *)realloc(d->ctx_prompt, need_prompt);
-        if (nb) { d->ctx_prompt = nb; d->ctx_prompt_cap = need_prompt; }
-    }
-
-    /* Last resort on a failed first allocation: take whatever we can get. */
-    if (!d->ctx_term) {
-        d->ctx_term = (char *)malloc((size_t)AI_MSG_MAX);
-        if (d->ctx_term) d->ctx_term_cap = (size_t)AI_MSG_MAX;
-    }
-    if (!d->ctx_prompt) {
-        d->ctx_prompt = (char *)malloc((size_t)AI_MSG_MAX);
-        if (d->ctx_prompt) d->ctx_prompt_cap = (size_t)AI_MSG_MAX;
-    }
-
-    return (d->ctx_term && d->ctx_prompt) ? 1 : 0;
-}
-
-/* The message box's text as UTF-8 with every CR LF turned into LF (spec
- * 2026-10-18 section 2). Read as UTF-16 rather than with the ANSI
- * GetWindowText, so a user item never holds code-page bytes the selection's
- * UTF-8 boundary rules would misread. Heap (the caller frees it); NULL when
- * memory runs out. */
-static char *input_text_utf8(HWND hInput)
-{
-    int wlen = GetWindowTextLengthW(hInput);
-    if (wlen < 0) wlen = 0;
-    size_t wbytes = ((size_t)wlen + 1) * sizeof(wchar_t);
-    wchar_t *w = (wchar_t *)malloc(wbytes);
-    if (!w) return NULL;
-    int got = GetWindowTextW(hInput, w, wlen + 1);
-    if (got < 0) got = 0;
-    if (got > wlen) got = wlen;
-    w[got] = L'\0';
-    int need = WideCharToMultiByte(CP_UTF8, 0, w, got + 1, NULL, 0, NULL, NULL);
-    char *u = need > 0 ? (char *)malloc((size_t)need) : NULL;
-    if (u && WideCharToMultiByte(CP_UTF8, 0, w, got + 1, u, need,
-                                 NULL, NULL) <= 0)
-        u[0] = '\0';
-    secure_zero(w, wbytes);
-    free(w);
-    if (u) text_crlf_to_lf(u);
-    return u;
-}
-
-static void send_user_message(AiChatData *d)
-{
-    /* Pending command batches: a card never blocks the input (rule 1) --
-     * only a streaming reply or an active dispatcher does, same as the
-     * IDC_CHAT_SEND handler's Send/Stop toggle already enforces for the
-     * primary UI path. */
-    if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
-        return;
-
-    /* The user is talking again: the unattended-round count starts over
-     * (guard-rails spec 2026-11-04 section 1). */
-    ai_rounds_user_message(d->active_state);
-
-    char *input = input_text_utf8(d->hInput);
-    if (!input) return;
-    /* The text as read: the prefix strip below shortens the string, but the
-     * bytes past the new end still hold the original, so the wipes cover
-     * this length. */
-    const size_t input_len = strlen(input);
-
-    /* Strip any "[Image attached] " prefixes inserted by clipboard paste */
-    {
-        const char *img_prefix = "[Image attached] ";
-        size_t pfx_len = strlen(img_prefix);
-        char *text_start = input;
-        while (strstr(text_start, img_prefix) == text_start)
-            text_start += pfx_len;
-        if (text_start != input)
-            memmove(input, text_start, strlen(text_start) + 1);
-    }
-
-    if (input[0] == '\0') {
-        secure_zero(input, input_len);
-        free(input);
-        return;
-    }
-
-    SetWindowText(d->hInput, "");
-
-    /* Display user message in ChatListView */
-    chat_msg_append(&d->msg_list, CHAT_ITEM_USER, input);
-    if (d->hChatList) {
-        chat_listview_invalidate(d->hChatList);
-        chat_listview_scroll_to_bottom(d->hChatList);
-    }
-
-    /* Extract terminal context into the panel's persistent scratch buffer */
-    const char *term_text = "";
-    int ctx_ok = ctx_buffers_ensure(d);
-    if (ctx_ok) {
-        d->ctx_term[0] = '\0';
-        if (d->active_term) {
-            term_extract_last_n(d->active_term, d->context_lines,
-                                d->ctx_term, d->ctx_term_cap);
-        }
-        term_text = d->ctx_term;
-    }
-
-
-    /* On first message, add system prompt */
-    if (ctx_ok && d->conv.msg_count == 0) {
-        char  *sys_prompt     = d->ctx_prompt;
-        size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
-                                  d->session_notes, d->system_notes,
-                                  active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
-        /* Append tool descriptions if tools are registered and provider supports them */
-        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
-            size_t len = strlen(sys_prompt);
-            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n")) {
-                for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                            "- %s: %s\n",
-                            d->tool_registry.tools[ti].name,
-                            d->tool_registry.tools[ti].description))
-                        break;
-                }
-                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                    "request them via the tool-use API and the results will be provided.\n\n"
-                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            }
-        }
-        ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
-    } else if (ctx_ok && d->active_term) {
-        /* Update system prompt with fresh terminal context */
-        char  *sys_prompt     = d->ctx_prompt;
-        size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
-                                  d->session_notes, d->system_notes,
-                                  active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
-        /* Append tool descriptions */
-        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
-            size_t len = strlen(sys_prompt);
-            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n")) {
-                for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                            "- %s: %s\n",
-                            d->tool_registry.tools[ti].name,
-                            d->tool_registry.tools[ti].description))
-                        break;
-                }
-                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                    "request them via the tool-use API and the results will be provided.\n\n"
-                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            }
-        }
-        /* Replace the first (system) message */
-        ai_conv_set_system(&d->conv, sys_prompt);
-    }
-
-    ai_conv_add(&d->conv, AI_ROLE_USER, input);
-
-    /* Attach pending image to the user message just added */
-    if (d->pending_attachment) {
-        int last = d->conv.msg_count - 1;
-        if (last >= 0 && d->conv.messages[last].role == AI_ROLE_USER) {
-            d->conv.messages[last].attachment =
-                ai_attachment_dup(d->pending_attachment);
-        }
-    }
-
-
-    update_context_bar(d);
-
-    d->stream_display_start = -1;
-    start_indicator(d, "thinking");
-
-    launch_stream_thread(d, "user");
-
-    /* Clear pending attachment after thread is launched */
-    ai_attachment_free(&d->pending_attachment);
-
-    secure_zero(input, input_len);
-    free(input);
-}
-
-/* line_clear_mode is the caller's (dispatch_tick's) already-decided
- * DispatchLineClearMode -- computed once per tick from the same
- * term_cursor_row_is_windows_prompt() reading dispatch_tick used for its
- * own no-prefix safety gate, and handed in rather than recomputed here,
- * so the prefix actually written can never disagree with the check that
- * decided it was safe to send at all (dispatch_line_clear.h). */
-static void execute_command(AiChatData *d, const char *cmd,
-                             DispatchLineClearMode line_clear_mode)
-{
-    if (!d || !cmd || !cmd[0]) return;
-    SessionIo *io = d->active_io;
-    if (!io || !io->write) {
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                        "[error: no active session]");
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        return;
-    }
-    /* Defense in depth: even though ai_extract_commands() and
-     * chat_approval_add() already refuse a command containing a raw
-     * control byte, a UTF-8-encoded C1 control, or a bidi override/isolate
-     * character, refuse to write one to the channel here too -- this is
-     * the last point before the bytes reach the remote shell. Shared with
-     * paste_filter_controls() -- see text_has_unsafe_command_char() in
-     * src/core/paste_filter.h. */
-    if (text_has_unsafe_command_char(cmd)) {
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-            "[command rejected: control characters inside an EXEC block]");
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        return;
-    }
-
-    /* Clear any existing text on the line before pasting -- but only for a
-     * shell known to treat Ctrl+E (end of line) + Ctrl+U (kill to start of
-     * line) as the readline line-editing idiom it is. PSReadLine
-     * (PowerShell) and cmd.exe both take those two bytes as literal input
-     * instead, which used to land "^E^U" in front of every dispatched
-     * command (see dispatch_line_clear.h). The caller (dispatch_tick) has
-     * already confirmed the line is otherwise empty and quiet since the
-     * user's last keystroke when no prefix is about to be sent -- see
-     * term_at_unambiguous_prompt() and dispatch_keystroke_too_recent(). */
-    if (line_clear_mode == DISPATCH_LINE_CLEAR_READLINE) {
-        io->write(io->ctx, "\x05\x15", 2);
-    }
-
-    /* Send command + CR to the session (CR = Enter key, same as WM_CHAR) */
-    io->write(io->ctx, cmd, (size_t)strlen(cmd));
-    io->write(io->ctx, "\r", 1);
-
-}
-
-/* Send a follow-up user turn after a batch finishes running and launch a
- * fresh stream for it. msg_text is the continue message body (built by
- * the caller via ai_build_continue_text() -- rule 4). `unattended` is 1 when
- * the batch that just finished ran without the user acting on it by hand
- * (CmdBatch.user_acted == 0): it counts towards the Auto-approve round cap,
- * while an attended batch resets the count (ai_rounds_continue()). */
-static void send_continue_message(AiChatData *d, const char *msg_text,
-                                  int unattended)
-{
-    if (!d || !d->active_state || d->active_state->busy) return;
-    if (!msg_text || !msg_text[0]) return;
-
-    ai_rounds_continue(d->active_state, unattended);
-
-    /* Extract fresh terminal context after command execution */
-    const char *term_text = "";
-    int ctx_ok = ctx_buffers_ensure(d);
-    if (ctx_ok) {
-        d->ctx_term[0] = '\0';
-        if (d->active_term) {
-            term_extract_last_n(d->active_term, d->context_lines,
-                                d->ctx_term, d->ctx_term_cap);
-        }
-        term_text = d->ctx_term;
-    }
-
-
-    /* Update system prompt with fresh terminal context */
-    if (ctx_ok && d->conv.msg_count > 0 && d->active_term) {
-        char  *sys_prompt     = d->ctx_prompt;
-        size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
-                                  d->session_notes, d->system_notes,
-                                  active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
-        ai_conv_set_system(&d->conv, sys_prompt);
-    }
-
-    ai_conv_add(&d->conv, AI_ROLE_USER, msg_text);
-
-
-    start_indicator(d, "continuing");
-
-    launch_stream_thread(d, "continue");
-}
-
-/* Start the command dispatcher on one specific batch: sends every command
- * in its queue with status APPROVE_APPROVED, in order, one at a time,
- * only once active_term is sitting at a shell prompt (see
- * term_at_prompt()). Does not send anything itself -- the TIMER_CMD_QUEUE
- * tick (dispatch_tick(), driven from AiChatWndProc's WM_TIMER) does the
- * actual sending. Safe to call repeatedly (e.g. once per single-command
- * Approve click, or from a different batch's Run while this one is
- * already running): a no-op while any dispatch is active or the batch
- * has nothing approved yet -- another card's Run while the dispatcher is
- * busy just leaves its commands APPROVED, and cmd_batch_next_runnable()
- * picks the batch up once the current one finishes (see
- * maybe_start_next_batch()). */
-static void dispatch_start(AiChatData *d, int batch_id)
-{
-    if (!d || !d->active_state || d->dispatch_active) return;
-
-    CmdBatch *batch = cmd_batch_find(&d->active_state->batches, batch_id);
-    if (!batch || chat_approval_next_approved(&batch->q) < 0) return;
-
-    DWORD now = GetTickCount();
-
-    d->dispatch_active = 1;
-    d->dispatch_batch_id = batch->id;
-    d->dispatch_seq = d->active_term ? d->active_term->write_seq : 0;
-    d->dispatch_await_echo = 0;
-    d->dispatch_last_change_tick = now;
-    d->dispatch_last_idx = -1;
-    d->dispatch_sent_count = 0;
-    d->dispatch_stall_reported = 0;
-    d->dispatch_ambiguous_since_tick = 0;
-    d->dispatch_ambiguous_reported = 0;
-    d->dispatch_start_tick = now;
-    d->dispatch_last_progress_tick = now;
-    d->dispatch_last_diag_log_tick = 0;
-
-    {
-        int windows_prompt = term_cursor_row_is_windows_prompt(d->active_term);
-        char line[176];
-        snprintf(line, sizeof(line),
-            "dispatch_start: batch=%d kind=%s shell=%s mode=%s",
-            batch->id,
-            session_kind_name(active_session_kind(d)),
-            active_shell_name(d) ? active_shell_name(d) : "(none)",
-            dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d),
-                                      windows_prompt)
-                == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE");
-        DLOG(DLOG_AI, DLOG_INFO, 0, "dispatch.start", "msg=%s", line);
-    }
-
-    SetTimer(d->hwnd, TIMER_CMD_QUEUE, CMD_QUEUE_POLL_MS, NULL);
-
-    /* Send button shows Stop while the dispatcher is running, same as
-     * while an AI stream is in flight. */
-    if (d->hSendBtn) {
-        SetWindowTextW(d->hSendBtn, L"\x25A0");
-        InvalidateRect(d->hSendBtn, NULL, TRUE);
-    }
-}
-
-/* If nothing is currently dispatching or streaming, start the oldest
- * batch that has an approved-but-unsent command (rule 3: a batch whose
- * Run was clicked while another was dispatching "is queued and runs
- * next"). Called once a stream finishes (the reply itself, or a batch's
- * continue message) so a queued batch picks up right away instead of
- * waiting for another user action. */
-static void maybe_start_next_batch(AiChatData *d)
-{
-    if (!d || !d->active_state || d->dispatch_active || ACTIVE_BUSY(d)) return;
-    CmdBatch *nb = cmd_batch_next_runnable(&d->active_state->batches);
-    if (nb) dispatch_start(d, nb->id);
-}
-
-/* Stop the dispatcher: kill the timer, mark the running batch's cards with
- * what actually happened to them, settle and remove just that batch's card,
- * and restore the Send button. Other pending batches are untouched -- "Stop
- * cancels the running batch only" (rule 3). When status_msg is non-NULL it
- * is appended as a status line (the Stop button path); a session switch or
- * panel close cancels silently (NULL). A no-op when the dispatcher isn't
- * running.
- *
- * Nothing is force-denied any more (2026-09-23 dispatch-states spec,
- * section 2): a command the dispatcher never sent stays APPROVE_APPROVED in
- * the queue and chat_msg_batch_sync_run(..., batch_ending = 1) paints it
- * "not run", which is the honest label -- the user denied nothing. The
- * batch is removed from the set on the next line, so a later
- * dispatch_start() cannot resurrect it either way.
- *
- * `notify` marks the two paths the user can see the end of -- the Stop
- * button and the session ending mid-batch. Those additionally (a) send
- * Ctrl+C when the terminal is sitting at a continuation prompt, so the
- * shell discards the half-finished line and gives the user a prompt back,
- * and (b) tell the model what ran and what did not, instead of leaving it
- * to assume every command it proposed was executed (section 3). */
-static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
-{
-    if (!d || !d->dispatch_active) return;
-
-    KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-    d->dispatch_active = 0;
-    d->dispatch_stall_reported = 0;
-    d->dispatch_ambiguous_since_tick = 0;
-    d->dispatch_ambiguous_reported = 0;
-
-    char continue_text[4096] = "";
-    int have_continue = 0;
-    int unattended = 1;
-
-    CmdBatch *batch = d->active_state
-        ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
-        : NULL;
-    if (batch) {
-        /* Read before cmd_batch_remove() below frees the batch. */
-        unattended = !batch->user_acted;
-        chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 1);
-
-        if (notify) {
-            int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
-            char first_cmd[1024] = "";
-            if (batch->q.count > 0)
-                snprintf(first_cmd, sizeof(first_cmd), "%s",
-                         batch->q.entries[0].command);
-            have_continue = ai_build_continue_text(newer_exchanges, first_cmd,
-                                                   &batch->q, continue_text,
-                                                   sizeof(continue_text)) > 0;
-            /* The per-command outcomes list can overflow the buffer on a
-             * batch with many/long commands -- fall back to the opening
-             * sentence alone so a continue message is still sent and
-             * maybe_start_next_batch() still gets its turn once it
-             * completes, rather than silently dropping the continue. */
-            if (!have_continue)
-                have_continue = ai_build_continue_text(newer_exchanges,
-                                                       first_cmd, NULL,
-                                                       continue_text,
-                                                       sizeof(continue_text)) > 0;
-        }
-
-        chat_msg_batch_settle(&d->msg_list, batch->id);
-        cmd_batch_remove(&d->active_state->batches, batch->id);
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-    }
-    d->dispatch_batch_id = 0;
-
-    /* Stop at a continuation prompt: the shell is holding an unfinished
-     * line (an unclosed quote, a half-typed here-doc). Ctrl+C throws it
-     * away so the next thing the user types isn't swallowed by it. At a
-     * primary prompt nothing is sent, as before. */
-    if (notify && d->active_io && d->active_io->write && d->active_term &&
-        term_at_continuation_prompt(d->active_term))
-        d->active_io->write(d->active_io->ctx, "\x03", 1);
-
-    if (status_msg) {
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_msg);
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-    }
-
-    if (d->hSendBtn) {
-        SetWindowText(d->hSendBtn, ">");
-        InvalidateRect(d->hSendBtn, NULL, TRUE);
-    }
-
-    if (have_continue) send_continue_message(d, continue_text, unattended);
-}
-
-/* Diagnostic only, for dispatch_log_stall_if_due() below -- never used by
- * term_at_prompt()/term_at_unambiguous_prompt() etc. themselves. Mirrors
- * term_cursor_row_text()'s guards (src/term/buffer.c, private to that
- * file) in the same order, so buf holding text vs. a reason lines up
- * exactly with whether that function would have produced a row -- but
- * explains a failure instead of returning 0 silently, and represents the
- * row's raw content instead of that function's lossy ASCII-only copy
- * (every non-ASCII codepoint becomes '?' there, and a real space cell is
- * indistinguishable from a blank one). buf always ends up NUL-terminated
- * within buf_size: on success, the row's text up to the cursor with
- * control bytes and codepoints above ASCII written as \xNN and a blank
- * cell as a literal space (so trailing spaces stay visible); on failure,
- * the reason, including -- for the one case worth pinpointing -- the
- * column and codepoint of the non-blank cell found after the cursor.
- * Returns 1/0 matching term_cursor_row_text()'s own return. */
-static int describe_cursor_row(const Terminal *term, char *buf, size_t buf_size)
-{
-    if (!buf || buf_size == 0) return 0;
-    buf[0] = '\0';
-
-    if (!term) { snprintf(buf, buf_size, "no terminal"); return 0; }
-    if (term->alt_screen_active) {
-        snprintf(buf, buf_size, "alt screen active");
-        return 0;
-    }
-    if (term->cursor.row < 0 || term->cursor.row >= term->rows) {
-        snprintf(buf, buf_size, "cursor row %d out of range [0,%d)",
-                 term->cursor.row, term->rows);
-        return 0;
-    }
-    if (term->cursor.col < 0) {
-        snprintf(buf, buf_size, "cursor col %d < 0", term->cursor.col);
-        return 0;
-    }
-
-    /* term_screen_to_phys() (term.h) -- the exact mapping
-     * term_cursor_row_text() itself uses -- not a hand-rolled copy. This
-     * diagnostic's own former copy added a `logical < lines_count` check
-     * that production's term_cursor_row_text() no longer has (see
-     * term_screen_to_phys()'s comment): that extra check is what made
-     * this very function log "logical row 7 out of range [0,1)" for the
-     * regression report that led here -- the diagnostic was reproducing
-     * the bug it was added to diagnose, not just describing it. */
-    int physical = term_screen_to_phys(term, term->cursor.row);
-    if (physical < 0 || physical >= term->lines_capacity) {
-        snprintf(buf, buf_size, "physical row %d out of range [0,%d)",
-                 physical, term->lines_capacity);
-        return 0;
-    }
-    TermRow *row = term->lines[physical];
-    if (!row) { snprintf(buf, buf_size, "row slot empty"); return 0; }
-
-    int col = term->cursor.col;
-    if (col > term->cols) col = term->cols;
-
-    for (int c = col; c < row->len && c < term->cols; c++) {
-        uint32_t cp = row->cells[c].codepoint;
-        if (cp != 0 && cp != ' ') {
-            snprintf(buf, buf_size,
-                     "non-blank cell after cursor: column %d, U+%04X",
-                     c, (unsigned)cp);
-            return 0;
-        }
-    }
-
-    size_t pos = 0;
-    for (int i = 0; i < col && pos + 5 < buf_size; i++) {
-        uint32_t cp = row->cells[i].codepoint;
-        if (cp == 0) cp = ' ';
-        if (cp >= 0x20 && cp < 0x7F) {
-            buf[pos++] = (char)cp;
-        } else {
-            int n = snprintf(buf + pos, buf_size - pos, "\\x%02X",
-                              cp <= 0xFFu ? (unsigned)cp : 0xFFu);
-            if (n < 0) break;
-            pos += (size_t)n;
-        }
-    }
-    buf[pos < buf_size ? pos : buf_size - 1] = '\0';
-    return 1;
-}
-
-/* Diagnostic only, added for a 2026-09-25 regression report: a maintainer's
- * single-command PowerShell batch ran to completion in the terminal but
- * the AI panel never settled -- card stuck "running" forever, no status
- * line, so nothing in the product's own UI said why. A live reproduction
- * against a real ConPTY-hosted PowerShell could not reproduce it (see the
- * wintest case below), which points at something particular to the
- * reporter's own machine/session -- this exists to capture that, without
- * asking for a debugger attach. Logs at ai WARN (the debug log folder,
- * always on -- see init_app_log(), src/main.c) every field the settle
- * gate (`ready = !dispatch_await_echo && quiet && term_at_prompt(term)`,
- * dispatch_tick() below) and the no-prefix safety checks actually read,
- * but only once a batch has gone >3 s without sending a command or
- * settling (d->dispatch_last_progress_tick), and at most once every 2 s
- * after that (d->dispatch_last_diag_log_tick) -- cheap in the case that
- * matters (nothing happening) and silent otherwise. Never logs command
- * text beyond the cursor row (which may hold whatever the user typed
- * there -- acceptable for a local diagnostic log -- but never the AI
- * conversation). */
-static void dispatch_log_stall_if_due(AiChatData *d, CmdBatch *batch)
-{
-    if (!d || !batch) return;
-
-    DWORD now = GetTickCount();
-    if (now - d->dispatch_last_progress_tick <= 3000u) return;
-    if (d->dispatch_last_diag_log_tick != 0 &&
-        now - d->dispatch_last_diag_log_tick < 2000u) return;
-    d->dispatch_last_diag_log_tick = now;
-
-    Terminal *term = d->active_term;
-
-    int next_idx = chat_approval_next_approved(&batch->q);
-    unsigned long seq = term ? term->write_seq : 0;
-    int quiet = (int)((now - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS);
-    int at_prompt = term_at_prompt(term);
-    int unambiguous = term_at_unambiguous_prompt(term);
-    int continuation = term_at_continuation_prompt(term);
-    int windows_prompt = term_cursor_row_is_windows_prompt(term);
-
-    DispatchLineClearMode mode = dispatch_line_clear_mode(
-        active_session_kind(d), active_shell_name(d), windows_prompt);
-
-    char keystroke_desc[24] = "none";
-    if (d->active_io && d->active_io->last_input_tick)
-        snprintf(keystroke_desc, sizeof(keystroke_desc), "%lu",
-                 (unsigned long)(now - *d->active_io->last_input_tick));
-
-    char row_desc[220];
-    int row_ok = describe_cursor_row(term, row_desc, sizeof(row_desc));
-
-    char idx_desc[16];
-    if (next_idx >= 0)
-        snprintf(idx_desc, sizeof(idx_desc), "%d", next_idx);
-    else
-        snprintf(idx_desc, sizeof(idx_desc), "settle");
-
-    /* Plain state as fields; the cursor-row text (what the user may have
-     * typed there) goes through DLOG_CONTENT, so it is written only when
-     * "Include terminal content" is on. row_ok says whether row_desc is the
-     * row or the reason there is none. */
-    DLOG(DLOG_AI, DLOG_WARN, 0, "dispatch.stall",
-         "batch=%d next=%s sent=%d await_echo=%d quiet=%d quiet_ms=%lu "
-         "write_seq=%lu dispatch_seq=%lu at_prompt=%d unambiguous=%d "
-         "continuation=%d windows_prompt=%d mode=%s keystroke_ms=%s "
-         "alt_screen=%d row=%d col=%d rows=%d cols=%d row_ok=%d",
-         batch->id, idx_desc, d->dispatch_sent_count, d->dispatch_await_echo,
-         quiet, (unsigned long)(now - d->dispatch_last_change_tick),
-         seq, d->dispatch_seq, at_prompt, unambiguous, continuation,
-         windows_prompt,
-         mode == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE",
-         keystroke_desc,
-         term ? (int)term->alt_screen_active : -1,
-         term ? term->cursor.row : -1, term ? term->cursor.col : -1,
-         term ? term->rows : -1, term ? term->cols : -1,
-         row_ok);
-    DLOG_CONTENT(DLOG_AI, DLOG_WARN, 0, "dispatch.stall.row", "text",
-                 row_desc, strlen(row_desc));
-}
-
-/* TIMER_CMD_QUEUE tick: advance the dispatcher (on d->dispatch_batch_id)
- * by at most one command. Tracks "quiet" (no terminal writes) and
- * "changed since the last send" (dispatch_await_echo) off
- * active_term->write_seq so the prompt that was on screen before a
- * command runs can never be mistaken for the next prompt. See
- * docs/superpowers/specs/2026-09-07-command-dispatch-and-
- * auto-approve-levels.md, section A. */
-static void dispatch_tick(AiChatData *d)
-{
-    if (!d || !d->dispatch_active) return;
-
-    /* The transport can vanish mid-batch (window.c clears active_io before
-     * closing it at EOF), and the batch must be abandoned visibly rather
-     * than waiting for a prompt that cannot come. */
-    if (!d->active_term || !d->active_io) {
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                        "[session ended -- remaining commands cancelled]");
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        /* notify: the model is told which commands ran and which did not,
-         * rather than being left to assume the whole batch executed. No
-         * Ctrl+C -- active_io is already gone, which is why we're here. */
-        dispatch_cancel(d, NULL, 1);
-        return;
-    }
-
-    CmdBatch *batch = d->active_state
-        ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
-        : NULL;
-    if (!batch) {
-        /* The batch vanished from under the dispatcher (e.g. the session
-         * it belonged to was switched away from and its dispatch was
-         * cancelled, but this stale tick still fired) -- stop cleanly. */
-        KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-        d->dispatch_active = 0;
-        d->dispatch_batch_id = 0;
-        d->dispatch_stall_reported = 0;
-        d->dispatch_ambiguous_since_tick = 0;
-        d->dispatch_ambiguous_reported = 0;
-        if (d->hSendBtn) {
-            SetWindowText(d->hSendBtn, ">");
-            InvalidateRect(d->hSendBtn, NULL, TRUE);
-        }
-        return;
-    }
-
-    dispatch_log_stall_if_due(d, batch);
-
-    unsigned long seq = d->active_term->write_seq;
-    if (seq != d->dispatch_seq) {
-        d->dispatch_seq = seq;
-        d->dispatch_last_change_tick = GetTickCount();
-        d->dispatch_await_echo = 0;
-        /* Output means the stall (if there was one) is over: the next one
-         * gets its own status line. The ambiguous-prompt wait is *not*
-         * reset here, deliberately: a command that updates a line ending
-         * in something prompt-shaped (a progress bar's "... 50 %",
-         * redirection's "... >") on every burst of output would otherwise
-         * re-arm and re-report every cycle without ever timing out --
-         * dispatch_ambiguous_since_tick/_reported are cleared only when
-         * the check actually passes, or the batch starts, cancels or
-         * finishes (see below and dispatch_start()/dispatch_cancel()). */
-        d->dispatch_stall_reported = 0;
-    }
-
-    int quiet = (GetTickCount() - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS;
-    int ready = !d->dispatch_await_echo && quiet &&
-                term_at_prompt(d->active_term);
-    if (!ready) {
-        /* A shell waiting for the rest of an unfinished line looks exactly
-         * like a hang from here: no output, and no primary prompt to send
-         * the next command to. Say so once per stall and keep waiting --
-         * never a Ctrl+C of our own accord, because a command that prompts
-         * with "> " itself (read -p, a REPL) is indistinguishable from an
-         * unclosed quote and killing it would be worse. The check runs
-         * whether or not a command has been sent, so a quote the user
-         * opened by hand before the batch is reported too. */
-        if (quiet && !d->dispatch_await_echo && !d->dispatch_stall_reported &&
-            term_at_continuation_prompt(d->active_term)) {
-            d->dispatch_stall_reported = 1;
-            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                "[the shell is waiting for more input (a \">\" or \">>\" prompt). "
-                "Finish the line in the terminal, or press Stop to cancel.]");
-            if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        }
-        return;
-    }
-
-    int idx = chat_approval_next_approved(&batch->q);
-    if (idx >= 0) {
-        if (d->dispatch_last_idx >= 0) {
-            chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
-            /* Sync the display now, not only right before the next send
-             * below: the checks that follow can return without sending
-             * anything this tick (a no-prefix wait, possibly for several
-             * ticks in a row), and the card for the command that just
-             * finished must not sit showing "running" for that whole
-             * wait. */
-            chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 0);
-            if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        }
-
-        /* Computed once per tick and reused for both the safety gate below
-         * and the execute_command() call further down, so the prefix
-         * actually written can never disagree with the check that decided
-         * it was safe to send (see execute_command()'s line_clear_mode
-         * parameter doc). term_cursor_row_is_windows_prompt() overrides
-         * the session's own kind/shell name to NONE whenever the live
-         * cursor row looks like a PowerShell or cmd prompt -- an SSH
-         * session to a Windows host, or a pwsh/cmd started as a nested
-         * shell inside a local Git bash/MSYS2 session (dispatch_line_clear.h). */
-        int windows_prompt = term_cursor_row_is_windows_prompt(d->active_term);
-        DispatchLineClearMode line_clear_mode = dispatch_line_clear_mode(
-            active_session_kind(d), active_shell_name(d), windows_prompt);
-
-        /* For a local shell that gets no clear-line prefix (PowerShell,
-         * cmd, custom, or one not yet resolved -- see execute_command()
-         * and dispatch_line_clear.h; SSH normally always gets the prefix,
-         * whatever its CmdPlatform, unless windows_prompt overrides it),
-         * term_at_prompt()'s loose check above -- the cursor row simply
-         * ends in a prompt character -- is not enough to send on: "PS
-         * C:\Users\thoma> ls -la >" also ends in '>' (a redirection
-         * operator mid-command) and would have the AI's command appended
-         * to a line the user is still typing. A readline shell (or any SSH
-         * session not currently at a Windows prompt) always gets the
-         * Ctrl+E Ctrl+U prefix regardless of what is on the line first, so
-         * the loose check already covers it -- this block runs only for
-         * the no-prefix path, and only here (inside idx >= 0, after the
-         * previous entry is marked completed), so a fully-sent batch
-         * settling below is never at risk of it and every card reflects
-         * reality before any cancel below. */
-        if (line_clear_mode == DISPATCH_LINE_CLEAR_NONE) {
-            DWORD now_tick = GetTickCount();
-
-            /* A keystroke landed too recently to trust the cursor row
-             * (ConPTY echoes asynchronously, so a character just typed
-             * but not yet echoed is invisible to the row text below --
-             * see dispatch_keystroke_too_recent()). Delay silently: this
-             * is not "an ambiguous prompt" -- it resolves on its own the
-             * moment the echo catches up (almost always well under a
-             * second), so it must not post the status line below, nor
-             * start or advance the 5 s cancel clock -- only a prompt row
-             * that is genuinely ambiguous does either of those.
-             * last_input_tick (SessionIo.last_input_tick,
-             * src/term/session_io.h) points at Session.last_term_input_tick
-             * specifically, bumped only where a keystroke or paste is
-             * actually written to *this* terminal's session -- not AI-panel
-             * typing or mouse-wheel scrolling, neither of which can glue
-             * text onto a dispatched command, so typing the AI's next
-             * question cannot stall or cancel this batch. NULL when
-             * nothing tracks one for this session, in which case there is
-             * nothing to guard against. */
-            if (d->active_io && d->active_io->last_input_tick) {
-                unsigned long since_keystroke = (unsigned long)
-                    (now_tick - *d->active_io->last_input_tick);
-                if (dispatch_keystroke_too_recent(since_keystroke))
-                    return;
-            }
-
-            /* The stricter, bare-prompt-only check: an ordinary prompt can
-             * legitimately have a space right before its terminator (cmd's
-             * default "$P $G" renders as "C:\x >"; a themed prompt like
-             * "[main] >"), so this alone must not cancel the batch
-             * outright. */
-            if (!term_at_unambiguous_prompt(d->active_term)) {
-                /* Not something waiting out can necessarily fix -- unlike
-                 * a continuation prompt, finishing the command does not
-                 * make an oddly-shaped prompt stop looking ambiguous --
-                 * but a single failed check must not cancel outright
-                 * either: report once and keep waiting, the same pattern
-                 * as the continuation-prompt stall above, and cancel only
-                 * once the condition has persisted past
-                 * DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS (see
-                 * dispatch_line_clear.h for why that bound exists and how
-                 * it was chosen). The timer and the report-once flag are
-                 * cleared only when this check passes below, or the batch
-                 * starts, cancels or finishes -- never merely because
-                 * output arrived (see the write_seq handling above) --
-                 * so a command that keeps refreshing a prompt-shaped line
-                 * cannot re-arm this every burst without ever timing out. */
-                if (d->dispatch_ambiguous_since_tick == 0)
-                    d->dispatch_ambiguous_since_tick = now_tick;
-
-                unsigned long since_ambiguous = (unsigned long)
-                    (now_tick - d->dispatch_ambiguous_since_tick);
-
-                if (dispatch_ambiguous_prompt_timed_out(since_ambiguous)) {
-                    dispatch_cancel(d,
-                        "[not sent: the input line isn't empty, or the "
-                        "prompt ends with a space before its last "
-                        "character]", 1);
-                    return;
-                }
-
-                if (!d->dispatch_ambiguous_reported) {
-                    d->dispatch_ambiguous_reported = 1;
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                        "[not sent yet: the input line isn't empty, or the "
-                        "prompt ends with a space before its last "
-                        "character. Waiting...]");
-                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
-                }
-                return;
-            }
-
-            /* Clear -- reset the wait so a later, unrelated ambiguity
-             * (a different command, later in the batch) gets its own
-             * timeout window and its own status line. */
-            d->dispatch_ambiguous_since_tick = 0;
-            d->dispatch_ambiguous_reported = 0;
-        }
-
-        /* N = commands already sent plus everything still APPROVED right
-         * now (idx included) -- so the label tracks correctly even when
-         * more commands get approved after the dispatcher started. */
-        int approved_now = 0;
-        for (int i = 0; i < batch->q.count; i++)
-            if (batch->q.entries[i].status == APPROVE_APPROVED)
-                approved_now++;
-        int total = d->dispatch_sent_count + approved_now;
-
-        chat_approval_set_executing(&batch->q, idx);
-        /* The cards follow the queue: the one just finished turns "ran",
-         * this one turns "running", the rest stay "queued". */
-        chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 0);
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        execute_command(d, batch->q.entries[idx].command, line_clear_mode);
-        d->dispatch_last_idx = idx;
-        d->dispatch_sent_count++;
-        d->dispatch_await_echo = 1;
-        d->dispatch_last_progress_tick = GetTickCount();
-
-        float now = (float)GetTickCount() / 1000.0f;
-        chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now);
-        chat_activity_set_exec(&d->activity, d->dispatch_sent_count, total);
-
-        char prog[80];
-        snprintf(prog, sizeof(prog), "running %d/%d \xC2\xB7 waiting for prompt",
-                 d->dispatch_sent_count, total);
-        start_indicator(d, prog);
-    } else {
-        /* Nothing left to send in this batch -- settle it, remove it, and
-         * tell the AI which batch just ran (rule 4) before letting it
-         * continue. */
-        if (d->dispatch_last_idx >= 0)
-            chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
-
-        {
-            char line[96];
-            snprintf(line, sizeof(line), "settled batch %d after %lu ms",
-                     batch->id,
-                     (unsigned long)(GetTickCount() - d->dispatch_start_tick));
-            DLOG(DLOG_AI, DLOG_INFO, 0, "dispatch.settled", "msg=%s", line);
-        }
-
-        int batch_id = batch->id;
-        /* Read before cmd_batch_remove() below frees the batch. */
-        int unattended = !batch->user_acted;
-        int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
-        char first_cmd[1024] = "";
-        if (batch->q.count > 0)
-            snprintf(first_cmd, sizeof(first_cmd), "%s",
-                     batch->q.entries[0].command);
-
-        /* Final card states, and the per-command outcome list for the
-         * model -- both read the queue, which cmd_batch_remove() is about
-         * to free. batch_ending = 1: nothing should still be APPROVED here
-         * (next_approved just said so), but anything that were would be
-         * "not run", never "queued". */
-        chat_msg_batch_sync_run(&d->msg_list, batch_id, &batch->q, 1);
-
-        char continue_text[4096] = "";
-        int have_continue = ai_build_continue_text(newer_exchanges, first_cmd,
-                                                   &batch->q, continue_text,
-                                                   sizeof(continue_text)) > 0;
-        /* The per-command outcomes list can overflow the buffer on a batch
-         * with many/long commands -- fall back to the opening sentence
-         * alone so a continue message is still sent and
-         * maybe_start_next_batch() still gets its turn once it completes,
-         * rather than silently dropping the continue. */
-        if (!have_continue)
-            have_continue = ai_build_continue_text(newer_exchanges, first_cmd,
-                                                    NULL, continue_text,
-                                                    sizeof(continue_text)) > 0;
-
-        KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-        d->dispatch_active = 0;
-        d->dispatch_batch_id = 0;
-        d->dispatch_stall_reported = 0;
-        d->dispatch_ambiguous_since_tick = 0;
-        d->dispatch_ambiguous_reported = 0;
-
-        chat_msg_batch_settle(&d->msg_list, batch_id);
-        cmd_batch_remove(&d->active_state->batches, batch_id);
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
-
-        if (d->hSendBtn) {
-            SetWindowText(d->hSendBtn, ">");
-            InvalidateRect(d->hSendBtn, NULL, TRUE);
-        }
-
-        if (have_continue) send_continue_message(d, continue_text, unattended);
-    }
-}
-
-/* Convert a clipboard bitmap to a base64-encoded PNG AiAttachment.
- * Returns NULL if the clipboard does not contain a bitmap or on error. */
-static AiAttachment *clipboard_to_png_attachment(HWND owner)
-{
-    if (!IsClipboardFormatAvailable(CF_BITMAP))
-        return NULL;
-    if (!OpenClipboard(owner))
-        return NULL;
-
-    HBITMAP hbm = (HBITMAP)GetClipboardData(CF_BITMAP);
-    if (!hbm) { CloseClipboard(); return NULL; }
-
-    BITMAP bm_info;
-    GetObject(hbm, sizeof(bm_info), &bm_info);
-
-    GpBitmap *gpbmp = NULL;
-    if (GdipCreateBitmapFromHBITMAP(hbm, NULL, &gpbmp) != 0 || !gpbmp) {
-        CloseClipboard();
-        return NULL;
-    }
-    CloseClipboard();
-
-    IStream *stm = SHCreateMemStream(NULL, 0);
-    if (!stm) {
-        GdipDisposeImage((GpImage *)gpbmp);
-        return NULL;
-    }
-
-    if (GdipSaveImageToStream((GpImage *)gpbmp, stm, &CLSID_PNG, NULL) != 0) {
-        stm->lpVtbl->Release(stm);
-        GdipDisposeImage((GpImage *)gpbmp);
-        return NULL;
-    }
-    GdipDisposeImage((GpImage *)gpbmp);
-
-    STATSTG stat;
-    stm->lpVtbl->Stat(stm, &stat, STATFLAG_NONAME);
-    size_t png_len = (size_t)stat.cbSize.QuadPart;
-
-    unsigned char *png_buf = (unsigned char *)malloc(png_len);
-    if (!png_buf) { stm->lpVtbl->Release(stm); return NULL; }
-
-    LARGE_INTEGER zero_pos = {{0}};
-    stm->lpVtbl->Seek(stm, zero_pos, STREAM_SEEK_SET, NULL);
-    ULONG bytes_read = 0;
-    stm->lpVtbl->Read(stm, png_buf, (ULONG)png_len, &bytes_read);
-    stm->lpVtbl->Release(stm);
-
-    if (bytes_read != (ULONG)png_len) { free(png_buf); return NULL; }
-
-    size_t b64_size = ((png_len + 2) / 3) * 4 + 1;
-    char *b64 = (char *)malloc(b64_size);
-    if (!b64) { free(png_buf); return NULL; }
-
-    size_t b64_len = base64_encode(png_buf, png_len, b64, b64_size);
-    free(png_buf);
-    if (b64_len == 0) { free(b64); return NULL; }
-
-    const char *prefix = "data:image/png;base64,";
-    size_t prefix_len = strlen(prefix);
-    char *url = (char *)malloc(prefix_len + b64_len + 1);
-    if (!url) { free(b64); return NULL; }
-    memcpy(url, prefix, prefix_len);
-    memcpy(url + prefix_len, b64, b64_len + 1);
-    free(b64);
-
-    AiAttachment *att = (AiAttachment *)calloc(1, sizeof(*att));
-    if (!att) { free(url); return NULL; }
-    att->base64_url = url;
-    att->width = bm_info.bmWidth;
-    att->height = bm_info.bmHeight;
-    return att;
-}
-
-static void input_sync_scroll(AiChatData *d);
-
-/* Pastes the clipboard's CF_TEXT into the (ANSI) message box with every bare
- * LF turned into CRLF, which is the only line end a multiline EDIT breaks on
- * (the transcript copies lines joined with LF). Returns 1 when text was
- * inserted, 0 when there was none (the caller then lets the control paste). */
-static int input_paste_text(HWND hInput, HWND clip_owner)
-{
-    int done = 0;
-    if (!hInput || !IsClipboardFormatAvailable(CF_TEXT)) return 0;
-    if (!OpenClipboard(clip_owner)) return 0;
-    HGLOBAL hg = GetClipboardData(CF_TEXT);
-    if (hg) {
-        const char *txt = (const char *)GlobalLock(hg);
-        if (txt) {
-            size_t need = text_lf_to_crlf(txt, NULL, 0);
-            char *buf = (char *)malloc(need + 1);
-            if (buf) {
-                text_lf_to_crlf(txt, buf, need + 1);
-                SendMessageA(hInput, EM_REPLACESEL, TRUE, (LPARAM)buf);
-                free(buf);
-                done = 1;
-            }
-            GlobalUnlock(hg);
-        }
-    }
-    CloseClipboard();
-    return done;
-}
-
-/* Subclass proc for the multiline input: Enter sends, Shift+Enter inserts newline */
-static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
-                                           WPARAM wParam, LPARAM lParam,
-                                           UINT_PTR uIdSubclass,
-                                           DWORD_PTR dwRefData)
-{
-    if (msg == WM_KEYDOWN || msg == WM_CHAR) {
-        session_mark_user_active();
-    }
-    if (msg == WM_PASTE) {
-        HWND parent = GetParent(hwnd);
-        AiChatData *pd = parent
-            ? (AiChatData *)GetWindowLongPtr(parent, GWLP_USERDATA) : NULL;
-        if (pd && IsClipboardFormatAvailable(CF_BITMAP)) {
-            AiAttachment *att = clipboard_to_png_attachment(parent);
-            if (att) {
-                ai_attachment_free(&pd->pending_attachment);
-                pd->pending_attachment = att;
-                SendMessageA(hwnd, EM_REPLACESEL, TRUE,
-                             (LPARAM)"[Image attached] ");
-                return 0;
-            }
-        }
-        /* Text: LF -> CRLF so pasted lines stay lines. Our own insert
-         * replaces the control's, so it must not run a second time. */
-        if (input_paste_text(hwnd, hwnd)) return 0;
-        /* Fall through to the control's own paste */
-    }
-    if (msg == WM_KEYDOWN && wParam == VK_RETURN) {
-        int shift = GetKeyState(VK_SHIFT) & 0x8000;
-        AiInputAction action = ai_input_key_action(1, shift ? 1 : 0);
-        if (action == AI_INPUT_SEND) {
-            /* Trigger the send button */
-            HWND parent = GetParent(hwnd);
-            PostMessage(parent, WM_COMMAND,
-                        MAKEWPARAM(IDC_CHAT_SEND, BN_CLICKED), 0);
-            return 0; /* eat the Enter key */
-        }
-        /* AI_INPUT_NEWLINE: fall through to default (inserts newline) */
-    }
-    if (msg == WM_KEYDOWN && (GetKeyState(VK_CONTROL) & 0x8000)) {
-        if (wParam == VK_OEM_PLUS  || wParam == (WPARAM)'='
-         || wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
-            HWND parent = GetParent(hwnd);
-            if (parent) SendMessage(parent, msg, wParam, lParam);
-            return 0;
-        }
-    }
-    if (msg == WM_MOUSEWHEEL) {
-        int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
-        /* Ctrl+Wheel: forward to parent so chat_apply_zoom runs */
-        if (GetKeyState(VK_CONTROL) & 0x8000) {
-            HWND parent = GetParent(hwnd);
-            if (parent) SendMessage(parent, msg, wParam, lParam);
-            return 0;
-        }
-        /* Whether WM_MOUSEWHEEL targets the window under the cursor or the
-         * window with keyboard focus is a per-machine setting
-         * (HKCU\Control Panel\Desktop\MouseWheelRouting: 2 = under cursor,
-         * the Windows 10/11 default; 0/1 = focus window). On the
-         * maintainer's box it's 2, so this handler mostly only ever sees a
-         * wheel message when the cursor really is over the input -- this
-         * check is defence for the 0/1 case (and for any other host where
-         * it differs), not the fix for the reported bug (that turned out
-         * to be the box's own hit-test in ai_panel_layout.c -- see
-         * thinking_wheel_over_box()/thinking_wheel_should_chain()). Route
-         * an under-cursor wheel to whatever one of our own windows is
-         * actually under it (same pattern settings.c uses for its
-         * multiline notes field, generalised with WindowFromPoint instead
-         * of a single hard-coded control): if that's this input box,
-         * handle it below; if it's some other child of ours (typically
-         * the chat list), hand it there directly; if the mouse is over
-         * neither, hand off to the panel, whose own WM_MOUSEWHEEL default
-         * forwards to the chat list anyway. GetWindowThreadProcessId scopes
-         * this to our own thread's windows so a wheel over some unrelated
-         * window (routed here only under setting 0/1, where it follows
-         * focus regardless of the cursor) doesn't get redirected into it. */
-        POINT wpt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        HWND hit = WindowFromPoint(wpt);
-        if (hit && hit != hwnd &&
-            GetWindowThreadProcessId(hit, NULL) == GetCurrentThreadId()) {
-            return SendMessage(hit, msg, wParam, lParam);
-        }
-        if (!hit || hit != hwnd) {
-            HWND panel = GetParent(hwnd);
-            if (panel) return SendMessage(panel, msg, wParam, lParam);
-            return 0;
-        }
-        int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
-        SendMessage(hwnd, EM_LINESCROLL, 0, (LPARAM)scroll);
-        /* Sync input scrollbar */
-        HWND parent = GetParent(hwnd);
-        if (parent) {
-            AiChatData *d = (AiChatData *)GetWindowLongPtr(parent,
-                                                           GWLP_USERDATA);
-            if (d) input_sync_scroll(d);
-        }
-        return 0;
-    }
-    if (msg == WM_NCDESTROY) {
-        RemoveWindowSubclass(hwnd, InputSubclassProc, uIdSubclass);
-    }
-    (void)dwRefData;
-    return DefSubclassProc(hwnd, msg, wParam, lParam);
-}
-
-/* Add a tooltip to a child control */
-static void add_tooltip(HWND hTooltip, HWND hCtrl, const char *text)
-{
-    if (!hTooltip || !hCtrl) return;
-    TOOLINFO ti;
-    memset(&ti, 0, sizeof(ti));
-    ti.cbSize   = sizeof(ti);
-    ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
-    ti.hwnd     = GetParent(hCtrl);
-    ti.uId      = (UINT_PTR)hCtrl;
-    ti.lpszText = (LPSTR)text;
-    SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
-}
-
-/* Draw one of the header's square icon buttons (New chat / Save / Undock
- * or Dock): bg_secondary fill, border stroke, R_CTRL radius, a built-in
- * vector icon centred -- no label, per the frame-B header design. These
- * are real child windows, so hover comes from the themed_button subclass
- * rather than ns_hover. */
-static void draw_header_icon_button(LPDRAWITEMSTRUCT dis,
-                                     const ThemeColors *theme, int dpi,
-                                     NsIconId icon)
-{
-    if (!dis || !theme) return;
-    HDC hdc = dis->hDC;
-    RECT rc = dis->rcItem;
-    int pressed = (dis->itemState & ODS_SELECTED) != 0;
-    themed_button_track_hover(dis->hwndItem);
-    int hot = !pressed && themed_button_is_hot(dis->hwndItem);
-    COLORREF bg = theme_cr(pressed ? theme->bg_primary
-                           : hot ? ns_tokens()->bg_secondary.hover
-                                 : theme->bg_secondary);
-    COLORREF fg = theme_cr(theme->text_main);
-    COLORREF bdr = theme_cr(theme->border);
-
-    HBRUSH hBgBr = CreateSolidBrush(theme_cr(theme->bg_primary));
-    FillRect(hdc, &rc, hBgBr);
-    DeleteObject(hBgBr);
-
-    int radius = ns_scale(R_CTRL, dpi);
-    ns_draw_round_fill(hdc, &rc, radius, bg, 255);
-    ns_draw_round_stroke(hdc, &rc, radius, bdr, STROKE_HAIRLINE);
-
-    ns_icon_draw(hdc, icon, &rc, fg, (UINT)dpi);
-}
-
-/* Model-chip geometry, shared by relayout() (to size the session label)
- * and the header paint (to draw the chip itself): sized to the current
- * model name's measured text width (FONT_CAPTION + 2*SP_SM padding) and
- * placed directly left of the header's icon buttons; the session label
- * takes the remaining space to its left. `hdc` may be NULL (a fixed
- * fallback width is used); pass a real one for an accurate size. */
-static void ai_chat_header_chip(AiChatData *d, NsRect header, int buttons_left,
-                                 HDC hdc, NsRect *out_chip, RECT *out_label)
-{
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int chip_h = ns_scale(SZ_TAG_H, d->dpi);
-    int chip_w = chip_h * 2;
-
-    if (hdc) {
-        HFONT font = ns_font(FONT_CAPTION, d->dpi);
-        HGDIOBJ old = font ? SelectObject(hdc, font) : NULL;
-        const char *model = d->conv.model;
-        int mlen = (int)strlen(model);
-        SIZE sz = {0, 0};
-        if (mlen > 0) GetTextExtentPoint32A(hdc, model, mlen, &sz);
-        if (old) SelectObject(hdc, old);
-        chip_w = sz.cx + 2 * pad_sm;
-    }
-
-    int chip_x = buttons_left - chip_w;
-    int chip_y = header.y + (header.h - chip_h) / 2;
-    if (out_chip) {
-        out_chip->x = chip_x; out_chip->y = chip_y;
-        out_chip->w = chip_w; out_chip->h = chip_h;
-    }
-    if (out_label) {
-        int label_left = header.x + pad_sm;
-        int label_right = chip_x - pad_sm;
-        if (label_right < label_left) label_right = label_left;
-        SetRect(out_label, label_left, header.y, label_right,
-                header.y + header.h);
-    }
-}
-
-/* Reposition all child controls from ai_panel_layout()'s header/thread/
- * status/sash/composer tiling (ai_chat_compute_layout()). Called once at the
- * end of WM_CREATE and again on every WM_SIZE. */
-static void relayout(AiChatData *d)
-{
-    if (!d || !d->hwnd) return;
-
-    int margin = ns_scale(5, d->dpi);
-    int input_h = ai_chat_input_h(d);
-    int send_w = ns_scale(40, d->dpi);
-
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-
-    /* ---- Header: session name (left), model chip (painted -- see
-     * WM_PAINT), three icon buttons right-aligned. ---- */
-    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int by = l.header.y + (l.header.h - btn_h) / 2;
-    int bx = l.header.x + l.header.w - pad_sm - btn_h;
-    if (d->hUndockBtn)
-        MoveWindow(d->hUndockBtn, bx, by, btn_h, btn_h, TRUE);
-    bx -= pad_sm + btn_h;
-    if (d->hSaveBtn)
-        MoveWindow(d->hSaveBtn, bx, by, btn_h, btn_h, TRUE);
-    bx -= pad_sm + btn_h;
-    if (d->hNewChatBtn)
-        MoveWindow(d->hNewChatBtn, bx, by, btn_h, btn_h, TRUE);
-    int buttons_left = bx - pad_sm;
-
-    {
-        NsRect chip;
-        RECT label_rc;
-        HDC hdc = GetDC(d->hwnd);
-        ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, &label_rc);
-        if (hdc) ReleaseDC(d->hwnd, hdc);
-        if (d->hSessionLabel)
-            MoveWindow(d->hSessionLabel, label_rc.left, label_rc.top,
-                       label_rc.right - label_rc.left,
-                       label_rc.bottom - label_rc.top, TRUE);
-    }
-
-    /* ---- Thread: the chat list fills l.thread. ---- */
-    {
-        int disp_w = l.thread.w - CSB_WIDTH;
-        if (disp_w < 1) disp_w = 1;
-        int disp_h = l.thread.h < 1 ? 1 : l.thread.h;
-        if (d->hDisplay)
-            MoveWindow(d->hDisplay, l.thread.x, l.thread.y, disp_w, disp_h, TRUE);
-        if (d->hDisplayScrollbar)
-            MoveWindow(d->hDisplayScrollbar, l.thread.x + disp_w, l.thread.y,
-                       CSB_WIDTH, disp_h, TRUE);
-        if (d->hChatList)
-            chat_listview_relayout(d->hChatList);
-    }
-
-    /* ---- Composer: unchanged position and behaviour; keeps its own
-     * height (composer_h in ai_chat_compute_layout() is exactly
-     * input_h + margin, so l.composer.y lands where input_y always did). */
-    {
-        int input_y = l.composer.y;
-        int input_w = l.composer.w - send_w - margin * 3 - CSB_WIDTH;
-        if (input_w < 1) input_w = 1;
-        if (d->hInput)
-            MoveWindow(d->hInput, l.composer.x + margin, input_y,
-                       input_w, input_h, TRUE);
-        if (d->hInputScrollbar)
-            MoveWindow(d->hInputScrollbar, l.composer.x + margin + input_w,
-                       input_y, CSB_WIDTH, input_h, TRUE);
-        if (d->hSendBtn)
-            MoveWindow(d->hSendBtn, l.composer.x + l.composer.w - send_w - margin,
-                       input_y, send_w, input_h, TRUE);
-    }
-
-    status_tools_update(d);
-}
-
-/* ── Status line: geometry, hit-test, tooltip, paint ──────────────────
- * The policy control is painted directly on the panel's own client area
- * (not child windows), so hover/click/tooltip all go through a hit-test
- * against a freshly measured AiStatusLayout + NsPolicyLayout rather than
- * window messages. See
- * docs/superpowers/specs/2026-09-11-status-policy-control-design.md
- * section 4.
- */
-
-/* Status-line hover/hit ids for ns_hover: 0..3 the four cells, 4 the
- * Auto-approve button; -1 stays "nothing" (spec 2026-10-18 section 3). */
-#define STATUS_HIT_CELL(stop) (stop)
-#define STATUS_HIT_AUTO       NS_POLICY_STOPS
-#define STATUS_HIT_COUNT      (NS_POLICY_STOPS + 1)
-
-/* Tooltip tool ids on the panel: STATUS_TOOL_BASE + hit id (cells 0..3,
- * button 4), then the context meter. */
-#define STATUS_TOOL_BASE  100
-#define STATUS_TOOL_METER STATUS_HIT_COUNT
-#define STATUS_TOOL_COUNT (STATUS_HIT_COUNT + 1)
-
-typedef struct {
-    NsRect status;
-    AiStatusLayout sl;
-    NsPolicyLayout pl;
-    char meter_text[32];
-    int has_meter;   /* context_limit > 0 -- meter numbers are meaningful */
-} AiStatusPaint;
-
-/* Format "<used> / <limit>" the same way the old boxed label did (e.g.
- * "1.2k / 200k"), just without the "Context: " prefix or "(N%)" suffix --
- * the meter bar shows the fraction visually now. */
-static void ai_chat_format_meter_text(int tokens, int limit,
-                                       char *buf, size_t cap)
-{
-    if (!buf || cap == 0) return;
-    char tok_str[16], lim_str[16];
-    if (tokens >= 1000)
-        snprintf(tok_str, sizeof(tok_str), "%.1fk", tokens / 1000.0);
-    else
-        snprintf(tok_str, sizeof(tok_str), "%d", tokens);
-    if (limit >= 1000)
-        snprintf(lim_str, sizeof(lim_str), "%dk", limit / 1000);
-    else
-        snprintf(lim_str, sizeof(lim_str), "%d", limit);
-    snprintf(buf, cap, "%s / %s", tok_str, lim_str);
-}
-
-/* Client rect to invalidate when a hover id gains or loses hover. */
-static NsRect ai_chat_status_rect_for_id(const AiStatusPaint *sp, int id)
-{
-    NsRect z = { 0, 0, 0, 0 };
-    if (id >= 0 && id < NS_POLICY_STOPS) return sp->pl.cell[id];
-    if (id == STATUS_HIT_AUTO) return sp->sl.auto_btn;
-    return z;
-}
-
-static int ai_chat_pt_in_rect(NsRect r, int x, int y)
-{
-    return r.w > 0 && r.h > 0 &&
-           x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
-}
-
-/* Is (x, y), in client coordinates, over the composer's drag sash? */
-static int ai_chat_sash_hit(AiChatData *d, int x, int y)
-{
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-    return ai_chat_pt_in_rect(l.sash, x, y);
-}
-
-/* The sash is a border-coloured hairline across its vertical centre. */
-static void paint_sash(AiChatData *d, HDC hdc)
-{
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-    if (l.sash.w <= 0 || l.sash.h <= 0) return;
-    ns_draw_separator(hdc, l.sash.x, l.sash.x + l.sash.w,
-                      l.sash.y + l.sash.h / 2, theme_cr(ns_tokens()->border));
-}
-
-/* Measure the status line's variable-width text (segment labels,
- * auto-approve text, meter numbers) and lay it out via ai_status_layout().
- * Self-contained: borrows its own HDC when the caller doesn't have one
- * handy (hit-testing/tooltips), or reuses the caller's paint HDC. */
-static void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
-{
-    memset(out, 0, sizeof(*out));
-
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-    out->status.x = l.status.x; out->status.y = l.status.y;
-    out->status.w = l.status.w; out->status.h = l.status.h;
-
-    HDC own_hdc = hdc ? NULL : GetDC(d->hwnd);
-    HDC use_hdc = hdc ? hdc : own_hdc;
-    if (!use_hdc) return;
-
-    HFONT font = ns_font(FONT_CAPTION, d->dpi);
-    HGDIOBJ old = font ? SelectObject(use_hdc, font) : NULL;
-
-    SIZE sz;
-    int full_w[NS_POLICY_STOPS], short_w[NS_POLICY_STOPS];
-    for (int k = 0; k < NS_POLICY_STOPS; k++) {
-        const char *lbl = cmd_policy_stop_label(k);
-        GetTextExtentPoint32A(use_hdc, lbl, (int)strlen(lbl), &sz);
-        full_w[k] = sz.cx;
-        const char *sh = cmd_policy_stop_short(k);
-        GetTextExtentPoint32A(use_hdc, sh, (int)strlen(sh), &sz);
-        short_w[k] = sz.cx;
-    }
-    AiStatusMeasure m;
-    memset(&m, 0, sizeof(m));
-    m.policy_full_w    = ns_policy_width(full_w, d->dpi);
-    m.policy_compact_w = ns_policy_width(short_w, d->dpi);
-    {
-        const char *af = cmd_policy_auto_label(0);
-        const char *ac = cmd_policy_auto_label(1);
-        GetTextExtentPoint32A(use_hdc, af, (int)strlen(af), &sz);
-        m.auto_full_w = sz.cx;
-        GetTextExtentPoint32A(use_hdc, ac, (int)strlen(ac), &sz);
-        m.auto_compact_w = sz.cx;
-    }
-
-    out->has_meter = d->context_limit > 0;
-    if (out->has_meter) {
-        int actual = d->actual_input_tokens + d->actual_output_tokens;
-        int tokens = actual > 0 ? actual : ai_context_estimate_tokens(&d->conv);
-        ai_chat_format_meter_text(tokens, d->context_limit,
-                                  out->meter_text, sizeof(out->meter_text));
-        GetTextExtentPoint32A(use_hdc, out->meter_text,
-                              (int)strlen(out->meter_text), &sz);
-        m.meter_text_w = sz.cx;
-    }
-
-    if (old) SelectObject(use_hdc, old);
-    if (own_hdc) ReleaseDC(d->hwnd, own_hdc);
-
-    ai_status_layout(out->status, d->dpi, &m, &out->sl);
-    /* Cells are hit over the full row height; the pill is cut at the
-     * layout's clip so a cell under the button neither paints nor hits. */
-    ns_policy_layout(out->sl.policy, out->sl.compact ? short_w : full_w,
-                     out->sl.policy_clip, out->status.h, d->dpi, &out->pl);
-}
-
-/* Hit-test a client point against the status line. Returns 0..3 for a
- * cell, STATUS_HIT_AUTO for the button, or -1. */
-static int ai_chat_status_hit(AiChatData *d, int x, int y)
-{
-    AiStatusPaint sp;
-    ai_chat_get_status_paint(d, NULL, &sp);
-    int stop = -1;
-    int what = ai_status_hit(&sp.sl, &sp.pl, x, y, &stop);
-    if (what == HIT_POLICY_ALLOWED) return STATUS_HIT_CELL(stop);
-    if (what == HIT_POLICY_AUTO) return STATUS_HIT_AUTO;
-    return -1;
-}
-
-/* Client rect for a status-line hit id, for targeted invalidation. 0 when
- * the id is out of range or the element is zero-size. */
-static int ai_chat_status_rect(AiChatData *d, int id, RECT *out_rc)
-{
-    if (id < 0 || id >= STATUS_HIT_COUNT) return 0;
-    AiStatusPaint sp;
-    ai_chat_get_status_paint(d, NULL, &sp);
-    NsRect r = ai_chat_status_rect_for_id(&sp, id);
-    if (r.w <= 0 || r.h <= 0) return 0;
-    SetRect(out_rc, r.x, r.y, r.x + r.w, r.y + r.h);
-    return 1;
-}
-
-/* Move each status-line tooltip tool onto its element. Called after every
- * relayout and every status-line invalidation (resize, DPI change, tier
- * change, policy or context change). A clipped cell gets an empty rect, so
- * it shows no tip. */
-static void status_tools_update(AiChatData *d)
-{
-    if (!d || !d->hTooltip || !d->hwnd) return;
-    AiStatusPaint sp;
-    ai_chat_get_status_paint(d, NULL, &sp);
-    for (int t = 0; t < STATUS_TOOL_COUNT; t++) {
-        NsRect r = { 0, 0, 0, 0 };
-        if (t < NS_POLICY_STOPS) {
-            r = sp.pl.hit[t];
-        } else if (t == STATUS_HIT_AUTO) {
-            r = sp.sl.auto_btn;
-        } else if (t == STATUS_TOOL_METER && sp.has_meter &&
-                   (sp.sl.meter_bar.w > 0 || sp.sl.meter_text.w > 0)) {
-            NsRect a = sp.sl.meter_bar.w > 0 ? sp.sl.meter_bar : sp.sl.meter_text;
-            NsRect b = sp.sl.meter_text.w > 0 ? sp.sl.meter_text : sp.sl.meter_bar;
-            r.x = a.x; r.y = a.y; r.w = (b.x + b.w) - a.x; r.h = a.h;
-        }
-        TOOLINFO ti;
-        memset(&ti, 0, sizeof(ti));
-        ti.cbSize = sizeof(ti);
-        ti.hwnd   = d->hwnd;
-        ti.uId    = (UINT_PTR)(STATUS_TOOL_BASE + t);
-        if (r.w > 0 && r.h > 0)
-            SetRect(&ti.rect, r.x, r.y, r.x + r.w, r.y + r.h);
-        else
-            SetRectEmpty(&ti.rect);
-        SendMessage(d->hTooltip, TTM_NEWTOOLRECT, 0, (LPARAM)&ti);
-    }
-}
-
-static RECT ai_chat_to_RECT(NsRect r)
-{
-    RECT rc = { r.x, r.y, r.x + r.w, r.y + r.h };
-    return rc;
-}
-
-/* Paint the header's model chip and (while a session is active) the
- * activity dot + one-word status, next to the session label. */
-static void paint_header(AiChatData *d, HDC hdc)
-{
-    const ThemeTokens *tok = ns_tokens();
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-
-    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int buttons_left = l.header.x + l.header.w - pad_sm
-                      - 3 * btn_h - 2 * pad_sm - pad_sm;
-
-    NsRect chip;
-    ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, NULL);
-    if (chip.w > 0 && chip.h > 0) {
-        RECT chip_rc = ai_chat_to_RECT(chip);
-        HFONT font = ns_font(FONT_CAPTION, d->dpi);
-        ns_draw_chip(hdc, &chip_rc, theme_cr(tok->raised.base),
-                    theme_cr(tok->text_dim), font, d->conv.model);
-    }
-
-    if (d->activity.phase == ACTIVITY_IDLE) return;
-
-    RECT rc_lbl = {0, 0, 0, 0};
-    if (d->hSessionLabel) {
-        GetWindowRect(d->hSessionLabel, &rc_lbl);
-        MapWindowPoints(NULL, d->hwnd, (POINT *)&rc_lbl, 2);
-    }
-    SIZE sz_lbl = {0, 0};
-    /* Measure with the session label's own font (FONT_TITLE) so the dot
-     * lands right after its actually-rendered text, not an approximation. */
-    HGDIOBJ old_f = SelectObject(hdc, ns_font(FONT_TITLE, d->dpi));
-    char lbl_text[256] = "";
-    if (d->hSessionLabel)
-        GetWindowTextA(d->hSessionLabel, lbl_text, (int)sizeof(lbl_text));
-    GetTextExtentPoint32A(hdc, lbl_text, (int)strlen(lbl_text), &sz_lbl);
-    SelectObject(hdc, d->hSmallFont ? d->hSmallFont : GetStockObject(DEFAULT_GUI_FONT));
-
-    int dot_sz = ns_scale(6, d->dpi);
-    int dot_x = rc_lbl.left + sz_lbl.cx + ns_scale(6, d->dpi);
-    int dot_y = rc_lbl.top + ((rc_lbl.bottom - rc_lbl.top) - dot_sz) / 2;
-
-    COLORREF dot_clr;
-    switch (d->activity.health) {
-    case HEALTH_YELLOW:
-        dot_clr = RGB(((d->theme->chat.indicator_yellow) >> 16) & 0xFF,
-                      ((d->theme->chat.indicator_yellow) >> 8) & 0xFF,
-                      (d->theme->chat.indicator_yellow) & 0xFF);
-        break;
-    case HEALTH_RED:
-        dot_clr = RGB(((d->theme->chat.indicator_red) >> 16) & 0xFF,
-                      ((d->theme->chat.indicator_red) >> 8) & 0xFF,
-                      (d->theme->chat.indicator_red) & 0xFF);
-        break;
-    default:
-        dot_clr = RGB(((d->theme->chat.indicator_green) >> 16) & 0xFF,
-                      ((d->theme->chat.indicator_green) >> 8) & 0xFF,
-                      (d->theme->chat.indicator_green) & 0xFF);
-        break;
-    }
-
-    if (d->pulse_toggle && !ns_reduced_motion()) {
-        COLORREF bg_c = RGB(((d->theme->bg_primary) >> 16) & 0xFF,
-                            ((d->theme->bg_primary) >> 8) & 0xFF,
-                            (d->theme->bg_primary) & 0xFF);
-        dot_clr = RGB((GetRValue(dot_clr) + GetRValue(bg_c)) / 2,
-                      (GetGValue(dot_clr) + GetGValue(bg_c)) / 2,
-                      (GetBValue(dot_clr) + GetBValue(bg_c)) / 2);
-    }
-
-    HBRUSH hDotBr = CreateSolidBrush(dot_clr);
-    HPEN hDotPn = CreatePen(PS_SOLID, 1, dot_clr);
-    HGDIOBJ ob = SelectObject(hdc, hDotBr);
-    HGDIOBJ op = SelectObject(hdc, hDotPn);
-    Ellipse(hdc, dot_x, dot_y, dot_x + dot_sz, dot_y + dot_sz);
-    SelectObject(hdc, op);
-    SelectObject(hdc, ob);
-    DeleteObject(hDotPn);
-    DeleteObject(hDotBr);
-
-    const char *word;
-    switch (d->activity.phase) {
-    case ACTIVITY_PROCESSING: word = "Processing"; break;
-    case ACTIVITY_THINKING:   word = "Thinking";   break;
-    case ACTIVITY_RESPONDING: word = "Responding"; break;
-    case ACTIVITY_EXECUTING:  word = "Executing";  break;
-    case ACTIVITY_WAITING:    word = "Waiting";    break;
-    default:                  word = "";           break;
-    }
-    if (word[0]) {
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, dot_clr);
-        RECT wrc;
-        wrc.left   = dot_x + dot_sz + ns_scale(4, d->dpi);
-        wrc.top    = rc_lbl.top;
-        wrc.right  = l.header.x + l.header.w;
-        wrc.bottom = rc_lbl.bottom;
-        DrawTextA(hdc, word, -1, &wrc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    }
-    SelectObject(hdc, old_f);
-}
-
-/* Paint the status line: bg_secondary fill with a border rule on top, the
- * policy control, and the context meter + used/limit numbers (or, while a
- * start_indicator() busy override is set, that text instead of the meter). */
-static void paint_status_line(AiChatData *d, HDC hdc)
-{
-    const ThemeTokens *tok = ns_tokens();
-    AiStatusPaint sp;
-    ai_chat_get_status_paint(d, hdc, &sp);
-    RECT status_rc = ai_chat_to_RECT(sp.status);
-
-    HBRUSH bg_br = CreateSolidBrush(theme_cr(tok->bg_secondary.base));
-    FillRect(hdc, &status_rc, bg_br);
-    DeleteObject(bg_br);
-    ns_draw_separator(hdc, status_rc.left, status_rc.right, status_rc.top,
-                      theme_cr(tok->border));
-
-    HFONT cap_font = ns_font(FONT_CAPTION, d->dpi);
-    HGDIOBJ old_font = cap_font ? SelectObject(hdc, cap_font) : NULL;
-    int old_bk = SetBkMode(hdc, TRANSPARENT);
-
-    /* The policy pill and the Auto-approve button */
-    {
-        int hot = d->status_hover.hot_id;
-        int hover_stop = (hot >= 0 && hot < NS_POLICY_STOPS) ? hot : -1;
-        ns_draw_policy(hdc, &sp.pl, d->approval_q.policy, sp.sl.compact,
-                       hover_stop, tok, cap_font, d->dpi);
-        /* Tier 5 lets the button sit partly left of a row narrower than it
-         * is: clip to the row so it never paints over the panel's edge. The
-         * hit test keeps the layout's rect. */
-        int saved_dc = SaveDC(hdc);
-        IntersectClipRect(hdc, status_rc.left, status_rc.top,
-                          status_rc.right, status_rc.bottom);
-        ns_draw_auto_button(hdc, &sp.sl.auto_btn, d->approval_q.policy,
-                            sp.sl.compact, hot == STATUS_HIT_AUTO, tok,
-                            cap_font, d->dpi);
-        if (saved_dc) RestoreDC(hdc, saved_dc);
-    }
-
-    /* Busy override, or the context meter + used/limit numbers. The busy
-     * label uses the layout's label rect, which ends SP_SM short of the
-     * button, so it can never paint over it (spec section 3). */
-    if (d->context_label[0]) {
-        if (sp.sl.label.w > 0) {
-            RECT rc = ai_chat_to_RECT(sp.sl.label);
-            SetTextColor(hdc, theme_cr(tok->text_main));
-            DrawTextA(hdc, d->context_label, -1, &rc,
-                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX |
-                      DT_END_ELLIPSIS);
-        }
-    } else if (sp.has_meter) {
-        if (sp.sl.meter_bar.w > 0) {
-            int actual = d->actual_input_tokens + d->actual_output_tokens;
-            int tokens = actual > 0 ? actual : ai_context_estimate_tokens(&d->conv);
-            double frac = d->context_limit > 0
-                        ? (double)tokens / (double)d->context_limit : 0.0;
-            ns_draw_meter(hdc, &sp.sl.meter_bar, frac, tok);
-        }
-        if (sp.sl.meter_text.w > 0) {
-            RECT rc = ai_chat_to_RECT(sp.sl.meter_text);
-            SetTextColor(hdc, theme_cr(tok->text_main));
-            DrawTextA(hdc, sp.meter_text, -1, &rc,
-                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        }
-    }
-
-    SetBkMode(hdc, old_bk);
-    if (old_font) SelectObject(hdc, old_font);
-}
-
-/* Sync the input scrollbar with the EDIT control's scroll state */
-static void input_sync_scroll(AiChatData *d)
-{
-    if (!d || !d->hInputScrollbar) return;
-    int lh = d->input_line_h > 0 ? d->input_line_h : 1;
-    csb_sync_edit(d->hInput, d->hInputScrollbar, lh);
-}
-
-/* Zoom the AI chat content fonts. Resizes the chat ListView fonts
- * (user messages + AI responses) and the user input textbox font.
- * Buttons keep the UI font; context bar and session label keep the
- * small font. */
-static void chat_apply_zoom(AiChatData *d, int delta)
-{
-    if (!d) return;
-    int new_size = app_font_zoom(d->ui_font_size, delta);
-    if (new_size == d->ui_font_size)
-        return;
-    d->ui_font_size = new_size;
-
-    if (!d->hChatList)
-        return;
-
-    int h = -MulDiv(new_size, d->dpi, 72);
-
-    if (d->hChatFont) DeleteObject(d->hChatFont);
-    if (d->hBoldFont) DeleteObject(d->hBoldFont);
-    if (d->hMonoFont) DeleteObject(d->hMonoFont);
-
-    d->hChatFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_TT_PRECIS,
-                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                              DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-    d->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-        APP_FONT_UI_FACE);
-    d->hMonoFont = CreateFont(h, 0, 0, 0, FW_NORMAL,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
-        d->ai_font_name[0] ? d->ai_font_name : "Consolas");
-
-    chat_listview_set_fonts(d->hChatList, d->hChatFont,
-                            d->hMonoFont, d->hBoldFont,
-                            d->hSmallFont);
-    chat_listview_relayout(d->hChatList);
-
-    /* Apply the same zoomable font to the user input textbox so its text
-     * scales with the chat. Buttons, labels and the context bar continue
-     * to use the fixed UI font (d->hFont). */
-    if (d->hInput && d->hChatFont) {
-        SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hChatFont, TRUE);
-        HDC hdc_m = GetDC(d->hInput);
-        if (hdc_m) {
-            HGDIOBJ old_m = SelectObject(hdc_m, (HGDIOBJ)d->hChatFont);
-            TEXTMETRIC tm_m;
-            GetTextMetrics(hdc_m, &tm_m);
-            d->input_line_h = tm_m.tmHeight + tm_m.tmExternalLeading;
-            SelectObject(hdc_m, old_m);
-            ReleaseDC(d->hInput, hdc_m);
-        }
-        input_sync_scroll(d);
-    }
-}
 
 static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                        WPARAM wParam, LPARAM lParam)
@@ -3463,14 +40,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
 
-        /* All child-control geometry is decided by relayout() (called once
+        /* All child-control geometry is decided by ai_chat_relayout() (called once
          * at the end of this handler, then again on every WM_SIZE) from
          * ai_panel_layout()'s header/thread/status/composer tiling -- the
          * positions/sizes given to CreateWindow here are placeholders. */
         int btn_h = ns_scale(SZ_CTRL_H, nd->dpi);
 
         /* New chat / Save / Undock: three square icon buttons in the
-         * header, owner-drawn via draw_header_icon_button(). */
+         * header, owner-drawn via ai_chat_draw_header_icon_button(). */
         nd->hNewChatBtn = CreateWindow("BUTTON", "",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             0, 0, btn_h, btn_h,
@@ -3491,9 +68,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Suppress WM_ERASEBKGND on owner-drawn buttons to prevent
          * white flicker during splitter drag / parent resize. */
-        SetWindowSubclass(nd->hNewChatBtn,  btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
-        SetWindowSubclass(nd->hSaveBtn,     btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
-        SetWindowSubclass(nd->hUndockBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hNewChatBtn,  ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hSaveBtn,     ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hUndockBtn,   ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
         /* Old floating Allow/Deny buttons removed — approval is now
          * handled inline via chat_listview command block buttons.
@@ -3512,8 +89,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Chat display: owner-drawn ChatListView replaces RichEdit.
          * In docked mode the initial window may be 1x1, so clamp
-         * all dimensions to >=1 — relayout() fixes them on first WM_SIZE. */
-        int input_h = ai_chat_input_h(nd); /* placeholder; relayout() sets it */
+         * all dimensions to >=1 — ai_chat_relayout() fixes them on first WM_SIZE. */
+        int input_h = ai_chat_input_h(nd); /* placeholder; ai_chat_relayout() sets it */
         int margin = ns_scale(5, nd->dpi);
         int disp_w = 1, disp_h = 1;
 
@@ -3552,7 +129,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             margin, 0, 1, input_h,
             hwnd, (HMENU)IDC_CHAT_INPUT, NULL, NULL);
         if (nd->hInput)
-            SetWindowSubclass(nd->hInput, InputSubclassProc, 0, 0);
+            SetWindowSubclass(nd->hInput, ai_chat_input_subclass_proc, 0, 0);
 
         /* Custom themed scrollbar for input */
         nd->hInputScrollbar = csb_create(hwnd,
@@ -3564,7 +141,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             0, 0, send_w, input_h,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
-        SetWindowSubclass(nd->hSendBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hSendBtn, ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
         /* Font — buttons/labels use the cached FONT_BODY role (Inter UI
          * font); the chat content font below is independently zoomable
@@ -3639,23 +216,23 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             0, 0, 0, 0, hwnd, NULL, NULL, NULL);
         if (nd->hTooltip) {
             SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, 400);
-            add_tooltip(nd->hTooltip, nd->hNewChatBtn,
+            ai_chat_add_tooltip(nd->hTooltip, nd->hNewChatBtn,
                 "New chat\nClear the conversation and start fresh.");
-            add_tooltip(nd->hTooltip, nd->hSaveBtn,
+            ai_chat_add_tooltip(nd->hTooltip, nd->hSaveBtn,
                 "Save chat\nSave the conversation as a text file.");
             if (nd->hUndockBtn)
-                add_tooltip(nd->hTooltip, nd->hUndockBtn,
+                ai_chat_add_tooltip(nd->hTooltip, nd->hUndockBtn,
                     nd->docked ? "Undock\nOpen AI Assist in a separate window."
                                : "Dock\nDock AI Assist inside the main window.");
-            add_tooltip(nd->hTooltip, nd->hSendBtn,
+            ai_chat_add_tooltip(nd->hTooltip, nd->hSendBtn,
                 "Send\nSend your message to the AI.\n"
                 "Shortcut: press Enter in the input box.");
 
             /* The status line: one rect tool per element -- four cells,
              * the Auto-approve button and the context meter -- so Windows
              * shows and hides the tip per element on its own (spec
-             * 2026-10-18 section 4). Rects are set by status_tools_update()
-             * after every relayout; text comes from TTN_GETDISPINFO. */
+             * 2026-10-18 section 4). Rects are set by ai_chat_status_tools_update()
+             * after every ai_chat_relayout; text comes from TTN_GETDISPINFO. */
             for (int t = 0; t < STATUS_TOOL_COUNT; t++) {
                 TOOLINFO ti;
                 memset(&ti, 0, sizeof(ti));
@@ -3673,18 +250,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
          * chat_listview to paint the empty/no-key/no-session state
          * (set just below -- active_io isn't known yet at this
          * point, ai_chat_set_session() corrects it right after). */
-        chat_rebuild_display(nd);
-        update_panel_state(nd);
+        ai_chat_rebuild_display(nd);
+        ai_chat_update_panel_state(nd);
 
-        update_context_bar(nd);
-        relayout(nd);
+        ai_chat_update_context_bar(nd);
+        ai_chat_relayout(nd);
         SetFocus(nd->hInput);
         return 0;
     }
 
     case WM_SIZE: {
         if (!d) break;
-        relayout(d);
+        ai_chat_relayout(d);
         /* Force repaint of all owner-drawn buttons after layout change.
          * Erase background (TRUE) so newly exposed areas during the
          * slide-out animation get filled with the theme colour. */
@@ -3757,7 +334,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             int new_base = ai_chat_unscale(new_h, d->dpi);
             if (new_base != d->input_base_h) {
                 d->input_base_h = new_base;
-                relayout(d);
+                ai_chat_relayout(d);
                 InvalidateRect(hwnd, NULL, TRUE);
                 UpdateWindow(hwnd);
             }
@@ -3869,12 +446,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         &d->active_state->batches, d->dispatch_batch_id);
                     if (running) running->user_acted = 1;
                 }
-                dispatch_cancel(d, "[command queue stopped]", 1);
+                ai_chat_dispatch_cancel(d, "[command queue stopped]", 1);
                 ai_rounds_user_message(d->active_state);
                 if (d->hChatList)
                     chat_listview_scroll_to_bottom(d->hChatList);
             } else if (d && ACTIVE_BUSY(d)) {
-                cancel_active_stream(d);
+                ai_chat_cancel_active_stream(d);
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                     "[cancelled]");
                 if (d->hChatList) {
@@ -3882,7 +459,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     chat_listview_scroll_to_bottom(d->hChatList);
                 }
             } else {
-                send_user_message(d);
+                ai_chat_send_user_message(d);
             }
             /* Only while the panel is on screen: a send finishing after the
              * panel was hidden must not pull keyboard focus back into it. */
@@ -3900,7 +477,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             const char *const *sugg = ai_panel_suggestions(&count);
             if (i >= 0 && i < count) {
                 SetWindowText(d->hInput, sugg[i]);
-                send_user_message(d);
+                ai_chat_send_user_message(d);
                 SetFocus(d->hInput);
             }
             return 0;
@@ -3913,7 +490,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (!d) return 0;
             HWND main_hwnd = GetParent(hwnd);
             if (!main_hwnd) return 0;
-            /* Same precedence as update_panel_state(): no transport means
+            /* Same precedence as ai_chat_update_panel_state(): no transport means
              * NO_SESSION is showing (even if the key is also empty), so
              * check active_io first rather than api_key. */
             if (!d->active_io) {
@@ -3930,9 +507,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d) {
                 /* Cancel any active stream or command dispatch first */
                 if (ACTIVE_BUSY(d))
-                    cancel_active_stream(d);
+                    ai_chat_cancel_active_stream(d);
                 if (d->dispatch_active)
-                    dispatch_cancel(d, NULL, 0);
+                    ai_chat_dispatch_cancel(d, NULL, 0);
 
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
@@ -3958,18 +535,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->active_state) d->active_state->show_thinking = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
-                thinking_history_clear(d);
+                ai_chat_thinking_history_clear(d);
                 /* Clear display -- an empty msg_list is painted as the
-                 * empty/no-key/no-session state (update_panel_state()). */
+                 * empty/no-key/no-session state (ai_chat_update_panel_state()). */
                 chat_msg_list_clear(&d->msg_list);
                 d->stream_ai_item = NULL;
                 if (d->hChatList)
                     chat_listview_invalidate(d->hChatList);
-                update_panel_state(d);
+                ai_chat_update_panel_state(d);
                 /* Clear input field */
                 SetWindowText(d->hInput, "");
                 SetFocus(d->hInput);
-                update_context_bar(d);
+                ai_chat_update_context_bar(d);
             }
             return 0;
         case IDC_CHAT_SAVE:
@@ -4022,7 +599,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
             return 0;
         /* ── The policy row ─────────────────────────────────────────
-         * Every gesture lands here and goes through request_policy_change(),
+         * Every gesture lands here and goes through ai_chat_request_policy_change(),
          * which asks before Critical runs unattended and is a no-op while
          * that box is up. apply_policy_change() then unblocks or re-blocks
          * pending rows against the new level. */
@@ -4030,14 +607,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d) {
                 CmdPolicy next = d->approval_q.policy;
                 cmd_policy_cycle_allowed(&next);
-                request_policy_change(hwnd, d, next);
+                ai_chat_request_policy_change(hwnd, d, next);
             }
             return 0;
         case IDC_CHAT_AUTOAPPROVE:
             if (d) {
                 CmdPolicy next = d->approval_q.policy;
                 cmd_policy_set_auto(&next, !cmd_policy_auto_on(next));
-                request_policy_change(hwnd, d, next);
+                ai_chat_request_policy_change(hwnd, d, next);
             }
             return 0;
         /* IDC_CHAT_THINKING removed - thinking toggle now inline in chat */
@@ -4052,7 +629,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 ctl_id < IDC_CHAT_POLICY_ALLOW_BASE + NS_POLICY_STOPS) {
                 CmdPolicy next = d->approval_q.policy;
                 cmd_policy_set_allowed(&next, ctl_id - IDC_CHAT_POLICY_ALLOW_BASE);
-                request_policy_change(hwnd, d, next);
+                ai_chat_request_policy_change(hwnd, d, next);
                 return 0;
             }
             /* Retired unattended setters: swallowed, no effect. */
@@ -4066,7 +643,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d && ctl_id >= IDC_CMD_APPROVE_BASE &&
                 ctl_id < IDC_CMD_APPROVE_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_APPROVE_BASE;
-                CmdBatch *batch = resolve_batch(d, lParam);
+                CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
                 if (batch) {
                     chat_approval_approve(&batch->q, idx);
 
@@ -4084,10 +661,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     /* Let the dispatcher pick this command up once the
                      * terminal is at a prompt (no-op if already running). */
                     batch->user_acted = 1;
-                    dispatch_start(d, batch->id);
+                    ai_chat_dispatch_start(d, batch->id);
 
                     /* Check if all decided — if so, the card can settle now */
-                    settle_batch_if_done(d, batch);
+                    ai_chat_settle_batch_if_done(d, batch);
                 }
                 SetFocus(d->hInput);
                 return 0;
@@ -4097,7 +674,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d && ctl_id >= IDC_CMD_DENY_BASE &&
                 ctl_id < IDC_CMD_DENY_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_DENY_BASE;
-                CmdBatch *batch = resolve_batch(d, lParam);
+                CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
                 if (batch) {
                     chat_approval_deny(&batch->q, idx);
 
@@ -4114,7 +691,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                     /* Check if all decided */
                     if (chat_approval_all_decided(&batch->q)) {
-                        settle_batch_if_done(d, batch);
+                        ai_chat_settle_batch_if_done(d, batch);
                         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                         "[some commands denied]");
                         if (d->hChatList)
@@ -4127,7 +704,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
             /* IDC_CMD_APPROVE_ALL → approve all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_ALL) {
-                CmdBatch *batch = resolve_batch(d, lParam);
+                CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
                 if (batch) {
                     chat_approval_approve_all(&batch->q);
 
@@ -4139,13 +716,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                             it->u.cmd.approved = 1;
                     }
 
-                    settle_batch_if_done(d, batch);
+                    ai_chat_settle_batch_if_done(d, batch);
                     if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
                     /* Let the dispatcher send the approved commands one at a
                      * time, only once the terminal is at a prompt. */
                     batch->user_acted = 1;
-                    dispatch_start(d, batch->id);
+                    ai_chat_dispatch_start(d, batch->id);
                 }
                 SetFocus(d->hInput);
                 return 0;
@@ -4154,7 +731,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_CMD_APPROVE_SEL → approve only selected (ticked) commands
              * in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_SEL) {
-                CmdBatch *batch = resolve_batch(d, lParam);
+                CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
                 if (batch) {
                     int ci = 0;
                     int any_approved = 0;
@@ -4188,14 +765,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         /* Let the dispatcher send the approved commands one
                          * at a time, only once the terminal is at a prompt. */
                         batch->user_acted = 1;
-                        dispatch_start(d, batch->id);
+                        ai_chat_dispatch_start(d, batch->id);
                     } else {
                         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                         "[no commands selected]");
                         if (d->hChatList)
                             chat_listview_invalidate(d->hChatList);
                     }
-                    settle_batch_if_done(d, batch);
+                    ai_chat_settle_batch_if_done(d, batch);
                 }
                 SetFocus(d->hInput);
                 return 0;
@@ -4203,7 +780,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
             /* IDC_CMD_CANCEL_ALL → deny all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_CANCEL_ALL) {
-                CmdBatch *batch = resolve_batch(d, lParam);
+                CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
                 if (batch) {
                     int ci = 0;
                     for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
@@ -4215,7 +792,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         }
                         ci++;
                     }
-                    settle_batch_if_done(d, batch);
+                    ai_chat_settle_batch_if_done(d, batch);
                     if (d->hChatList) chat_listview_invalidate(d->hChatList);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                     "[all commands cancelled]");
@@ -4229,7 +806,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_ACTIVITY_RETRY → cancel current request and resend */
             if (d && ctl_id == IDC_ACTIVITY_RETRY) {
                 /* Cancel current stream if possible, reset activity */
-                abort_session_stream(d, d->active_state);
+                ai_chat_abort_session_stream(d, d->active_state);
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
                 if (d->hChatList) {
@@ -4254,8 +831,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
 
                 /* Re-launch stream */
-                start_indicator(d, "retrying");
-                launch_stream_thread(d, "retry");
+                ai_chat_start_indicator(d, "retrying");
+                ai_chat_launch_stream_thread(d, "retry");
                 return 0;
             }
 
@@ -4311,7 +888,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
             /* IDC_CHATLIST_PASTE → right-click paste from chat listview */
             if (d && ctl_id == IDC_CHATLIST_PASTE) {
-                if (d->hInput && input_paste_text(d->hInput, hwnd))
+                if (d->hInput && ai_chat_input_paste_text(d->hInput, hwnd))
                     SetFocus(d->hInput);
                 return 0;
             }
@@ -4557,7 +1134,7 @@ next_coalesce:;
          * the thread already committed its result to src->conv. Build a real
          * batch in that (background) session's own set -- there's no live
          * msg_list to post cards into while it isn't displayed, but
-         * chat_rebuild_display() replays every batch in the set the moment
+         * ai_chat_rebuild_display() replays every batch in the set the moment
          * the user switches to it, same as an active-session reply. */
         if (src != d->active_state) {
             if (wParam == 2 && src && rmsg->content) {
@@ -4905,10 +1482,10 @@ next_coalesce:;
                          * the batch immediately so its rows show "queued"/
                          * "running"/"ran" instead of sitting on the pending
                          * card's un-settled styling while it runs. */
-                        settle_batch_if_done(d, batch);
+                        ai_chat_settle_batch_if_done(d, batch);
                         /* Let the dispatcher send the approved commands one
                          * at a time, only once the terminal is at a prompt. */
-                        dispatch_start(d, batch->id);
+                        ai_chat_dispatch_start(d, batch->id);
                     } else {
                         /* Leave the card pending and reset its container's
                          * scroll -- it stays interactive for the life of
@@ -4916,7 +1493,7 @@ next_coalesce:;
                         if (d->hChatList)
                             chat_listview_reset_cmd_expand(d->hChatList);
                     }
-                    relayout(d);
+                    ai_chat_relayout(d);
                     /* A reply finishing is not a user action: only move
                      * the caret to the input if the focus is already
                      * somewhere in this panel. Never take it from the
@@ -4937,7 +1514,7 @@ next_coalesce:;
             free(text);
             free(rmsg->thinking);
             free(rmsg);
-            update_context_bar(d);
+            ai_chat_update_context_bar(d);
         } else {
             /* Error */
             char *text = rmsg->content;
@@ -4965,14 +1542,14 @@ next_coalesce:;
          * runs next"). No-op if the dispatcher is already busy or another
          * stream is in flight. */
         if (src == d->active_state)
-            maybe_start_next_batch(d);
+            ai_chat_maybe_start_next_batch(d);
         return 0;
     }
 
     case WM_TIMER:
         if (!d) return 0;
         if (wParam == TIMER_CMD_QUEUE) {
-            dispatch_tick(d);
+            ai_chat_dispatch_tick(d);
         } else if (wParam == TIMER_STREAM_REAP) {
             /* A reply whose thread ended without its final message getting
              * through (out of memory, or the post failed) would leave its
@@ -4980,12 +1557,12 @@ next_coalesce:;
             void *lost;
             while ((lost = ai_stream_table_lost_owner(&d->streams)) != NULL) {
                 if (lost == (void *)d->active_state) {
-                    cancel_active_stream(d);
+                    ai_chat_cancel_active_stream(d);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                     "[the AI reply was lost]");
                     if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 } else {
-                    abort_session_stream(d, (AiSessionState *)lost);
+                    ai_chat_abort_session_stream(d, (AiSessionState *)lost);
                 }
             }
             if (d->streams.count == 0)
@@ -5016,7 +1593,7 @@ next_coalesce:;
             }
         } else if (wParam == TIMER_SCROLL_SYNC) {
             /* ChatListView handles its own scroll; only sync input */
-            input_sync_scroll(d);
+            ai_chat_input_sync_scroll(d);
         }
         return 0;
 
@@ -5053,7 +1630,7 @@ next_coalesce:;
             }
             if (delta != 0)
                 SendMessage(d->hInput, EM_LINESCROLL, 0, (LPARAM)delta);
-            input_sync_scroll(d);
+            ai_chat_input_sync_scroll(d);
             return 0;
         }
         break;
@@ -5061,11 +1638,11 @@ next_coalesce:;
     case WM_KEYDOWN:
         if (d && (GetKeyState(VK_CONTROL) & 0x8000)) {
             if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
-                chat_apply_zoom(d, 1);
+                ai_chat_apply_zoom(d, 1);
                 return 0;
             }
             if (wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
-                chat_apply_zoom(d, -1);
+                ai_chat_apply_zoom(d, -1);
                 return 0;
             }
         }
@@ -5076,7 +1653,7 @@ next_coalesce:;
             int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
             /* Ctrl+Scroll zooms the font */
             if (GetKeyState(VK_CONTROL) & 0x8000) {
-                chat_apply_zoom(d, zdelta > 0 ? 1 : -1);
+                ai_chat_apply_zoom(d, zdelta > 0 ? 1 : -1);
                 return 0;
             }
             /* Forward wheel to ChatListView if it exists */
@@ -5091,13 +1668,13 @@ next_coalesce:;
             /* The header's model chip and the status line are painted
              * elements (not child windows), so they need repainting on
              * every WM_PAINT regardless of activity; the activity dot +
-             * one-word status inside paint_header() is the only piece
+             * one-word status inside ai_chat_paint_header() is the only piece
              * that's conditional on d->activity.phase. */
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            paint_header(d, hdc);
-            paint_status_line(d, hdc);
-            paint_sash(d, hdc);
+            ai_chat_paint_header(d, hdc);
+            ai_chat_paint_status_line(d, hdc);
+            ai_chat_paint_sash(d, hdc);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -5191,12 +1768,12 @@ next_coalesce:;
                                  &rc, theme_cr(0xFFFFFF), (UINT)d->dpi);
                 }
             } else if ((int)dis->CtlID == IDC_CHAT_SAVE) {
-                draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_SAVE);
+                ai_chat_draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_SAVE);
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
-                draw_header_icon_button(dis, d->theme, d->dpi,
+                ai_chat_draw_header_icon_button(dis, d->theme, d->dpi,
                     d->docked ? NS_ICON_UNDOCK : NS_ICON_DOCK);
             } else if ((int)dis->CtlID == IDC_CHAT_NEWCHAT) {
-                draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_NEW_CHAT);
+                ai_chat_draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_NEW_CHAT);
             }
             /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
              * approval buttons are now inline in chat_listview. The
@@ -5232,25 +1809,25 @@ next_coalesce:;
              *
              * A table entry can have a NULL owner (defensive: nothing
              * today launches a stream with d->active_state NULL, but
-             * nothing guarantees it never will). abort_session_stream()
+             * nothing guarantees it never will). ai_chat_abort_session_stream()
              * no-ops on a NULL state without touching the table at all, so
              * looping on d->streams.count while resolving owner-at-slot-0
              * would spin forever the moment slot 0 held one: remove such
              * an entry directly instead of routing it through
-             * abort_session_stream() (there is no session to update
+             * ai_chat_abort_session_stream() (there is no session to update
              * anyway). Either branch always shrinks the table by at least
              * one entry, so the loop always terminates. */
             while (d->streams.count > 0) {
                 AiSessionState *owner =
                     (AiSessionState *)ai_stream_table_owner_at(&d->streams, 0);
                 if (owner)
-                    abort_session_stream(d, owner);
+                    ai_chat_abort_session_stream(d, owner);
                 else
                     ai_stream_table_abort_owner(&d->streams, NULL);
             }
             ai_stream_table_abort_all(&d->streams);   /* nothing left; belt and braces */
             if (d->active_state) d->active_state->busy = 0;
-            drain_stream_messages(hwnd);
+            ai_chat_drain_stream_messages(hwnd);
 
             KillTimer(hwnd, TIMER_SCROLL_SYNC);
             KillTimer(hwnd, TIMER_HEARTBEAT);
@@ -5263,7 +1840,7 @@ next_coalesce:;
                 d->active_state->valid = 1;
             }
             ai_conv_reset(&d->conv);   /* no session: nothing may leak */
-            thinking_history_clear(d);
+            ai_chat_thinking_history_clear(d);
             ai_attachment_free(&d->pending_attachment);
             chat_msg_list_clear(&d->msg_list);
             d->stream_ai_item = NULL;
@@ -5424,7 +2001,7 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io)
     if (!d) return;
     d->active_term = term;
     d->active_io = io;
-    update_panel_state(d);
+    ai_chat_update_panel_state(d);
 }
 
 void ai_chat_set_shell_name(HWND hwnd, const char *shell_name)
@@ -5442,7 +2019,7 @@ void ai_chat_force_state(HWND hwnd, int state_id)
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
     d->forced_state = state_id;
-    update_panel_state(d);
+    ai_chat_update_panel_state(d);
 }
 
 void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
@@ -5470,7 +2047,7 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
     if (d->hChatList)
         chat_listview_set_model(d->hChatList, d->conv.model);
 
-    update_panel_state(d);
+    ai_chat_update_panel_state(d);
 }
 
 void ai_chat_update_tools(HWND hwnd,
@@ -5482,7 +2059,7 @@ void ai_chat_update_tools(HWND hwnd,
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
-    chat_register_tools(d,
+    ai_chat_register_tools(d,
                         search_provider ? search_provider : "none",
                         search_url,
                         max_search_results,
@@ -5582,7 +2159,7 @@ void ai_chat_set_policy_default(HWND hwnd, CmdPolicy policy)
     if (d->active_state) {
         ai_chat_seed_policy(d, d->active_state);
         d->approval_q.policy = d->active_state->policy;
-        invalidate_status_line(d);
+        ai_chat_invalidate_status_line(d);
     }
 }
 
@@ -5604,7 +2181,7 @@ static void do_session_switch(AiChatData *d,
                               const char *session_name)
 {
     /* A Critical confirmation still up from the old session must not apply
-     * to this one (request_policy_change()). */
+     * to this one (ai_chat_request_policy_change()). */
     d->session_gen++;
     /* Save current conversation to old session state. A busy session's
      * thread works on its own copy, so this is safe mid-reply; when the
@@ -5617,14 +2194,14 @@ static void do_session_switch(AiChatData *d,
     /* Kill command timers — they belong to the old session. The dispatcher
      * itself is per-panel, not per-session, so switching away just stops
      * it silently (no "[command queue stopped]" -- that's the Stop button's
-     * message); dispatch_cancel() marks whatever was left APPROVED in the
+     * message); ai_chat_dispatch_cancel() marks whatever was left APPROVED in the
      * old session's running batch "not run" on its card, settles and
-     * removes just that one batch (so a later dispatch_start() can't
+     * removes just that one batch (so a later ai_chat_dispatch_start() can't
      * resurrect it), and restores the Send button. Every other pending batch in the old session stays
-     * in its CmdBatchSet untouched -- chat_rebuild_display() re-creates
+     * in its CmdBatchSet untouched -- ai_chat_rebuild_display() re-creates
      * their cards when the user switches back (rule 6). */
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-    dispatch_cancel(d, NULL, 0);
+    ai_chat_dispatch_cancel(d, NULL, 0);
 
     /* Save policy, show-thinking and activity phase to old session */
     if (d->active_state && d->active_state != new_state) {
@@ -5635,7 +2212,7 @@ static void do_session_switch(AiChatData *d,
     }
 
     /* Clear thinking history — it belongs to the old session */
-    thinking_history_clear(d);
+    ai_chat_thinking_history_clear(d);
 
     /* Load new session's conversation */
     if (new_state && new_state != d->active_state) {
@@ -5688,21 +2265,21 @@ static void do_session_switch(AiChatData *d,
         chat_activity_reset(&d->activity);
     }
 
-    relayout(d);
+    ai_chat_relayout(d);
 
-    /* chat_rebuild_display() replays the conversation and re-creates a
+    /* ai_chat_rebuild_display() replays the conversation and re-creates a
      * card for every batch still in new_state->batches (rule 6) --
      * ai_build_confirm_text()'s old single-snapshot summary line is gone
      * along with it. */
-    chat_rebuild_display(d);
-    update_panel_state(d);
+    ai_chat_rebuild_display(d);
+    ai_chat_update_panel_state(d);
 
     /* Pick up the newly displayed session's queue at once rather than
      * after the user's next prompt. Hidden-tab batches are all pending, so
      * they wait for a click; a batch the user had approved on this tab and
-     * that the switch away cancelled was removed by dispatch_cancel(), so
+     * that the switch away cancelled was removed by ai_chat_dispatch_cancel(), so
      * only batches still holding approved, unrun rows start here. */
-    maybe_start_next_batch(d);
+    ai_chat_maybe_start_next_batch(d);
 
     /* If switching to a session that's still streaming,
      * re-append any accumulated content so the user sees progress.
@@ -5790,14 +2367,14 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
      * freed below. */
     if (d->active_state == state) {
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-        dispatch_cancel(d, NULL, 0);
-        if (state->busy) cancel_active_stream(d);
+        ai_chat_dispatch_cancel(d, NULL, 0);
+        if (state->busy) ai_chat_cancel_active_stream(d);
     }
 
     /* Abort and orphan its reply in flight, if any: the thread frees its
      * own stream, and its late messages no longer resolve to this state.
      * Also frees the session's stream buffers and clears busy. */
-    abort_session_stream(d, state);
+    ai_chat_abort_session_stream(d, state);
 
     /* Free every pending batch (the caller frees the AiSessionState itself
      * right after this call returns). */
@@ -5844,7 +2421,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     /* Pending command batches: build real CmdBatch entries (real, unique
      * ids) in the demo session's own batch set from the canned queues --
      * approval for the state's own batch, approval2 for "batches"'s
-     * second one -- instead of touching d->approval_q. chat_rebuild_display()
+     * second one -- instead of touching d->approval_q. ai_chat_rebuild_display()
      * below replays every batch still in the set exactly the way a live
      * session switch does (append_batch_command_items()), so this reuses
      * the same code path a real reply's cards come from. */
@@ -5869,7 +2446,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     /* Rebuilds msg_list from d->conv (now including the thinking block
      * just attached, plus any tool_call/tool_result items) and appends a
      * card for every batch just built above. */
-    chat_rebuild_display(d);
+    ai_chat_rebuild_display(d);
 
     /* "cmddetail": the "approval" state with the details popup already open
      * on its longest command (the demo's long, truncated row), so the
@@ -5890,7 +2467,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     }
 
     /* The demo session has no channel (window.c's create_demo_session
-     * passes NULL), so update_panel_state() would otherwise read every
+     * passes NULL), so ai_chat_update_panel_state() would otherwise read every
      * demo state as AI_STATE_NO_SESSION. "empty", "nokey" and "nosession"
      * are the only states that actually leave msg_list empty (every other
      * state's replayed turns make the forced state moot -- chat_listview
@@ -5910,7 +2487,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * 2026-10-18 section 6) -- and "thinking" shows it collapsed, so the
      * review set still covers both forms per the design spec's "Thought
      * process" section. Setting the item's own flag (rather than
-     * d->show_thinking) is the smallest change -- chat_rebuild_display()
+     * d->show_thinking) is the smallest change -- ai_chat_rebuild_display()
      * always creates it collapsed. */
     if (state && (strcmp(state, "all") == 0 || strcmp(state, "chat") == 0)) {
         ChatMsgItem *ti = d->msg_list.head;
@@ -5944,13 +2521,13 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
                         "Stream cancelled by user.");
     }
 
-    relayout(d);
+    ai_chat_relayout(d);
     if (d->hChatList) {
         /* The integration harness asks the list where words were painted
          * (CLV_MSG_QUERY_WORD) -- under --ui-demo only. */
         chat_listview_enable_query(d->hChatList);
         chat_listview_invalidate(d->hChatList);
-        /* chat_rebuild_display() above always leaves the list scrolled to
+        /* ai_chat_rebuild_display() above always leaves the list scrolled to
          * the bottom; ui_demo_scrolls_to_top() (src/core/ui_demo.c) names
          * the states whose canned reply is long enough that this would
          * push the Thinking disclosure off the top of the thread, and

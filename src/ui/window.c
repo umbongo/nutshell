@@ -982,7 +982,7 @@ static Session *create_session(int rows, int cols) {
      * before session_connect() or the first successful recv() sets them).
      * last_term_input_tick is different: a session driven entirely from
      * the AI panel may never
-     * get a single terminal keystroke, and dispatch_tick()'s no-prefix
+     * get a single terminal keystroke, and ai_chat_dispatch_tick()'s no-prefix
      * safety check (SessionIo.last_input_tick, src/term/session_io.h)
      * reads it on the very first command of such a session -- an
      * indeterminate value there is compared against GetTickCount() as if
@@ -2320,7 +2320,7 @@ static void on_ai_clicked(void) {
 
     /* The panel always opens now, session or API key or neither -- it
      * shows the empty/no-key/no-session state itself (ai_panel_states.h,
-     * decided in ai_chat.c's update_panel_state()). No MessageBox gate
+     * decided in ai_chat_view.c's ai_chat_update_panel_state()). No MessageBox gate
      * here any more (AI Assist Panel task 4). */
     if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
         if (g_ai_docked) {

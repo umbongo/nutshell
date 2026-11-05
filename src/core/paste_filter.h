@@ -44,7 +44,7 @@ size_t paste_filter_controls(const char *in, size_t in_len, char *out, size_t *r
 char *paste_visualize_controls(const char *raw, size_t raw_len, size_t *out_removed);
 
 /* Shared by the AI command-execution paths (src/core/chat_approval.c,
- * src/core/ai_prompt.c, src/ui/ai_chat.c): true if `s` (NUL-terminated
+ * src/core/ai_prompt.c, src/ui/ai_chat_dispatch.c): true if `s` (NUL-terminated
  * UTF-8) contains a byte or sequence paste_filter_controls() would strip --
  * any C0 control (0x00-0x1F, including TAB/LF/CR: a command sent to
  * execute_command() must be exactly one line, so none of them are

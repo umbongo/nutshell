@@ -400,11 +400,11 @@ int test_ai_stream_abort_all_on_panel_close(void)
 /* Hardening: the AI panel's WM_DESTROY drains its table with
  *   while (t.count > 0) {
  *       owner = ai_stream_table_owner_at(&t, 0);
- *       if (owner) abort_session_stream(d, owner);   // ai_chat.c only
+ *       if (owner) ai_chat_abort_session_stream(d, owner);   // ai_chat.c only
  *       else       ai_stream_table_abort_owner(&t, NULL);
  *   }
- * -- exercised here at the table-primitive level, since abort_session_stream()
- * itself lives in src/ui/ai_chat.c (Win32-only, not built for native tests).
+ * -- exercised here at the table-primitive level, since ai_chat_abort_session_stream()
+ * itself lives in src/ui/ai_chat_send.c (Win32-only, not built for native tests).
  * A NULL owner is defensive (nothing today calls ai_stream_table_add()
  * with one), but the primitive it falls back to -- ai_stream_table_abort_owner()
  * matching and removing entries whose owner is exactly NULL -- must work,

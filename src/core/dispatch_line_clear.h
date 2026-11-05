@@ -4,7 +4,7 @@
 
 #include "session_io.h"    /* SessionKind */
 
-/* How execute_command() (src/ui/ai_chat.c) should clear whatever is
+/* How execute_command() (src/ui/ai_chat_dispatch.c) should clear whatever is
  * already on the shell's input line before writing an AI-dispatched
  * command to it.
  *
@@ -57,7 +57,7 @@ typedef enum {
  *         classified", and an unrelated prompt shape (Gentoo's
  *         "user@host ~ $", zsh's "host ~ %" -- a space before the
  *         terminator) would then also fail the stricter no-prefix check
- *         in dispatch_tick(), cancelling the batch outright on what is
+ *         in ai_chat_dispatch_tick(), cancelling the batch outright on what is
  *         otherwise the main use case.
  *       - The network-device CLIs (Cisco IOS/NX-OS/ASA, Junos, EOS, ...)
  *         this app classifies also support Ctrl+E/Ctrl+U as a line-kill
@@ -103,7 +103,7 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
                                                 const char *local_shell_name,
                                                 int cursor_row_is_windows_prompt);
 
-/* The two timing decisions dispatch_tick() (src/ui/ai_chat.c) makes on the
+/* The two timing decisions ai_chat_dispatch_tick() (src/ui/ai_chat_dispatch.c) makes on the
  * no-prefix path (DISPATCH_LINE_CLEAR_NONE above), where a command is
  * written straight onto the input line rather than after a clear-line
  * prefix. Both take an already-computed elapsed-milliseconds value so this
@@ -121,13 +121,13 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
  * character the user just typed but that has not reached the terminal
  * buffer yet is invisible to term_at_unambiguous_prompt() -- the
  * terminal's write_seq has not changed yet either, so the dispatcher's own
- * "quiet" tracking (PROMPT_QUIET_MS in ai_chat.c) does not catch it -- and
+ * "quiet" tracking (PROMPT_QUIET_MS in ai_chat_internal.h) does not catch it -- and
  * the AI's command gets glued onto the front of whatever the user typed
  * (e.g. "xGet-ChildItem"). Set to the same 400 ms as PROMPT_QUIET_MS: the
  * rest of the dispatcher already treats that as long enough for the
  * terminal to have caught up with anything in flight.
  *
- * dispatch_tick() treats a true result as a silent delay, not an
+ * ai_chat_dispatch_tick() treats a true result as a silent delay, not an
  * "ambiguous prompt": it must not post the wait status line below, and
  * must not start or advance DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS's clock
  * either, unlike a failed term_at_unambiguous_prompt() check. A recent
@@ -142,7 +142,7 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
  * a no-prefix dispatch. */
 int dispatch_keystroke_too_recent(unsigned long elapsed_ms);
 
-/* How long, in milliseconds, dispatch_tick() may wait on a no-prefix
+/* How long, in milliseconds, ai_chat_dispatch_tick() may wait on a no-prefix
  * prompt that term_at_prompt() accepts but term_at_unambiguous_prompt()
  * does not, before giving up and cancelling the batch. (A too-recent
  * keystroke, dispatch_keystroke_too_recent() above, is a separate, silent
@@ -161,7 +161,7 @@ int dispatch_keystroke_too_recent(unsigned long elapsed_ms);
  * (CMD_QUEUE_POLL_MS, 250 ms) -- long enough that a momentary read is
  * never mistaken for a real stall, short enough that a genuine stall is
  * still reported and cleared up within a few seconds rather than left
- * hanging indefinitely. dispatch_tick() measures elapsed_ms from when it
+ * hanging indefinitely. ai_chat_dispatch_tick() measures elapsed_ms from when it
  * first saw the condition, not reset by output arriving in between (a
  * command that keeps refreshing a prompt-shaped line, e.g. a progress
  * percentage, must not re-arm this every burst without ever timing out)
@@ -169,7 +169,7 @@ int dispatch_keystroke_too_recent(unsigned long elapsed_ms);
  * cancels or finishes. */
 #define DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS 5000u
 
-/* True when elapsed_ms (time since dispatch_tick() first saw the
+/* True when elapsed_ms (time since ai_chat_dispatch_tick() first saw the
  * ambiguous-prompt condition for the command it is trying to send) means
  * the dispatcher should stop waiting and cancel the batch. */
 int dispatch_ambiguous_prompt_timed_out(unsigned long elapsed_ms);
