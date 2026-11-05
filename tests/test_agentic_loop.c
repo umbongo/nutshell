@@ -341,15 +341,32 @@ int test_ai_reasoning_absent_emits_nothing(void)
     AiConversation conv;
     reasoning_conv(&conv, NULL);
     char buf[16384];
+    /* Moonshot: the field is always there on a tool-call turn, empty when
+     * the model streamed no reasoning (the thinking models reject a missing
+     * one). */
     ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
-    ASSERT_TRUE(strstr(buf, "\"tool_calls\":[") != NULL);
-    ASSERT_NULL(strstr(buf, "reasoning_content"));
+    const char *asst = strstr(buf, "{\"role\":\"assistant\"");
+    ASSERT_NOT_NULL(asst);
+    const char *rc = strstr(asst, "\"reasoning_content\":\"\",\"tool_calls\":[");
+    ASSERT_NOT_NULL(rc);
+    ASSERT_NULL(strstr(rc + 20, "reasoning_content"));
+    ASSERT_NULL(conv.messages[2].reasoning);
+    /* only on an assistant tool-call turn */
+    ASSERT_NULL(strstr(buf, "\"role\":\"user\",\"content\":\"fetch it\",\"reasoning_content\""));
     ai_conv_reset(&conv);
 
-    reasoning_conv(&conv, "");   /* empty counts as none */
+    reasoning_conv(&conv, "");   /* empty counts as none: same output */
     ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
-    ASSERT_NULL(strstr(buf, "reasoning_content"));
+    ASSERT_TRUE(strstr(buf, "\"reasoning_content\":\"\",\"tool_calls\":[") != NULL);
     ASSERT_NULL(conv.messages[2].reasoning);
+
+    /* every other provider still emits nothing */
+    static const char *const others[] = {"deepseek", "openai", "gemini",
+                                         "anthropic", NULL};
+    for (int i = 0; others[i]; i++) {
+        ASSERT_TRUE(reasoning_body(&conv, others[i], buf, sizeof(buf)) > 0);
+        ASSERT_NULL(strstr(buf, "reasoning_content"));
+    }
     ai_conv_reset(&conv);
     TEST_END();
 }
@@ -460,17 +477,17 @@ int test_ai_moonshot_max_completion_tokens(void)
     ASSERT_TRUE(ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1,
                                          "moonshot") > 0);
     ASSERT_STR_EQ(buf,
-        "{\"model\":\"m\",\"max_completion_tokens\":8096,\"stream\":true,"
+        "{\"model\":\"m\",\"max_completion_tokens\":16384,\"stream\":true,"
         "\"messages\":[{\"role\":\"system\",\"content\":\"sys\"},"
         "{\"role\":\"user\",\"content\":\"hi\"}]}");
     ASSERT_NULL(strstr(buf, "\"max_tokens\""));
 
     /* also with tools, and when not streaming */
     ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
-    ASSERT_TRUE(strstr(buf, "\"max_completion_tokens\":8096,") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"max_completion_tokens\":16384,") != NULL);
     ASSERT_TRUE(ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0,
                                          "moonshot") > 0);
-    ASSERT_TRUE(strstr(buf, "\"max_completion_tokens\":8096,\"stream\":false") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"max_completion_tokens\":16384,\"stream\":false") != NULL);
 
     /* every other provider: byte-for-byte what it was */
     ASSERT_TRUE(ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1,
@@ -522,5 +539,45 @@ int test_ai_stream_chunk_cut_off(void)
     /* Anthropic's own stop reason is a different format and not reported here */
     ASSERT_EQ(ai_stream_chunk_cut_off(
         "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}"), 0);
+    TEST_END();
+}
+
+/* The Moonshot output limit follows the model's context window: 16384, or
+ * half of a small window (spec ruling 2026-11-05). */
+int test_ai_moonshot_output_limit_per_model(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ai_moonshot_output_limit("kimi-k3"), 16384);
+    ASSERT_EQ(ai_moonshot_output_limit("kimi-k3.1-pro"), 16384);
+    ASSERT_EQ(ai_moonshot_output_limit("moonshot-v1-128k"), 16384);
+    ASSERT_EQ(ai_moonshot_output_limit("moonshot-v1-32k"), 16000);
+    ASSERT_EQ(ai_moonshot_output_limit("moonshot-v1-8k"), 4000);
+    /* not in the table (0 from ai_model_context_limit): the full 16384 */
+    ASSERT_EQ(ai_model_context_limit("my-own-kimi"), 0);
+    ASSERT_EQ(ai_moonshot_output_limit("my-own-kimi"), 16384);
+    ASSERT_EQ(ai_moonshot_output_limit(""), 16384);
+    ASSERT_EQ(ai_moonshot_output_limit(NULL), 16384);
+
+    /* and the emitted body carries it */
+    static const struct { const char *model; const char *field; } cases[] = {
+        {"kimi-k3",          "\"max_completion_tokens\":16384,"},
+        {"moonshot-v1-8k",   "\"max_completion_tokens\":4000,"},
+        {"moonshot-v1-32k",  "\"max_completion_tokens\":16000,"},
+        {"unlisted-model",   "\"max_completion_tokens\":16384,"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        AiConversation conv;
+        ai_conv_init(&conv, cases[i].model);
+        ai_conv_add(&conv, AI_ROLE_USER, "hi");
+        char buf[2048];
+        ASSERT_TRUE(ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1,
+                                             "moonshot") > 0);
+        ASSERT_TRUE(strstr(buf, cases[i].field) != NULL);
+        /* another provider with the same model name: no limit field */
+        ASSERT_TRUE(ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1,
+                                             "openai") > 0);
+        ASSERT_NULL(strstr(buf, "max_completion_tokens"));
+        ai_conv_reset(&conv);
+    }
     TEST_END();
 }

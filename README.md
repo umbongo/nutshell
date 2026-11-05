@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,584 unit tests across 139 test files, and cppcheck reports no errors or warnings
+- 3,585 unit tests across 139 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -250,7 +250,7 @@ With **Auto-approve** on, rows at or below the level are approved and start runn
 
 #### Tool Calls
 
-Tools work with Anthropic, OpenAI, DeepSeek and Moonshot (Kimi); the gate below applies to all four. Gemini and a Custom endpoint get no tools. Moonshot requests carry an output limit of 8096 tokens, and Kimi's reasoning travels back with its tool calls as its thinking models require. If a provider ends a reply at its output limit, the thread shows "reply cut off at the provider's output limit".
+Tools work with Anthropic, OpenAI, DeepSeek and Moonshot (Kimi); the gate below applies to all four. Gemini and a Custom endpoint get no tools. Moonshot requests carry an output limit of 16384 tokens (half the context window for the small moonshot-v1-8k and -32k), and Kimi's reasoning travels back with its tool calls as its thinking models require. If a provider ends a reply at its output limit, the thread shows "reply cut off at the provider's output limit".
 
 `web_search` and `read_debug_log` run as they always have. `web_fetch` asks first: the call lands in a one-row approval card (`web_fetch: <address>`, tagged **UNKNOWN**) headed "1 tool call", with **Deny all** and **Run 1 selected**, and the AI waits for your answer.
 
@@ -718,7 +718,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,584 unit tests across 139 test files
+├── tests/                              # 3,585 unit tests across 139 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion

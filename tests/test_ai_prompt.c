@@ -235,12 +235,26 @@ int test_ai_provider_models_moonshot(void) {
     TEST_BEGIN();
     const char * const *models = ai_provider_models("moonshot");
     ASSERT_NOT_NULL(models);
-    ASSERT_STR_EQ(models[0], "kimi-k3");
-    ASSERT_STR_EQ(models[1], "kimi-k2.5");
-    ASSERT_STR_EQ(models[2], "kimi-k2");
+    /* The chat models platform.kimi.ai/docs/models lists, in its order. */
+    static const char *const expect[] = {
+        "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3",
+        "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6",
+        "kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
+        "moonshot-v1-auto", "moonshot-v1-8k-vision-preview",
+        "moonshot-v1-32k-vision-preview", "moonshot-v1-128k-vision-preview",
+        "kimi-k2-0905-preview", "kimi-k2-0711-preview", "kimi-k2-turbo-preview",
+        "kimi-k2-thinking", "kimi-k2-thinking-turbo", "kimi-latest",
+        "kimi-thinking-preview",
+    };
     int count = 0;
-    while (models[count]) count++;
-    ASSERT_EQ(count, 6);
+    while (models[count]) {
+        ASSERT_TRUE(count < 21);
+        ASSERT_STR_EQ(models[count], expect[count]);
+        count++;
+    }
+    ASSERT_EQ(count, 21);
+    /* the default is still a listed model */
+    ASSERT_STR_EQ(ai_provider_model("moonshot"), "kimi-k3");
     TEST_END();
 }
 

@@ -2997,6 +2997,7 @@ int test_ai_reasoning_capped(void);
 int test_ai_reasoning_copy_take_compact(void);
 int test_ai_moonshot_max_completion_tokens(void);
 int test_ai_stream_chunk_cut_off(void);
+int test_ai_moonshot_output_limit_per_model(void);
 /* test_ai_agentic_cap.c */
 int test_cap_all_quotes(void);
 int test_cap_control_bytes_stripped(void);
@@ -6790,6 +6791,7 @@ int main(void) {
     failed += test_ai_reasoning_copy_take_compact();
     failed += test_ai_moonshot_max_completion_tokens();
     failed += test_ai_stream_chunk_cut_off();
+    failed += test_ai_moonshot_output_limit_per_model();
     failed += test_cap_all_quotes();
     failed += test_cap_control_bytes_stripped();
     failed += test_cap_utf8_boundary();

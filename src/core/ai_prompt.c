@@ -439,8 +439,8 @@ int ai_model_context_limit(const char *model)
         {"claude-sonnet-4-6",         200000},
         {"claude-haiku-4-5-20251001", 200000},
         {"claude-opus-4-6",           200000},
+        {"kimi-k3.1-pro",            1000000},
         {"kimi-k3",                  1000000},
-        {"kimi-k2",                   128000},
         {"moonshot-v1-8k",              8000},
         {"moonshot-v1-32k",            32000},
         {"moonshot-v1-128k",          128000},
@@ -451,6 +451,14 @@ int ai_model_context_limit(const char *model)
             return limits[i].tokens;
     }
     return 0;
+}
+
+int ai_moonshot_output_limit(const char *model)
+{
+    int ctx = ai_model_context_limit(model);   /* 0: not in the table */
+    if (ctx <= 0 || ctx >= AI_MOONSHOT_OUTPUT_BIG_CTX)
+        return AI_MOONSHOT_OUTPUT_MAX;
+    return ctx / 2;
 }
 
 int ai_context_estimate_tokens(const AiConversation *conv)
@@ -783,10 +791,10 @@ static size_t build_body_core(const AiConversation *conv,
         pos += (size_t)n;
     }
 
-    /* Moonshot: an explicit output limit (see AI_MOONSHOT_MAX_COMPLETION_TOKENS) */
+    /* Moonshot: an explicit output limit sized to the model (ai_moonshot_output_limit) */
     if (is_moonshot) {
         n = snprintf(buf + pos, buf_size - pos, ",\"max_completion_tokens\":%d",
-                     AI_MOONSHOT_MAX_COMPLETION_TOKENS);
+                     ai_moonshot_output_limit(conv->model));
         if (n < 0 || pos + (size_t)n >= buf_size) return 0;
         pos += (size_t)n;
     }
@@ -1027,15 +1035,17 @@ static size_t build_body_core(const AiConversation *conv,
             if (pos == 0) return 0;
 
             /* Moonshot's thinking models want the turn's reasoning back and
-             * answer 400 without it; no other provider gets the field (a
+             * answer 400 without it: the field is always there, an empty
+             * string when nothing was streamed. No other provider gets it (a
              * DeepSeek reasoner rejects it, OpenAI has no such field). */
-            if (is_moonshot && msg->reasoning && msg->reasoning[0]) {
+            if (is_moonshot) {
                 const char *rc_key = ",\"reasoning_content\":";
                 size_t rck_len = strlen(rc_key);
                 if (pos + rck_len >= buf_size) return 0;
                 memcpy(buf + pos, rc_key, rck_len);
                 pos += rck_len;
-                pos = json_escape_string(msg->reasoning, strlen(msg->reasoning), buf, buf_size, pos, 1);
+                const char *rtext = msg->reasoning ? msg->reasoning : "";
+                pos = json_escape_string(rtext, strlen(rtext), buf, buf_size, pos, 1);
                 if (pos == 0) return 0;
             }
 
@@ -1836,8 +1846,15 @@ const char * const *ai_provider_models(const char *provider)
         "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6", NULL
     };
     static const char * const moonshot_models[] = {
-        "kimi-k3", "kimi-k2.5", "kimi-k2", "moonshot-v1-8k", "moonshot-v1-32k",
-        "moonshot-v1-128k", NULL
+        /* platform.kimi.ai/docs/models, in the page's order */
+        "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3",
+        "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6",
+        "kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
+        "moonshot-v1-auto", "moonshot-v1-8k-vision-preview",
+        "moonshot-v1-32k-vision-preview", "moonshot-v1-128k-vision-preview",
+        "kimi-k2-0905-preview", "kimi-k2-0711-preview", "kimi-k2-turbo-preview",
+        "kimi-k2-thinking", "kimi-k2-thinking-turbo", "kimi-latest",
+        "kimi-thinking-preview", NULL
     };
     static const char * const gemini_models[] = {
         "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", NULL

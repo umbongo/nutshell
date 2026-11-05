@@ -231,8 +231,13 @@ int ai_provider_supports_tools(const char *provider);
 /* Output limit sent as "max_completion_tokens" to provider "moonshot" (and
  * only to it). Without one the server's default is far lower, and a thinking
  * model's reasoning counts against it, so a long [EXEC] reply was cut off
- * before its closing marker. Equal to the max_tokens Anthropic gets. */
-#define AI_MOONSHOT_MAX_COMPLETION_TOKENS 8096
+ * before its closing marker. A model whose context window is known to be
+ * under AI_MOONSHOT_OUTPUT_BIG_CTX gets half of it (moonshot-v1-8k: 4000,
+ * moonshot-v1-32k: 16000); every other model, one that is not in
+ * ai_model_context_limit()'s table included, gets AI_MOONSHOT_OUTPUT_MAX. */
+#define AI_MOONSHOT_OUTPUT_MAX     16384
+#define AI_MOONSHOT_OUTPUT_BIG_CTX 65536
+int ai_moonshot_output_limit(const char *model);
 
 /* 1 when an OpenAI-format stream chunk (the JSON after "data: ") ends the
  * reply because it hit the provider's output limit: choices[0].finish_reason
