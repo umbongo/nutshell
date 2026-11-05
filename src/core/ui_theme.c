@@ -210,6 +210,58 @@ static void resolve_surface(unsigned int base, int step_dir, int away_from_label
     out->disabled = theme_blend(base, bg_primary, 0.5);
 }
 
+/* The selection hue anywhere but the user bubble, from the focus token and
+ * the theme polarity.  The one place that decides it: ui_theme_sel_hue() and
+ * ui_theme_md_role() both read it, so the markdown walk follows any change. */
+static unsigned int sel_hue_off_bubble(unsigned int focus, int is_dark)
+{
+    (void)is_dark;
+    return focus;
+}
+
+/* rgb_alpha() of src/ui/ns_draw.c, byte for byte: fg * a + bg * (1 - a) per
+ * channel in float, truncated.  Kept here so the portable tests see it. */
+static unsigned int tint(unsigned int fg, unsigned int bg, float a)
+{
+    unsigned int out = 0;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        float f = (float)((fg >> sh) & 0xFFu), b = (float)((bg >> sh) & 0xFFu);
+        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFFu) << sh;
+    }
+    return out;
+}
+
+unsigned int ui_theme_md_role(const ThemeColors *c, UiMdRole role)
+{
+    if (!c) return 0;
+
+    unsigned int hue = role == UI_MD_CODE ? c->info : c->link;
+    unsigned int focus = c->overrides.focus ? c->overrides.focus : c->accent;
+    int is_dark = theme_is_dark(c->bg_primary);
+    unsigned int sel = sel_hue_off_bubble(focus, is_dark);
+
+    unsigned int surf[3];
+    surf[0] = c->bg_primary;
+    if (role == UI_MD_CODE) {
+        surf[1] = c->chat.cmd_bg;
+        surf[2] = tint(sel, c->chat.cmd_bg, UI_SEL_ALPHA);
+    } else {
+        surf[1] = tint(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
+        surf[2] = tint(sel, c->bg_primary, UI_SEL_ALPHA);
+    }
+
+    double dir = is_dark ? 2.0 : -2.0;
+    unsigned int cur = hue;
+    for (int step = 0; step <= 50; step++) {
+        if (step > 0) cur = theme_shift_lightness(cur, dir);
+        if (theme_contrast(cur, surf[0]) >= UI_TEXT_MIN_RATIO &&
+            theme_contrast(cur, surf[1]) >= UI_TEXT_MIN_RATIO &&
+            theme_contrast(cur, surf[2]) >= UI_TEXT_MIN_RATIO)
+            return cur;
+    }
+    return c->text_main;
+}
+
 void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
 {
     if (!base || !out) return;
@@ -240,6 +292,8 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
     out->text_dim_label = resolve_label(base->text_dim, base->bg_primary, base->text_main);
     out->border = base->border;
     out->focus  = base->overrides.focus ? base->overrides.focus : base->accent;
+    out->md_structure = ui_theme_md_role(base, UI_MD_STRUCTURE);
+    out->md_code      = ui_theme_md_role(base, UI_MD_CODE);
 
     out->terminal_fg = base->terminal_fg;
     out->terminal_bg = base->terminal_bg;
@@ -252,5 +306,5 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
 unsigned int ui_theme_sel_hue(const ThemeTokens *t, int on_user_bubble)
 {
     if (!t) return 0;
-    return on_user_bubble ? t->chat.user_text : t->focus;
+    return on_user_bubble ? t->chat.user_text : sel_hue_off_bubble(t->focus, t->is_dark);
 }

@@ -302,3 +302,115 @@ int test_ui_theme_terminal_min_contrast_by_name(void) {
     }
     TEST_END();
 }
+
+/* ---- ui_theme_md_role -------------------------------------------------- */
+
+/* rgb_alpha()'s truncating float blend, written out independently of
+ * ui_theme.c so the test checks the arithmetic, not a shared helper. */
+static unsigned int md_test_blend(unsigned int fg, unsigned int bg, float a) {
+    unsigned int out = 0;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
+        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
+    }
+    return out;
+}
+
+/* A theme with only the fields ui_theme_md_role reads set. */
+static ThemeColors md_test_theme(unsigned int bg, unsigned int cmd_bg,
+                                 unsigned int dim, unsigned int accent,
+                                 unsigned int hue, unsigned int text_main) {
+    ThemeColors c;
+    memset(&c, 0, sizeof c);
+    c.bg_primary = bg;
+    c.chat.cmd_bg = cmd_bg;
+    c.text_dim = dim;
+    c.accent = accent;
+    c.link = hue;
+    c.info = hue;
+    c.text_main = text_main;
+    return c;
+}
+
+/* Every surface the role is painted on clears UI_TEXT_MIN_RATIO. */
+static int md_test_clears(const ThemeColors *c, UiMdRole role, unsigned int col) {
+    unsigned int focus = c->overrides.focus ? c->overrides.focus : c->accent;
+    unsigned int surf[3];
+    surf[0] = c->bg_primary;
+    if (role == UI_MD_CODE) {
+        surf[1] = c->chat.cmd_bg;
+        surf[2] = md_test_blend(focus, c->chat.cmd_bg, UI_SEL_ALPHA);
+    } else {
+        surf[1] = md_test_blend(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
+        surf[2] = md_test_blend(focus, c->bg_primary, UI_SEL_ALPHA);
+    }
+    for (int i = 0; i < 3; i++)
+        if (theme_contrast(col, surf[i]) < UI_TEXT_MIN_RATIO) return 0;
+    return 1;
+}
+
+int test_ui_theme_md_role_unchanged_when_it_clears(void) {
+    TEST_BEGIN();
+    /* White on black: far above 4.7 on every surface of either role. */
+    ThemeColors d = md_test_theme(0x000000, 0x101010, 0x202020, 0xFFFFFF,
+                                  0xFFFFFF, 0xCCCCCC);
+    ASSERT_EQ((int)ui_theme_md_role(&d, UI_MD_STRUCTURE), 0xFFFFFF);
+    ASSERT_EQ((int)ui_theme_md_role(&d, UI_MD_CODE), 0xFFFFFF);
+    /* Black on white, the light polarity. */
+    ThemeColors l = md_test_theme(0xFFFFFF, 0xF0F0F0, 0xE0E0E0, 0x000000,
+                                  0x000000, 0x333333);
+    ASSERT_EQ((int)ui_theme_md_role(&l, UI_MD_STRUCTURE), 0x000000);
+    ASSERT_EQ((int)ui_theme_md_role(&l, UI_MD_CODE), 0x000000);
+    TEST_END();
+}
+
+int test_ui_theme_md_role_walks_away_from_the_background(void) {
+    TEST_BEGIN();
+    /* Dark: a dim blue-grey that fails moves lighter and then clears. */
+    ThemeColors d = md_test_theme(0x101018, 0x202028, 0x404050, 0x6080C0,
+                                  0x3A3A5A, 0xEEEEEE);
+    UiMdRole roles[2] = { UI_MD_STRUCTURE, UI_MD_CODE };
+    for (int k = 0; k < 2; k++) {
+        ASSERT_TRUE(!md_test_clears(&d, roles[k], d.link));
+        unsigned int got = ui_theme_md_role(&d, roles[k]);
+        ASSERT_TRUE(got != d.text_main);
+        ASSERT_TRUE(theme_lstar(got) > theme_lstar(d.link));
+        ASSERT_TRUE(md_test_clears(&d, roles[k], got));
+    }
+    /* Light: a pale hue that fails moves darker and then clears. */
+    ThemeColors l = md_test_theme(0xF8F8F0, 0xE8E8E0, 0xB0B0A0, 0x406080,
+                                  0xB0C8A0, 0x111111);
+    for (int k = 0; k < 2; k++) {
+        ASSERT_TRUE(!md_test_clears(&l, roles[k], l.link));
+        unsigned int got = ui_theme_md_role(&l, roles[k]);
+        ASSERT_TRUE(got != l.text_main);
+        ASSERT_TRUE(theme_lstar(got) < theme_lstar(l.link));
+        ASSERT_TRUE(md_test_clears(&l, roles[k], got));
+    }
+    TEST_END();
+}
+
+int test_ui_theme_md_role_falls_back_to_text_main(void) {
+    TEST_BEGIN();
+    /* A mid-grey ground with a black accent: the selection surface is a
+     * darker grey, and no shade of the hue reads 4.7 on it and on the ground
+     * in 50 steps either way. */
+    ThemeColors c = md_test_theme(0x808080, 0x808080, 0x808080, 0x000000,
+                                  0x909090, 0xABCDEF);
+    ASSERT_EQ((int)ui_theme_md_role(&c, UI_MD_STRUCTURE), 0xABCDEF);
+    ASSERT_EQ((int)ui_theme_md_role(&c, UI_MD_CODE), 0xABCDEF);
+    ASSERT_EQ((int)ui_theme_md_role(NULL, UI_MD_CODE), 0);
+    TEST_END();
+}
+
+int test_ui_theme_md_tokens_match_md_role(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *c = ui_theme_get(i);
+        ThemeTokens t;
+        ui_theme_resolve(c, &t);
+        ASSERT_EQ((int)t.md_structure, (int)ui_theme_md_role(c, UI_MD_STRUCTURE));
+        ASSERT_EQ((int)t.md_code, (int)ui_theme_md_role(c, UI_MD_CODE));
+    }
+    TEST_END();
+}

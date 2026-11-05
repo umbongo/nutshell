@@ -12,6 +12,7 @@
 #include "ns_type.h"
 #include "ns_draw.h"
 #include "theme.h"
+#include "ui_theme.h"
 #include "text_runs.h"
 #include <limits.h>
 #include <stdio.h>
@@ -23,18 +24,15 @@
 #define RGB_FROM_THEME(c) \
     RGB(((c) >> 16) & 0xFF, ((c) >> 8) & 0xFF, (c) & 0xFF)
 
-/* Colour-by-role: resolve one of the two AI-reply intent hues (structure =
+/* Colour-by-role: one of the two AI-reply intent hues (structure =
  * theme->link for headings/list markers/blockquote bar/table header text;
- * code = theme->info for inline code text/fenced-code left bar) against
- * theme->bg_primary, falling back to theme->text_main when the hue itself
- * would read below WCAG AA (4.5:1) on this theme rather than retuning the
- * theme's own palette -- see tests/test_ui_tokens.c's
- * test_ui_tokens_md_role_color_contrast for the per-theme numbers this is
- * guarding against. theme_contrast() is cheap enough to call per paint. */
-static COLORREF md_role_clr(const ThemeColors *theme, unsigned int role)
+ * code = theme->info for inline code text/fenced-code left bar), as
+ * ui_theme_md_role() resolves it: walked until it reads >= UI_TEXT_MIN_RATIO
+ * on every surface it is painted on (bg_primary, the table header fill,
+ * chat.cmd_bg and the selection tint), else theme->text_main. */
+static COLORREF md_role_clr(const ThemeColors *theme, UiMdRole role)
 {
-    return RGB_FROM_THEME(
-        theme_role_color(role, theme->bg_primary, theme->text_main));
+    return RGB_FROM_THEME(ui_theme_md_role(theme, role));
 }
 
 /* ── Layout constants ────────────────────────────────────────────────── */
@@ -58,7 +56,7 @@ static COLORREF md_role_clr(const ThemeColors *theme, unsigned int role)
 #define MD_TABLE_PAD_H      SP_SM
 #define MD_TABLE_PAD_V      SP_XS
 #define MD_TABLE_MIN_EM      6  /* column floor, in average-char widths */
-#define MD_TABLE_HEADER_FILL_ALPHA 0.12f
+#define MD_TABLE_HEADER_FILL_ALPHA UI_DIM_TINT_ALPHA
 
 /* ── UTF-8 → UTF-16 (stack buffer with heap fallback) ───────────────── */
 
@@ -111,7 +109,7 @@ static void mdbuf_free(MdWBuf *b)
 /* ── Character selection: runs and highlight (spec 2026-10-18 s.3, s.6) ── */
 
 /* The highlight: the focus hue at 30% over the colour the run sits on. */
-#define MD_SEL_ALPHA 0.30f
+#define MD_SEL_ALPHA UI_SEL_ALPHA
 
 /* Boundaries of one run, from one GetTextExtentExPointW call (stack
  * buffers, heap past MD_CUM_STACK). n == 0 when they could not be had.
@@ -1027,8 +1025,8 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
      * headings/list markers/blockquote bar/table header text, "code" for
      * inline code text/fenced-code left bar. Resolved once per render so
      * every line reuses the same (contrast-guarded) colour. */
-    COLORREF structure_clr = md_role_clr(theme, theme->link);
-    COLORREF code_clr = md_role_clr(theme, theme->info);
+    COLORREF structure_clr = md_role_clr(theme, UI_MD_STRUCTURE);
+    COLORREF code_clr = md_role_clr(theme, UI_MD_CODE);
     COLORREF body_clr = RGB_FROM_THEME(theme->text_main);
     COLORREF dim_text_clr = RGB_FROM_THEME(theme->text_dim);
     COLORREF code_bg = RGB_FROM_THEME(theme->chat.cmd_bg);

@@ -101,6 +101,10 @@ typedef struct {
      * text_dim itself is occasionally painted as a chip/badge background
      * (e.g. the "READ" safety tag) rather than only used as text (Task 10). */
     unsigned int text_dim_label;
+    /* The two markdown role colours (headings/list markers/table header text,
+     * and inline code), already walked until they read >= UI_TEXT_MIN_RATIO
+     * on every surface md_render.c paints them on: ui_theme_md_role(). */
+    unsigned int md_structure, md_code;
     unsigned int terminal_fg, terminal_bg;
     /* The terminal's colour tables for this theme (src/core/term_colors.h):
      * built from terminal_fg/terminal_bg/terminal_min_contrast by every
@@ -110,6 +114,35 @@ typedef struct {
     ThemeChatColors chat;   /* copied through unchanged for the migration window */
     int is_dark;
 } ThemeTokens;
+
+/* The chat selection tint's alpha: the selection hue blended over the surface
+ * it sits on (md_render.c, the chat list view). */
+#define UI_SEL_ALPHA 0.30f
+
+/* text_dim tinted over a surface: the markdown table header fill. */
+#define UI_DIM_TINT_ALPHA 0.12f
+
+/* What the markdown role colours must reach as text on every surface they
+ * are painted on: the 4.5 WCAG floor plus a 0.2 margin. */
+#define UI_TEXT_MIN_RATIO 4.7
+
+/* The two markdown role hues: structure is the link hue (headings, list and
+ * blockquote markers, table header text), code is the info hue (inline code
+ * text, the fenced-code bar). */
+typedef enum { UI_MD_STRUCTURE, UI_MD_CODE } UiMdRole;
+
+/* The colour md_render.c paints `role` with.  It starts at the role hue
+ * (c->link / c->info) and returns the first colour that reads at least
+ * UI_TEXT_MIN_RATIO on every surface of that role, walking the hue 2 L* at a
+ * time away from the background (lighter on a dark bg_primary, darker on a
+ * light one), at most 50 steps, else c->text_main.  Surfaces:
+ *   structure: bg_primary; the table header fill (text_dim at
+ *     UI_DIM_TINT_ALPHA over bg_primary); the selection hue at UI_SEL_ALPHA
+ *     over bg_primary.
+ *   code: bg_primary; chat.cmd_bg; the selection hue at UI_SEL_ALPHA over
+ *     chat.cmd_bg.
+ * The blends are rgb_alpha()'s truncating float blend (src/ui/ns_draw.c). */
+unsigned int ui_theme_md_role(const ThemeColors *c, UiMdRole role);
 
 /* Resolve `base` into a complete token set.  Call once, when the theme is
  * chosen or changed; `out` may then be read from freely by UI code. */

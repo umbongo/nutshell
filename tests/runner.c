@@ -3730,6 +3730,10 @@ int test_paint_synthetic_runs_cover_their_marker(void);
 
 /* test_sel_contrast.c */
 int test_sel_highlight_visible_on_every_surface(void);
+int test_ui_theme_md_role_unchanged_when_it_clears(void);
+int test_ui_theme_md_role_walks_away_from_the_background(void);
+int test_ui_theme_md_role_falls_back_to_text_main(void);
+int test_ui_theme_md_tokens_match_md_role(void);
 int test_sel_hue_is_focus_except_on_the_bubble(void);
 
 /* test_ai_exec_quoted.c */
@@ -5745,6 +5749,10 @@ int main(void) {
     failed += test_ui_theme_switch_preserves_name();
     failed += test_ui_theme_dark_themes_have_light_text();
     failed += test_ui_theme_terminal_min_contrast_by_name();
+    failed += test_ui_theme_md_role_unchanged_when_it_clears();
+    failed += test_ui_theme_md_role_walks_away_from_the_background();
+    failed += test_ui_theme_md_role_falls_back_to_text_main();
+    failed += test_ui_theme_md_tokens_match_md_role();
 
     printf("\n--- Display Buffer ---\n");
     failed += test_dispbuf_init_zeroed();

@@ -192,25 +192,33 @@ int test_ui_tokens_link_darker_than_accent_on_light_themes(void)
 
 /* ---- Colour-by-role render-time contrast (AI reply markdown colour) ------ */
 
-/* md_render.c paints two intent hues directly as flat text on bg_primary:
- * base->link (the "structure" hue -- headings, list/blockquote markers,
- * table header text) and base->info (the "code" hue -- inline code text,
- * fenced-code left bar). That's flat text on bg_primary, not a derived
- * ThemeSurface, so the bar is theme_contrast(link/info, bg_primary) >= 4.5,
- * same as text_main/text_dim above -- not ThemeSurface.label, which only
- * applies to a surface's own base fill.
+/* md_render.c paints two intent hues as flat text: base->link (the
+ * "structure" hue -- headings, list/blockquote markers, table header text)
+ * and base->info (the "code" hue -- inline code text, fenced-code left bar).
+ * It paints them through ui_theme_md_role(), which starts at the hue and walks
+ * it (2 L* at a time, away from the background) until it reads at least
+ * UI_TEXT_MIN_RATIO (4.7) on every surface of its role: structure on
+ * bg_primary, the table header fill and the selection tint over bg_primary;
+ * code on bg_primary, chat.cmd_bg and the selection tint over chat.cmd_bg.
+ * Falling back to text_main is only for a hue no shade of which can do it.
  *
- * Two of today's four themes fall short of 4.5:1 on the raw token:
- *   Onyx Synapse: link 4.158, info 4.148
- *   Sage & Sand:  link 3.099, info 3.095
- * (Onyx Light: link 7.833, info 5.527; Moss & Mist: link 5.132, info
- * 4.928 -- both comfortably clear it.) Per the design-system rules this
- * test does not retune those colours -- md_render.c instead resolves each
- * role through theme_role_color(), which falls back to text_main when the
- * hue itself would fail. This test holds that resolved, actually-painted
- * colour to >= 4.5:1 in every theme, and pins down (via the exact expected
- * colour) which themes currently show the hue vs. fall back, so a future
- * palette change shows up here as a deliberate diff. */
+ * The raw tokens alone fall short on bg_primary in two of the four themes
+ * (Onyx Synapse: link 4.158, info 4.148; Sage & Sand: link 3.099, info
+ * 3.095), and more on the other surfaces.  This test holds the resolved,
+ * actually-painted colour to >= 4.5:1 on bg_primary, never the plain text
+ * colour (the hue is kept), and >= 4.7:1 on every surface of its role. */
+/* rgb_alpha() (src/ui/ns_draw.c): fg * a + bg * (1 - a) per channel in
+ * float, truncated. */
+static unsigned int blend_f(unsigned int fg, unsigned int bg, float a)
+{
+    unsigned int out = 0;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
+        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
+    }
+    return out;
+}
+
 int test_ui_tokens_md_role_color_contrast(void)
 {
     TEST_BEGIN();
@@ -222,21 +230,31 @@ int test_ui_tokens_md_role_color_contrast(void)
         printf("  [md role colour] %-14s link=%.3f info=%.3f\n",
                base->name, link_c, info_c);
 
-        unsigned int resolved_link =
-            theme_role_color(base->link, base->bg_primary, base->text_main);
-        unsigned int resolved_info =
-            theme_role_color(base->info, base->bg_primary, base->text_main);
+        unsigned int resolved_link = ui_theme_md_role(base, UI_MD_STRUCTURE);
+        unsigned int resolved_info = ui_theme_md_role(base, UI_MD_CODE);
 
-        /* Whatever theme_role_color hands the renderer must always clear
-         * 4.5:1, and it must stay the theme's own hue: a legible shade of
-         * link/info, never the plain text colour ("keep to the selected
-         * theme"). A hue that already clears AA comes back untouched. */
+        /* What the renderer paints must clear 4.5:1 on bg_primary and stay
+         * the theme's own hue: a legible shade of link/info, never the plain
+         * text colour ("keep to the selected theme"). */
         ASSERT_TRUE(theme_contrast(resolved_link, base->bg_primary) >= MIN_CONTRAST);
         ASSERT_TRUE(theme_contrast(resolved_info, base->bg_primary) >= MIN_CONTRAST);
         ASSERT_TRUE(resolved_link != base->text_main);
         ASSERT_TRUE(resolved_info != base->text_main);
-        if (link_c >= MIN_CONTRAST) ASSERT_EQ((int)resolved_link, (int)base->link);
-        if (info_c >= MIN_CONTRAST) ASSERT_EQ((int)resolved_info, (int)base->info);
+
+        /* The hue is held on every surface it is painted on, not only on
+         * bg_primary: >= UI_TEXT_MIN_RATIO on each surface of its role. */
+        ThemeTokens tok;
+        ui_theme_resolve(base, &tok);
+        unsigned int sel = ui_theme_sel_hue(&tok, 0);
+        unsigned int dim_fill = blend_f(base->text_dim, base->bg_primary, UI_DIM_TINT_ALPHA);
+        unsigned int sel_bgp = blend_f(sel, base->bg_primary, UI_SEL_ALPHA);
+        unsigned int sel_cmd = blend_f(sel, base->chat.cmd_bg, UI_SEL_ALPHA);
+        ASSERT_TRUE(theme_contrast(resolved_link, dim_fill) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_link, sel_bgp) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, base->chat.cmd_bg) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, sel_cmd) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_link, base->bg_primary) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, base->bg_primary) >= UI_TEXT_MIN_RATIO);
 
         /* Hue preserved: the dominant channel of the shade is the dominant
          * channel of the original (a blue link stays blue, not grey). */

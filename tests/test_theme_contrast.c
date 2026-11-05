@@ -69,10 +69,6 @@ static const Exemption k_exempt[] = {
     /* Onyx Synapse */
     { "Onyx Synapse", "chat.user_text", "sel30(chat.user_bubble)", 3.09 },
     { "Onyx Synapse", "chat.status_text", "bg_primary.base", 3.26 },
-    { "Onyx Synapse", "md code(info role)", "chat.cmd_bg", 4.35 },
-    { "Onyx Synapse", "md code(info role)", "sel30(chat.cmd_bg)", 2.83 },
-    { "Onyx Synapse", "md structure(link role)", "sel30(bg_primary)", 3.18 },
-    { "Onyx Synapse", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 4.12 },
     { "Onyx Synapse", "text_dim", "tint18(text_dim on chat.cmd_bg)", 4.17 },
     { "Onyx Synapse", "text_dim", "sel30(bg_secondary)", 3.50 },
     { "Onyx Synapse", "text_dim", "sel30(bg_primary)", 3.94 },
@@ -82,7 +78,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Light", "chat.user_text", "sel30(chat.user_bubble)", 2.68 },
     { "Onyx Light", "chat.ai_accent", "bg_primary.base", 3.69 },
     { "Onyx Light", "chat.status_text", "bg_primary.base", 2.13 },
-    { "Onyx Light", "md code(info role)", "sel30(chat.cmd_bg)", 3.34 },
     { "Onyx Light", "text_dim", "tint18(text_dim on bg_primary)", 3.87 },
     { "Onyx Light", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.66 },
     { "Onyx Light", "text_dim", "sel30(bg_secondary)", 3.32 },
@@ -91,9 +86,6 @@ static const Exemption k_exempt[] = {
     /* Sage & Sand */
     { "Sage & Sand", "chat.user_text", "sel30(chat.user_bubble)", 4.37 },
     { "Sage & Sand", "chat.status_text", "bg_primary.base", 3.14 },
-    { "Sage & Sand", "md code(info role)", "sel30(chat.cmd_bg)", 2.86 },
-    { "Sage & Sand", "md structure(link role)", "sel30(bg_primary)", 2.65 },
-    { "Sage & Sand", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 3.78 },
     { "Sage & Sand", "text_dim", "sel30(bg_secondary)", 3.26 },
     { "Sage & Sand", "text_dim", "sel30(bg_primary)", 3.64 },
     { "Sage & Sand", "border", "chat.cmd_bg", 1.49 },
@@ -103,9 +95,6 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "chat.user_text", "sel30(chat.user_bubble)", 1.91 },
     { "Moss & Mist", "chat.ai_accent", "bg_primary.base", 2.34 },
     { "Moss & Mist", "chat.status_text", "bg_primary.base", 2.06 },
-    { "Moss & Mist", "md code(info role)", "sel30(chat.cmd_bg)", 3.99 },
-    { "Moss & Mist", "md structure(link role)", "sel30(bg_primary)", 4.40 },
-    { "Moss & Mist", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 4.41 },
     { "Moss & Mist", "text_dim", "chat.cmd_bg", 4.40 },
     { "Moss & Mist", "text_dim", "tint18(text_dim on bg_primary)", 3.77 },
     { "Moss & Mist", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.51 },
@@ -116,7 +105,7 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "accent.base", "chat.cmd_bg", 1.59 },
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
 };
-#define EXPECTED_EXEMPTIONS 45
+#define EXPECTED_EXEMPTIONS 34
 
 /* ---- Blends --------------------------------------------------------------
  *
@@ -247,12 +236,11 @@ SEL(s_sel_on_user,    "sel30(chat.user_bubble)",
  * the accent (window.c WM_DRAWITEM). */
 SEL(s_accel_sel,      "accelerator(accent.label at 75%)",
     ablend(t->accent.label, t->accent.base, 0.75f));
-/* derived: markdown roles (md_render.c md_role_clr): link/info hue moved to
- * 4.5:1 on bg_primary, or text_main when no shade reaches it. */
-SEL(s_md_structure,   "md structure(link role)",
-    theme_role_color(t->link.base, t->bg_primary.base, t->text_main));
-SEL(s_md_code,        "md code(info role)",
-    theme_role_color(t->info.base, t->bg_primary.base, t->text_main));
+/* derived: markdown roles (md_render.c md_role_clr): the resolved tokens,
+ * ui_theme_md_role() -- the link/info hue walked to 4.7:1 on every surface of
+ * its role, or text_main when no shade reaches it. */
+SEL(s_md_structure,   "md structure(link role)", t->md_structure);
+SEL(s_md_code,        "md code(info role)",      t->md_code);
 
 /* ---- The table -----------------------------------------------------------
  *
