@@ -37,6 +37,10 @@ typedef struct {
                                   * block: the row is shown but can never run, so
                                   * it is always APPROVE_BLOCKED and no policy
                                   * change releases it. Zeroed on every add. */
+    char reason[CMD_REASON_MAX]; /* why the row always asks: the sensitive phrase
+                                  * ("reads credentials", ...) when safety_mask has
+                                  * CMD_MASK_SENSITIVE, else "". Zeroed on every add.
+                                  * The class reason is not stored. */
     char note[CMD_NOTE_MAX];    /* the assistant's explanation for this command
                                   * (may be empty); set with
                                   * chat_approval_set_note(), zeroed on add */
@@ -60,6 +64,10 @@ void chat_approval_init(ApprovalQueue *q);
  *   worst category above policy.allowed            -> APPROVE_BLOCKED
  *   every category at or below policy.unattended   -> APPROVE_APPROVED
  *   otherwise                                      -> APPROVE_PENDING
+ *
+ * A sensitive command (CMD_MASK_SENSITIVE in safety_mask) is never
+ * APPROVED here, at any policy: it is PENDING, or BLOCKED above the
+ * ceiling, and `reason` holds the phrase.
  *
  * The second test is a set test over safety_mask, not a threshold over
  * `safety` -- see cmd_policy_runs_unattended().
