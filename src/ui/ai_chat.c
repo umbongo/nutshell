@@ -1726,6 +1726,7 @@ next_coalesce:;
              * one-word status inside ai_chat_paint_header() is the only piece
              * that's conditional on d->activity.phase. */
             PAINTSTRUCT ps;
+            ai_chat_header_sync(d); /* the name's room follows the word */
             HDC hdc = BeginPaint(hwnd, &ps);
             ai_chat_paint_header(d, hdc);
             ai_chat_paint_status_line(d, hdc);

@@ -573,6 +573,7 @@ void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
                                      NsIconId icon);
 void ai_chat_relayout(AiChatData *d);
 void ai_chat_paint_header(AiChatData *d, HDC hdc);
+void ai_chat_header_sync(AiChatData *d);
 void ai_chat_apply_zoom(AiChatData *d, int delta);
 
 #endif /* _WIN32 */
