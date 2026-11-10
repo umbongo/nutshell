@@ -353,3 +353,77 @@ int test_tool_decision_row_labels(void)
     ASSERT_STR_EQ(tool_decision_row_label(TOOL_DECISION_RUN), "not run");
     TEST_END();
 }
+
+/* ---- The dispatch rule: a web_fetch call while Permit Web Fetch is off ---- */
+
+static void reg_with(AiToolRegistry *reg, const char *const *names, int n)
+{
+    ai_tools_init(reg);
+    for (int i = 0; i < n; i++) {
+        AiToolDef t;
+        memset(&t, 0, sizeof(t));
+        snprintf(t.name, sizeof(t.name), "%s", names[i]);
+        t.safety = TOOL_SAFE;
+        (void)ai_tools_register(reg, &t);
+    }
+}
+
+int test_tool_dispatch_web_fetch_off_is_fetch_off(void)
+{
+    TEST_BEGIN();
+    AiToolRegistry reg;
+    const char *only_search[] = { "web_search" };
+    reg_with(&reg, only_search, 1);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetch"), (int)TOOL_DISPATCH_FETCH_OFF);
+
+    /* Nothing registered at all (a provider without tools) is the same. */
+    AiToolRegistry empty;
+    ai_tools_init(&empty);
+    ASSERT_EQ((int)tool_dispatch_rule(&empty, "web_fetch"), (int)TOOL_DISPATCH_FETCH_OFF);
+    ASSERT_EQ((int)tool_dispatch_rule(NULL, "web_fetch"), (int)TOOL_DISPATCH_FETCH_OFF);
+    TEST_END();
+}
+
+int test_tool_dispatch_web_fetch_on_is_normal(void)
+{
+    TEST_BEGIN();
+    AiToolRegistry reg;
+    const char *both[] = { "web_search", "web_fetch" };
+    reg_with(&reg, both, 2);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetch"), (int)TOOL_DISPATCH_NORMAL);
+    TEST_END();
+}
+
+int test_tool_dispatch_other_names_are_never_fetch_off(void)
+{
+    TEST_BEGIN();
+    AiToolRegistry reg;
+    const char *only_search[] = { "web_search" };
+    reg_with(&reg, only_search, 1);
+    /* An unregistered name that is not web_fetch keeps the old path (the
+     * executor's "Unknown tool"); near-misses are not web_fetch either. */
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, "rm_rf"), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetch2"), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, "WEB_FETCH"), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetc"), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, ""), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, NULL), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_search"), (int)TOOL_DISPATCH_NORMAL);
+    TEST_END();
+}
+
+int test_tool_dispatch_fetch_off_texts(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(tool_fetch_off_row(),
+                  "web_fetch is off: turn on Permit Web Fetch in Settings > "
+                  "AI Assistant > Web Access to allow it");
+    /* The model's note: Nutshell's own sentence, naming the cause so it can
+     * tell the user; it must fit a tool_note. */
+    const char *note = tool_fetch_off_note();
+    ASSERT_NOT_NULL(note);
+    ASSERT_TRUE(strstr(note, "Permit Web Fetch") != NULL);
+    ASSERT_TRUE(strstr(note, "not run") != NULL);
+    ASSERT_TRUE(strlen(note) < AI_TOOL_NOTE_MAX);
+    TEST_END();
+}

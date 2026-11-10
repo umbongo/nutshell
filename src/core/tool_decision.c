@@ -1,5 +1,6 @@
 /* src/core/tool_decision.c -- see tool_decision.h */
 #include "tool_decision.h"
+#include <string.h>
 
 ToolGate tool_gate_decide(ToolSafety safety, CmdPolicy p, int attended)
 {
@@ -138,4 +139,24 @@ const char *tool_decision_row_label(ToolDecision d)
     case TOOL_DECISION_RUN:
     default:                         return "not run";
     }
+}
+
+ToolDispatch tool_dispatch_rule(const AiToolRegistry *reg, const char *name)
+{
+    if (name && strcmp(name, "web_fetch") == 0 &&
+        !ai_tools_find(reg, "web_fetch"))
+        return TOOL_DISPATCH_FETCH_OFF;
+    return TOOL_DISPATCH_NORMAL;
+}
+
+const char *tool_fetch_off_row(void)
+{
+    return "web_fetch is off: turn on Permit Web Fetch in Settings > "
+           "AI Assistant > Web Access to allow it";
+}
+
+const char *tool_fetch_off_note(void)
+{
+    return "Web fetch is turned off in the user's settings (Permit Web Fetch), "
+           "so this tool call was not run.";
 }

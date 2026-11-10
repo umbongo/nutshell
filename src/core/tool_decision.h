@@ -123,4 +123,26 @@ const char *tool_decision_note(ToolDecision d);
 /* The card row's label for an outcome. */
 const char *tool_decision_row_label(ToolDecision d);
 
+/* ---- The dispatch rule: a call to a tool the model was never offered ------
+ * "Permit Web Fetch" off means web_fetch is not in the stream's registry, so
+ * the model should not call it -- but it can (a habit, or a URL in the
+ * conversation). tool_dispatch_rule() names that case so the stream can say
+ * why, instead of announcing a "using tool: web_fetch" row and then failing
+ * with "Unknown tool". Only web_fetch gets this: any other unregistered name
+ * stays TOOL_DISPATCH_NORMAL and is answered by the executor as before.
+ * `reg` NULL counts as an empty registry; `name` NULL is NORMAL. */
+typedef enum {
+    TOOL_DISPATCH_NORMAL = 0,   /* the usual path: gate, run, or "Unknown tool" */
+    TOOL_DISPATCH_FETCH_OFF     /* a web_fetch call while web fetch is off */
+} ToolDispatch;
+
+ToolDispatch tool_dispatch_rule(const AiToolRegistry *reg, const char *name);
+
+/* The status row shown under the reply for a TOOL_DISPATCH_FETCH_OFF call
+ * (no card, no "using tool" row), and the note the model gets as the call's
+ * result (Nutshell's own text, not an error: nothing failed, the user's
+ * setting said no). */
+const char *tool_fetch_off_row(void);
+const char *tool_fetch_off_note(void);
+
 #endif /* NUTSHELL_TOOL_DECISION_H */

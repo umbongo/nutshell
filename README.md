@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,640 unit tests across 141 test files, and cppcheck reports no errors or warnings
+- 3,644 unit tests across 141 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -199,7 +199,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
 - **Search URL** — shown only for the Custom search engine
 - **Max results** — search results returned to the AI per query (1 to 20)
-- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call. Whether a fetch asks first depends on Auto-approve (see [Tool Calls](#tool-calls))
+- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call. Whether a fetch asks first depends on Auto-approve (see [Tool Calls](#tool-calls)). With it off the AI is not offered the tool; if it calls `web_fetch` anyway, no card appears, a status row under the reply says "web_fetch is off: turn on Permit Web Fetch in Settings > AI Assistant > Web Access to allow it", and the AI is told the call was not run
 
 ### AI Chat Assistant
 
@@ -718,7 +718,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,640 unit tests across 141 test files
+├── tests/                              # 3,644 unit tests across 141 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion

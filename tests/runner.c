@@ -3915,6 +3915,10 @@ int test_tool_decision_late_answer_reports_winner(void);
 int test_tool_decision_answer_before_remove_order(void);
 int test_tool_decision_notes(void);
 int test_tool_decision_row_labels(void);
+int test_tool_dispatch_web_fetch_off_is_fetch_off(void);
+int test_tool_dispatch_web_fetch_on_is_normal(void);
+int test_tool_dispatch_other_names_are_never_fetch_off(void);
+int test_tool_dispatch_fetch_off_texts(void);
 
 /* test_ai_debug_tool.c */
 int test_ai_debug_tool_register_fills_the_definition(void);
@@ -7808,6 +7812,10 @@ int main(void) {
     failed += test_tool_decision_answer_before_remove_order();
     failed += test_tool_decision_notes();
     failed += test_tool_decision_row_labels();
+    failed += test_tool_dispatch_web_fetch_off_is_fetch_off();
+    failed += test_tool_dispatch_web_fetch_on_is_normal();
+    failed += test_tool_dispatch_other_names_are_never_fetch_off();
+    failed += test_tool_dispatch_fetch_off_texts();
     /* test_ai_debug_tool.c */
     failed += test_ai_debug_tool_register_fills_the_definition();
     failed += test_ai_debug_tool_registered_only_while_debugging();

@@ -532,6 +532,27 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++) {
                 AiToolCall *call = &tool_stream_ptr->pending_tool_calls[ti];
 
+                /* A web_fetch call while Permit Web Fetch is off: no card and
+                 * no "using tool" row. A status row says why, and the model
+                 * gets Nutshell's note (not an error) so it can tell the
+                 * user. Nothing is counted against the rate limit. */
+                if (tool_dispatch_rule(&s->tools, call->name) ==
+                    TOOL_DISPATCH_FETCH_OFF) {
+                    results[ti].tool_use_id[0] = '\0';
+                    strncpy(results[ti].tool_use_id, call->id,
+                            sizeof(results[ti].tool_use_id) - 1);
+                    snprintf(results[ti].tool_note,
+                             sizeof(results[ti].tool_note), "%s",
+                             tool_fetch_off_note());
+                    results[ti].content = NULL;
+                    results[ti].is_error = 0;
+                    DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call",
+                         "stream=%u tool=%s ok=0 fetch_off=1",
+                         stream_id, call->name);
+                    post_tool_msg(s, CHAT_ITEM_STATUS, tool_fetch_off_row());
+                    continue;
+                }
+
                 /* Rate limit check */
                 char rate_err[256] = "";
                 if (!agentic_check_rate_limit(&agentic, call->name,
