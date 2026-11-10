@@ -356,59 +356,36 @@ int test_tool_decision_row_labels(void)
 
 /* ---- The dispatch rule: a web_fetch call while Permit Web Fetch is off ---- */
 
-static void reg_with(AiToolRegistry *reg, const char *const *names, int n)
-{
-    ai_tools_init(reg);
-    for (int i = 0; i < n; i++) {
-        AiToolDef t;
-        memset(&t, 0, sizeof(t));
-        snprintf(t.name, sizeof(t.name), "%s", names[i]);
-        t.safety = TOOL_SAFE;
-        (void)ai_tools_register(reg, &t);
-    }
-}
-
 int test_tool_dispatch_web_fetch_off_is_fetch_off(void)
 {
     TEST_BEGIN();
-    AiToolRegistry reg;
-    const char *only_search[] = { "web_search" };
-    reg_with(&reg, only_search, 1);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetch"), (int)TOOL_DISPATCH_FETCH_OFF);
-
-    /* Nothing registered at all (a provider without tools) is the same. */
-    AiToolRegistry empty;
-    ai_tools_init(&empty);
-    ASSERT_EQ((int)tool_dispatch_rule(&empty, "web_fetch"), (int)TOOL_DISPATCH_FETCH_OFF);
-    ASSERT_EQ((int)tool_dispatch_rule(NULL, "web_fetch"), (int)TOOL_DISPATCH_FETCH_OFF);
+    /* Not registered: the lookup found nothing. */
+    ASSERT_EQ((int)tool_dispatch_rule("web_fetch", 0), (int)TOOL_DISPATCH_FETCH_OFF);
     TEST_END();
 }
 
 int test_tool_dispatch_web_fetch_on_is_normal(void)
 {
     TEST_BEGIN();
-    AiToolRegistry reg;
-    const char *both[] = { "web_search", "web_fetch" };
-    reg_with(&reg, both, 2);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetch"), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule("web_fetch", 1), (int)TOOL_DISPATCH_NORMAL);
     TEST_END();
 }
 
 int test_tool_dispatch_other_names_are_never_fetch_off(void)
 {
     TEST_BEGIN();
-    AiToolRegistry reg;
-    const char *only_search[] = { "web_search" };
-    reg_with(&reg, only_search, 1);
     /* An unregistered name that is not web_fetch keeps the old path (the
      * executor's "Unknown tool"); near-misses are not web_fetch either. */
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, "rm_rf"), (int)TOOL_DISPATCH_NORMAL);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetch2"), (int)TOOL_DISPATCH_NORMAL);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, "WEB_FETCH"), (int)TOOL_DISPATCH_NORMAL);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_fetc"), (int)TOOL_DISPATCH_NORMAL);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, ""), (int)TOOL_DISPATCH_NORMAL);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, NULL), (int)TOOL_DISPATCH_NORMAL);
-    ASSERT_EQ((int)tool_dispatch_rule(&reg, "web_search"), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule("rm_rf", 0), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule("web_fetch2", 0), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule("WEB_FETCH", 0), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule("web_fetc", 0), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule("", 0), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(NULL, 0), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule(NULL, 1), (int)TOOL_DISPATCH_NORMAL);
+    /* A registered tool, web_search included, is never fetch-off. */
+    ASSERT_EQ((int)tool_dispatch_rule("web_search", 1), (int)TOOL_DISPATCH_NORMAL);
+    ASSERT_EQ((int)tool_dispatch_rule("web_search", 0), (int)TOOL_DISPATCH_NORMAL);
     TEST_END();
 }
 

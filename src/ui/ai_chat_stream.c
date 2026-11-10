@@ -536,7 +536,8 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                  * no "using tool" row. A status row says why, and the model
                  * gets Nutshell's note (not an error) so it can tell the
                  * user. Nothing is counted against the rate limit. */
-                if (tool_dispatch_rule(&s->tools, call->name) ==
+                if (tool_dispatch_rule(call->name,
+                        ai_tools_find(&s->tools, call->name) != NULL) ==
                     TOOL_DISPATCH_FETCH_OFF) {
                     results[ti].tool_use_id[0] = '\0';
                     strncpy(results[ti].tool_use_id, call->id,

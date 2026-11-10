@@ -141,10 +141,9 @@ const char *tool_decision_row_label(ToolDecision d)
     }
 }
 
-ToolDispatch tool_dispatch_rule(const AiToolRegistry *reg, const char *name)
+ToolDispatch tool_dispatch_rule(const char *name, int registered)
 {
-    if (name && strcmp(name, "web_fetch") == 0 &&
-        !ai_tools_find(reg, "web_fetch"))
+    if (name && strcmp(name, "web_fetch") == 0 && !registered)
         return TOOL_DISPATCH_FETCH_OFF;
     return TOOL_DISPATCH_NORMAL;
 }

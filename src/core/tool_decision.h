@@ -130,13 +130,15 @@ const char *tool_decision_row_label(ToolDecision d);
  * why, instead of announcing a "using tool: web_fetch" row and then failing
  * with "Unknown tool". Only web_fetch gets this: any other unregistered name
  * stays TOOL_DISPATCH_NORMAL and is answered by the executor as before.
- * `reg` NULL counts as an empty registry; `name` NULL is NORMAL. */
+ * `registered` is whether the stream's registry holds a tool of that name
+ * (the caller's ai_tools_find() != NULL; this module never touches the
+ * registry). `name` NULL is NORMAL. */
 typedef enum {
     TOOL_DISPATCH_NORMAL = 0,   /* the usual path: gate, run, or "Unknown tool" */
     TOOL_DISPATCH_FETCH_OFF     /* a web_fetch call while web fetch is off */
 } ToolDispatch;
 
-ToolDispatch tool_dispatch_rule(const AiToolRegistry *reg, const char *name);
+ToolDispatch tool_dispatch_rule(const char *name, int registered);
 
 /* The status row shown under the reply for a TOOL_DISPATCH_FETCH_OFF call
  * (no card, no "using tool" row), and the note the model gets as the call's
