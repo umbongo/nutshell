@@ -69,7 +69,7 @@ void ai_chat_register_tools(AiChatData *d,
                  "\"properties\":{\"url\":{\"type\":\"string\","
                  "\"description\":\"The URL to fetch\"}},"
                  "\"required\":[\"url\"]}");
-        fetch_tool.safety = TOOL_SAFE;
+        fetch_tool.safety = TOOL_UNKNOWN;   /* reaches out to a URL: asks unless Auto-approve is on at Unknown+ */
         fetch_tool.execute = tool_web_fetch_execute;
         fetch_tool.tool_data = &d->fetch_ctx;
         ai_tools_register(&d->tool_registry, &fetch_tool);
@@ -113,6 +113,10 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     strncpy(s->api_key, d->api_key, sizeof(s->api_key) - 1);
     strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
     strncpy(s->custom_url, d->custom_url, sizeof(s->custom_url) - 1);
+    /* The card timeout is fixed for this stream here; the thread never
+     * reads the panel's setting. */
+    s->tool_timeout_ms = tool_decision_timeout_ms(d->tool_timeout_sec);
+    s->tool_auto_rounds = ai_tool_rounds_clamp(d->tool_auto_rounds);
     int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
 
     /* One terminal snapshot per launch (spec 2026-11-05 decision 2), taken
@@ -212,6 +216,10 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         }
     }
 
+    /* A retry's old stream may be parked on a tool card: answer it and
+     * remove the card before ai_stream_table_add() aborts that stream. */
+    ai_chat_cancel_tool_batches(d, d->active_state);
+
     /* Register it for this session. Any stream the session still had (a
      * retry) is aborted and orphaned here, so its late messages are stale. */
     if (ai_stream_table_add(&d->streams, s, d->active_state) != 0) {
@@ -294,6 +302,10 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
 void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state)
 {
     if (!d || !state) return;
+    /* Answer and remove the session's tool cards first, so no stream thread
+     * is left waiting on a card that is gone (spec decision 20). Covers
+     * Stop, Retry, tab close, the reaper and the WM_DESTROY loop. */
+    ai_chat_cancel_tool_batches(d, state);
     ai_stream_table_abort_owner(&d->streams, state);
     state->busy = 0;
     free(state->stream_content);
@@ -321,6 +333,10 @@ void ai_chat_drain_stream_messages(HWND hwnd)
             if (c) { free(c->delta); free(c); }
         }
     }
+    /* 105 is posted by the stream thread for a tool card request; 104 is
+     * sent, never posted. */
+    while (PeekMessage(&m, hwnd, WM_AI_TOOL_DECIDE, WM_AI_TOOL_DECIDE, PM_REMOVE))
+        free((AiToolDecideMsg *)m.lParam);
 }
 
 /* Cancel the active AI stream: signal abort, clear busy, reset UI state.
@@ -370,6 +386,11 @@ void ai_chat_cancel_active_stream(AiChatData *d)
         SetWindowText(d->hSendBtn, ">");
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
+
+    /* The stream is over: a batch whose Run was clicked while it was busy
+     * stays APPROVED until now (ai_chat_dispatch_start() refuses while
+     * busy; spec decision 21), so start it. No-op while a dispatch runs. */
+    ai_chat_maybe_start_next_batch(d);
 }
 
 /* Grow the context scratch buffers to fit the configured line budget.
@@ -445,6 +466,7 @@ void ai_chat_send_user_message(AiChatData *d)
     /* The user is talking again: the unattended-round count starts over
      * (guard-rails spec 2026-11-04 section 1). */
     ai_rounds_user_message(d->active_state);
+    ai_tool_rounds_reset(d->active_state);   /* ... and so are the tool rounds */
 
     char *input = input_text_utf8(d->hInput);
     if (!input) return;

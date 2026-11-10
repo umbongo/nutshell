@@ -1,6 +1,7 @@
 /* tests/test_chat_msg.c */
 #include "test_framework.h"
 #include "chat_msg.h"
+#include "tool_decision.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -945,24 +946,24 @@ int test_chat_cmd_label_quoted(void) {
 int test_chat_card_header_text(void) {
     TEST_BEGIN();
     char buf[96];
-    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, buf, sizeof(buf)), 10);
+    ASSERT_EQ((int)chat_card_header_text(NULL, 3, 0, 0, buf, sizeof(buf)), 10);
     ASSERT_STR_EQ(buf, "3 commands");
-    ASSERT_EQ((int)chat_card_header_text(1, 0, 0, buf, sizeof(buf)), 9);
+    ASSERT_EQ((int)chat_card_header_text(NULL, 1, 0, 0, buf, sizeof(buf)), 9);
     ASSERT_STR_EQ(buf, "1 command");
-    chat_card_header_text(3, 1, 0, buf, sizeof(buf));
+    chat_card_header_text(NULL, 3, 1, 0, buf, sizeof(buf));
     ASSERT_STR_EQ(buf, "3 commands \xC2\xB7 1 held");
-    chat_card_header_text(3, 0, 2, buf, sizeof(buf));
+    chat_card_header_text(NULL, 3, 0, 2, buf, sizeof(buf));
     ASSERT_STR_EQ(buf, "3 commands \xC2\xB7 2 quoted");
-    int n = (int)chat_card_header_text(4, 1, 2, buf, sizeof(buf));
+    int n = (int)chat_card_header_text(NULL, 4, 1, 2, buf, sizeof(buf));
     ASSERT_STR_EQ(buf, "4 commands \xC2\xB7 1 held \xC2\xB7 2 quoted");
     ASSERT_EQ(n, (int)strlen(buf));
     /* does not fit: 0, and buf still a valid string */
     memset(buf, 'x', sizeof(buf));
-    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, buf, 8), 0);
+    ASSERT_EQ((int)chat_card_header_text(NULL, 3, 0, 0, buf, 8), 0);
     ASSERT_EQ((int)buf[7], 0);
     ASSERT_EQ((int)strlen(buf) < 8, 1);
-    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, NULL, 8), 0);
-    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, buf, 0), 0);
+    ASSERT_EQ((int)chat_card_header_text(NULL, 3, 0, 0, NULL, 8), 0);
+    ASSERT_EQ((int)chat_card_header_text(NULL, 3, 0, 0, buf, 0), 0);
     TEST_END();
 }
 
@@ -1033,6 +1034,149 @@ int test_chat_msg_set_reason(void) {
     ASSERT_NOT_NULL(user);
     chat_msg_set_reason(user, "reads credentials");
     ASSERT_STR_EQ(user->text, "hi");
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_card_header_noun(void) {
+    TEST_BEGIN();
+    char buf[96];
+    ASSERT_EQ((int)chat_card_header_text("tool call", 1, 0, 0, buf, sizeof(buf)), 11);
+    ASSERT_STR_EQ(buf, "1 tool call");
+    ASSERT_EQ((int)chat_card_header_text("tool call", 2, 0, 0, buf, sizeof(buf)), 12);
+    ASSERT_STR_EQ(buf, "2 tool calls");
+    chat_card_header_text(NULL, 3, 1, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "3 commands \xC2\xB7 1 held");
+    ASSERT_EQ((int)chat_card_header_text(NULL, 3, 0, 0, buf, 8), 0);
+    ASSERT_EQ((int)chat_card_header_text("tool call", 3, 0, 0, buf, 8), 0);
+    ASSERT_EQ((int)buf[0], 0);
+    TEST_END();
+}
+
+int test_chat_msg_set_tool_and_outcome(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *cmd = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ChatMsgItem *usr = chat_msg_append(&list, CHAT_ITEM_USER, "hi");
+    ASSERT_NOT_NULL(cmd);
+    ASSERT_NOT_NULL(usr);
+    ASSERT_EQ(cmd->u.cmd.tool, 0);
+    ASSERT_EQ(cmd->u.cmd.tool_outcome, (int)TOOL_DECISION_NONE);
+
+    chat_msg_set_tool(cmd, 1);
+    ASSERT_EQ(cmd->u.cmd.tool, 1);
+    ASSERT_EQ(cmd->u.cmd.tool_outcome, (int)TOOL_DECISION_PENDING);
+
+    chat_msg_set_tool_outcome(cmd, (int)TOOL_DECISION_APPROVED);
+    ASSERT_EQ(cmd->u.cmd.tool_outcome, (int)TOOL_DECISION_APPROVED);
+
+    /* clearing the flag leaves the outcome alone */
+    chat_msg_set_tool(cmd, 0);
+    ASSERT_EQ(cmd->u.cmd.tool, 0);
+    ASSERT_EQ(cmd->u.cmd.tool_outcome, (int)TOOL_DECISION_APPROVED);
+
+    /* NULL-safe, and a no-op on a non-command item */
+    chat_msg_set_tool(NULL, 1);
+    chat_msg_set_tool_outcome(NULL, 3);
+    char before[sizeof(*usr)];
+    memcpy(before, usr, sizeof(*usr));
+    chat_msg_set_tool(usr, 1);
+    chat_msg_set_tool_outcome(usr, (int)TOOL_DECISION_RUN);
+    ASSERT_EQ(memcmp(before, usr, sizeof(*usr)), 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_apply_ceiling_skips_tool(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *tool = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ChatMsgItem *held = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ChatMsgItem *quo  = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ChatMsgItem *open = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ChatMsgItem *usr  = chat_msg_append(&list, CHAT_ITEM_USER, "hi");
+    ASSERT_NOT_NULL(tool);
+    ASSERT_NOT_NULL(held);
+    ASSERT_NOT_NULL(quo);
+    ASSERT_NOT_NULL(open);
+    ASSERT_NOT_NULL(usr);
+
+    /* A tool row: unblocked and undecided, then held and undecided. */
+    chat_msg_set_tool(tool, 1);
+    tool->u.cmd.safety = CMD_UNKNOWN;
+    tool->u.cmd.blocked = 0;
+    tool->u.cmd.approved = -1;
+    ChatMsgItem tool_before = *tool;
+    chat_msg_apply_ceiling(tool, CMD_READ, CMD_CRITICAL);   /* raise */
+    ASSERT_EQ(memcmp(&tool_before, tool, sizeof(*tool)), 0);
+    chat_msg_apply_ceiling(tool, CMD_CRITICAL, CMD_READ);   /* lower */
+    ASSERT_EQ(memcmp(&tool_before, tool, sizeof(*tool)), 0);
+    tool->u.cmd.blocked = 1;
+    tool_before = *tool;
+    chat_msg_apply_ceiling(tool, CMD_READ, CMD_CRITICAL);   /* raise */
+    ASSERT_EQ(memcmp(&tool_before, tool, sizeof(*tool)), 0);
+    ASSERT_EQ(tool->u.cmd.blocked, 1);
+
+    /* A held command row is released when the ceiling reaches it. */
+    held->u.cmd.safety = CMD_WRITE;
+    held->u.cmd.blocked = 1;
+    held->u.cmd.approved = 0;
+    held->u.cmd.selected = 0;
+    chat_msg_apply_ceiling(held, CMD_READ, CMD_WRITE);
+    ASSERT_EQ(held->u.cmd.blocked, 0);
+    ASSERT_EQ(held->u.cmd.approved, -1);
+    ASSERT_EQ(held->u.cmd.selected, 1);
+
+    /* ... but not while the ceiling stays below it. */
+    held->u.cmd.safety = CMD_CRITICAL;
+    held->u.cmd.blocked = 1;
+    held->u.cmd.approved = 0;
+    held->u.cmd.selected = 0;
+    chat_msg_apply_ceiling(held, CMD_READ, CMD_WRITE);
+    ASSERT_EQ(held->u.cmd.blocked, 1);
+    ASSERT_EQ(held->u.cmd.approved, 0);
+    ASSERT_EQ(held->u.cmd.selected, 0);
+
+    /* A quoted row is never released. */
+    quo->u.cmd.safety = CMD_READ;
+    quo->u.cmd.quoted = 1;
+    quo->u.cmd.blocked = 1;
+    chat_msg_apply_ceiling(quo, CMD_READ, CMD_CRITICAL);
+    ASSERT_EQ(quo->u.cmd.blocked, 1);
+
+    /* Lowering holds an unsettled, undecided row above the new ceiling. */
+    open->u.cmd.safety = CMD_WRITE;
+    open->u.cmd.approved = -1;
+    open->u.cmd.settled = 0;
+    chat_msg_apply_ceiling(open, CMD_CRITICAL, CMD_READ);
+    ASSERT_EQ(open->u.cmd.blocked, 1);
+
+    /* ... not a settled one, a decided one, or one within the ceiling. */
+    open->u.cmd.blocked = 0;
+    open->u.cmd.settled = 1;
+    chat_msg_apply_ceiling(open, CMD_CRITICAL, CMD_READ);
+    ASSERT_EQ(open->u.cmd.blocked, 0);
+    open->u.cmd.settled = 0;
+    open->u.cmd.approved = 1;
+    chat_msg_apply_ceiling(open, CMD_CRITICAL, CMD_READ);
+    ASSERT_EQ(open->u.cmd.blocked, 0);
+    open->u.cmd.approved = -1;
+    chat_msg_apply_ceiling(open, CMD_CRITICAL, CMD_WRITE);
+    ASSERT_EQ(open->u.cmd.blocked, 0);
+
+    /* An unchanged ceiling touches nothing. */
+    chat_msg_apply_ceiling(open, CMD_WRITE, CMD_WRITE);
+    ASSERT_EQ(open->u.cmd.blocked, 0);
+
+    /* Non-command items and NULL are left alone. */
+    char before[sizeof(*usr)];
+    memcpy(before, usr, sizeof(*usr));
+    chat_msg_apply_ceiling(usr, CMD_READ, CMD_CRITICAL);
+    chat_msg_apply_ceiling(usr, CMD_CRITICAL, CMD_READ);
+    ASSERT_EQ(memcmp(before, usr, sizeof(*usr)), 0);
+    chat_msg_apply_ceiling(NULL, CMD_READ, CMD_CRITICAL);
     chat_msg_list_clear(&list);
     TEST_END();
 }

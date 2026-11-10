@@ -19,6 +19,7 @@
 
 typedef enum {
     TOOL_SAFE,
+    TOOL_UNKNOWN,
     TOOL_WRITE,
     TOOL_CRITICAL
 } ToolSafety;
@@ -85,6 +86,20 @@ int  ai_tool_execute(const AiToolRegistry *reg, const AiToolCall *call,
 /* Build tool_result messages */
 int  ai_tool_result_anthropic(const AiToolResult *result, char *buf, size_t max);
 int  ai_tool_result_openai(const AiToolResult *result, char *buf, size_t max);
+
+/* The text of a tool-approval card for call: row is the one-line summary and
+ * detail the full text behind the Details toggle.
+ *   web_fetch    row "web_fetch: " + net_url_display_marked(url) (no query,
+ *                no userinfo); detail net_url_detail(url).
+ *   any other    row the tool name (controls and bidi removed); detail the
+ *                call's input_json with controls and bidi escaped
+ *                (net_text_escape).
+ * Both are NUL-terminated within their capacity (a NULL buffer or capacity 0
+ * is skipped); a detail that does not fit ends in U+2026. Returns 0, or -1
+ * when call is NULL or a web_fetch call has no usable "url" string (row is
+ * then "web_fetch: (no url)", detail ""; for a NULL call both are ""). */
+int  ai_tool_card_text(const AiToolCall *call, char *row, size_t row_cap,
+                       char *detail, size_t detail_cap);
 
 /* Schema validation */
 int  ai_tools_validate_schemas(const AiToolRegistry *reg);
@@ -154,13 +169,52 @@ typedef struct {
     AiToolCall *pending_tool_calls;  /* heap array, grown as tool_use blocks complete */
     int         pending_tool_count;
     int         pending_tool_cap;
+
+    /* The last finish_reason / stop_reason seen this round ("" when none),
+     * and how many tool_calls deltas arrived without an "index" (treated
+     * as index 0). Both feed the per-round log line, nothing else. */
+    char        finish[32];
+    int         index_defaulted;
 } AiToolStreamState;
 
 /* Streaming tool detection — Anthropic format */
 int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *state);
 
-/* Streaming tool detection — OpenAI format */
+/* Streaming tool detection — OpenAI format.
+ * Returns 0 (normal chunk), 1 (finish_reason "tool_calls"), 2 (finish_reason
+ * "stop") or -1 (error). A chunk's delta.tool_calls is accumulated BEFORE its
+ * finish_reason is acted on, so a call carried by the finish chunk itself is
+ * kept; a delta without "index" is taken as index 0 (state->index_defaulted
+ * counts them). state->finish records the finish_reason. */
 int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state);
+
+/* 1 when the tool loop runs at the end of a round, else 0. OpenAI-format
+ * providers (anything but "anthropic", NULL included): whenever tool calls
+ * are pending, whatever the finish_reason said (tool_calls, stop, none),
+ * except a reply cut off at the output limit (cut_off), whose last call's
+ * arguments are incomplete. Anthropic: tool_stop (stop_reason tool_use) is
+ * still required. */
+int ai_tool_round_should_run(const char *provider, int tool_stop,
+                             int pending, int cut_off);
+
+/* The longest provider error message kept (bytes, terminator excluded). */
+#define AI_STREAM_ERROR_MSG_MAX 200
+
+/* 1 when an OpenAI-format stream chunk (the JSON after "data: ") is an error
+ * event: a top-level "error" that is an object ({"error":{"message":...,
+ * "type":...}}) or a string. msg_out (may be NULL) gets the message, or the
+ * error type, or "unknown error"; control and bidirectional-format
+ * characters are stripped, newlines and tabs become spaces, and it is cut
+ * to AI_STREAM_ERROR_MSG_MAX bytes (and to msg_size - 1) on a UTF-8
+ * boundary. Always 0 for provider "anthropic" (its error events are not
+ * handled here), for "error": null and for every other chunk. */
+int ai_stream_chunk_error(const char *provider, const char *json,
+                          char *msg_out, size_t msg_size);
+
+/* Drop the empty slots (no name and no id) a provider's index gaps leave in
+ * pending_tool_calls, keeping the others in order; pending_tool_count shrinks
+ * to match. Returns how many were dropped. NULL gives 0. */
+int ai_tools_stream_compact(AiToolStreamState *state);
 
 /* Reset/discard all partial streaming state (on error or cancellation) */
 void ai_tools_stream_reset(AiToolStreamState *state);

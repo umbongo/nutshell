@@ -41,6 +41,12 @@ void ai_chat_switch_session(HWND hwnd,
  * Clears any internal pointers to the dying session's state. */
 void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state);
 
+/* Answer every tool card of `state` CANCELLED (the stream waiting on it
+ * stops waiting) and remove those batches. window.c calls it before it frees
+ * a session's batch set. A no-op when the panel is gone: its streams went
+ * with it. */
+void ai_chat_cancel_tool_batches_for(HWND hwnd, AiSessionState *state);
+
 /* Update the active session's terminal/transport pointers (without switching
  * conversation). Pass io = NULL when the session has no live transport --
  * window.c does this BEFORE closing a transport, so the panel never holds a
@@ -109,6 +115,16 @@ void ai_chat_set_policy_default(HWND hwnd, CmdPolicy policy);
 
 /* Set how many terminal lines are sent to the AI as context (1-50000). */
 void ai_chat_set_context_lines(HWND hwnd, int lines);
+
+/* Set how long a tool approval card waits before it expires, in seconds
+ * (settings.ai_tool_timeout_sec, 15-3600, or 0 for never). Applies to streams launched
+ * after the call: a waiting card keeps the value its stream started with. */
+void ai_chat_set_tool_timeout(HWND hwnd, int seconds);
+
+/* Set the automatic tool rounds before a tool call asks on a card again
+ * (settings.ai_tool_auto_rounds, 1-20). Applies to streams launched after the
+ * call: a stream keeps the value it started with. */
+void ai_chat_set_tool_rounds(HWND hwnd, int rounds);
 
 /* --ui-demo only: layer the canned approval queue(s) and small activity
  * flourishes onto a conversation already loaded via ai_chat_show()'s

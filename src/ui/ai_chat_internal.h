@@ -134,6 +134,10 @@ typedef struct {
 /* Sent by the integration harness: returns cmd_policy_status_word() of
  * the displayed session's policy -- bits 0-7 the level, bit 8 Auto-approve. */
 #define WM_AI_GET_POLICY (WM_USER + 104)
+/* Posted by a stream's thread for a tool call that needs the user's say
+ * (spec 2026-11-05-trust-boundary-design.md decision 15). lParam: a heap
+ * AiToolDecideMsg the UI handler (or the drain) frees. */
+#define WM_AI_TOOL_DECIDE (WM_USER + 105)
 
 #define TIMER_CMD_QUEUE   2     /* Command dispatcher poll (prompt-gated) */
 #define TIMER_SCROLL_SYNC 4     /* Sync custom scrollbar with RichEdit */
@@ -278,6 +282,16 @@ typedef struct {
     /* How many terminal lines are sent to the AI as context (1-50000).
      * Always clamped via ai_context_clamp_lines(); never 0. */
     int context_lines;
+
+    /* Seconds a tool approval card waits before it expires, from
+     * settings.ai_tool_timeout_sec (15-3600, 0 = never); each launched stream copies it
+     * into AiStream.tool_timeout_ms, so a change reaches later streams only. */
+    int tool_timeout_sec;
+
+    /* Automatic tool rounds before a call asks again, from
+     * settings.ai_tool_auto_rounds (1-20); each launched stream copies it into
+     * AiStream.tool_auto_rounds, so a change reaches later streams only. */
+    int tool_auto_rounds;
 
     /* Scratch buffers for the terminal context and the system prompt built
      * from it.  They live as long as the panel and grow with context_lines,
@@ -442,6 +456,18 @@ typedef struct {
     char *delta;
 } AiStreamChunk;
 
+/* WM_AI_TOOL_DECIDE payload. ASK: put a card up for the call published in
+ * the stream's decision slot under `gen`. EXPIRED: the thread gave up waiting
+ * on that card (same stream id and gen), so the row reads "not run" and its
+ * batch goes. `row` and `detail` come from ai_tool_card_text(). */
+enum { AI_TOOL_DECIDE_ASK = 0, AI_TOOL_DECIDE_EXPIRED = 1 };
+typedef struct {
+    unsigned   stream_id, gen;
+    int        loop_iter, kind;
+    ToolSafety safety;
+    char       row[256], detail[1024];
+} AiToolDecideMsg;
+
 /* Status-line hover/hit ids for ns_hover: 0..3 the four cells, 4 the
  * Auto-approve button; -1 stays "nothing" (spec 2026-10-18 section 3). */
 #define STATUS_HIT_CELL(stop) (stop)
@@ -489,6 +515,20 @@ void ai_chat_dispatch_start(AiChatData *d, int batch_id);
 void ai_chat_maybe_start_next_batch(AiChatData *d);
 void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);
 void ai_chat_dispatch_tick(AiChatData *d);
+/* Tool cards (trust boundary spec decisions 14, 15, 20). The slot answer is
+ * found by the batch's stream id and generation; no stream: NONE. Returns the
+ * state that holds afterwards (the CAS winner). The card answer is the Run
+ * (APPROVED) / Deny (NOT_APPROVED) path: answer the slot first, then label
+ * the rows from the result, then settle. The handler never waits and frees
+ * `m` on every path. */
+ToolDecision ai_chat_tool_slot_answer(AiChatData *d, const CmdBatch *batch,
+                                      ToolDecision answer);
+void ai_chat_tool_card_answer(AiChatData *d, CmdBatch *batch, ToolDecision answer);
+void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m);
+/* The sweep: answer every tool card of `state` CANCELLED (slot first), settle
+ * the displayed rows and remove the batches. Command batches are untouched.
+ * Called before anything that frees or abandons the stream or the set. */
+void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state);
 
 /* ai_chat_send.c */
 void ai_chat_register_tools(AiChatData *d, const char *search_provider,
@@ -525,6 +565,7 @@ int ai_chat_unscale(int px, int dpi);
 int ai_chat_input_h(const AiChatData *d);
 void ai_chat_update_panel_state(AiChatData *d);
 void ai_chat_thinking_history_clear(AiChatData *d);
+void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch);
 void ai_chat_rebuild_display(AiChatData *d);
 void ai_chat_add_tooltip(HWND hTooltip, HWND hCtrl, const char *text);
 void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
@@ -532,6 +573,7 @@ void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
                                      NsIconId icon);
 void ai_chat_relayout(AiChatData *d);
 void ai_chat_paint_header(AiChatData *d, HDC hdc);
+void ai_chat_header_sync(AiChatData *d);
 void ai_chat_apply_zoom(AiChatData *d, int delta);
 
 #endif /* _WIN32 */

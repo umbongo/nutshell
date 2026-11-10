@@ -55,7 +55,9 @@ typedef int (*AiStreamCallback)(const char *data, size_t len, void *userdata);
  * error:      error message buffer (may be NULL)
  * error_size: size of error buffer
  *
- * Returns 0 on success, -1 on transport error.
+ * Returns 0 on success, -1 on transport error. -1 with a 2xx *status_out
+ * means the body broke after the headers: `error` then holds "connection
+ * lost during reply" (the reply may or may not have arrived whole).
  */
 int ai_http_post_stream(const char *url, const char * const *headers,
                         const char *body, size_t body_len,

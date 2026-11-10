@@ -652,3 +652,5 @@ Every finding was accepted; each line names where it landed.
 16. Three snapshot sites could drift: accepted, one site in `launch_stream_thread`; the meter reads a stored length (decision 2).
 17. `read_debug_log` registration and `crypto.h` line endings were misstated: accepted (decisions 5, 13; Constraints).
 18. One pull request was too large to review: accepted, two pull requests from one spec, PR B on PR A (header, decision 18, Delivery).
+
+2026-11-05, maintainer: expiry default 60 s, configurable 15–3600 s, 0 = never; automatic tool rounds configurable 1–20, default 3

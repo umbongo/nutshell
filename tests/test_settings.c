@@ -143,6 +143,90 @@ int test_settings_validate_ai_max_context_lines_high(void)
     TEST_END();
 }
 
+/* ---- ai_tool_timeout_sec clamping ---------------------------------------- */
+
+int test_settings_validate_ai_tool_timeout_low(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.ai_tool_timeout_sec = 5;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    s.ai_tool_timeout_sec = -100;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    s.ai_tool_timeout_sec = 15;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    /* 0 is "never expire" and stays; 1..14 take the floor */
+    s.ai_tool_timeout_sec = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 0);
+
+    s.ai_tool_timeout_sec = 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    s.ai_tool_timeout_sec = 14;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+    TEST_END();
+}
+
+int test_settings_validate_ai_tool_timeout_high(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.ai_tool_timeout_sec = 99999;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 3600);
+
+    s.ai_tool_timeout_sec = 3600;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 3600);
+
+    s.ai_tool_timeout_sec = 120;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 120);
+    TEST_END();
+}
+
+int test_settings_validate_ai_tool_rounds(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    memset(&s, 0, sizeof(s));
+    s.ai_tool_auto_rounds = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 1);
+
+    s.ai_tool_auto_rounds = -7;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 1);
+
+    s.ai_tool_auto_rounds = 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 1);
+
+    s.ai_tool_auto_rounds = 20;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 20);
+
+    s.ai_tool_auto_rounds = 21;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 20);
+
+    s.ai_tool_auto_rounds = 4;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 4);
+    TEST_END();
+}
+
 /* ---- paste_delay_ms clamping -------------------------------------------- */
 
 int test_settings_validate_paste_delay_neg(void)

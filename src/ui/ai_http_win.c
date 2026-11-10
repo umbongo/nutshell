@@ -330,12 +330,18 @@ int ai_http_post_stream(const char *url, const char * const *headers,
     DWORD bytes_read;
     for (;;) {
         DWORD avail = 0;
-        if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
+        if (!WinHttpQueryDataAvailable(hRequest, &avail)) {
+            ret = -1;   /* the body broke after a 200: not a clean end */
+            break;
+        }
         if (avail == 0) break;
 
         DWORD to_read = avail < sizeof(chunk_buf) - 1
                        ? avail : (DWORD)(sizeof(chunk_buf) - 1);
-        if (!WinHttpReadData(hRequest, chunk_buf, to_read, &bytes_read)) break;
+        if (!WinHttpReadData(hRequest, chunk_buf, to_read, &bytes_read)) {
+            ret = -1;
+            break;
+        }
         if (bytes_read == 0) break;
 
         chunk_buf[bytes_read] = '\0';
@@ -344,6 +350,9 @@ int ai_http_post_stream(const char *url, const char * const *headers,
             break;
         }
     }
+
+    if (ret != 0 && error && error_size > 0)
+        snprintf(error, error_size, "connection lost during reply");
 
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);

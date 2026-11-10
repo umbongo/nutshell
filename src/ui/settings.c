@@ -12,6 +12,7 @@
 #include "ai_prompt.h"
 #include "ai_http.h"
 #include "cmd_policy.h"
+#include "tool_decision.h"
 #include "json_parser.h"
 #include "dlog.h"
 #include "open_dir.h"
@@ -19,6 +20,7 @@
 #include "pw_reveal.h"
 #include "net_guard.h"
 #include "ns_tokens.h"
+#include "ns_draw.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -181,6 +183,8 @@ typedef struct {
     HWND     hSshHint;    /* dim wrapped SSH idle-timeout hint */
     HWND     hAboutBlurb; /* dim About tagline */
     HWND     hCtxHint;    /* dim wrapped AI max-context-lines hint */
+    HWND     hToolTimeoutNote; /* dim note under the tool approval timeout */
+    HWND     hToolRoundsNote;  /* dim note under the automatic tool rounds */
     HWND     hUrlWarn;    /* warning-coloured "not encrypted" line under Base URL */
     HWND     hDbgDim[6];  /* dim statics on the Debugging page */
     int      n_dbg_dim;
@@ -242,9 +246,13 @@ static HWND make_combo2(HWND parent, HMENU id, DWORD type_style)
 
 static HWND make_check2(HWND parent, const char *text, HMENU id)
 {
-    return CreateWindow("BUTTON", text,
+    HWND chk = CreateWindow("BUTTON", text,
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
         0, 0, 10, 10, parent, id, NULL, NULL);
+    /* Classic rendering, or comctl32 v6 ignores the WM_CTLCOLORSTATIC text
+     * colour and the label draws black on the dark themes. */
+    ns_control_classic(chk);
+    return chk;
 }
 
 static SettingsCtrl *add_ctrl(SettingsDlgData *d, HWND lbl, HWND ctrl, HWND extra,
@@ -481,6 +489,12 @@ static const TooltipEntry k_tooltips[] = {
       "Start new sessions with Auto-approve on: commands up to 'Allowed' "
       "run without asking. With 'Allowed' at Critical, Save asks you to "
       "confirm. The AI panel's status line changes both per session." },
+    { IDC_AI_TOOL_TIMEOUT,
+      "How long a tool approval card waits for your answer before it "
+      "expires and the tool call is not run (15 - 3600 seconds, default 60; "
+      "0 = never expire, the card waits until you answer or stop). "
+      "A change applies to cards shown after you save; a card already "
+      "waiting keeps its timeout." },
     { IDC_SSH_IDLE_EDIT,
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
@@ -842,7 +856,8 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                 return (LRESULT)d->hBrBgPrimary;
             }
             int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb ||
-                       hCtl == d->hCtxHint);
+                       hCtl == d->hCtxHint || hCtl == d->hToolTimeoutNote ||
+                       hCtl == d->hToolRoundsNote);
             for (int di = 0; di < d->n_dbg_dim && !dim; di++)
                 dim = (hCtl == d->hDbgDim[di]);
             SetTextColor((HDC)wParam,
@@ -1517,6 +1532,47 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
             }
         }
+        {
+            /* The label is wider than the 150 px label column, so the row is
+             * full-width: the text left-aligned, the number box beside it
+             * (the tickbox-with-a-control-beside-it form). The label is kept
+             * short enough to stay on one line in its 240 px (96 dpi) box;
+             * what "0" means goes in the dim note under the row. */
+            char buf[16];
+            int sec = nd->cfg->settings.ai_tool_timeout_sec;
+            if (sec != AI_TOOL_TIMEOUT_SEC_NEVER &&
+                (sec < AI_TOOL_TIMEOUT_SEC_MIN || sec > AI_TOOL_TIMEOUT_SEC_MAX))
+                sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
+            (void)snprintf(buf, sizeof(buf), "%d", sec);
+            HWND lbl = make_static2(nd->hPage, "Tool approval timeout (seconds):");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_TIMEOUT, ES_NUMBER);
+            add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
+        }
+        {
+            nd->hToolTimeoutNote = make_static2(nd->hPage,
+                "0 means never: the card waits until you answer it or stop "
+                "the reply.");
+            add_ctrl(nd, NULL, nd->hToolTimeoutNote, NULL,
+                     SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 2, 0, 1, 1);
+        }
+        {
+            /* Same form as the timeout row above, directly under it. */
+            char buf[16];
+            int rounds = nd->cfg->settings.ai_tool_auto_rounds;
+            if (rounds < AI_TOOL_ROUNDS_MIN || rounds > AI_TOOL_ROUNDS_MAX)
+                rounds = AI_TOOL_ROUNDS_DEFAULT;
+            (void)snprintf(buf, sizeof(buf), "%d", rounds);
+            HWND lbl = make_static2(nd->hPage, "Automatic tool rounds:");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_ROUNDS, ES_NUMBER);
+            add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
+        }
+        {
+            nd->hToolRoundsNote = make_static2(nd->hPage,
+                "Fetches the assistant may run on its own after one prompt "
+                "before it asks; your next prompt resets the count.");
+            add_ctrl(nd, NULL, nd->hToolRoundsNote, NULL,
+                     SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 3, 0, 1, 1);
+        }
 
         /* ==== AI_WEB ==== */
         {
@@ -2087,6 +2143,21 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             v = GetDlgItemInt(d->hPage, IDC_AI_MAX_RESULTS, &ok, FALSE);
             if (ok && v >= 1 && v <= 20)
                 s->ai_max_search_results = (int)v;
+
+            /* Tool approval timeout: 0 (never) or 15..3600 s; keep the stored
+             * value on a parse failure or any other entry, as the idle
+             * timeout does */
+            v = GetDlgItemInt(d->hPage, IDC_AI_TOOL_TIMEOUT, &ok, FALSE);
+            if (ok && (v == (UINT)AI_TOOL_TIMEOUT_SEC_NEVER ||
+                       (v >= (UINT)AI_TOOL_TIMEOUT_SEC_MIN &&
+                        v <= (UINT)AI_TOOL_TIMEOUT_SEC_MAX)))
+                s->ai_tool_timeout_sec = (int)v;
+
+            /* Automatic tool rounds: 1..20; keep the stored value on a parse
+             * failure or any other entry (0 is not allowed) */
+            v = GetDlgItemInt(d->hPage, IDC_AI_TOOL_ROUNDS, &ok, FALSE);
+            if (ok && v >= (UINT)AI_TOOL_ROUNDS_MIN && v <= (UINT)AI_TOOL_ROUNDS_MAX)
+                s->ai_tool_auto_rounds = (int)v;
 
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)

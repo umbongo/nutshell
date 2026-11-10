@@ -72,6 +72,8 @@ int test_config_default_settings(void)
     ASSERT_STR_EQ(s.colour_scheme, "Onyx Synapse");
     ASSERT_STR_EQ(s.host_key_verification, "tofu");
     ASSERT_EQ(s.ai_max_context_lines, 1000);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 60);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 3);
     TEST_END();
 }
 
@@ -187,6 +189,8 @@ int test_config_roundtrip_settings(void)
     (void)snprintf(orig->settings.foreground_colour,
                    sizeof(orig->settings.foreground_colour), "%s", "#FFFFFF");
     orig->settings.ai_max_context_lines = 2500;
+    orig->settings.ai_tool_timeout_sec = 300;
+    orig->settings.ai_tool_auto_rounds = 7;
 
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
@@ -200,6 +204,8 @@ int test_config_roundtrip_settings(void)
     ASSERT_EQ(loaded->settings.logging_enabled, 1);
     ASSERT_STR_EQ(loaded->settings.foreground_colour, "#FFFFFF");
     ASSERT_EQ(loaded->settings.ai_max_context_lines, 2500);
+    ASSERT_EQ(loaded->settings.ai_tool_timeout_sec, 300);
+    ASSERT_EQ(loaded->settings.ai_tool_auto_rounds, 7);
 
     config_free(orig);
     config_free(loaded);
@@ -639,6 +645,97 @@ int test_config_load_out_of_range(void)
 
     config_free(cfg);
     remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ai_tool_timeout_sec: absent keeps the 60 s default, 0 stays 0 (never),
+ * 1..14 and negatives clamp to 15, above 3600 clamps to 3600. */
+int test_config_load_tool_timeout(void)
+{
+    TEST_BEGIN();
+    const char *cases[] = { "", "\"ai_tool_timeout_sec\": 5", "\"ai_tool_timeout_sec\": 99999",
+                            "\"ai_tool_timeout_sec\": 240", "\"ai_tool_timeout_sec\": -1",
+                            "\"ai_tool_timeout_sec\": 0", "\"ai_tool_timeout_sec\": 1",
+                            "\"ai_tool_timeout_sec\": 14", "\"ai_tool_timeout_sec\": 15",
+                            "\"ai_tool_timeout_sec\": 3600", "\"ai_tool_timeout_sec\": 3601" };
+    const int want[] = { 60, 15, 3600, 240, 15, 0, 15, 15, 15, 3600, 3600 };
+    for (int i = 0; i < 11; i++) {
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fprintf(f, "{\n  \"settings\": {\n    \"font_size\": 10%s%s\n  }\n}\n",
+                cases[i][0] ? ",\n    " : "", cases[i]);
+        fclose(f);
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        if (cfg) {
+            ASSERT_EQ(cfg->settings.ai_tool_timeout_sec, want[i]);
+            config_free(cfg);
+        }
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+/* 0 (never expire) survives save and load: it is not mistaken for unset. */
+int test_config_roundtrip_tool_timeout_never(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+    orig->settings.ai_tool_timeout_sec = 0;
+    ASSERT_EQ(config_save(orig, TMP_CFG), 0);
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    if (loaded) ASSERT_EQ(loaded->settings.ai_tool_timeout_sec, 0);
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ai_tool_auto_rounds: absent keeps the default 3; 0 and negatives clamp to 1
+ * (the nearest bound, as the other numeric settings do), above 20 clamps to 20. */
+int test_config_load_tool_rounds(void)
+{
+    TEST_BEGIN();
+    const char *cases[] = { "", "\"ai_tool_auto_rounds\": 0", "\"ai_tool_auto_rounds\": -4",
+                            "\"ai_tool_auto_rounds\": 1", "\"ai_tool_auto_rounds\": 5",
+                            "\"ai_tool_auto_rounds\": 20", "\"ai_tool_auto_rounds\": 21",
+                            "\"ai_tool_auto_rounds\": 99999" };
+    const int want[] = { 3, 1, 1, 1, 5, 20, 20, 20 };
+    for (int i = 0; i < 8; i++) {
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fprintf(f, "{\n  \"settings\": {\n    \"font_size\": 10%s%s\n  }\n}\n",
+                cases[i][0] ? ",\n    " : "", cases[i]);
+        fclose(f);
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        if (cfg) {
+            ASSERT_EQ(cfg->settings.ai_tool_auto_rounds, want[i]);
+            config_free(cfg);
+        }
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_roundtrip_tool_rounds(void)
+{
+    TEST_BEGIN();
+    const int vals[] = { 1, 3, 12, 20 };
+    for (int i = 0; i < 4; i++) {
+        Config *orig = config_new_default();
+        ASSERT_NOT_NULL(orig);
+        orig->settings.ai_tool_auto_rounds = vals[i];
+        ASSERT_EQ(config_save(orig, TMP_CFG), 0);
+        Config *loaded = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(loaded);
+        if (loaded) ASSERT_EQ(loaded->settings.ai_tool_auto_rounds, vals[i]);
+        config_free(orig);
+        config_free(loaded);
+        remove(TMP_CFG);
+    }
     TEST_END();
 }
 

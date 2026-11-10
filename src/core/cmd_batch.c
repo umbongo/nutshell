@@ -74,11 +74,22 @@ void cmd_batch_remove(CmdBatchSet *set, int id)
     }
 }
 
+int cmd_batch_is_tool(const CmdBatch *b)
+{
+    return b && b->tool_stream_id != 0;
+}
+
+int cmd_batch_full(const CmdBatchSet *set)
+{
+    return !set || set->count >= CMD_BATCH_MAX;
+}
+
 CmdBatch *cmd_batch_first_pending(CmdBatchSet *set)
 {
     if (!set) return NULL;
     for (int i = 0; i < set->count; i++) {
-        if (set->b[i] && chat_approval_needs_user(&set->b[i]->q))
+        if (set->b[i] && !cmd_batch_is_tool(set->b[i]) &&
+            chat_approval_needs_user(&set->b[i]->q))
             return set->b[i];
     }
     return NULL;
@@ -88,7 +99,8 @@ CmdBatch *cmd_batch_next_runnable(CmdBatchSet *set)
 {
     if (!set) return NULL;
     for (int i = 0; i < set->count; i++) {
-        if (set->b[i] && chat_approval_next_approved(&set->b[i]->q) >= 0)
+        if (set->b[i] && !cmd_batch_is_tool(set->b[i]) &&
+            chat_approval_next_approved(&set->b[i]->q) >= 0)
             return set->b[i];
     }
     return NULL;

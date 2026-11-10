@@ -1,6 +1,7 @@
 /* src/core/chat_msg.c */
 #include "chat_msg.h"
 #include "secure_zero.h"
+#include "tool_decision.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +57,8 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.cmd.batch = 0;
         item->u.cmd.run = CHAT_RUN_NONE;
         item->u.cmd.container_scroll = 0;
+        item->u.cmd.tool = 0;
+        item->u.cmd.tool_outcome = (int)TOOL_DECISION_NONE;
     }
 
     /* Link into list */
@@ -223,6 +226,37 @@ void chat_msg_set_quoted(ChatMsgItem *item, int quoted)
     item->u.cmd.quoted = quoted ? 1 : 0;
 }
 
+void chat_msg_set_tool(ChatMsgItem *item, int tool)
+{
+    if (!item || item->type != CHAT_ITEM_COMMAND) return;
+    item->u.cmd.tool = tool ? 1 : 0;
+    if (tool) item->u.cmd.tool_outcome = (int)TOOL_DECISION_PENDING;
+}
+
+void chat_msg_set_tool_outcome(ChatMsgItem *item, int outcome)
+{
+    if (!item || item->type != CHAT_ITEM_COMMAND) return;
+    item->u.cmd.tool_outcome = outcome;
+}
+
+void chat_msg_apply_ceiling(ChatMsgItem *it, int prev_allowed, int next_allowed)
+{
+    if (!it || it->type != CHAT_ITEM_COMMAND || it->u.cmd.tool) return;
+    if (next_allowed > prev_allowed) {
+        if (it->u.cmd.blocked && !it->u.cmd.quoted &&
+            (int)it->u.cmd.safety <= next_allowed) {
+            it->u.cmd.blocked = 0;
+            it->u.cmd.approved = -1;
+            it->u.cmd.selected = 1;  /* no longer held -- starts checked */
+        }
+    } else if (next_allowed < prev_allowed) {
+        if (!it->u.cmd.settled && it->u.cmd.approved == -1 &&
+            (int)it->u.cmd.safety > next_allowed) {
+            it->u.cmd.blocked = 1;
+        }
+    }
+}
+
 int chat_msg_set_thinking(ChatMsgItem *item, const char *thinking_text)
 {
     if (!item || item->type != CHAT_ITEM_AI_TEXT) return -1;
@@ -332,12 +366,14 @@ const char *chat_cmd_label(int approved, int blocked, int quoted, int run,
     return label;
 }
 
-int chat_card_header_text(int n, int held, int quoted, char *buf, size_t cap)
+int chat_card_header_text(const char *noun, int n, int held, int quoted,
+                          char *buf, size_t cap)
 {
     if (!buf || cap == 0) return 0;
     buf[0] = '\0';
     size_t pos = 0;
-    int w = snprintf(buf, cap, "%d command%s", n, n == 1 ? "" : "s");
+    int w = snprintf(buf, cap, "%d %s%s", n, noun ? noun : "command",
+                     n == 1 ? "" : "s");
     if (w < 0 || (size_t)w >= cap) { buf[0] = '\0'; return 0; }
     pos = (size_t)w;
     if (held > 0) {

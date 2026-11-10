@@ -137,5 +137,15 @@ void ns_draw_meter(HDC hdc, const NsRect *bar, double fraction,
  * inset 1 px inside `rc`. */
 void ns_draw_focus_ring(HDC hdc, const RECT *rc, COLORREF colour, int dpi);
 
+/* Opts a button-class control (checkbox, radio, group box) out of the visual
+ * styles, so it renders classic and honours the text colour a parent sets in
+ * WM_CTLCOLORSTATIC / WM_CTLCOLORBTN. Under Common-Controls 6 (the app
+ * manifest) a themed checkbox ignores that colour and draws its label in the
+ * system text colour, black on the dark themes. Calls SetWindowTheme(h, L"",
+ * L"") through uxtheme.dll, loaded at run time from the system directory and
+ * cached; if the DLL or the entry point is missing it does nothing. Call it
+ * right after creating the control. */
+void ns_control_classic(HWND h);
+
 #endif /* _WIN32 */
 #endif /* NUTSHELL_NS_DRAW_H */

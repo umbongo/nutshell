@@ -31,6 +31,8 @@ void chat_activity_tick(ActivityState *state, float current_time)
 {
     if (state->phase == ACTIVITY_IDLE) return;
     if (state->connection_lost) { state->health = HEALTH_RED; return; }
+    /* A tool card waits as long as the person takes: it does not age. */
+    if (state->phase == ACTIVITY_WAITING) { state->health = HEALTH_GREEN; return; }
 
     float elapsed = current_time - state->last_token_time;
     if (elapsed >= 30.0f)
@@ -90,7 +92,7 @@ int chat_activity_format(const ActivityState *state, float current_time,
         return (int)snprintf(buf, buf_size, "Executing %d/%d...%s",
                              state->exec_current, state->exec_total, slow);
     case ACTIVITY_WAITING:
-        return (int)snprintf(buf, buf_size, "Waiting for output...%s", slow);
+        return (int)snprintf(buf, buf_size, "Waiting for your decision");
     }
     return 0;
 }

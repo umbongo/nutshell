@@ -134,6 +134,7 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                         L.pad, L.y_save, L.fw, L.ctlh, hwnd,
                         (HMENU)(UINT_PTR)PW_ID_SAVE, NULL, NULL);
+            ns_control_classic(chk);   /* keep the WM_CTLCOLORSTATIC colour */
             SendMessageA(chk, WM_SETFONT, (WPARAM)font, TRUE);
         }
         pw_make_button(hwnd, "OK", IDOK, L.pad + L.fw - 2 * L.bw - L.gap, &L, font);

@@ -5,6 +5,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "ai_header_layout.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -126,7 +127,7 @@ void ai_chat_thinking_history_clear(AiChatData *d)
  * a card settles the moment every entry is decided, well before the
  * dispatcher actually gets around to sending it (see
  * ai_chat_settle_batch_if_done()). */
-static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
+void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
 {
     if (!list || !batch) return;
     for (int i = 0; i < batch->q.count; i++) {
@@ -139,6 +140,8 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
         chat_msg_set_reason(item, e->reason);
         chat_msg_set_batch(item, batch->id);
         chat_msg_set_note(item, e->note);
+        /* A tool call's row (outcome PENDING until its slot is answered). */
+        if (e->tool) chat_msg_set_tool(item, 1);
         switch (e->status) {
         case APPROVE_APPROVED:
         case APPROVE_EXECUTING:
@@ -243,7 +246,8 @@ void ai_chat_rebuild_display(AiChatData *d)
      * 2026-09-09-pending-command-batches.md, "Session switch"). */
     if (d->active_state) {
         for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            append_batch_command_items(&d->msg_list, d->active_state->batches.b[bi]);
+            ai_chat_append_batch_command_items(&d->msg_list,
+                                               d->active_state->batches.b[bi]);
     }
 
     if (d->hChatList) {
@@ -299,43 +303,102 @@ void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
     ns_icon_draw(hdc, icon, &rc, fg, (UINT)dpi);
 }
 
-/* Model-chip geometry, shared by ai_chat_relayout() (to size the session label)
- * and the header paint (to draw the chip itself): sized to the current
- * model name's measured text width (FONT_CAPTION + 2*SP_SM padding) and
- * placed directly left of the header's icon buttons; the session label
- * takes the remaining space to its left. `hdc` may be NULL (a fixed
- * fallback width is used); pass a real one for an accurate size. */
-static void ai_chat_header_chip(AiChatData *d, NsRect header, int buttons_left,
-                                 HDC hdc, NsRect *out_chip, RECT *out_label)
+/* The one-word activity status the header shows next to the session name;
+ * "" while idle. */
+static const char *ai_chat_header_word(const AiChatData *d)
+{
+    switch (d->activity.phase) {
+    case ACTIVITY_PROCESSING: return "Processing";
+    case ACTIVITY_THINKING:   return "Thinking";
+    case ACTIVITY_RESPONDING: return "Responding";
+    case ACTIVITY_EXECUTING:  return "Executing";
+    case ACTIVITY_WAITING:    return "Waiting";
+    default:                  return "";
+    }
+}
+
+/* Header geometry, shared by ai_chat_relayout() (buttons and the session
+ * label), ai_chat_header_sync() (the label, as the status word comes and
+ * goes) and the header paint (chip, dot and word): measures the model name
+ * (FONT_CAPTION chip text + 2*SP_SM padding), the session name (FONT_TITLE,
+ * the label's own font) and the activity word (the small font the paint
+ * uses), then lets ai_header_layout() lay the row out right to left so the
+ * word can never land under the chip or the buttons. `hdc` may be NULL (a
+ * fixed chip width and an unclipped name are assumed); pass a real one for
+ * accurate sizes. */
+static void ai_chat_header_layout(AiChatData *d, NsRect header, HDC hdc,
+                                  AiHeaderLayout *out)
 {
     int pad_sm = ns_scale(SP_SM, d->dpi);
-    int chip_h = ns_scale(SZ_TAG_H, d->dpi);
-    int chip_w = chip_h * 2;
+    AiHeaderMeasure m;
+    m.header    = header;
+    m.pad       = pad_sm;
+    m.gap       = pad_sm;
+    m.btn_h     = ns_scale(SZ_CTRL_H, d->dpi);
+    m.buttons_w = 3 * m.btn_h + 2 * pad_sm;
+    m.chip_h    = ns_scale(SZ_TAG_H, d->dpi);
+    m.chip_w    = m.chip_h * 2;
+    m.name_w    = header.w;
+    m.status_w  = 0;
 
     if (hdc) {
-        HFONT font = ns_font(FONT_CAPTION, d->dpi);
-        HGDIOBJ old = font ? SelectObject(hdc, font) : NULL;
-        const char *model = d->conv.model;
-        int mlen = (int)strlen(model);
         SIZE sz = {0, 0};
-        if (mlen > 0) GetTextExtentPoint32A(hdc, model, mlen, &sz);
-        if (old) SelectObject(hdc, old);
-        chip_w = sz.cx + 2 * pad_sm;
-    }
+        HFONT cap = ns_font(FONT_CAPTION, d->dpi);
+        HGDIOBJ old = cap ? SelectObject(hdc, cap) : NULL;
+        int mlen = (int)strlen(d->conv.model);
+        if (mlen > 0) GetTextExtentPoint32A(hdc, d->conv.model, mlen, &sz);
+        m.chip_w = sz.cx + 2 * pad_sm;
 
-    int chip_x = buttons_left - chip_w;
-    int chip_y = header.y + (header.h - chip_h) / 2;
-    if (out_chip) {
-        out_chip->x = chip_x; out_chip->y = chip_y;
-        out_chip->w = chip_w; out_chip->h = chip_h;
+        /* A little slack so the label's own ellipsis never trims a name
+         * that the layout has judged to fit. */
+        sz.cx = 0; sz.cy = 0;
+        SelectObject(hdc, ns_font(FONT_TITLE, d->dpi));
+        int nlen = (int)strlen(d->session_name);
+        if (nlen > 0) GetTextExtentPoint32A(hdc, d->session_name, nlen, &sz);
+        m.name_w = sz.cx + ns_scale(SP_XS, d->dpi) / 2;
+
+        const char *word = ai_chat_header_word(d);
+        if (word[0]) {
+            sz.cx = 0; sz.cy = 0;
+            SelectObject(hdc, d->hSmallFont ? d->hSmallFont
+                                            : GetStockObject(DEFAULT_GUI_FONT));
+            GetTextExtentPoint32A(hdc, word, (int)strlen(word), &sz);
+            m.status_w = ns_scale(6, d->dpi) + ns_scale(SP_XS, d->dpi) + sz.cx;
+        }
+        if (old) SelectObject(hdc, old);
     }
-    if (out_label) {
-        int label_left = header.x + pad_sm;
-        int label_right = chip_x - pad_sm;
-        if (label_right < label_left) label_right = label_left;
-        SetRect(out_label, label_left, header.y, label_right,
-                header.y + header.h);
-    }
+    ai_header_layout(&m, out);
+}
+
+/* Move the session label to the rect the header layout gives it (only when
+ * it changed, so a paint that finds nothing to do moves nothing). */
+static void ai_chat_header_place_label(AiChatData *d, const AiHeaderLayout *hl)
+{
+    if (!d->hSessionLabel) return;
+    RECT cur;
+    GetWindowRect(d->hSessionLabel, &cur);
+    MapWindowPoints(NULL, d->hwnd, (POINT *)&cur, 2);
+    if (cur.left == hl->name.x && cur.top == hl->name.y &&
+        cur.right - cur.left == hl->name.w &&
+        cur.bottom - cur.top == hl->name.h)
+        return;
+    MoveWindow(d->hSessionLabel, hl->name.x, hl->name.y, hl->name.w,
+               hl->name.h, TRUE);
+}
+
+/* Re-place the session label for the current activity word. Called before
+ * the panel paints: the word (and so the name's room) changes with the
+ * phase, between resizes. */
+void ai_chat_header_sync(AiChatData *d)
+{
+    if (!d || !d->hwnd || !d->hSessionLabel) return;
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+    HDC hdc = GetDC(d->hwnd);
+    AiHeaderLayout hl;
+    ai_chat_header_layout(d, l.header, hdc, &hl);
+    if (hdc) ReleaseDC(d->hwnd, hdc);
+    ai_chat_header_place_label(d, &hl);
 }
 
 /* Reposition all child controls from ai_panel_layout()'s header/thread/
@@ -352,32 +415,28 @@ void ai_chat_relayout(AiChatData *d)
     AiPanelLayout l;
     ai_chat_compute_layout(d, &l);
 
-    /* ---- Header: session name (left), model chip (painted -- see
-     * WM_PAINT), three icon buttons right-aligned. ---- */
-    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int by = l.header.y + (l.header.h - btn_h) / 2;
-    int bx = l.header.x + l.header.w - pad_sm - btn_h;
-    if (d->hUndockBtn)
-        MoveWindow(d->hUndockBtn, bx, by, btn_h, btn_h, TRUE);
-    bx -= pad_sm + btn_h;
-    if (d->hSaveBtn)
-        MoveWindow(d->hSaveBtn, bx, by, btn_h, btn_h, TRUE);
-    bx -= pad_sm + btn_h;
-    if (d->hNewChatBtn)
-        MoveWindow(d->hNewChatBtn, bx, by, btn_h, btn_h, TRUE);
-    int buttons_left = bx - pad_sm;
-
+    /* ---- Header: session name (left), the status word and model chip
+     * (painted -- see WM_PAINT), three icon buttons right-aligned; all
+     * placed by ai_header_layout(). ---- */
     {
-        NsRect chip;
-        RECT label_rc;
+        int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
+        int pad_sm = ns_scale(SP_SM, d->dpi);
+        AiHeaderLayout hl;
         HDC hdc = GetDC(d->hwnd);
-        ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, &label_rc);
+        ai_chat_header_layout(d, l.header, hdc, &hl);
         if (hdc) ReleaseDC(d->hwnd, hdc);
-        if (d->hSessionLabel)
-            MoveWindow(d->hSessionLabel, label_rc.left, label_rc.top,
-                       label_rc.right - label_rc.left,
-                       label_rc.bottom - label_rc.top, TRUE);
+
+        int by = hl.buttons.y;
+        int bx = hl.buttons.x + hl.buttons.w - btn_h;
+        if (d->hUndockBtn)
+            MoveWindow(d->hUndockBtn, bx, by, btn_h, btn_h, TRUE);
+        bx -= pad_sm + btn_h;
+        if (d->hSaveBtn)
+            MoveWindow(d->hSaveBtn, bx, by, btn_h, btn_h, TRUE);
+        bx -= pad_sm + btn_h;
+        if (d->hNewChatBtn)
+            MoveWindow(d->hNewChatBtn, bx, by, btn_h, btn_h, TRUE);
+        ai_chat_header_place_label(d, &hl);
     }
 
     /* ---- Thread: the chat list fills l.thread. ---- */
@@ -422,47 +481,33 @@ RECT ai_chat_to_RECT(NsRect r)
 }
 
 /* Paint the header's model chip and (while a session is active) the
- * activity dot + one-word status, next to the session label. */
+ * activity dot + one-word status, next to the session label. Every rect
+ * comes from ai_header_layout(): the word sits between the session name
+ * and the chip, and is left out when the row has no room for it. */
 void ai_chat_paint_header(AiChatData *d, HDC hdc)
 {
     const ThemeTokens *tok = ns_tokens();
     AiPanelLayout l;
     ai_chat_compute_layout(d, &l);
 
-    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int buttons_left = l.header.x + l.header.w - pad_sm
-                      - 3 * btn_h - 2 * pad_sm - pad_sm;
+    AiHeaderLayout hl;
+    ai_chat_header_layout(d, l.header, hdc, &hl);
 
-    NsRect chip;
-    ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, NULL);
-    if (chip.w > 0 && chip.h > 0) {
-        RECT chip_rc = ai_chat_to_RECT(chip);
+    if (hl.chip.w > 0 && hl.chip.h > 0) {
+        RECT chip_rc = ai_chat_to_RECT(hl.chip);
         HFONT font = ns_font(FONT_CAPTION, d->dpi);
         ns_draw_chip(hdc, &chip_rc, theme_cr(tok->raised.base),
                     theme_cr(tok->text_dim), font, d->conv.model);
     }
 
-    if (d->activity.phase == ACTIVITY_IDLE) return;
+    if (d->activity.phase == ACTIVITY_IDLE || !hl.status_shown) return;
 
-    RECT rc_lbl = {0, 0, 0, 0};
-    if (d->hSessionLabel) {
-        GetWindowRect(d->hSessionLabel, &rc_lbl);
-        MapWindowPoints(NULL, d->hwnd, (POINT *)&rc_lbl, 2);
-    }
-    SIZE sz_lbl = {0, 0};
-    /* Measure with the session label's own font (FONT_TITLE) so the dot
-     * lands right after its actually-rendered text, not an approximation. */
-    HGDIOBJ old_f = SelectObject(hdc, ns_font(FONT_TITLE, d->dpi));
-    char lbl_text[256] = "";
-    if (d->hSessionLabel)
-        GetWindowTextA(d->hSessionLabel, lbl_text, (int)sizeof(lbl_text));
-    GetTextExtentPoint32A(hdc, lbl_text, (int)strlen(lbl_text), &sz_lbl);
-    SelectObject(hdc, d->hSmallFont ? d->hSmallFont : GetStockObject(DEFAULT_GUI_FONT));
+    HGDIOBJ old_f = SelectObject(hdc, d->hSmallFont ? d->hSmallFont
+                                                    : GetStockObject(DEFAULT_GUI_FONT));
 
     int dot_sz = ns_scale(6, d->dpi);
-    int dot_x = rc_lbl.left + sz_lbl.cx + ns_scale(6, d->dpi);
-    int dot_y = rc_lbl.top + ((rc_lbl.bottom - rc_lbl.top) - dot_sz) / 2;
+    int dot_x = hl.status.x;
+    int dot_y = hl.status.y + (hl.status.h - dot_sz) / 2;
 
     COLORREF dot_clr;
     switch (d->activity.health) {
@@ -505,24 +550,17 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc)
     DeleteObject(hDotPn);
     DeleteObject(hDotBr);
 
-    const char *word;
-    switch (d->activity.phase) {
-    case ACTIVITY_PROCESSING: word = "Processing"; break;
-    case ACTIVITY_THINKING:   word = "Thinking";   break;
-    case ACTIVITY_RESPONDING: word = "Responding"; break;
-    case ACTIVITY_EXECUTING:  word = "Executing";  break;
-    case ACTIVITY_WAITING:    word = "Waiting";    break;
-    default:                  word = "";           break;
-    }
+    const char *word = ai_chat_header_word(d);
     if (word[0]) {
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, word_clr);
         RECT wrc;
-        wrc.left   = dot_x + dot_sz + ns_scale(4, d->dpi);
-        wrc.top    = rc_lbl.top;
-        wrc.right  = l.header.x + l.header.w;
-        wrc.bottom = rc_lbl.bottom;
-        DrawTextA(hdc, word, -1, &wrc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        wrc.left   = dot_x + dot_sz + ns_scale(SP_XS, d->dpi);
+        wrc.top    = hl.status.y;
+        wrc.right  = hl.status.x + hl.status.w;
+        wrc.bottom = hl.status.y + hl.status.h;
+        DrawTextA(hdc, word, -1, &wrc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
     }
     SelectObject(hdc, old_f);
 }

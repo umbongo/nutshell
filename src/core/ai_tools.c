@@ -3,6 +3,8 @@
 #include "json_validate.h"
 #include "dlog.h"
 #include "dlog_query.h"
+#include "net_guard.h"
+#include "paste_filter.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -668,6 +670,7 @@ int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *st
         if (delta) {
             const char *stop_reason = json_obj_str(delta, "stop_reason");
             if (stop_reason) {
+                snprintf(state->finish, sizeof(state->finish), "%s", stop_reason);
                 if (strcmp(stop_reason, "tool_use") == 0) {
                     ret = 1;
                 } else if (strcmp(stop_reason, "end_turn") == 0
@@ -685,6 +688,81 @@ int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *st
 }
 
 /* ---- OpenAI streaming parser --------------------------------------------- */
+
+/* Accumulate one delta.tool_calls array into the state. -1 on out of memory. */
+static int openai_accumulate_tool_calls(AiToolStreamState *state,
+                                        JsonNode *tool_calls)
+{
+    size_t n = vec_size(&tool_calls->as.arr);
+    for (size_t i = 0; i < n; i++) {
+        JsonNode *tc_node = (JsonNode *)vec_get(&tool_calls->as.arr, i);
+        if (!tc_node || tc_node->type != JSON_OBJECT) continue;
+
+        const char *id = json_obj_str(tc_node, "id");
+
+        /* Get slot index. Some servers leave it out (counted so the caller
+         * can log it once). Such a delta continues the current (last) slot,
+         * or index 0 when there is none, unless it carries an id that is not
+         * the current call's: a different id, or any id once the current call
+         * already has its name but no id, starts a new call. */
+        double idx_d = json_obj_num(tc_node, "index", -1.0);
+        int slot;
+        if (idx_d < 0.0) {
+            state->index_defaulted++;
+            int cur = state->pending_tool_count > 0
+                    ? state->pending_tool_count - 1 : 0;
+            slot = cur;
+            if (id && id[0] && state->pending_tool_count > 0) {
+                const AiToolCall *c = &state->pending_tool_calls[cur];
+                int differs = c->id[0] ? strcmp(c->id, id) != 0
+                                       : c->name[0] != '\0';
+                if (differs) slot = state->pending_tool_count;
+            }
+        } else {
+            slot = (int)idx_d;
+        }
+
+        /* Grow pending_tool_calls array if needed to accommodate this slot */
+        while (slot >= state->pending_tool_cap) {
+            int new_cap = (state->pending_tool_cap == 0) ? 4 : state->pending_tool_cap * 2;
+            AiToolCall *grown = (AiToolCall *)realloc(state->pending_tool_calls,
+                                                       (size_t)new_cap * sizeof(AiToolCall));
+            if (!grown) return -1;
+            /* Zero-initialize the newly allocated slots */
+            memset(grown + state->pending_tool_cap, 0,
+                   (size_t)(new_cap - state->pending_tool_cap) * sizeof(AiToolCall));
+            state->pending_tool_calls = grown;
+            state->pending_tool_cap   = new_cap;
+        }
+
+        /* Extend count if this slot is new */
+        if (slot >= state->pending_tool_count) {
+            state->pending_tool_count = slot + 1;
+        }
+
+        /* First chunk: id and function.name */
+        if (id) {
+            snprintf(state->pending_tool_calls[slot].id,
+                     sizeof(state->pending_tool_calls[slot].id), "%s", id);
+        }
+
+        JsonNode *func = json_obj_get(tc_node, "function");
+        if (func && func->type == JSON_OBJECT) {
+            const char *name = json_obj_str(func, "name");
+            if (name) {
+                snprintf(state->pending_tool_calls[slot].name,
+                         sizeof(state->pending_tool_calls[slot].name), "%s", name);
+            }
+
+            const char *arguments = json_obj_str(func, "arguments");
+            if (arguments && arguments[0] != '\0') {
+                if (stream_append_input(&state->pending_tool_calls[slot], arguments) < 0)
+                    return -1;
+            }
+        }
+    }
+    return 0;
+}
 
 int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state)
 {
@@ -706,90 +784,146 @@ int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state
         return 0;
     }
 
-    /* Check finish_reason */
+    /* The delta first: a call (or its last fragment) can ride in the same
+     * chunk as the finish_reason, and acting on the finish first lost it. */
+    JsonNode *delta = json_obj_get(choice, "delta");
+    if (delta && delta->type == JSON_OBJECT) {
+        JsonNode *tool_calls = json_obj_get(delta, "tool_calls");
+        if (tool_calls && tool_calls->type == JSON_ARRAY &&
+            openai_accumulate_tool_calls(state, tool_calls) < 0) {
+            json_free(root);
+            return -1;
+        }
+    }
+
+    /* Then the finish_reason. */
+    int ret = 0;
     const char *finish_reason = json_obj_str(choice, "finish_reason");
     if (finish_reason) {
-        if (strcmp(finish_reason, "tool_calls") == 0) {
-            json_free(root);
-            return 1;
-        }
-        if (strcmp(finish_reason, "stop") == 0) {
-            json_free(root);
-            return 2;
-        }
-    }
-
-    /* Process delta.tool_calls if present */
-    JsonNode *delta = json_obj_get(choice, "delta");
-    if (!delta || delta->type != JSON_OBJECT) {
-        json_free(root);
-        return 0;
-    }
-
-    JsonNode *tool_calls = json_obj_get(delta, "tool_calls");
-    if (!tool_calls || tool_calls->type != JSON_ARRAY) {
-        json_free(root);
-        return 0;
-    }
-
-    size_t n = vec_size(&tool_calls->as.arr);
-    for (size_t i = 0; i < n; i++) {
-        JsonNode *tc_node = (JsonNode *)vec_get(&tool_calls->as.arr, i);
-        if (!tc_node || tc_node->type != JSON_OBJECT) continue;
-
-        /* Get slot index */
-        double idx_d = json_obj_num(tc_node, "index", -1.0);
-        if (idx_d < 0.0) continue;
-        int slot = (int)idx_d;
-
-        /* Grow pending_tool_calls array if needed to accommodate this slot */
-        while (slot >= state->pending_tool_cap) {
-            int new_cap = (state->pending_tool_cap == 0) ? 4 : state->pending_tool_cap * 2;
-            AiToolCall *grown = (AiToolCall *)realloc(state->pending_tool_calls,
-                                                       (size_t)new_cap * sizeof(AiToolCall));
-            if (!grown) {
-                json_free(root);
-                return -1;
-            }
-            /* Zero-initialize the newly allocated slots */
-            memset(grown + state->pending_tool_cap, 0,
-                   (size_t)(new_cap - state->pending_tool_cap) * sizeof(AiToolCall));
-            state->pending_tool_calls = grown;
-            state->pending_tool_cap   = new_cap;
-        }
-
-        /* Extend count if this slot is new */
-        if (slot >= state->pending_tool_count) {
-            state->pending_tool_count = slot + 1;
-        }
-
-        /* First chunk: id and function.name */
-        const char *id = json_obj_str(tc_node, "id");
-        if (id) {
-            snprintf(state->pending_tool_calls[slot].id,
-                     sizeof(state->pending_tool_calls[slot].id), "%s", id);
-        }
-
-        JsonNode *func = json_obj_get(tc_node, "function");
-        if (func && func->type == JSON_OBJECT) {
-            const char *name = json_obj_str(func, "name");
-            if (name) {
-                snprintf(state->pending_tool_calls[slot].name,
-                         sizeof(state->pending_tool_calls[slot].name), "%s", name);
-            }
-
-            const char *arguments = json_obj_str(func, "arguments");
-            if (arguments && arguments[0] != '\0') {
-                if (stream_append_input(&state->pending_tool_calls[slot], arguments) < 0) {
-                    json_free(root);
-                    return -1;
-                }
-            }
-        }
+        snprintf(state->finish, sizeof(state->finish), "%s", finish_reason);
+        if (strcmp(finish_reason, "tool_calls") == 0)
+            ret = 1;
+        else if (strcmp(finish_reason, "stop") == 0)
+            ret = 2;
     }
 
     json_free(root);
-    return 0;
+    return ret;
+}
+
+int ai_tools_stream_compact(AiToolStreamState *state)
+{
+    if (!state || !state->pending_tool_calls) return 0;
+    int kept = 0;
+    for (int i = 0; i < state->pending_tool_count; i++) {
+        AiToolCall *c = &state->pending_tool_calls[i];
+        if (c->name[0] == '\0' && c->id[0] == '\0') continue;
+        if (kept != i) {
+            memcpy(&state->pending_tool_calls[kept], c, sizeof(*c));
+        }
+        kept++;
+    }
+    int dropped = state->pending_tool_count - kept;
+    for (int i = kept; i < state->pending_tool_count; i++)
+        memset(&state->pending_tool_calls[i], 0, sizeof(AiToolCall));
+    state->pending_tool_count = kept;
+    return dropped;
+}
+
+int ai_tool_round_should_run(const char *provider, int tool_stop,
+                             int pending, int cut_off)
+{
+    if (pending <= 0) return 0;
+    if (provider && strcmp(provider, "anthropic") == 0)
+        return tool_stop ? 1 : 0;
+    return cut_off ? 0 : 1;
+}
+
+/* Append the sanitised form of src to out (cap bytes with the terminator,
+ * limit bytes of content at most). */
+static void stream_error_sanitise(const char *src, char *out, size_t cap,
+                                  size_t limit)
+{
+    if (cap == 0) return;
+    if (limit > cap - 1) limit = cap - 1;
+    size_t o = 0;
+    const unsigned char *p = (const unsigned char *)src;
+    while (*p) {
+        size_t clen = 1;
+        int drop = 0;
+        int space = 0;          /* a multi-byte separator written as one ' ' */
+        unsigned char c = *p;
+        if (c == '\n' || c == '\r' || c == '\t') {
+            c = ' ';
+        } else if (c < 0x20 || c == 0x7F) {
+            drop = 1;
+        } else if (c >= 0x80) {
+            /* Length of the UTF-8 sequence, or drop an invalid byte. */
+            if (c >= 0xC2 && c <= 0xDF) clen = 2;
+            else if (c >= 0xE0 && c <= 0xEF) clen = 3;
+            else if (c >= 0xF0 && c <= 0xF4) clen = 4;
+            else drop = 1;
+            if (!drop) {
+                for (size_t k = 1; k < clen; k++) {
+                    if ((p[k] & 0xC0) != 0x80) { drop = 1; clen = 1; break; }
+                }
+            }
+            if (!drop && clen == 2 && c == 0xC2 && p[1] >= 0x80 && p[1] <= 0x9F)
+                drop = 1;                                   /* C1 controls */
+            if (!drop && clen == 2 && c == 0xD8 && p[1] == 0x9C)
+                drop = 1;                                   /* U+061C ALM */
+            if (!drop && clen == 3 && c == 0xE2) {
+                if (p[1] == 0x80 && (p[2] == 0xA8 || p[2] == 0xA9)) {
+                    c = ' ';                   /* U+2028/2029 line/paragraph */
+                    space = 1;
+                }
+                if (p[1] == 0x80 && (p[2] == 0x8E || p[2] == 0x8F ||
+                                     (p[2] >= 0xAA && p[2] <= 0xAE)))
+                    drop = 1;                  /* LRM/RLM, LRE..RLO */
+                if (p[1] == 0x81 && p[2] >= 0xA6 && p[2] <= 0xA9)
+                    drop = 1;                  /* LRI..PDI */
+            }
+        }
+        if (!drop) {
+            if (o + (space ? 1 : clen) > limit) break;   /* never split */
+            if (space || clen == 1) out[o++] = (char)c;
+            else { memcpy(out + o, p, clen); o += clen; }
+        }
+        p += clen;
+    }
+    out[o] = '\0';
+}
+
+int ai_stream_chunk_error(const char *provider, const char *json,
+                          char *msg_out, size_t msg_size)
+{
+    if (!json || !json[0]) return 0;
+    if (provider && strcmp(provider, "anthropic") == 0) return 0;
+    JsonNode *root = json_parse(json);
+    if (!root) return 0;
+    if (root->type != JSON_OBJECT) { json_free(root); return 0; }
+
+    JsonNode *err = json_obj_get(root, "error");
+    int is_error = 0;
+    const char *text = NULL;
+    if (err && err->type == JSON_OBJECT) {
+        is_error = 1;
+        text = json_obj_str(err, "message");
+        if (!text || !text[0]) text = json_obj_str(err, "type");
+    } else if (err && err->type == JSON_STRING) {
+        is_error = 1;
+        text = err->as.str_val;
+    }
+    if (!is_error) { json_free(root); return 0; }
+
+    if (msg_out && msg_size > 0) {
+        stream_error_sanitise(text ? text : "", msg_out, msg_size,
+                              AI_STREAM_ERROR_MSG_MAX);
+        if (msg_out[0] == '\0')
+            snprintf(msg_out, msg_size, "%s", "unknown error");
+    }
+    json_free(root);
+    return 1;
 }
 
 /* ---- read_debug_log ------------------------------------------------------ */
@@ -913,4 +1047,67 @@ const char *ai_debug_tool_prompt_note(void)
            "Nutshell's own debug log. Use it when the user reports a glitch or a hang, "
            "or says they just marked an issue (start with summary=true, then narrow with "
            "around_issue or category), and call it at most a few times per turn.";
+}
+
+/* ---- ai_tool_card_text ----------------------------------------------------- */
+
+/* Copy src into out (cap bytes) as a one-line label: controls, bidi, TAB, LF
+ * and CR removed, cut on a UTF-8 boundary, NUL-terminated. */
+static void card_label(const char *src, char *out, size_t cap)
+{
+    char tmp[AI_TOOL_NAME_MAX];
+    size_t n, w, k;
+
+    if (!out || cap == 0) return;
+    n = strnlen(src, sizeof tmp - 1);
+    memcpy(tmp, src, n);
+    n = paste_filter_controls(tmp, n, tmp, NULL);
+    for (k = 0, w = 0; k < n; k++)
+        if (tmp[k] != '\t' && tmp[k] != '\n' && tmp[k] != '\r') tmp[w++] = tmp[k];
+    tmp[w] = '\0';
+    if (w > cap - 1) {
+        w = cap - 1;
+        while (w > 0 && ((unsigned char)tmp[w] & 0xC0) == 0x80) w--;
+        tmp[w] = '\0';
+    }
+    memcpy(out, tmp, w + 1);
+}
+
+int ai_tool_card_text(const AiToolCall *call, char *row, size_t row_cap,
+                      char *detail, size_t detail_cap)
+{
+    static const char prefix[] = "web_fetch: ";
+    const size_t plen = sizeof prefix - 1;
+
+    if (row && row_cap > 0) row[0] = '\0';
+    if (detail && detail_cap > 0) detail[0] = '\0';
+    if (!call) return -1;
+
+    if (strncmp(call->name, "web_fetch", AI_TOOL_NAME_MAX) == 0) {
+        JsonNode *input = json_parse(call->input_json);
+        const char *url = input ? json_obj_str(input, "url") : NULL;
+        int rc = 0;
+
+        if (!url || url[0] == '\0') {
+            if (row && row_cap > 0) snprintf(row, row_cap, "%s(no url)", prefix);
+            rc = -1;
+        } else {
+            if (row && row_cap > 0) {
+                size_t head = plen < row_cap - 1 ? plen : row_cap - 1;
+                memcpy(row, prefix, head);
+                row[head] = '\0';
+                if (head == plen)
+                    net_url_display_marked(url, row + plen, row_cap - plen);
+            }
+            if (detail && detail_cap > 0) net_url_detail(url, detail, detail_cap);
+        }
+        if (input) json_free(input);
+        return rc;
+    }
+
+    if (row && row_cap > 0) card_label(call->name, row, row_cap);
+    if (detail && detail_cap > 0)
+        net_text_escape(call->input_json, strnlen(call->input_json, AI_TOOL_INPUT_MAX),
+                        detail, detail_cap);
+    return 0;
 }

@@ -881,3 +881,132 @@ int test_web_fetch_end_hook_runs_once_on_every_exit(void)
     free(buf);
     TEST_END();
 }
+
+/* ---- redirect host pinning for an approved fetch -------------------------- */
+
+int test_web_fetch_pinned_same_host_followed(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    snprintf(ctx.pinned_host, sizeof(ctx.pinned_host), "pub.test");
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 302, "/next", "");
+    fk_resp(&f, 200, NULL, "<p>there</p>");
+    char *buf;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(f.gets, 2);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_STR_EQ(buf, "there");
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_pinned_cross_host_refused(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    snprintf(ctx.pinned_host, sizeof(ctx.pinned_host), "pub.test");
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_host(&f, "other.test", 93, 184, 216, 35);
+    fk_resp(&f, 302, "http://other.test/", "");
+    fk_resp(&f, 200, NULL, "<p>other</p>");
+    char *buf;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "redirect to another host refused") != NULL);
+    ASSERT_EQ(f.gets, 1);
+    /* Refused before any resolve: only pub.test was ever looked up. */
+    ASSERT_EQ(f.resolves, 1);
+    ASSERT_STR_EQ(f.resolved[0], "pub.test");
+    ASSERT_EQ(f.hops, 1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    /* Through the registry the text is Nutshell's own: it lands in
+     * tool_note and content stays empty, so it is outside the data block. */
+    fk_init(&f, &be, &ctx);
+    snprintf(ctx.pinned_host, sizeof(ctx.pinned_host), "pub.test");
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 302, "http://other.test/", "");
+    AiToolResult r;
+    rc = fk_run_tool(&ctx, "http://pub.test/", &r);
+    ASSERT_EQ(rc, -1);
+    ASSERT_EQ(r.is_error, 1);
+    ASSERT_NULL(r.content);
+    ASSERT_TRUE(strstr(r.tool_note, "redirect to another host refused; "
+                                    "ask again with the new URL") != NULL);
+    /* The server's host name is not echoed into the note. */
+    ASSERT_TRUE(strstr(r.tool_note, "other.test") == NULL);
+    TEST_END();
+}
+
+int test_web_fetch_unpinned_cross_host_followed(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    snprintf(ctx.pinned_host, sizeof(ctx.pinned_host), "%s", "");
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_host(&f, "other.test", 93, 184, 216, 35);
+    fk_resp(&f, 302, "http://other.test/", "");
+    fk_resp(&f, 200, NULL, "<p>other</p>");
+    char *buf;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(f.gets, 2);
+    ASSERT_STR_EQ(f.resolved[1], "other.test");
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_pinned_host_spellings(void)
+{
+    TEST_BEGIN();
+    char *buf;
+    int rc;
+
+    /* The host's case is not significant. */
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    snprintf(ctx.pinned_host, sizeof(ctx.pinned_host), "example.com");
+    fk_host(&f, "example.com", 93, 184, 216, 34);
+    fk_host(&f, "Example.COM", 93, 184, 216, 34);
+    fk_resp(&f, 302, "http://Example.COM/x", "");
+    fk_resp(&f, 200, NULL, "<p>ok</p>");
+    rc = fk_run(&ctx, "http://example.com/", NULL, &buf);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(f.gets, 2);
+    free(buf);
+
+    /* A trailing dot is another spelling the guard does not equate. */
+    fk_init(&f, &be, &ctx);
+    snprintf(ctx.pinned_host, sizeof(ctx.pinned_host), "example.com");
+    fk_host(&f, "example.com", 93, 184, 216, 34);
+    fk_host(&f, "example.com.", 93, 184, 216, 34);
+    fk_resp(&f, 302, "http://example.com./x", "");
+    fk_resp(&f, 200, NULL, "<p>ok</p>");
+    rc = fk_run(&ctx, "http://example.com/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_EQ(f.gets, 1);
+    ASSERT_EQ(f.resolves, 1);
+    if (buf) ASSERT_TRUE(strstr(buf, "redirect to another host refused") != NULL);
+    free(buf);
+
+    /* A subdomain is another host. */
+    fk_init(&f, &be, &ctx);
+    snprintf(ctx.pinned_host, sizeof(ctx.pinned_host), "example.com");
+    fk_host(&f, "example.com", 93, 184, 216, 34);
+    fk_host(&f, "a.example.com", 93, 184, 216, 36);
+    fk_resp(&f, 302, "http://a.example.com/x", "");
+    fk_resp(&f, 200, NULL, "<p>ok</p>");
+    rc = fk_run(&ctx, "http://example.com/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_EQ(f.gets, 1);
+    ASSERT_EQ(f.resolves, 1);
+    free(buf);
+    TEST_END();
+}

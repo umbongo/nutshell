@@ -9,6 +9,7 @@
 #include "ai_prompt.h"
 #include "ai_stream.h"
 #include "worker_life.h"
+#include "tool_decision.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -591,5 +592,46 @@ int test_ai_stream_lost_final_message_is_found(void)
     ai_stream_mark_finished(NULL);
     ai_stream_note_delivered(NULL);
     ASSERT_NULL(ai_stream_table_lost_owner(NULL));
+    TEST_END();
+}
+
+int test_ai_stream_new_tool_rounds_default(void)
+{
+    TEST_BEGIN();
+    /* A stream that was never given a cap uses the default of 3 rounds. */
+    AiStream *s = ai_stream_new();
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_EQ(s->tool_auto_rounds, 3);
+        ai_stream_discard(s);
+    }
+    TEST_END();
+}
+
+int test_ai_stream_new_tool_timeout_default(void)
+{
+    TEST_BEGIN();
+    /* A stream that was never given a timeout waits the 60 s default, never 0. */
+    AiStream *s = ai_stream_new();
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_EQ((int)s->tool_timeout_ms, 60000);
+        ai_stream_discard(s);
+    }
+    TEST_END();
+}
+
+int test_ai_stream_new_slot_idle(void)
+{
+    TEST_BEGIN();
+    AiStream *s = ai_stream_new();
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_EQ((int)tool_decision_poll(&s->decision, 0, 0, 0, 60000), (int)TOOL_DECISION_NONE);
+        unsigned g = tool_decision_publish(&s->decision);
+        ASSERT_TRUE(g != 0);
+        ASSERT_EQ((int)tool_decision_poll(&s->decision, g, 0, 0, 60000), (int)TOOL_DECISION_PENDING);
+        ai_stream_discard(s);
+    }
     TEST_END();
 }
