@@ -183,6 +183,8 @@ typedef struct {
     HWND     hSshHint;    /* dim wrapped SSH idle-timeout hint */
     HWND     hAboutBlurb; /* dim About tagline */
     HWND     hCtxHint;    /* dim wrapped AI max-context-lines hint */
+    HWND     hToolTimeoutNote; /* dim note under the tool approval timeout */
+    HWND     hToolRoundsNote;  /* dim note under the automatic tool rounds */
     HWND     hUrlWarn;    /* warning-coloured "not encrypted" line under Base URL */
     HWND     hDbgDim[6];  /* dim statics on the Debugging page */
     int      n_dbg_dim;
@@ -854,7 +856,8 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                 return (LRESULT)d->hBrBgPrimary;
             }
             int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb ||
-                       hCtl == d->hCtxHint);
+                       hCtl == d->hCtxHint || hCtl == d->hToolTimeoutNote ||
+                       hCtl == d->hToolRoundsNote);
             for (int di = 0; di < d->n_dbg_dim && !dim; di++)
                 dim = (hCtl == d->hDbgDim[di]);
             SetTextColor((HDC)wParam,
@@ -1532,16 +1535,25 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         {
             /* The label is wider than the 150 px label column, so the row is
              * full-width: the text left-aligned, the number box beside it
-             * (the tickbox-with-a-control-beside-it form). */
+             * (the tickbox-with-a-control-beside-it form). The label is kept
+             * short enough to stay on one line in its 240 px (96 dpi) box;
+             * what "0" means goes in the dim note under the row. */
             char buf[16];
             int sec = nd->cfg->settings.ai_tool_timeout_sec;
             if (sec != AI_TOOL_TIMEOUT_SEC_NEVER &&
                 (sec < AI_TOOL_TIMEOUT_SEC_MIN || sec > AI_TOOL_TIMEOUT_SEC_MAX))
                 sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
             (void)snprintf(buf, sizeof(buf), "%d", sec);
-            HWND lbl = make_static2(nd->hPage, "Tool approval timeout (seconds, 0 = never):");
+            HWND lbl = make_static2(nd->hPage, "Tool approval timeout (seconds):");
             HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_TIMEOUT, ES_NUMBER);
             add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
+        }
+        {
+            nd->hToolTimeoutNote = make_static2(nd->hPage,
+                "0 means never: the card waits until you answer it or stop "
+                "the reply.");
+            add_ctrl(nd, NULL, nd->hToolTimeoutNote, NULL,
+                     SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 2, 0, 1, 1);
         }
         {
             /* Same form as the timeout row above, directly under it. */
@@ -1553,6 +1565,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             HWND lbl = make_static2(nd->hPage, "Automatic tool rounds:");
             HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_ROUNDS, ES_NUMBER);
             add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
+        }
+        {
+            nd->hToolRoundsNote = make_static2(nd->hPage,
+                "Fetches the assistant may run on its own after one prompt "
+                "before it asks; your next prompt resets the count.");
+            add_ctrl(nd, NULL, nd->hToolRoundsNote, NULL,
+                     SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 3, 0, 1, 1);
         }
 
         /* ==== AI_WEB ==== */
