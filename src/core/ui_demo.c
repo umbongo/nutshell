@@ -525,8 +525,8 @@ void ui_demo_run_log(const char *state, CmdRunLog *log, const AiConversation *co
 
     b->reply_msg = RUNLIST_FIRST_REPLY;
     const AiMessage *reply = &conv->messages[RUNLIST_FIRST_REPLY];
-    (void)cmd_run_log_record(log, b,
-        cmd_run_log_turn_hash(ai_msg_content(reply), reply->content_len), 1);
+    b->reply_hash = cmd_run_log_turn_hash(ai_msg_content(reply), reply->content_len);
+    (void)cmd_run_log_record(log, b, b->reply_hash, 1);
     free(b);
 }
 

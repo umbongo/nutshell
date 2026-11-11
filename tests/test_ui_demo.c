@@ -922,6 +922,10 @@ int test_cmd_run_log_exec_note_before_mark(void)
     ASSERT_NOT_NULL(b);
     b->conv_mark = conv_mark;
     b->reply_msg = reply_msg;               /* not conv_mark - 1 */
+    {
+        const AiMessage *pm = &conv.messages[reply_msg];
+        b->reply_hash = cmd_run_log_turn_hash(ai_msg_content(pm), pm->content_len);
+    }
     b->q.policy.allowed = CMD_CRITICAL;
     int i0 = chat_approval_add(&b->q, "ls /var/log", CMD_PLATFORM_LINUX);
     int i1 = chat_approval_add(&b->q, "pwd", CMD_PLATFORM_LINUX);
@@ -931,8 +935,8 @@ int test_cmd_run_log_exec_note_before_mark(void)
     CmdRunLog log;
     cmd_run_log_init(&log);
     const AiMessage *rm = &conv.messages[b->reply_msg];
-    ASSERT_EQ(cmd_run_log_record(&log, b,
-                  cmd_run_log_turn_hash(ai_msg_content(rm), rm->content_len), 1), 0);
+    /* The hash the batch carries from creation, not one taken at removal. */
+    ASSERT_EQ(cmd_run_log_record(&log, b, b->reply_hash, 1), 0);
     const CmdRunRecord *rec = log.rec[0];
     ASSERT_EQ(rec->reply_msg, 2);
 

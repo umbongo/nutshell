@@ -30,25 +30,18 @@ AiConversation *ai_chat_owner_conv(AiChatData *d, AiSessionState *owner)
     return (owner == d->active_state) ? &d->conv : &owner->conv;
 }
 
-/* The hash of the assistant reply at `reply_msg` of `conv`, 0 when that is
- * not an assistant turn (cmd_run_record_matches() then never shows it). */
-static uint32_t reply_turn_hash(const AiConversation *conv, int reply_msg)
-{
-    if (!conv || reply_msg < 0 || reply_msg >= conv->msg_count) return 0;
-    const AiMessage *m = &conv->messages[reply_msg];
-    if (m->role != AI_ROLE_ASSISTANT) return 0;
-    return cmd_run_log_turn_hash(ai_msg_content(m), m->content_len);
-}
-
 /* Record a command batch's rows in the owner's run log. A tool batch, an
  * empty queue or an allocation failure records nothing (the log refuses). */
 static void batch_record(AiChatData *d, AiSessionState *owner,
                          const CmdBatch *batch, int batch_ending)
 {
     if (!d || !owner || !batch || cmd_batch_is_tool(batch)) return;
-    (void)cmd_run_log_record(&owner->run_log, batch,
-        reply_turn_hash(ai_chat_owner_conv(d, owner), batch->reply_msg),
-        batch_ending);
+    /* The hash is the one the batch took from its reply when it was created
+     * (CmdBatch.reply_hash), not read from a conversation now: a tab switch
+     * has already moved the working copy away, and Retry may have replaced
+     * the reply. */
+    (void)cmd_run_log_record(&owner->run_log, batch, batch->reply_hash,
+                             batch_ending);
 }
 
 void ai_chat_batch_remove_recorded(AiChatData *d, AiSessionState *owner,

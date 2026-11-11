@@ -1227,6 +1227,11 @@ next_coalesce:;
                     if (batch) {
                         batch->conv_mark = src->conv.msg_count;
                         batch->reply_msg = reply_msg;
+                        if (reply_msg >= 0) {
+                            const AiMessage *rm = &src->conv.messages[reply_msg];
+                            batch->reply_hash = cmd_run_log_turn_hash(
+                                ai_msg_content(rm), rm->content_len);
+                        }
                         for (int ci = 0; ci < ncmds; ci++) {
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
@@ -1457,6 +1462,11 @@ next_coalesce:;
                      * (ai_build_continue_text's newer_exchanges). */
                     batch->conv_mark = d->conv.msg_count;
                     batch->reply_msg = reply_msg;
+                    if (reply_msg >= 0) {
+                        const AiMessage *rm = &d->conv.messages[reply_msg];
+                        batch->reply_hash = cmd_run_log_turn_hash(
+                            ai_msg_content(rm), rm->content_len);
+                    }
 
                     if (evicted_id > 0) {
                         chat_msg_batch_settle(&d->msg_list, evicted_id);

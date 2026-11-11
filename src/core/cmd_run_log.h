@@ -60,7 +60,8 @@ uint32_t cmd_run_log_turn_hash(const char *text, size_t len);
  *   EXECUTING -> approved 1, run RUNNING, or UNFINISHED when batch_ending
  *   APPROVED  -> approved 1, run NONE, or ABORTED when batch_ending
  *   DENIED    -> approved 0
- *   PENDING, BLOCKED -> approved -1, blocked 0 (chat_cmd_label: "skipped")
+ *   PENDING -> approved -1, blocked 0 (chat_cmd_label: "skipped")
+ *   BLOCKED -> approved -1, blocked 1 (chat_cmd_label: "held", as live)
  *
  * `safety`, `quoted` and `reason` are copied from the entry; quoted wins in
  * chat_cmd_label(). NULL `e` or `out` does nothing. */

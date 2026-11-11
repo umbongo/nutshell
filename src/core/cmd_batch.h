@@ -2,6 +2,7 @@
 #ifndef NUTSHELL_CMD_BATCH_H
 #define NUTSHELL_CMD_BATCH_H
 
+#include <stdint.h>
 #include "chat_approval.h"
 
 /*
@@ -33,6 +34,13 @@ typedef struct {
                       * taken, so that can be a USER turn. The run log keeps it
                       * (cmd_run_log.h) to replay the rows under the reply.
                       * -1 from cmd_batch_add(): not set, matches no turn. */
+    uint32_t reply_hash; /* cmd_run_log_turn_hash() of that reply's content,
+                      * taken where the batch is created (beside reply_msg),
+                      * so the record made at removal keys to the reply that
+                      * produced the batch even when the conversation has been
+                      * moved or the reply replaced by then (a tab switch
+                      * empties the working copy; Retry swaps the turn).
+                      * 0 from cmd_batch_add(): not set. */
     int user_acted; /* 1 once the user acted on this batch by hand (a
                       * Run/Approve click, or a user-initiated cancel).
                       * Read when the batch finishes: a batch the user

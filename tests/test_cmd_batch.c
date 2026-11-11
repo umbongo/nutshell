@@ -319,7 +319,10 @@ int test_cmd_batch_reply_msg_defaults_unset(void) {
     CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
     ASSERT_NOT_NULL(b);
     ASSERT_EQ(b->reply_msg, -1);
+    ASSERT_EQ((int)b->reply_hash, 0);   /* the producing reply's hash: unset */
     b->reply_msg = 6;
+    b->reply_hash = 0xDEADBEEFu;
+    ASSERT_EQ(cmd_batch_find(&set, b->id)->reply_hash, 0xDEADBEEFu);
     ASSERT_EQ(cmd_batch_find(&set, b->id)->reply_msg, 6);
     cmd_batch_set_free(&set);
     TEST_END();

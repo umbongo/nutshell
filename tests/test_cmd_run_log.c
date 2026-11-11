@@ -54,8 +54,8 @@ int test_cmd_run_row_every_state(void)
         { APPROVE_DENIED,    1,  0, CHAT_RUN_NONE,       "denied" },
         { APPROVE_PENDING,   0, -1, CHAT_RUN_NONE,       "skipped" },
         { APPROVE_PENDING,   1, -1, CHAT_RUN_NONE,       "skipped" },
-        { APPROVE_BLOCKED,   0, -1, CHAT_RUN_NONE,       "skipped" },
-        { APPROVE_BLOCKED,   1, -1, CHAT_RUN_NONE,       "skipped" },
+        { APPROVE_BLOCKED,   0, -1, CHAT_RUN_NONE,       "held" },
+        { APPROVE_BLOCKED,   1, -1, CHAT_RUN_NONE,       "held" },
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         ApprovalEntry e;
@@ -67,7 +67,9 @@ int test_cmd_run_row_every_state(void)
         memset(&row, 0x5A, sizeof(row));
         cmd_run_row_from_entry(&e, cases[i].ending, &row);
         ASSERT_EQ(row.approved, cases[i].approved);
-        ASSERT_EQ(row.blocked, 0);
+        /* A held row stays held: the live row says "held" (blocked wins in
+         * chat_cmd_label), so the replay must too. */
+        ASSERT_EQ(row.blocked, cases[i].status == APPROVE_BLOCKED ? 1 : 0);
         ASSERT_EQ(row.run, cases[i].run);
         ASSERT_EQ(row.quoted, 0);
         ASSERT_EQ((int)row.safety, (int)CMD_WRITE);
@@ -98,6 +100,33 @@ int test_cmd_run_row_every_state(void)
     /* NULL arguments are ignored. */
     cmd_run_row_from_entry(NULL, 0, &qr);
     cmd_run_row_from_entry(&q, 0, NULL);
+
+    /* Replayed as rows (the rebuild's fields), a held and a skipped entry
+     * count "held" and "skipped" in the batch summary, as they did live. */
+    ApprovalEntry he, se;
+    memset(&he, 0, sizeof(he));
+    memset(&se, 0, sizeof(se));
+    he.status = APPROVE_BLOCKED;
+    se.status = APPROVE_PENDING;
+    ApprovalEntry *ents[2] = { &he, &se };
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    for (int i = 0; i < 2; i++) {
+        CmdRunRow rr;
+        cmd_run_row_from_entry(ents[i], 1, &rr);
+        ChatMsgItem *it = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+        ASSERT_NOT_NULL(it);
+        chat_msg_set_command(it, "ls", rr.safety, rr.blocked);
+        chat_msg_set_batch(it, -1);
+        it->u.cmd.approved = rr.approved;
+        it->u.cmd.run = rr.run;
+        it->u.cmd.settled = 1;
+    }
+    ChatBatchCounts counts;
+    ASSERT_EQ(chat_msg_batch_counts(&list, -1, &counts), 2);
+    ASSERT_EQ(counts.held, 1);
+    ASSERT_EQ(counts.skipped, 1);
+    chat_msg_list_clear(&list);
     TEST_END();
 }
 

@@ -57,8 +57,13 @@ void cmd_run_row_from_entry(const ApprovalEntry *e, int batch_ending,
     case APPROVE_DENIED:
         out->approved = 0;
         break;
-    case APPROVE_PENDING:
     case APPROVE_BLOCKED:
+        /* Held stays held: the live row carries blocked = 1, which
+         * chat_cmd_label() ranks first. */
+        out->approved = -1;
+        out->blocked = 1;
+        break;
+    case APPROVE_PENDING:
     default:
         out->approved = -1;
         break;
