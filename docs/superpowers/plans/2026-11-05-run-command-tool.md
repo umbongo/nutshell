@@ -222,11 +222,14 @@ Tasks B1 to B11 and five fix waves (FW1 to FW5) are built. The review found what
 - R41 (B15/B16): the notes-only answer keeps each result's note and adds "output dropped: Nutshell ran out of memory" only where there was output (return 1).
 - R42 (all body builders): `json_validate`'s number scan follows the JSON number grammar, so a body with `1.` or `01` is refused where it was sent before (the PR body notes it).
 - R43 (B1's parser, every `json_parse`): decoded string lengths are kept so `runcmd_parse_input` refuses an embedded `\u0000`; an object key holding `\u0000` fails the whole parse.
+- R44 (B12/B14): an `[EXEC]` continue text that launches its own request stays an unmarked USER turn and takes a fresh snapshot frozen to it, as today (a Moonshot body `[EXEC]` also produces must not change by a byte); only a continue text the door queues behind an open run_command turn is a marked note.
+- R45 (B13/B16): the stream thread's tool-round room check cannot see the owner's note queue and passes NULL; the UI-side checks pass `&owner->notes`.
 
 **B12**
 - `frame.snapshot_at` is 0 in `ai_chat_send.c:146` and `ai_chat_stream.c:732` today. Set it to `snapshot_msg + 1` from the frozen copy, with `frame.snapshot = NULL` and `snapshot_at` 0 when `!ai_conv_has_snapshot(&conv)` (a resume with nothing frozen): a fresh snapshot with `snapshot_at` 0 lands in the question, which spec §22 forbids. Both sites, so the in-stream rebuild agrees with the launch.
-- Take a fresh snapshot only when the last message is a typed USER turn (`ai_conv_freeze_snapshot` returns 1 for a note, so a launch after a note keeps the old one on its question). `ai_conv_freeze_snapshot` returns -1 when an allocation fails (its header says so): launch without a snapshot rather than fail.
+- Take a fresh snapshot only when the last message is a typed USER turn or a continue text that launched its own request (`ai_conv_freeze_snapshot` returns 1 for a note, so a launch after a note keeps the old one on its question). `ai_conv_freeze_snapshot` returns -1 when an allocation fails (its header says so): launch without a snapshot rather than fail.
 - The body builder returns 0 for three causes (pairing, overflow, allocation) and the in-stream rebuild says only "JSON rebuild failed": call `ai_conv_tool_pairs_well_formed` first and pick the row from it; the launch's row for the other two is the overflow or "out of memory" text, never "JSON build failed".
+- A continue launch freezes a fresh snapshot on its continue text, as today (R44).
 
 **B13**
 - The plan's `agentic_room_for_tool_round(&s->conv, K)` is wrong: the second argument is the note queue (`const AiNoteQueue *q`), not the call count K. The stream thread must not read the owner's queue (the UI appends to it while the stream runs, and it is 16 KB), so the thread passes `NULL` (notes that arrive later stay queued: `ai_conv_flush_notes` keeps what does not fit); the UI-side checks in B15, B16 and B17 pass `&owner->notes`.
@@ -237,6 +240,7 @@ Tasks B1 to B11 and five fix waves (FW1 to FW5) are built. The review found what
 
 **B14**
 - No `src/ui` site calls `ai_conv_add_user_note` yet: the policy-raised note (`ai_chat_status.c` ~67), the NOTEs in `ai_chat.c` (~1279-1297, ~1415-1446), the policy-blocked note (~1565) and the `[EXEC]` continue text (`ai_chat_send.c` ~578) still use `ai_conv_add`, so none is marked and the snapshot fix (I6) is inert until each goes through the door. Clear `AiSessionState.notes` at New Chat and session reset.
+- Add the `[EXEC]` continue text that launches its own request without the note mark: use a door path that does not mark, or `ai_conv_add` when nothing is open (R44); only a continue text the door queues is marked.
 - A note that cannot be stored stays queued (never dropped): the door returns 1 and the caller shows nothing extra.
 
 **B15**
@@ -250,6 +254,8 @@ Tasks B1 to B11 and five fix waves (FW1 to FW5) are built. The review found what
 - Set `user_acted` for Retry and Stop as well as a typed message and New Chat. Guard `d->active_term == NULL` on SESSION_ENDED and PANEL_CLOSED (no capture then) and use the owner's conversation, never `d->conv`.
 - "Never captured" is now "ran; output not captured" in core; the finish needs nothing for it. Pass the owner's `&owner->notes` to the room checks (I3, done in core).
 - Handle `agentic_add_tool_results` as R37: 1, -1 and -2 each show a status row; the batch is still removed and rows settled.
+
+- Check room with the owner's queue before any relaunch (R45: the stream's tool-round check cannot see the queue).
 
 **B17**
 - `ai_conv_room_for_send(&d->conv, batch != NULL, &owner->notes)`: the typed message counts the queued notes the finish flushes.

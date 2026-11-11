@@ -1053,13 +1053,19 @@ block into it, changing its bytes and placing newer screen state before
 the results. Now the snapshot is frozen to the turn it was taken for:
 `AiConversation` gains `char *snapshot; int snapshot_msg;` (-1: none),
 copied, taken and freed with the conversation. A launch whose conversation
-ends on a USER turn the user typed (a typed message, Retry of a question)
+ends on a USER turn the user typed or an `[EXEC]` continue text that launched
+its own request (a typed message, Retry of a question, a continue launch)
 takes a fresh snapshot and freezes it to that turn; a launch whose
 conversation ends on tool results (a run_command resume, Retry from
-results) or on a USER turn Nutshell wrote (a note, an `[EXEC]` continue text,
-see the bullet below) takes none. Every request attaches the frozen snapshot
+results) or on a USER note Nutshell queued or appended (see the bullet below)
+takes none. *(review of B1-B11, 2026-11-11, Ruling R44)* A continue text that
+launched its own request is not a Nutshell note for this rule (it stays an
+unmarked USER turn and takes a fresh snapshot, exactly as today, so a body
+the `[EXEC]` path also produces does not change by a byte); one the door
+queued behind an open run_command turn (decision 19's "older `[EXEC]`
+batch") is a marked note. Every request attaches the frozen snapshot
 to `messages[snapshot_msg]` while that is a typed USER turn and only
-Nutshell's own USER turns follow it, and none otherwise *(review of B1-B11,
+Nutshell's own USER notes follow it, and none otherwise *(review of B1-B11,
 2026-11-11: reworded from "while that is the last USER turn"; the bullet
 below is the rule)*. *(critique 2)* The builder keeps reading `AiBodyFrame.snapshot`
 (trust's tests in `tests/test_ai_body_frame.c` pass unchanged); the frame
@@ -1085,8 +1091,9 @@ today.
   `AiMessage` gains `int nutshell_note` (1 on a USER turn Nutshell wrote):
   set only by the note door (decision 19: `ai_conv_add_user_note`'s direct
   append and `ai_conv_flush_notes`), cleared by `ai_conv_add`, carried by
-  copy and take (struct copy). An older `[EXEC]` continue text goes through
-  the door, so it counts as Nutshell's own. `AiBodyFrame.snapshot_at` k > 0
+  copy and take (struct copy). An older `[EXEC]` continue text that the door queues
+  behind an open run_command turn counts as Nutshell's own; one that launches
+  its own request does not (R44). `AiBodyFrame.snapshot_at` k > 0
   attaches to message k − 1 while it is a USER turn that is not itself a note
   (`nutshell_note` 0: a block is only ever taken for a message the user typed,
   so an index that points at a note is invalid: `ai_conv_snapshot_trim`
