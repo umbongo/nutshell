@@ -855,7 +855,8 @@ batches alike.
   removed batch, `src/core/cmd_run_log.{c,h}`: per session (on
   `AiSessionState`) up to `CMD_RUN_LOG_MAX` 16 records, oldest dropped,
   each `{reply_msg, turn_hash, n, per row: heap copy of the command,
-  safety, quoted, reason, and the label inputs approved/blocked/run}`.
+  safety, quoted, reason, the command's note (`CMD_NOTE_MAX`), and the label
+  inputs approved/blocked/run}`.
   *(critique 2026-11-11)* `reply_msg` is the index of the assistant reply
   that produced the batch, held on `CmdBatch.reply_msg` and set where
   `conv_mark` is set (`ai_chat.c` ~1218, ~1437, decision 6), not derived

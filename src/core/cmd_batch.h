@@ -93,6 +93,15 @@ int cmd_batch_is_tool(const CmdBatch *b);
  * never allowed to evict) or `set` is NULL, else 0. */
 int cmd_batch_full(const CmdBatchSet *set);
 
+/* 1 when nothing in `b` is left to ask or to run: no entry PENDING, and no
+ * command entry APPROVED (not yet sent) or EXECUTING (sent, output still
+ * coming). A tool entry (tool = 1) is decided by its click and never
+ * dispatched, so its status does not count (chat_approval_next_approved
+ * skips it too). An empty queue is finished; NULL is 0. The settle path
+ * removes a batch only when this holds: a batch with a command still running
+ * stays until the dispatcher's tick sees it finish. */
+int cmd_batch_finished(const CmdBatch *b);
+
 /* Oldest command batch (list order) whose queue still needs the user, per
  * chat_approval_needs_user(). Tool batches are skipped. NULL if none. */
 CmdBatch *cmd_batch_first_pending(CmdBatchSet *set);

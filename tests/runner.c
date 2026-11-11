@@ -2678,6 +2678,12 @@ int test_cmd_run_log_free(void);
 int test_cmd_run_log_turn_hash(void);
 int test_cmd_run_record_matches_rule(void);
 int test_cmd_run_log_oom_records_nothing(void);
+int test_cmd_run_reply_index_rule(void);
+int test_cmd_run_log_forget_drops_keyed_records(void);
+int test_cmd_run_row_keeps_note(void);
+int test_cmd_batch_finished_rule(void);
+int test_chat_approval_rows_settled_rule(void);
+int test_chat_approval_rows_settled_mixed_has_no_summary(void);
 int test_cmd_batch_next_runnable_none(void);
 int test_cmd_batch_add_user_acted_zero(void);
 
@@ -6574,6 +6580,12 @@ int main(void) {
     failed += test_cmd_run_log_turn_hash();
     failed += test_cmd_run_record_matches_rule();
     failed += test_cmd_run_log_oom_records_nothing();
+    failed += test_cmd_run_reply_index_rule();
+    failed += test_cmd_run_log_forget_drops_keyed_records();
+    failed += test_cmd_run_row_keeps_note();
+    failed += test_cmd_batch_finished_rule();
+    failed += test_chat_approval_rows_settled_rule();
+    failed += test_chat_approval_rows_settled_mixed_has_no_summary();
     failed += test_cmd_batch_next_runnable_none();
     failed += test_cmd_batch_add_user_acted_zero();
 

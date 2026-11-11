@@ -336,3 +336,146 @@ int test_cmd_run_log_oom_records_nothing(void)
     cmd_batch_set_free(&set);
     TEST_END();
 }
+
+/* ---- Review fixes: the reply's index, forgetting a popped turn, the note ---- */
+
+/* The index a batch is keyed to: only a reply that is stored, is the last
+ * message and is an assistant turn with the reply's own text. */
+int test_cmd_run_reply_index_rule(void)
+{
+    TEST_BEGIN();
+    const char *reply = "run this\n[EXEC] ls";
+    size_t rl = strlen(reply);
+
+    /* Stored, last message is that assistant turn: its index. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, reply, rl, reply, rl), 4);
+    ASSERT_EQ(cmd_run_reply_index(1, 1, 1, reply, rl, reply, rl), 0);
+
+    /* The add failed (a full conversation): the last message is an OLDER
+     * turn, here even one with the same text -- the reply was never stored. */
+    ASSERT_EQ(cmd_run_reply_index(0, 5, 1, reply, rl, reply, rl), -1);
+
+    /* Last message is an older assistant turn with different text. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, "older answer", 12, reply, rl), -1);
+    /* Same length, one byte different. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, "run this\n[EXEC] lx", rl, reply, rl),
+              -1);
+    /* A prefix of the reply is not the reply. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, "run this", 8, reply, rl), -1);
+
+    /* Last message is a user turn. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 0, reply, rl, reply, rl), -1);
+
+    /* Empty conversation. */
+    ASSERT_EQ(cmd_run_reply_index(1, 0, 1, reply, rl, reply, rl), -1);
+    ASSERT_EQ(cmd_run_reply_index(1, -1, 1, reply, rl, reply, rl), -1);
+
+    /* NULL texts are the empty string: two empty replies match. */
+    ASSERT_EQ(cmd_run_reply_index(1, 3, 1, NULL, 0, "", 0), 2);
+    ASSERT_EQ(cmd_run_reply_index(1, 3, 1, NULL, 0, reply, rl), -1);
+    TEST_END();
+}
+
+static CmdRunRecord *add_keyed_record(CmdRunLog *log, CmdBatchSet *set,
+                                      int reply_msg, uint32_t hash)
+{
+    CmdBatch *b = make_batch(set, 1, reply_msg);
+    if (!b) return NULL;
+    if (cmd_run_log_record(log, b, hash, 0) != 0) return NULL;
+    cmd_batch_set_free(set);
+    return log->rec[log->count - 1];
+}
+
+int test_cmd_run_log_forget_drops_keyed_records(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    CmdBatchSet set;
+    cmd_run_log_init(&log);
+
+    /* An empty log, and a NULL one: nothing to do. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 4), 0);
+    ASSERT_EQ(cmd_run_log_forget(NULL, 4), 0);
+
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 2, 10));
+    CmdRunRecord *keep_a = log.rec[0];
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 4, 11));
+    CmdRunRecord *keep_b = NULL;
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 6, 12));
+    keep_b = log.rec[2];
+    ASSERT_EQ(log.count, 3);
+
+    /* None keyed to the index: unchanged. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 5), 0);
+    ASSERT_EQ(log.count, 3);
+
+    /* One match: dropped, the others keep their order. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 4), 1);
+    ASSERT_EQ(log.count, 2);
+    ASSERT_TRUE(log.rec[0] == keep_a);
+    ASSERT_TRUE(log.rec[1] == keep_b);
+    ASSERT_NULL(log.rec[2]);
+
+    /* Several matches (same index, different text), around a survivor. */
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 6, 13));
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 3, 14));
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 6, 15));
+    ASSERT_EQ(log.count, 5);
+    CmdRunRecord *survivor = log.rec[3];
+    ASSERT_EQ(cmd_run_log_forget(&log, 6), 3);
+    ASSERT_EQ(log.count, 2);
+    ASSERT_TRUE(log.rec[0] == keep_a);
+    ASSERT_TRUE(log.rec[1] == survivor);
+    ASSERT_EQ(log.rec[1]->reply_msg, 3);
+    ASSERT_NULL(log.rec[2]);
+    ASSERT_NULL(log.rec[3]);
+    ASSERT_NULL(log.rec[4]);
+
+    /* An index nothing is keyed to (here also past the log): unchanged. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 99), 0);
+    ASSERT_EQ(log.count, 2);
+
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+/* The command's note travels into the record, so a replayed row's details
+ * popup is not blank. */
+int test_cmd_run_row_keeps_note(void)
+{
+    TEST_BEGIN();
+    ApprovalEntry e;
+    memset(&e, 0, sizeof(e));
+    snprintf(e.command, sizeof(e.command), "ls");
+    e.status = APPROVE_COMPLETED;
+    snprintf(e.note, sizeof(e.note), "lists the directory");
+    CmdRunRow row;
+    memset(&row, 0x5A, sizeof(row));
+    cmd_run_row_from_entry(&e, 0, &row);
+    ASSERT_STR_EQ(row.note, "lists the directory");
+
+    /* No note is an empty string, not stale bytes. */
+    e.note[0] = '\0';
+    memset(&row, 0x5A, sizeof(row));
+    cmd_run_row_from_entry(&e, 0, &row);
+    ASSERT_STR_EQ(row.note, "");
+
+    /* A note filling the field is cut to a terminated string. */
+    memset(e.note, 'n', sizeof(e.note));
+    cmd_run_row_from_entry(&e, 0, &row);
+    ASSERT_EQ((int)strlen(row.note), CMD_NOTE_MAX - 1);
+
+    /* Through a record. */
+    CmdBatchSet set;
+    CmdBatch *b = make_batch(&set, 2, 0);
+    ASSERT_NOT_NULL(b);
+    chat_approval_set_note(&b->q, 1, "second row's note");
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 1, 0), 0);
+    ASSERT_STR_EQ(log.rec[0]->rows[0].note, "");
+    ASSERT_STR_EQ(log.rec[0]->rows[1].note, "second row's note");
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}

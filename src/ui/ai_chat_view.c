@@ -120,16 +120,19 @@ void ai_chat_thinking_history_clear(AiChatData *d)
  * switch (ai_chat_rebuild_display, below) and --ui-demo's "batches"/etc.
  * states (ai_chat_apply_demo_extras, which builds real CmdBatch entries
  * from the canned ApprovalQueue and lets this same replay draw them).
- * Status maps straight onto the fields the list view reads: PENDING/
- * BLOCKED stay unsettled (part of the active card, approved=-1, which
- * chat_msg_set_command already defaults to); DENIED/APPROVED/EXECUTING/
- * COMPLETED all render inline (settled=1) -- APPROVED is included because
- * a card settles the moment every entry is decided, well before the
- * dispatcher actually gets around to sending it (see
- * ai_chat_settle_batch_if_done()). */
+ * Status maps onto the fields the list view reads: approved follows the
+ * click (APPROVED/EXECUTING/COMPLETED 1, DENIED 0, PENDING/BLOCKED -1, which
+ * chat_msg_set_command already defaults to). Whether the rows are settled
+ * (inline, off the card) is the batch's, not each row's: the live view
+ * settles a batch's rows together, once every row is decided
+ * (ai_chat_settle_batch_if_done()) -- APPROVED included, well before the
+ * dispatcher sends it -- so a batch with a row still PENDING comes back as
+ * one whole card, and its summary line (needs a settled row) as absent as it
+ * was live. chat_approval_rows_settled() is that rule. */
 void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
 {
     if (!list || !batch) return;
+    const int settled = chat_approval_rows_settled(&batch->q);
     for (int i = 0; i < batch->q.count; i++) {
         const ApprovalEntry *e = &batch->q.entries[i];
         ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
@@ -142,22 +145,24 @@ void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch
         chat_msg_set_note(item, e->note);
         /* A tool call's row (outcome PENDING until its slot is answered). */
         if (e->tool) chat_msg_set_tool(item, 1);
+        /* Approved/denied as the click left them (APPROVED, EXECUTING and
+         * COMPLETED read approved, DENIED denied), whether or not the card
+         * is still up. */
         switch (e->status) {
         case APPROVE_APPROVED:
         case APPROVE_EXECUTING:
         case APPROVE_COMPLETED:
             item->u.cmd.approved = 1;
-            item->u.cmd.settled = 1;
             break;
         case APPROVE_DENIED:
             item->u.cmd.approved = 0;
-            item->u.cmd.settled = 1;
             break;
         case APPROVE_PENDING:
         case APPROVE_BLOCKED:
         default:
-            break;  /* stays unsettled -- part of the active card */
+            break;
         }
+        item->u.cmd.settled = settled;
     }
 
     /* Run state comes from the same queue, so a rebuilt display (session
@@ -186,6 +191,7 @@ static void append_run_record_items(ChatMsgList *list, const CmdRunRecord *rec,
         chat_msg_set_quoted(item, r->quoted);
         chat_msg_set_reason(item, r->reason);
         chat_msg_set_batch(item, batch_id);
+        chat_msg_set_note(item, r->note);
         item->u.cmd.approved = r->approved;
         item->u.cmd.run = r->run;
         item->u.cmd.settled = 1;

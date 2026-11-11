@@ -107,3 +107,16 @@ CmdBatch *cmd_batch_next_runnable(CmdBatchSet *set)
     }
     return NULL;
 }
+
+int cmd_batch_finished(const CmdBatch *b)
+{
+    if (!b) return 0;
+    for (int i = 0; i < b->q.count; i++) {
+        const ApprovalEntry *e = &b->q.entries[i];
+        if (e->status == APPROVE_PENDING) return 0;
+        if (e->tool) continue;
+        if (e->status == APPROVE_APPROVED || e->status == APPROVE_EXECUTING)
+            return 0;
+    }
+    return 1;
+}

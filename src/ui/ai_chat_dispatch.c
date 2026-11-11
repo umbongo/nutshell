@@ -57,7 +57,13 @@ void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner)
 {
     if (!d || !owner || owner->batches.count < CMD_BATCH_MAX) return;
     /* cmd_batch_add() evicts b[0] and frees it. */
-    batch_record(d, owner, owner->batches.b[0], 1);
+    CmdBatch *oldest = owner->batches.b[0];
+    batch_record(d, owner, oldest, 1);
+    /* The displayed owner's live rows end as the record says: an approved
+     * row never sent reads "not run", not "queued", and a running one
+     * "unfinished". The caller settles the rows after the add. */
+    if (owner == d->active_state && !cmd_batch_is_tool(oldest))
+        chat_msg_batch_sync_run(&d->msg_list, oldest->id, &oldest->q, 1);
 }
 
 /* Once every entry in a batch has been decided (chat_approval_all_decided
@@ -75,7 +81,10 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
     if (!chat_approval_all_decided(&batch->q)) return;
 
     int batch_id = batch->id;
-    int has_runnable = chat_approval_next_approved(&batch->q) >= 0;
+    /* Still runnable: a command approved but not sent, or sent and still
+     * running (EXECUTING) -- denying the last pending row while another row
+     * runs must not remove the batch under the dispatcher. */
+    int has_runnable = !cmd_batch_finished(batch);
 
     /* A tool batch is never removed with its call unanswered (spec decision
      * 20: every removal answers the slot). Run and Deny have already

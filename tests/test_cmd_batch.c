@@ -2,6 +2,7 @@
 #include "test_framework.h"
 #include "cmd_batch.h"
 #include <string.h>
+#include <stdio.h>
 
 int test_cmd_batch_set_init_empty(void) {
     TEST_BEGIN();
@@ -324,6 +325,71 @@ int test_cmd_batch_reply_msg_defaults_unset(void) {
     b->reply_hash = 0xDEADBEEFu;
     ASSERT_EQ(cmd_batch_find(&set, b->id)->reply_hash, 0xDEADBEEFu);
     ASSERT_EQ(cmd_batch_find(&set, b->id)->reply_msg, 6);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* ---- cmd_batch_finished: nothing left to ask or to run ---- */
+
+static void put_status(CmdBatch *b, int n, const ApprovalStatus *st)
+{
+    chat_approval_reset(&b->q);
+    for (int i = 0; i < n; i++) {
+        b->q.entries[i].status = st[i];
+        snprintf(b->q.entries[i].command, sizeof(b->q.entries[i].command),
+                 "echo %d", i);
+    }
+    b->q.count = n;
+}
+
+int test_cmd_batch_finished_rule(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+
+    /* All decided and idle: completed, denied and held rows only. */
+    ApprovalStatus idle[] = { APPROVE_COMPLETED, APPROVE_DENIED,
+                              APPROVE_BLOCKED };
+    put_status(b, 3, idle);
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+
+    /* One EXECUTING: still in flight, whatever else is decided. This is the
+     * last pending row denied while another command runs. */
+    ApprovalStatus exec[] = { APPROVE_EXECUTING, APPROVE_DENIED };
+    put_status(b, 2, exec);
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
+    /* One APPROVED, not yet sent. */
+    ApprovalStatus appr[] = { APPROVE_COMPLETED, APPROVE_APPROVED };
+    put_status(b, 2, appr);
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
+    /* All denied. */
+    ApprovalStatus denied[] = { APPROVE_DENIED, APPROVE_DENIED };
+    put_status(b, 2, denied);
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+
+    /* A PENDING row still needs the user. */
+    ApprovalStatus pend[] = { APPROVE_DENIED, APPROVE_PENDING };
+    put_status(b, 2, pend);
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
+    /* An empty queue has nothing left to run; NULL is not a finished batch. */
+    put_status(b, 0, NULL);
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+    ASSERT_EQ(cmd_batch_finished(NULL), 0);
+
+    /* A tool call's row is decided by its click and never dispatched:
+     * APPROVED there does not keep the batch alive (it matches
+     * chat_approval_next_approved, which skips tool rows). */
+    put_status(b, 1, appr + 1);
+    b->q.entries[0].tool = 1;
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+    b->q.entries[0].status = APPROVE_PENDING;
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
     cmd_batch_set_free(&set);
     TEST_END();
 }

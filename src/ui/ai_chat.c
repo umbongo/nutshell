@@ -864,10 +864,16 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_thinking[0] = '\0';
                 d->stream_thinking_len = 0;
 
-                /* Remove the last assistant message from conv if added */
+                /* Remove the last assistant message from conv if added, and
+                 * forget the run records keyed to it: a new reply with the
+                 * same text at this index would match them too. */
                 if (d->conv.msg_count > 0 &&
-                    d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
+                    d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT) {
+                    if (d->active_state)
+                        (void)cmd_run_log_forget(&d->active_state->run_log,
+                                                 d->conv.msg_count - 1);
                     ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
+                }
 
                 /* Re-launch stream */
                 ai_chat_start_indicator(d, "retrying");
@@ -1216,11 +1222,17 @@ next_coalesce:;
                     /* The reply is the last message here, before any NOTE
                      * below is added: reply_msg names it, not conv_mark - 1
                      * (the run log's key, cmd_run_log.h). */
-                    const int reply_msg =
-                        (src->conv.msg_count > 0 &&
-                         src->conv.messages[src->conv.msg_count - 1].role ==
-                             AI_ROLE_ASSISTANT)
-                        ? src->conv.msg_count - 1 : -1;
+                    const AiMessage *last = src->conv.msg_count > 0
+                        ? &src->conv.messages[src->conv.msg_count - 1] : NULL;
+                    /* The worker's own add may have failed (a full
+                     * conversation): the last message must then BE this
+                     * reply, by its text, or the rows match no turn. */
+                    const int reply_msg = cmd_run_reply_index(
+                        1, src->conv.msg_count,
+                        last && last->role == AI_ROLE_ASSISTANT,
+                        last ? ai_msg_content(last) : NULL,
+                        last ? last->content_len : 0,
+                        rmsg->content, strlen(rmsg->content));
                     ai_chat_batch_record_oldest_if_full(d, src);
                     CmdBatch *batch = cmd_batch_add(&src->batches,
                                                     &bg_defaults, NULL);
@@ -1312,17 +1324,24 @@ next_coalesce:;
 
             /* The thread committed the assistant message to src->conv.
              * Sync d->conv (the working copy) so it includes the response. */
-            if (text) {
-                ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text);
-            }
+            const int reply_stored =
+                text && ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text) == 0;
             /* The reply's index, taken now: the NOTEs added below make
              * conv_mark - 1 a user turn, and the run log keys a batch to
-             * the reply that produced it (cmd_run_log.h). */
-            const int reply_msg =
-                (text && d->conv.msg_count > 0 &&
-                 d->conv.messages[d->conv.msg_count - 1].role ==
-                     AI_ROLE_ASSISTANT)
-                ? d->conv.msg_count - 1 : -1;
+             * the reply that produced it (cmd_run_log.h). A full
+             * conversation refuses the add, and then the last message is an
+             * older turn: -1, so the batch's rows match no turn. */
+            const int reply_msg = cmd_run_reply_index(
+                reply_stored, d->conv.msg_count,
+                d->conv.msg_count > 0 &&
+                    d->conv.messages[d->conv.msg_count - 1].role ==
+                        AI_ROLE_ASSISTANT,
+                d->conv.msg_count > 0
+                    ? ai_msg_content(&d->conv.messages[d->conv.msg_count - 1])
+                    : NULL,
+                d->conv.msg_count > 0
+                    ? d->conv.messages[d->conv.msg_count - 1].content_len : 0,
+                text, text ? strlen(text) : 0);
 
             /* Save thinking for this assistant message in history. */
             if (d->stream_thinking_len > 0 &&

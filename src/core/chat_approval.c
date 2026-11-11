@@ -178,6 +178,17 @@ int chat_approval_all_decided(const ApprovalQueue *q)
     return 1;
 }
 
+int chat_approval_rows_settled(const ApprovalQueue *q)
+{
+    if (!q) return 0;
+    int any_unheld = 0;
+    for (int i = 0; i < q->count; i++) {
+        if (q->entries[i].status == APPROVE_PENDING) return 0;
+        if (q->entries[i].status != APPROVE_BLOCKED) any_unheld = 1;
+    }
+    return any_unheld;
+}
+
 int chat_approval_needs_user(const ApprovalQueue *q)
 {
     int any_blocked = 0, any_approved = 0;
