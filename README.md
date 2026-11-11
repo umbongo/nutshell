@@ -163,7 +163,7 @@ scrolls if you shrink it below the content.
 - **AI assist font** — font for the AI chat panel; does not affect the terminal
 
 #### General > Terminal
-- **Scrollback lines** — 100 to 50,000 (default: 10,000)
+- **Scrollback lines** — lines kept above the screen once they scroll off, 100 to 50,000 (default: 10,000). A change applies to tabs opened after Save; tabs already open keep their size. Memory is used only as lines are kept: a new tab costs little, and a full buffer on a 200-column tab takes about 40 MB at 10,000 lines and 200 MB at 50,000, and briefly about as much again while the tab is resized
 - **Paste delay** — inter-line delay in milliseconds (0 to 5000)
 - **Confirm before pasting** — show a preview dialog before every paste (default: on)
 

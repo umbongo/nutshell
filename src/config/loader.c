@@ -7,6 +7,7 @@
 #include "xmalloc.h"
 #include "secure_zero.h"
 #include "crypto.h"
+#include "settings_entry.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -478,8 +479,10 @@ void settings_validate(Settings *s)
         (void)snprintf(s->ai_font, sizeof(s->ai_font), "%s", APP_FONT_AI_DEFAULT);
     }
     s->font_size = app_font_snap_size(s->font_size);
-    if (s->scrollback_lines < 100)    s->scrollback_lines = 100;
-    if (s->scrollback_lines > 50000)  s->scrollback_lines = 50000;
+    if (s->scrollback_lines < SETTINGS_SCROLLBACK_MIN)
+        s->scrollback_lines = SETTINGS_SCROLLBACK_MIN;
+    if (s->scrollback_lines > SETTINGS_SCROLLBACK_MAX)
+        s->scrollback_lines = SETTINGS_SCROLLBACK_MAX;
     if (s->paste_delay_ms < 0)    s->paste_delay_ms = 0;
     if (s->paste_delay_ms > 5000) s->paste_delay_ms = 5000;
     if (s->ai_max_search_results < 1)  s->ai_max_search_results = 1;
@@ -519,7 +522,7 @@ void config_default_settings(Settings *s)
     field_copy(s->font,                 sizeof(s->font),                 APP_FONT_DEFAULT);
     field_copy(s->ai_font,              sizeof(s->ai_font),              APP_FONT_AI_DEFAULT);
     s->font_size        = APP_FONT_DEFAULT_SIZE;
-    s->scrollback_lines = 10000;
+    s->scrollback_lines = SETTINGS_SCROLLBACK_DEFAULT;
     s->paste_delay_ms   = 350;
     s->logging_enabled  = 0;
     s->debug_terminal   = 0;

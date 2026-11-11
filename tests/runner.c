@@ -3267,6 +3267,8 @@ int test_search_provider_index_case_and_unknown(void);
 int test_settings_entry_or_keep_range(void);
 int test_settings_entry_or_keep_zero_ok(void);
 int test_settings_entry_or_keep_huge_unsigned(void);
+int test_settings_scrollback_for_new_tab(void);
+int test_settings_scrollback_agrees_with_validate(void);
 
 /* test_settings_help.c */
 int test_settings_help_table_matches_enum(void);
@@ -7221,6 +7223,8 @@ int main(void) {
     failed += test_settings_entry_or_keep_range();
     failed += test_settings_entry_or_keep_zero_ok();
     failed += test_settings_entry_or_keep_huge_unsigned();
+    failed += test_settings_scrollback_for_new_tab();
+    failed += test_settings_scrollback_agrees_with_validate();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();
     failed += test_settings_help_labels_and_pages();

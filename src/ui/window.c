@@ -19,6 +19,7 @@
 #include "resource.h"
 #include "session_manager.h"
 #include "settings_dlg.h"
+#include "settings_entry.h"
 #include "help_guide.h"
 #include "cheatsheet_dlg.h"
 #include "shortcuts.h"
@@ -1011,7 +1012,8 @@ static void selection_tick(HWND hwnd)
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
-    s->term = term_init(rows, cols, 3000);
+    s->term = term_init(rows, cols,
+                        settings_scrollback_for_new_tab(g_config ? &g_config->settings : NULL));
     s->log_id = ++g_next_log_id;
     s->term->log_id = s->log_id;
     render_stuck_init(&s->poll_stuck);
