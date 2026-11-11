@@ -30,7 +30,8 @@ size_t chat_rebuild_call_text(const AiToolCall *call, char *out, size_t cap)
 
     char desc[1100] = "";
     if (strcmp(call->name, "web_fetch") == 0)
-        (void)web_fetch_describe(call->input_json, desc, sizeof(desc));
+        (void)web_fetch_describe(call->input_json, desc,
+                                 CHAT_REBUILD_FETCH_DESC_MAX);
     else if (strcmp(call->name, "run_command") == 0)
         (void)runcmd_describe(call->input_json, desc, sizeof(desc));
 
@@ -168,11 +169,65 @@ static int live_batch_matches(const CmdBatch *b, int idx, uint32_t hash)
            b->reply_msg == idx && b->reply_hash == hash;
 }
 
+/* What carries the commands of assistant turn `i`: *has_record, a record of
+ * the run log matches it (status-only ones included); *card_rows, a record
+ * with command rows or a live batch matches it; *live_card, a live batch does.
+ * Returns the turn's hash. */
+static uint32_t turn_cards(const AiConversation *conv, int i,
+                           const CmdRunLog *rlog, const CmdBatchSet *batches,
+                           int *has_record, int *card_rows, int *live_card)
+{
+    const AiMessage *msg = &conv->messages[i];
+    const AiToolCall *calls = msg->tool_calls;
+    const int n_calls = calls ? msg->n_tool_calls : 0;
+    /* A tool turn's hash mixes in its calls' ids, the same function the batch
+     * builder keyed the record with. */
+    const uint32_t hash = cmd_run_log_reply_hash(
+        ai_msg_content(msg), msg->content_len, calls, n_calls);
+    *has_record = *card_rows = *live_card = 0;
+    for (int ri = 0; rlog && ri < rlog->count; ri++) {
+        if (!cmd_run_record_matches_hash(rlog->rec[ri], i, 1, hash)) continue;
+        *has_record = 1;
+        if (rlog->rec[ri]->n > 0) *card_rows = 1;
+    }
+    for (int bi = 0; batches && bi < batches->count; bi++)
+        if (live_batch_matches(batches->b[bi], i, hash)) *live_card = 1;
+    *card_rows = *card_rows || *live_card;
+    return hash;
+}
+
+/* Mark (earlier[k] = 1) the assistant tool-round turns that precede turn `j`
+ * in the same reply: walking back from j - 1 over assistant tool turns and
+ * results turns, stopping at anything else (the user's turn, a plain reply). */
+static void mark_earlier_rounds(const AiConversation *conv, int j,
+                                unsigned char *earlier)
+{
+    for (int k = j - 1; k >= 1; k--) {
+        const AiMessage *m = &conv->messages[k];
+        if (m->role == AI_ROLE_ASSISTANT && m->tool_calls && m->n_tool_calls > 0)
+            earlier[k] = 1;
+        else if (m->role != AI_ROLE_TOOL)
+            break;
+    }
+}
+
 void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
                          char *const *thinking, const CmdRunLog *rlog,
                          const CmdBatchSet *batches)
 {
     if (!list || !conv) return;
+
+    /* A reply that went through tool rounds is stored as a turn per round,
+     * and its record or batch is keyed to the last turn: the rounds before a
+     * turn that carries commands are split at the marker too. */
+    unsigned char earlier[AI_MAX_MESSAGES];
+    memset(earlier, 0, sizeof(earlier));
+    for (int j = 2; j < conv->msg_count && j < AI_MAX_MESSAGES; j++) {
+        if (conv->messages[j].role != AI_ROLE_ASSISTANT) continue;
+        int hr, cr, lc;
+        (void)turn_cards(conv, j, rlog, batches, &hr, &cr, &lc);
+        if (hr || lc) mark_earlier_rounds(conv, j, earlier);
+    }
 
     for (int i = 1; i < conv->msg_count; i++) {
         const AiMessage *msg = &conv->messages[i];
@@ -194,24 +249,12 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
         const char *content = ai_msg_content(msg);
         const AiToolCall *calls = msg->tool_calls;
         const int n_calls = calls ? msg->n_tool_calls : 0;
-        /* A tool turn's hash mixes in its calls' ids, the same function the
-         * batch builder keyed the record with. */
-        const uint32_t turn_hash = cmd_run_log_reply_hash(
-            content, msg->content_len, calls, n_calls);
-
         /* What carries this reply's commands: records of the displayed
          * session's run log, and live batches (a card still up). */
-        int has_record = 0, card_rows = 0, live_card = 0;
-        for (int ri = 0; rlog && ri < rlog->count; ri++) {
-            if (!cmd_run_record_matches_hash(rlog->rec[ri], i, 1, turn_hash))
-                continue;
-            has_record = 1;
-            if (rlog->rec[ri]->n > 0) card_rows = 1;
-        }
-        for (int bi = 0; batches && bi < batches->count; bi++)
-            if (live_batch_matches(batches->b[bi], i, turn_hash))
-                live_card = 1;
-        card_rows = card_rows || live_card;
+        int has_record, card_rows, live_card;
+        const uint32_t turn_hash = turn_cards(conv, i, rlog, batches,
+                                              &has_record, &card_rows,
+                                              &live_card);
 
         /* The results turn answering this one, when it is the next message. */
         const AiMessage *tm = (i + 1 < conv->msg_count &&
@@ -249,7 +292,8 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
 
         /* The reply's text. With a card or a record it is only what the model
          * wrote before its first command, as live. */
-        const int split_text = has_record || live_card;
+        const int split_text = has_record || live_card ||
+                               (i < AI_MAX_MESSAGES && earlier[i]);
         char pre_text[AI_MSG_MAX];
         const char *shown = content;
         if (split_text && content &&

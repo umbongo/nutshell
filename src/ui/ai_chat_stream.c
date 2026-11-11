@@ -6,6 +6,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
+#include "chat_rebuild.h"
 #include "run_command.h"
 #include "json_parser.h"
 
@@ -738,7 +739,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                     if (debug_desc[0]) provider_suffix = debug_desc;
                 }
                 /* web_fetch: the requested URL (display form). */
-                char fetch_desc[160];
+                char fetch_desc[CHAT_REBUILD_FETCH_DESC_MAX];
                 if (!provider_suffix && strcmp(call->name, "web_fetch") == 0) {
                     (void)web_fetch_describe(call->input_json, fetch_desc,
                                              sizeof(fetch_desc));

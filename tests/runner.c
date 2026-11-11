@@ -2611,6 +2611,9 @@ int test_rebuild_replay_partless_tool_turn(void);
 int test_rebuild_replay_orphan_tool_turn_and_empty_part(void);
 int test_rebuild_replay_live_cards_come_last_in_order(void);
 int test_rebuild_replay_demo_tool_state_shows_the_cut(void);
+int test_rebuild_replay_record_on_final_turn_splits_earlier_rounds(void);
+int test_rebuild_replay_earlier_round_split_stops_at_user_turn(void);
+int test_rebuild_call_text_web_fetch_url_cut_like_live(void);
 
 /* test_ai_stream.c */
 int test_ai_conv_take_moves_overflow_and_clears_source(void);
@@ -6879,6 +6882,9 @@ int main(void) {
     failed += test_rebuild_replay_orphan_tool_turn_and_empty_part();
     failed += test_rebuild_replay_live_cards_come_last_in_order();
     failed += test_rebuild_replay_demo_tool_state_shows_the_cut();
+    failed += test_rebuild_replay_record_on_final_turn_splits_earlier_rounds();
+    failed += test_rebuild_replay_earlier_round_split_stops_at_user_turn();
+    failed += test_rebuild_call_text_web_fetch_url_cut_like_live();
 
     printf("\n--- Pending command batches: cmd_batch ---\n");
     failed += test_cmd_batch_set_init_empty();

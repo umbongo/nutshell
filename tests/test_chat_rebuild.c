@@ -809,3 +809,114 @@ int test_rebuild_replay_demo_tool_state_shows_the_cut(void) {
     ai_conv_reset(&conv);
     TEST_END();
 }
+
+/* Production keys a hidden-tab reply's record to the FINAL turn; the earlier
+ * web tool rounds are turns of their own, and their text, marker included,
+ * must be split too so the command is drawn once. */
+int test_rebuild_replay_record_on_final_turn_splits_earlier_rounds(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "check");
+    AiToolCall call;
+    set_call(&call, "t1", "web_search", "{}");
+    AiToolResult res;
+    set_result(&res, "t1", "", "hits", 0);
+    add_tool_round(&conv, "Checking.\n[EXEC]uname -a[/EXEC]\nmore", &call, &res, 1);
+    free_results(&res, 1);
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "Done.");
+    const int final_idx = conv.msg_count - 1;
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    record_batch(&log, &conv, final_idx, "uname -a", APPROVE_COMPLETED);
+    ASSERT_EQ(log.count, 1);
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    char out[512];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "U:check\n"
+        "C:using tool: web_search\n"
+        "R:hits\n"
+        "A:Checking.\n\n"
+        "A:Done.\n"
+        "K:uname -a\n");
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+
+    /* The same with the card still up (a live batch keyed to the final turn). */
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    chat_approval_add(&b->q, "uname -a", CMD_PLATFORM_LINUX);
+    b->q.entries[0].status = APPROVE_PENDING;
+    b->reply_msg = final_idx;
+    b->reply_hash = cmd_run_log_turn_hash("Done.", 5);
+    chat_rebuild_replay(&list, &conv, NULL, NULL, &set);
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "U:check\nC:using tool: web_search\nR:hits\nA:Checking.\n\nA:Done.\nK:uname -a\n");
+    chat_msg_list_clear(&list);
+    cmd_batch_set_free(&set);
+
+    /* Without a record or batch nothing is split. */
+    chat_rebuild_replay(&list, &conv, NULL, NULL, NULL);
+    dump(&list, out, sizeof(out));
+    ASSERT_TRUE(strstr(out, "[EXEC]uname -a[/EXEC]") != NULL);
+    chat_msg_list_clear(&list);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* The earlier-round rule stops at the user's turn: an older reply's rounds
+ * are not touched by a later reply's record. */
+int test_rebuild_replay_earlier_round_split_stops_at_user_turn(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "one");
+    AiToolCall call;
+    set_call(&call, "t1", "web_search", "{}");
+    AiToolResult res;
+    set_result(&res, "t1", "", "hits", 0);
+    add_tool_round(&conv, "old [EXEC]ls[/EXEC] text", &call, &res, 1);
+    free_results(&res, 1);
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "first answer");
+    ai_conv_add(&conv, AI_ROLE_USER, "two");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "second answer");
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    record_batch(&log, &conv, conv.msg_count - 1, "pwd", APPROVE_COMPLETED);
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    char out[512];
+    dump(&list, out, sizeof(out));
+    ASSERT_TRUE(strstr(out, "A:old [EXEC]ls[/EXEC] text\n") != NULL);
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* A long URL is cut where the live row cuts it. */
+int test_rebuild_call_text_web_fetch_url_cut_like_live(void) {
+    TEST_BEGIN();
+    AiToolCall c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.name, sizeof(c.name), "web_fetch");
+    char url[400] = "https://example.com/";
+    size_t n = strlen(url);
+    memset(url + n, 'a', 300);
+    url[n + 300] = '\0';
+    snprintf(c.input_json, sizeof(c.input_json), "{\"url\":\"%s\"}", url);
+    char out[512];
+    chat_rebuild_call_text(&c, out, sizeof(out));
+    /* "using tool: web_fetch - " is 24 bytes; the URL keeps at most 159 of
+     * them, as the live row does (the display form may be shorter still). */
+    ASSERT_TRUE(strlen(out) > 24);
+    ASSERT_TRUE(strlen(out) <= 24 + 159);
+    TEST_END();
+}

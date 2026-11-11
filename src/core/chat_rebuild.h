@@ -26,6 +26,10 @@
  * boundary. */
 #define CHAT_REBUILD_PREVIEW_MAX 200
 
+/* The buffer web_fetch's "using tool" URL is described into, live (the
+ * stream thread's row) and rebuilt, so a long URL reads the same both ways. */
+#define CHAT_REBUILD_FETCH_DESC_MAX 160
+
 /* The text of a call's "using tool" row:
  *   web_fetch    "using tool: web_fetch - <url>"      (web_fetch_describe)
  *   run_command  "using tool: run_command - <command>" (runcmd_describe)
