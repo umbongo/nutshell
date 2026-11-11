@@ -544,6 +544,49 @@ cursor, while `active_term` exists.
   when it is the range's first row and contains the command; trailing blank
   rows are trimmed. Nothing left and an empty screen: "no output on the
   screen".
+- *(review of B1-B11, 2026-11-11)* **A clear or a repaint is a screen
+  result, whatever the line numbers say.** `clear; ls` on a terminal whose
+  prompt sat on row 3 leaves the end line (5) past the start (3): the range
+  is neither empty nor inverted, yet the new output's first rows sit above the
+  start and the range reads only its tail. So the take also falls
+  back to the visible screen rows, with the same note and REDRAWN, when
+  (a) `erase_seq` moved: `Terminal` gains `uint32_t erase_seq`, bumped by
+  every ED 2 on the **primary** screen only (as `region_scroll_seq`, Ruling
+  R30), set to 0 in `term_init` and untouched by `term_resize`; or
+  (b) the cursor went above the start line: `Terminal` gains
+  `uint64_t cursor_low_line`, the lowest absolute line (as
+  `term_abs_cursor_line`) the primary cursor has been on since
+  `term_reset_cursor_low()`, which `runcmd_capture_start` calls. The parser
+  lowers it after every CSI, RI and DECRC (the only ways to move up) while
+  the primary screen is on, so nothing polls; a committed `term_resize`
+  resets it to 0 (the numbering changed, and `reflow_seq` forces the screen
+  anyway), a failed one leaves it. The take compares `cursor_low_line <
+  start_line`. A move up that stays at or below the start row (a progress
+  line redrawn with CUU) is the command's own rows and changes nothing.
+  Today's parser handles ED 0, 1 and 2; **ED 3 and RIS (ESC c) are not
+  handled** (they neither erase nor move the cursor, so they bump nothing);
+  a terminal that gains them bumps `erase_seq` there.
+- *(review of B1-B11, 2026-11-11)* **The cursor's own row.** The range ends
+  at the cursor's line, so a row the command wrote without a final newline
+  (`printf foo`, `cat` of a file with no last newline, a progress line when
+  Stop or a tab switch cancels an EXECUTING command) was left out, and the
+  model read "ran; no output on the screen". `runcmd_capture_start` records
+  the **prompt**: the start row's text left of the cursor, from a new
+  `term_extract` helper that writes cells as the row writer does (control
+  and never-written cells are spaces) but does not trim, into a 256-byte
+  buffer in the capture state, whole characters only. A prompt longer than
+  255 bytes is not recorded (`prompt_long`): the take then leaves the cursor
+  row out, as before; that is the only case where output with no final
+  newline can still be lost. At the take, the cursor row's text left of the
+  cursor is compared with the recorded prompt **as raw text** (the prompt's
+  trailing space counts; trimming comes after): equal adds nothing; ending
+  with the prompt adds the part before it; anything else is added whole (a
+  prompt changed by `cd` shows as a last line: real screen text, accepted).
+  What is added has its trailing blanks trimmed and follows the range text
+  after one newline. EMPTY only when the final text is empty. The screen
+  path is unchanged (it already includes the prompt row).
+- *(review of B1-B11, 2026-11-11)* `runcmd_capture_start` also resets
+  `captured`, the flags and any excerpt: a capture armed again takes again.
 
 **11. Cap and storage.** Per command `c = min(16 KiB, 64 KiB / n)`, `n` the
 batch's SLOT calls: head ¾c, tail ¼c, cut on UTF-8 boundaries, kept apart in

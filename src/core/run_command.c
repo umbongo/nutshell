@@ -346,14 +346,53 @@ void runcmd_cut(const char *text, size_t len, size_t cap, RunCmdCapture *c)
     c->omitted_bytes = len - head_len - tail_len;
 }
 
-void runcmd_capture_start(RunCmdCapture *c, const Terminal *t)
+void runcmd_capture_start(RunCmdCapture *c, Terminal *t)
 {
     if (!c || !t) return;
+    /* A capture armed again (Retry, a second look) starts clean: nothing of
+     * the last take survives, and it can take once more. */
+    cap_clear_excerpt(c);
+    c->flags = 0;
+    c->captured = 0;
+    term_reset_cursor_low(t);
     c->start_line = term_abs_cursor_line(t);
     c->start_reflow_seq = t->reflow_seq;
     c->start_region_seq = t->region_scroll_seq;
+    c->start_erase_seq = t->erase_seq;
     c->start_alt = t->alt_screen_active ? 1 : 0;
+
+    /* The prompt: the start row's text left of the cursor, untrimmed. One
+     * that does not fit is not recorded (prompt_long): the take then leaves
+     * the cursor row out, as it did before the prompt was recorded. */
+    size_t n = term_extract_cursor_prefix(t, c->prompt, sizeof c->prompt);
+    c->prompt_long = n > sizeof c->prompt - 1;
+    c->prompt_len = c->prompt_long ? 0 : n;
+    if (c->prompt_long) c->prompt[0] = '\0';
     c->started = 1;
+}
+
+/* The part of the cursor's row the command wrote: its text left of the
+ * cursor minus the recorded prompt (equal: nothing; ending with it: what
+ * comes before it; anything else: all of it), trailing blanks trimmed. Heap
+ * text with its length in *len_out ("" length 0 when there is none); NULL
+ * only when the allocation fails. A prompt that was too long to record
+ * (prompt_long) leaves the row out. */
+static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *len_out)
+{
+    *len_out = 0;
+    size_t full = c->prompt_long ? 0 : term_extract_cursor_prefix(t, NULL, 0);
+    char *row = (char *)malloc(full + 1);
+    if (!row) return NULL;
+    row[0] = '\0';
+    if (full > 0) (void)term_extract_cursor_prefix(t, row, full + 1);
+
+    size_t n = full;
+    if (n >= c->prompt_len && memcmp(row + n - c->prompt_len, c->prompt, c->prompt_len) == 0)
+        n -= c->prompt_len;
+    while (n > 0 && row[n - 1] == ' ') n--;
+    row[n] = '\0';
+    *len_out = n;
+    return row;
 }
 
 int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command,
@@ -370,7 +409,13 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
     int screen = c->start_alt || t->alt_screen_active ||
                  t->reflow_seq != c->start_reflow_seq ||
                  t->region_scroll_seq != c->start_region_seq;
+    /* A clear, or a repaint from above the start row: the numbering still
+     * counts rows, but the rows from the start line on are no longer the
+     * command's output. */
     int redrawn = 0;
+    if (!screen && (t->erase_seq != c->start_erase_seq ||
+                    t->cursor_low_line < c->start_line))
+        screen = redrawn = 1;
     if (!screen && end <= c->start_line) screen = redrawn = 1;
 
     /* A NULL text is an allocation failure, never "no output": the range
@@ -393,11 +438,38 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
                                           &range_flags);
         if (!text) oom = 1;
         if (range_flags & TERM_RANGE_START_RECYCLED) flags |= RUNCMD_CAP_SCROLLED_OUT;
+
+        /* The cursor's row is not in the range: add what the command wrote on
+         * it (output with no final newline, a progress line at a cancel). */
+        if (text) {
+            size_t rest_len = 0;
+            char *rest = cursor_row_rest(c, t, &rest_len);
+            if (!rest) {
+                oom = 1;
+            } else if (rest_len > 0) {
+                char *joined = (char *)malloc(len + 1 + rest_len + 1);
+                if (!joined) {
+                    oom = 1;
+                } else {
+                    memcpy(joined, text, len);
+                    size_t pos = len;
+                    if (pos > 0) joined[pos++] = '\n';
+                    memcpy(joined + pos, rest, rest_len);
+                    pos += rest_len;
+                    joined[pos] = '\0';
+                    free(text);
+                    text = joined;
+                    len = pos;
+                }
+            }
+            free(rest);
+        }
     }
 
     if (oom) {
         /* Dropped, size unknown: no excerpt, no EMPTY (the signature B8 reads
          * as "output dropped"), omitted_bytes 0. */
+        free(text);
         cap_clear_excerpt(c);
         c->flags = flags;
         return 1;

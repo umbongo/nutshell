@@ -276,3 +276,31 @@ char *term_extract_abs_range_dup(const Terminal *term, uint64_t first, uint64_t 
     if (len_out) *len_out = pos;
     return buf;
 }
+
+size_t term_extract_cursor_prefix(const Terminal *term, char *out, size_t cap)
+{
+    if (out && cap > 0) out[0] = '\0';
+    if (!term) return 0;
+    if (term->cursor.row < 0 || term->cursor.row >= term->rows) return 0;
+    int physical = term_screen_to_phys(term, term->cursor.row);
+    if (physical < 0 || physical >= term->lines_capacity) return 0;
+    const TermRow *row = term->lines[physical];
+    if (!row) return 0;
+
+    int upto = term->cursor.col;
+    if (upto > term->cols) upto = term->cols;
+    size_t total = 0, written = 0;
+    for (int c = 0; c < upto; c++) {
+        /* A cell past the written width has never held text: a space. */
+        uint32_t cp = c < row->len ? cell_text_codepoint(row->cells[c].codepoint) : ' ';
+        char u8[4];
+        int k = utf8_encode(cp, u8);
+        total += (size_t)k;
+        if (out && cap > 0 && written + (size_t)k < cap && written == total - (size_t)k) {
+            memcpy(out + written, u8, (size_t)k);
+            written += (size_t)k;
+        }
+    }
+    if (out && cap > 0) out[written] = '\0';
+    return total;
+}

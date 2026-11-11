@@ -703,3 +703,161 @@ int test_term_region_scroll_seq(void) {
     term_free(t);
     TEST_END();
 }
+
+int test_term_erase_seq(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    ASSERT_EQ((int)t->erase_seq, 0);
+    feed_str(t, "abc\x1b[2J");
+    ASSERT_EQ((int)t->erase_seq, 1);
+    feed_str(t, "\x1b[J\x1b[0J\x1b[1J\x1b[K\x1b[2K");   /* the other erases: not counted */
+    ASSERT_EQ((int)t->erase_seq, 1);
+    feed_str(t, "\x1b[3J\x1b" "c");                         /* ED 3 and RIS are not handled: nothing */
+    ASSERT_EQ((int)t->erase_seq, 1);
+    feed_str(t, "\x1b[2J\x1b[2J");
+    ASSERT_EQ((int)t->erase_seq, 3);
+
+    /* on the alternate screen it is not counted; back on the primary it is */
+    feed_str(t, "\x1b[?1049h\x1b[2J");
+    ASSERT_EQ((int)t->erase_seq, 3);
+    feed_str(t, "\x1b[?1049l\x1b[2J");
+    ASSERT_EQ((int)t->erase_seq, 4);
+
+    /* a resize does not touch it */
+    ASSERT_TRUE(term_resize(t, 6, 25));
+    ASSERT_EQ((int)t->erase_seq, 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_low_line(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(12, 20, 50);
+    ASSERT_EQ((int)t->cursor_low_line, 0);
+    feed_str(t, "a\r\nb\r\nc\r\nd\r\n");          /* cursor on line 4 */
+    ASSERT_EQ((int)term_abs_cursor_line(t), 4);
+    ASSERT_EQ((int)t->cursor_low_line, 0);                /* never above the start: stays */
+    term_reset_cursor_low(t);
+    ASSERT_EQ((int)t->cursor_low_line, 4);
+    feed_str(t, "e\r\nf\r\n");                          /* downward moves leave it */
+    ASSERT_EQ((int)t->cursor_low_line, 4);
+
+    feed_str(t, "\x1b[A");                               /* CUU: 6 -> 5 */
+    ASSERT_EQ((int)t->cursor_low_line, 4);
+    feed_str(t, "\x1b[2A");                              /* CUU 2: line 3 */
+    ASSERT_EQ((int)t->cursor_low_line, 3);
+    feed_str(t, "\x1b[3;1H");                            /* CUP row 3: line 2 */
+    ASSERT_EQ((int)t->cursor_low_line, 2);
+    feed_str(t, "\x1b[5;1H");                            /* back down: the mark stays */
+    ASSERT_EQ((int)t->cursor_low_line, 2);
+    feed_str(t, "\x1b[2d");                              /* VPA row 2: line 1 */
+    ASSERT_EQ((int)t->cursor_low_line, 1);
+    feed_str(t, "\x1b[5;1H\x1b[3F");                    /* CPL 3 from row 5: line 1 again */
+    ASSERT_EQ((int)t->cursor_low_line, 1);
+    feed_str(t, "\x1b[5;1H\x1b[4F");                    /* CPL 4: line 0 */
+    ASSERT_EQ((int)t->cursor_low_line, 0);
+
+    /* RI, DECRC and CSI u (restore) count too */
+    feed_str(t, "\x1b[2;1H\x1b" "7\x1b[6;1H");             /* save on row 2 (line 1), go down */
+    term_reset_cursor_low(t);
+    uint64_t base = t->cursor_low_line;                      /* the bottom row */
+    feed_str(t, "\x1b" "8");                                /* DECRC: back up to row 2 */
+    ASSERT_TRUE(t->cursor_low_line < base);
+    ASSERT_TRUE(t->cursor_low_line == term_abs_cursor_line(t));
+    feed_str(t, "\x1b[2;1H\x1b[s\x1b[6;1H");
+    term_reset_cursor_low(t);
+    base = t->cursor_low_line;
+    feed_str(t, "\x1b[u");                                  /* CSI u */
+    ASSERT_TRUE(t->cursor_low_line < base);
+    feed_str(t, "\x1b[6;1H");
+    term_reset_cursor_low(t);
+    base = t->cursor_low_line;
+    feed_str(t, "\x1bM\x1bM");                             /* RI twice: two lines up */
+    ASSERT_TRUE(t->cursor_low_line == base - 2);
+
+    /* the alternate screen's own moves are not counted; its exit may lower it */
+    term_reset_cursor_low(t);
+    uint64_t low = t->cursor_low_line;
+    feed_str(t, "\x1b[?1049h\x1b[1;1H\x1b[A");
+    ASSERT_TRUE(t->cursor_low_line == low);
+    feed_str(t, "\x1b[?1049l");
+    ASSERT_TRUE(t->cursor_low_line <= term_abs_cursor_line(t));
+
+    /* a committed resize sets it to 0: the numbering changed */
+    term_reset_cursor_low(t);
+    ASSERT_TRUE(term_resize(t, 6, 30));
+    ASSERT_EQ((int)t->cursor_low_line, 0);
+
+    /* NULL-safe */
+    term_reset_cursor_low(NULL);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_low_scrolled(void) {
+    /* On a terminal that has scrolled the mark is an absolute line: it counts
+     * the recycled rows, as term_abs_cursor_line() does. */
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 50);
+    for (int i = 0; i < 100; i++) feed_str(t, "x\r\n");
+    ASSERT_TRUE(t->lines_recycled > 0);
+    term_reset_cursor_low(t);
+    uint64_t line = term_abs_cursor_line(t);
+    ASSERT_EQ((int)t->cursor_low_line, (int)line);
+    feed_str(t, "\x1b[H");                                /* the top of the screen */
+    ASSERT_TRUE(t->cursor_low_line < line);
+    ASSERT_TRUE(t->cursor_low_line == term_abs_cursor_line(t));
+    ASSERT_EQ(t->cursor.row, 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_extract_cursor_prefix(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 50);
+    char out[64];
+
+    /* nothing written: empty */
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, sizeof out), 0);
+    ASSERT_STR_EQ(out, "");
+
+    /* text up to the cursor, the trailing space kept */
+    feed_str(t, "user@h:~$ ");
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, sizeof out), 10);
+    ASSERT_STR_EQ(out, "user@h:~$ ");
+
+    /* text right of the cursor is not read */
+    feed_str(t, "ls\x1b[2D");
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, sizeof out), 10);
+    ASSERT_STR_EQ(out, "user@h:~$ ");
+
+    /* a cursor past the written cells: those are spaces */
+    feed_str(t, "\r\nab\x1b[3C");
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, sizeof out), 5);
+    ASSERT_STR_EQ(out, "ab   ");
+
+    /* count only */
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, NULL, 0), 5);
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, 0), 5);
+
+    /* too small: the whole characters that fit, the full length returned */
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, 3), 5);
+    ASSERT_STR_EQ(out, "ab");
+
+    /* a multi-byte character is never cut: "é" is two bytes */
+    feed_str(t, "\r\n\xc3\xa9\xc3\xa9\xc3\xa9");
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, sizeof out), 6);
+    ASSERT_STR_EQ(out, "\xc3\xa9\xc3\xa9\xc3\xa9");
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, 4), 6);   /* room for one: 2 bytes + NUL fits, 2 more do not */
+    ASSERT_STR_EQ(out, "\xc3\xa9");
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, 3), 6);
+    ASSERT_STR_EQ(out, "\xc3\xa9");
+    ASSERT_EQ((int)term_extract_cursor_prefix(t, out, 2), 6);   /* not even one fits */
+    ASSERT_STR_EQ(out, "");
+
+    /* NULL terminal */
+    ASSERT_EQ((int)term_extract_cursor_prefix(NULL, out, sizeof out), 0);
+    ASSERT_STR_EQ(out, "");
+    term_free(t);
+    TEST_END();
+}

@@ -74,16 +74,21 @@ typedef enum {
 
 #define RUNCMD_CAP_SCREEN        1u   /* the excerpt is the screen rows, not the command's own range:
                                        * the alternate screen was on at the start or the take, the
-                                       * terminal reflowed, a scroll region scrolled, or the range
-                                       * was empty or inverted. Set on every screen-rows result,
+                                       * terminal reflowed, a scroll region scrolled, the display
+                                       * was erased (ED 2) or the cursor went above the start row
+                                       * (clear; ls, a repaint from the top), or the range was
+                                       * empty or inverted. Set on every screen-rows result,
                                        * empty ones included; B8's one note ("the screen changed
                                        * while the command ran; this is the screen as it ended"). */
 #define RUNCMD_CAP_SCROLLED_OUT  4u   /* primary range: the start scrolled out of the terminal's history */
 #define RUNCMD_CAP_EMPTY         8u   /* the final text, after the echo drop and the blank-row trim,
                                        * is empty (on either path): "no output on the screen" */
-#define RUNCMD_CAP_REDRAWN      16u   /* with SCREEN: the cause was an empty or inverted range (clear;
-                                       * ls, cls, reset) and the screen has content. Never set for the
+#define RUNCMD_CAP_REDRAWN      16u   /* with SCREEN: the cause was a clear or a repaint (ED 2, the
+                                       * cursor above the start row, or an empty or inverted range:
+                                       * clear; ls, cls) and the screen has content. Never set for the
                                        * alternate screen, a reflow or a region scroll. */
+
+#define RUNCMD_PROMPT_MAX 256   /* buffer size: a prompt is recorded up to 255 bytes */
 
 /* What was read back from the terminal for one call. Reading a capture:
  *   head != NULL                      an excerpt (tail != NULL: cut in the middle,
@@ -97,11 +102,14 @@ typedef enum {
  *                                     other flags (SCREEN, REDRAWN) are still set. */
 typedef struct {
     int      started, captured;      /* captured: spec section 10's once-only flag */
-    uint64_t start_line;  uint32_t start_reflow_seq, start_region_seq;  int start_alt;
+    uint64_t start_line;  uint32_t start_reflow_seq, start_region_seq, start_erase_seq;  int start_alt;
     char    *head; size_t head_len;  /* heap; NULL when no excerpt */
     char    *tail; size_t tail_len;  /* heap; NULL when uncut */
     size_t   omitted_bytes;
     unsigned flags;                  /* RUNCMD_CAP_* */
+    char     prompt[RUNCMD_PROMPT_MAX];   /* the start row's text left of the cursor */
+    size_t   prompt_len;             /* bytes in prompt; 0 with prompt_long */
+    int      prompt_long;            /* the start row's text did not fit: not recorded */
 } RunCmdCapture;
 
 typedef struct {
@@ -155,19 +163,41 @@ size_t runcmd_cap_bytes(int n_slot);
 void runcmd_cut(const char *text, size_t len, size_t cap, RunCmdCapture *c);
 
 /* Record where a call's output starts, before the command's first write:
- * the cursor's absolute line, reflow_seq, region_scroll_seq and whether the
- * alternate screen is on, then started = 1. Does nothing for NULL c or t. */
-void runcmd_capture_start(RunCmdCapture *c, const Terminal *t);
+ * the cursor's absolute line, reflow_seq, region_scroll_seq, erase_seq, whether
+ * the alternate screen is on, and the prompt (below), then started = 1. It also
+ * starts the terminal's low-water mark of the cursor line (term_reset_cursor_low;
+ * the one reason t is not const), so one capture runs on a terminal at a time.
+ * A capture armed again is reset: captured 0, flags 0, any excerpt freed.
+ * Does nothing for NULL c or t.
+ *
+ * The prompt is the start row's text left of the cursor, as term_extract writes
+ * a row but NOT trimmed (a prompt ends with a space): up to 255 bytes in
+ * prompt, whole characters only, prompt_len its length. A longer one is not
+ * recorded: prompt_long = 1, prompt_len 0. */
+void runcmd_capture_start(RunCmdCapture *c, Terminal *t);
 
 /* Read the call's output back, once (spec decision 10). Returns 0, touching
  * nothing, unless started && !captured && t. Otherwise sets captured = 1 and
  * stores the excerpt (through runcmd_cut with cap) and the flags:
  *  - alternate screen on at the start or now, reflow_seq or region_scroll_seq
  *    (primary-screen scrolls only) moved: the visible screen rows, SCREEN;
- *  - else the primary range [start_line, cursor line) is empty or inverted:
- *    the screen rows, SCREEN | REDRAWN (just SCREEN when the screen is blank);
+ *  - else erase_seq moved (an ED 2 on the primary screen; ED 3 and RIS are not
+ *    handled by the parser), or the cursor's low-water mark went above
+ *    start_line (cursor_low_line < start_line: a home, a clear's CUP, a repaint
+ *    from the top), or the primary range [start_line, cursor line) is empty or
+ *    inverted: the screen rows, SCREEN | REDRAWN (just SCREEN when the screen
+ *    is blank);
  *  - else that range with the echo (command) dropped; SCROLLED_OUT when its
- *    start has gone from the ring.
+ *    start has gone from the ring; then the cursor row's own text, which the
+ *    range excludes: the text left of the cursor, compared with the recorded
+ *    prompt as raw text (no trimming, so the prompt's trailing space counts):
+ *      equal to the prompt           adds nothing;
+ *      ending with the prompt        the part before it is added;
+ *      anything else                 all of it is added (a prompt changed by cd
+ *                                    shows as a last line);
+ *    trailing blanks of what is added are trimmed, and it follows the range
+ *    text after a '\n' (alone when the range is empty). With prompt_long the
+ *    cursor row is left out.
  * EMPTY whenever the final text is empty; a failed read or copy sets no EMPTY
  * (see RunCmdCapture). Text never holds a control byte
  * (C0 but the row separator, DEL, C1): term_extract writes those cells as

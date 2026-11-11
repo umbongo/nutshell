@@ -118,6 +118,8 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->epoch                  = 0;
     term->reflow_seq             = 0;
     term->region_scroll_seq      = 0;
+    term->erase_seq              = 0;
+    term->cursor_low_line        = 0;
     term->write_gen              = 0;
     term->grow_failing           = false;
     term->resize_failing         = false;
@@ -461,6 +463,9 @@ bool term_resize(Terminal *term, int rows, int cols) {
     /* Reflow renumbered every row: a selection's line numbers no longer apply. */
     term->epoch++;
     term->reflow_seq++;
+    /* The numbering changed: the old low-water mark means nothing (and 0 can
+     * never exceed the cursor's line). */
+    term->cursor_low_line = 0;
 
     term->rows = rows;
     term->cols = cols;
@@ -580,6 +585,12 @@ uint64_t term_abs_cursor_line(const Terminal *term)
     int top = (term->lines_count >= term->rows)
             ? (term->lines_count - term->rows) : 0;
     return term->lines_recycled + (uint64_t)top + (uint64_t)term->cursor.row;
+}
+
+void term_reset_cursor_low(Terminal *term)
+{
+    if (!term) return;
+    term->cursor_low_line = term_abs_cursor_line(term);
 }
 
 int term_view_to_logical(const Terminal *t, int screen_row)

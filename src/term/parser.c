@@ -380,6 +380,16 @@ static void handle_private_mode(Terminal *term, bool set)
     }
 }
 
+/* After an escape sequence that can move the cursor up: lower the low-water
+ * mark if the cursor is now above it (term.h, cursor_low_line). Primary
+ * screen only; the alternate screen has rows of its own. */
+static void note_cursor_low(Terminal *term)
+{
+    if (term->alt_screen_active) return;
+    uint64_t line = term_abs_cursor_line(term);
+    if (line < term->cursor_low_line) term->cursor_low_line = line;
+}
+
 /* --------------------------------------------------------------------------- */
 
 static void handle_csi(Terminal *term, char final) {
@@ -466,6 +476,7 @@ static void handle_csi(Terminal *term, char final) {
                 }
             } else if (n == 2) {
                 /* Clear entire screen — VT100: does NOT move cursor (xterm compat) */
+                if (!term->alt_screen_active) term->erase_seq++;
                 for (int r = 0; r < term->rows; r++) {
                     TermRow *rr = get_screen_row(term, r);
                     if (rr) {
@@ -734,6 +745,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     } else if (term->cursor.row > 0) {
                         term->cursor.row--;
                     }
+                    note_cursor_low(term);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == 'D') {
                     /* IND — Index (same as LF within scroll region) */
@@ -757,6 +769,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                         term->cursor.row = term->rows - 1;
                     if (term->cursor.col >= term->cols)
                         term->cursor.col = term->cols - 1;
+                    note_cursor_low(term);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == 'E') {
                     /* NEL — Next Line (CR + LF) */
@@ -831,6 +844,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     } else {
                         handle_csi(term, (char)c);
                     }
+                    note_cursor_low(term);
                     term->csi_private = false;
                     term->state = TERM_STATE_NORMAL;
                 }

@@ -283,9 +283,11 @@ int test_term_sb_resize_alloc_failure_unchanged(void)
     int fails[4] = { 1, 2, n / 2, n };
     for (int k = 0; k < 4; k++) {
         Terminal *t = make_partly();
+        t->erase_seq = 7;                  /* values a failed resize must not touch */
+        t->cursor_low_line = 3;
         int rows = t->rows, cols = t->cols, count = t->lines_count, start = t->lines_start;
-        uint64_t recycled = t->lines_recycled;
-        uint32_t epoch = t->epoch, reflow = t->reflow_seq;
+        uint64_t recycled = t->lines_recycled, low = t->cursor_low_line;
+        uint32_t epoch = t->epoch, reflow = t->reflow_seq, erase = t->erase_seq;
         TermCursor cur = t->cursor;
         char *before = all_text(t);
         ASSERT_NOT_NULL(before);
@@ -297,6 +299,8 @@ int test_term_sb_resize_alloc_failure_unchanged(void)
         ASSERT_EQ(t->lines_count, count); ASSERT_EQ(t->lines_start, start);
         ASSERT_EQ(t->lines_recycled, recycled); ASSERT_EQ(t->epoch, epoch);
         ASSERT_EQ(t->reflow_seq, reflow);
+        ASSERT_EQ(t->erase_seq, erase);
+        ASSERT_TRUE(t->cursor_low_line == low);   /* a failed resize leaves both */
         ASSERT_EQ(t->cursor.row, cur.row); ASSERT_EQ(t->cursor.col, cur.col);
         ASSERT_TRUE(ring_ok(t));
         char *txt = all_text(t);

@@ -1972,6 +1972,10 @@ int test_term_abs_range_start_recycled(void);
 int test_term_abs_range_empty(void);
 int test_term_reflow_seq(void);
 int test_term_region_scroll_seq(void);
+int test_term_erase_seq(void);
+int test_term_cursor_low_line(void);
+int test_term_cursor_low_scrolled(void);
+int test_term_extract_cursor_prefix(void);
 
 /* test_scroll_region.c */
 int test_sr_init_defaults(void);
@@ -3033,6 +3037,15 @@ int test_runcmd_capture_alt_scroll_keeps_range(void);
 int test_runcmd_capture_alt_at_start_only(void);
 int test_runcmd_capture_take_oom(void);
 int test_runcmd_capture_probe_matches_dup(void);
+int test_runcmd_capture_clear_taller_than_start(void);
+int test_runcmd_capture_clear_from_row_zero(void);
+int test_runcmd_capture_erase_display_alone(void);
+int test_runcmd_capture_cursor_home_redraw(void);
+int test_runcmd_capture_cursor_up_inside_range(void);
+int test_runcmd_capture_no_final_newline(void);
+int test_runcmd_capture_partial_row_at_cancel(void);
+int test_runcmd_capture_prompt_rules(void);
+int test_runcmd_capture_start_resets(void);
 int test_runcmd_results_every_row(void);
 int test_runcmd_results_executing_each_cause(void);
 int test_runcmd_results_typed_new_chat(void);
@@ -6054,6 +6067,10 @@ int main(void) {
     failed += test_term_abs_range_empty();
     failed += test_term_reflow_seq();
     failed += test_term_region_scroll_seq();
+    failed += test_term_erase_seq();
+    failed += test_term_cursor_low_line();
+    failed += test_term_cursor_low_scrolled();
+    failed += test_term_extract_cursor_prefix();
 
     printf("\n--- AI Chat Indicator ---\n");
     failed += test_indicator_removal_with_newlines();
@@ -7119,6 +7136,15 @@ int main(void) {
     failed += test_runcmd_capture_alt_at_start_only();
     failed += test_runcmd_capture_take_oom();
     failed += test_runcmd_capture_probe_matches_dup();
+    failed += test_runcmd_capture_clear_taller_than_start();
+    failed += test_runcmd_capture_clear_from_row_zero();
+    failed += test_runcmd_capture_erase_display_alone();
+    failed += test_runcmd_capture_cursor_home_redraw();
+    failed += test_runcmd_capture_cursor_up_inside_range();
+    failed += test_runcmd_capture_no_final_newline();
+    failed += test_runcmd_capture_partial_row_at_cancel();
+    failed += test_runcmd_capture_prompt_rules();
+    failed += test_runcmd_capture_start_resets();
     failed += test_runcmd_results_every_row();
     failed += test_runcmd_results_executing_each_cause();
     failed += test_runcmd_results_typed_new_chat();

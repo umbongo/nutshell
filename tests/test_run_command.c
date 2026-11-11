@@ -2567,3 +2567,260 @@ int test_runcmd_path_plan_table(void)
     ASSERT_EQ(bad.reset_rounds, 0);
     TEST_END();
 }
+
+/* ---- Capture after a clear, and output with no final newline (review of B1-B11, 2026-11-11) ---- */
+
+/* A capture started at the term's cursor, a command's bytes fed, then taken. */
+static void cap_run(Terminal *t, RunCmdCapture *c, const char *cmd, const char *bytes)
+{
+    runcmd_capture_start(c, t);
+    rc_feed(t, bytes);
+    (void)runcmd_capture_take(c, t, cmd, 4096);
+}
+
+/* The prompt on row 3 of 10, `clear; ls`, output taller than the start row:
+ * the end line (5) is past the start (3), yet f1 and f2 sit above the start. */
+int test_runcmd_capture_clear_taller_than_start(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "a\r\nb\r\nc\r\n$ ");
+    runcmd_capture_start(&c, t);
+    ASSERT_EQ((int)c.start_line, 3);
+    rc_feed(t, "clear; ls\r\n\x1b[H\x1b[2J" "f1\r\nf2\r\nf3\r\nf4\r\nf5\r\n$ ");
+    ASSERT_TRUE(term_abs_cursor_line(t) > c.start_line);    /* not empty, not inverted */
+    ASSERT_EQ(runcmd_capture_take(&c, t, "clear; ls", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_NOT_NULL(c.head);
+    if (c.head) ASSERT_STR_EQ(c.head, "f1\nf2\nf3\nf4\nf5\n$");
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+/* The prompt on row 0: the clear homes the cursor to the start line itself. */
+int test_runcmd_capture_clear_from_row_zero(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    cap_run(t, &c, "clear; ls", "clear; ls\r\n\x1b[H\x1b[2J" "f1\r\nf2\r\n$ ");
+    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_NOT_NULL(c.head);
+    if (c.head) ASSERT_STR_EQ(c.head, "f1\nf2\n$");
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+/* A clear that leaves the cursor where it is (ED 2 alone) after output began. */
+int test_runcmd_capture_erase_display_alone(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "a\r\n$ ");
+    cap_run(t, &c, "demo", "demo\r\nold1\r\nold2\r\n\x1b[2Jnew\r\n$ ");
+    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_NOT_NULL(c.head);
+    /* the screen as it is: the cleared rows above, the cursor stayed on row 4 */
+    if (c.head) ASSERT_STR_EQ(c.head, "\n\n\n\nnew\n$");
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+/* Cursor-home redraw with no clear at all (a full-screen repaint). */
+int test_runcmd_capture_cursor_home_redraw(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "a\r\nb\r\n$ ");
+    cap_run(t, &c, "redraw", "redraw\r\n\x1b[H" "x1\x1b[K\r\nx2\x1b[K\r\nx3\x1b[K\r\nx4\x1b[K\r\nx5\x1b[K\r\n$ ");
+    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_NOT_NULL(c.head);
+    if (c.head) ASSERT_STR_EQ(c.head, "x1\nx2\nx3\nx4\nx5\n$");
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+/* Moving up inside the command's own rows (a progress line) is not a redraw,
+ * and neither is an earlier command's home: the mark restarts at each start. */
+int test_runcmd_capture_cursor_up_inside_range(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    cap_run(t, &c, "run", "run\r\nprog 1\r\n\x1b[Aprog 2\x1b[K\r\ndone\r\n$ ");
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_NOT_NULL(c.head);
+    if (c.head) ASSERT_STR_EQ(c.head, "prog 2\ndone");
+    cap_free(&c);
+
+    /* the first command cleared and homed; the second, started below, is plain */
+    Terminal *u = term_init(10, 40, 100);
+    RunCmdCapture d, e;
+    memset(&d, 0, sizeof d);
+    memset(&e, 0, sizeof e);
+    rc_feed(u, "a\r\nb\r\n$ ");
+    cap_run(u, &d, "clear", "clear\r\n\x1b[H\x1b[2J$ ");
+    ASSERT_TRUE((d.flags & RUNCMD_CAP_SCREEN) != 0);
+    cap_run(u, &e, "ls", "ls\r\nf1\r\nf2\r\n$ ");
+    ASSERT_EQ((int)e.flags, 0);
+    ASSERT_NOT_NULL(e.head);
+    if (e.head) ASSERT_STR_EQ(e.head, "f1\nf2");
+    cap_free(&d);
+    cap_free(&e);
+    term_free(u);
+    term_free(t);
+    TEST_END();
+}
+
+/* printf foo: the output shares the prompt's row; cat of a file with no final
+ * newline loses nothing. */
+int test_runcmd_capture_no_final_newline(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "user@h:~$ ");
+    cap_run(t, &c, "printf foo", "printf foo\r\nfoouser@h:~$ ");
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_NOT_NULL(c.head);
+    if (c.head) ASSERT_STR_EQ(c.head, "foo");
+    cap_free(&c);
+    term_free(t);
+
+    Terminal *u = term_init(10, 40, 100);
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    rc_feed(u, "user@h:~$ ");
+    cap_run(u, &d, "cat f", "cat f\r\nl1\r\nl2\r\nl3user@h:~$ ");
+    ASSERT_EQ((int)d.flags, 0);
+    ASSERT_NOT_NULL(d.head);
+    if (d.head) ASSERT_STR_EQ(d.head, "l1\nl2\nl3");
+    cap_free(&d);
+    term_free(u);
+    TEST_END();
+}
+
+/* A cancel while the command runs: the partial current row, no prompt there. */
+int test_runcmd_capture_partial_row_at_cancel(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    cap_run(t, &c, "run", "run\r\nstep 1\r\nprogress 50%");
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_NOT_NULL(c.head);
+    if (c.head) ASSERT_STR_EQ(c.head, "step 1\nprogress 50%");
+    cap_free(&c);
+    term_free(t);
+
+    /* only the partial row, trailing blanks trimmed */
+    Terminal *u = term_init(10, 40, 100);
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    rc_feed(u, "$ ");
+    cap_run(u, &d, "run", "run\r\nwaiting   ");
+    if (d.head) ASSERT_STR_EQ(d.head, "waiting");
+    cap_free(&d);
+    term_free(u);
+    TEST_END();
+}
+
+/* An ordinary command leaves no prompt line; the prompt's trailing space is
+ * part of the comparison; a changed prompt shows as a last line; a prompt
+ * past the buffer is never read (the cursor row stays out). */
+int test_runcmd_capture_prompt_rules(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 60, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "user@h:~$ ");
+    cap_run(t, &c, "ls", "ls\r\nout1\r\nout2\r\nuser@h:~$ ");
+    ASSERT_EQ((int)c.flags, 0);
+    if (c.head) ASSERT_STR_EQ(c.head, "out1\nout2");
+    ASSERT_EQ((int)c.prompt_len, 10);
+    cap_free(&c);
+
+    /* only the prompt on the row: nothing added, EMPTY */
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    cap_run(t, &d, "true", "true\r\nuser@h:~$ ");
+    ASSERT_EQ((int)d.flags, (int)RUNCMD_CAP_EMPTY);
+    ASSERT_NULL(d.head);
+    cap_free(&d);
+    term_free(t);
+
+    /* a prompt that changed (cd): the new prompt is a last line, trimmed */
+    Terminal *u = term_init(10, 60, 100);
+    RunCmdCapture e;
+    memset(&e, 0, sizeof e);
+    rc_feed(u, "user@h:~$ ");
+    cap_run(u, &e, "cd /tmp", "cd /tmp\r\nuser@h:/tmp$ ");
+    ASSERT_NOT_NULL(e.head);
+    if (e.head) ASSERT_STR_EQ(e.head, "user@h:/tmp$");
+    cap_free(&e);
+    term_free(u);
+
+    /* a prompt of 300 bytes is not recorded: the cursor row is left out */
+    Terminal *w = term_init(10, 400, 100);
+    RunCmdCapture f;
+    memset(&f, 0, sizeof f);
+    char longp[301];
+    memset(longp, 'p', 300);
+    longp[300] = '\0';
+    rc_feed(w, longp);
+    runcmd_capture_start(&f, w);
+    ASSERT_EQ((int)f.prompt_len, 0);
+    ASSERT_EQ(f.prompt_long, 1);
+    rc_feed(w, "x\r\nout\r\n");
+    rc_feed(w, longp);
+    ASSERT_EQ(runcmd_capture_take(&f, w, "x", 4096), 1);
+    ASSERT_NOT_NULL(f.head);
+    if (f.head) ASSERT_STR_EQ(f.head, "out");
+    cap_free(&f);
+    term_free(w);
+    TEST_END();
+}
+
+/* Starting again re-arms the capture: captured, flags and the excerpt reset. */
+int test_runcmd_capture_start_resets(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    cap_run(t, &c, "ls", "ls\r\nout\r\n$ ");
+    ASSERT_EQ(c.captured, 1);
+    ASSERT_NOT_NULL(c.head);
+    runcmd_capture_start(&c, t);
+    ASSERT_EQ(c.started, 1);
+    ASSERT_EQ(c.captured, 0);
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_NULL(c.head);
+    ASSERT_NULL(c.tail);
+    ASSERT_EQ((int)c.head_len, 0);
+    rc_feed(t, "ls\r\nsecond\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    if (c.head) ASSERT_STR_EQ(c.head, "second");
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
