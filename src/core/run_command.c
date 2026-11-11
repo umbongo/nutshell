@@ -371,17 +371,35 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
     int redrawn = 0;
     if (!screen && end <= c->start_line) screen = redrawn = 1;
 
+    /* A NULL text is an allocation failure, never "no output": the range
+     * reader returns "" when nothing is left. The screen reader returns NULL
+     * for a blank screen too, so a one-row probe (it fills a tiny buffer from
+     * the same rows, writing at least a byte exactly when any row has
+     * content) tells the two apart. */
+    int oom = 0;
     if (screen) {
         flags |= RUNCMD_CAP_SCREEN;
         text = term_extract_last_n_dup(t, t->rows, &len);
-        if (redrawn && text && len > 0) flags |= RUNCMD_CAP_REDRAWN;
+        if (!text) {
+            char probe[8];
+            oom = term_extract_last_n(t, t->rows, probe, sizeof probe) > 0;
+        }
+        if (redrawn && (oom || (text && len > 0))) flags |= RUNCMD_CAP_REDRAWN;
     } else {
         unsigned range_flags = 0;
         text = term_extract_abs_range_dup(t, c->start_line, end, command, &len,
                                           &range_flags);
+        if (!text) oom = 1;
         if (range_flags & TERM_RANGE_START_RECYCLED) flags |= RUNCMD_CAP_SCROLLED_OUT;
     }
 
+    if (oom) {
+        /* Dropped, size unknown: no excerpt, no EMPTY (the signature B8 reads
+         * as "output dropped"), omitted_bytes 0. */
+        cap_clear_excerpt(c);
+        c->flags = flags;
+        return 1;
+    }
     if (!text || len == 0) flags |= RUNCMD_CAP_EMPTY;
     c->flags = flags;
     runcmd_cut(text, len, cap, c);

@@ -158,10 +158,11 @@ typedef struct {
      * its end (run_command, spec decision 10). reflow_seq: bumped by every
      * term_resize() that commits, beside epoch -- a failed resize leaves it,
      * and the alternate screen does not touch it. region_scroll_seq: bumped
-     * whenever rows shift in place instead of being recycled into scrollback
-     * (a scroll region, any scroll on the alternate screen, every scroll
-     * down), the events after which absolute line numbers stop meaning the
-     * same rows. */
+     * whenever PRIMARY-screen rows shift in place instead of being recycled
+     * into scrollback (a scroll region, every scroll down), the events after
+     * which absolute line numbers stop meaning the same rows. Scrolls on the
+     * alternate screen are not counted: it has rows of its own, and the
+     * capture reads the alternate-screen flag itself. */
     uint32_t reflow_seq;
     uint32_t region_scroll_seq;
     uint64_t write_gen;

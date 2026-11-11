@@ -1066,3 +1066,115 @@ int test_runcmd_capture_cut_applied(void)
     term_free(t);
     TEST_END();
 }
+
+/* Spec 10: "less then q keeps the output before it". Scrolling the alternate
+ * screen is not a region scroll of the primary ring. */
+int test_runcmd_capture_alt_scroll_keeps_range(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "less f\r\nout1\r\n");
+    rc_feed(t, "\x1b[?1049h");
+    char b[16];
+    for (int i = 0; i < 25; i++) {                 /* scrolls the alternate screen */
+        int k = snprintf(b, sizeof b, "pg%d\r\n", i);
+        term_process(t, b, (size_t)k);
+    }
+    rc_feed(t, "\x1b[?1049l");
+    rc_feed(t, "out2\r\n$ ");
+    ASSERT_EQ((int)t->region_scroll_seq, (int)c.start_region_seq);
+    ASSERT_EQ(runcmd_capture_take(&c, t, "less f", 4096), 1);
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_STR_EQ(c.head, "out1\nout2");
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+/* The alternate screen on at the start only: still SCREEN (spec 10). */
+int test_runcmd_capture_alt_at_start_only(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "P1\r\n");
+    rc_feed(t, "\x1b[?1049h$ ");
+    runcmd_capture_start(&c, t);
+    ASSERT_EQ(c.start_alt, 1);
+    rc_feed(t, "ls\r\nout\r\n\x1b[?1049l");
+    ASSERT_TRUE(!t->alt_screen_active);
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)RUNCMD_CAP_SCREEN);
+    ASSERT_TRUE(c.head && strstr(c.head, "P1") != NULL);
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+/* An allocation failure while taking is "dropped", never "no output". */
+int test_runcmd_capture_take_oom(void)
+{
+    TEST_BEGIN();
+    for (int at = 1; at <= 2; at++) {
+        Terminal *t = term_init(10, 200, 5000);
+        RunCmdCapture c;
+        memset(&c, 0, sizeof c);
+        rc_feed(t, "$ ");
+        runcmd_capture_start(&c, t);
+        rc_feed(t, "big\r\n");
+        char b[32];
+        for (int i = 0; i < 400; i++) {
+            int k = snprintf(b, sizeof b, "line %04d\r\n", i);
+            term_process(t, b, (size_t)k);
+        }
+        rc_feed(t, "$ ");
+        runcmd_set_alloc_for_test(plan_failing_alloc);   /* the cut's head, then its tail */
+        g_plan_alloc_calls = 0;
+        g_plan_alloc_fail_at = at;
+        ASSERT_EQ(runcmd_capture_take(&c, t, "big", 1000), 1);
+        runcmd_set_alloc_for_test(NULL);
+        ASSERT_EQ(c.captured, 1);
+        ASSERT_NULL(c.head);
+        ASSERT_NULL(c.tail);
+        ASSERT_EQ((int)c.omitted_bytes, 3999);
+        ASSERT_EQ((int)(c.flags & RUNCMD_CAP_EMPTY), 0);
+        ASSERT_EQ((int)c.flags, 0);
+        term_free(t);
+    }
+    TEST_END();
+}
+
+/* The take's OOM test for the screen reader rests on this: a one-row probe
+ * writes a byte exactly when term_extract_last_n_dup finds content. */
+int test_runcmd_capture_probe_matches_dup(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(6, 20, 50);
+    char probe[8];
+    size_t len = 0;
+    char *s = term_extract_last_n_dup(t, t->rows, &len);        /* blank */
+    ASSERT_NULL(s);
+    ASSERT_EQ((int)term_extract_last_n(t, t->rows, probe, sizeof probe), 0);
+    rc_feed(t, "\xF0\x9F\x98\x80");                             /* one 4-byte glyph */
+    s = term_extract_last_n_dup(t, t->rows, &len);
+    ASSERT_NOT_NULL(s);
+    ASSERT_TRUE(term_extract_last_n(t, t->rows, probe, sizeof probe) > 0);
+    free(s);
+    rc_feed(t, "\r\n\r\n \x1b[1;31m\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC");
+    s = term_extract_last_n_dup(t, t->rows, &len);
+    ASSERT_NOT_NULL(s);
+    ASSERT_TRUE(term_extract_last_n(t, t->rows, probe, sizeof probe) > 0);
+    free(s);
+    rc_feed(t, "\x1b[2J");                                      /* cleared: blank again */
+    s = term_extract_last_n_dup(t, t->rows, &len);
+    ASSERT_EQ(s == NULL, term_extract_last_n(t, t->rows, probe, sizeof probe) == 0);
+    free(s);
+    term_free(t);
+    TEST_END();
+}

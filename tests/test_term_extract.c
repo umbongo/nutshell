@@ -681,14 +681,20 @@ int test_term_region_scroll_seq(void) {
     for (int i = 0; i < 10; i++) feed_str(t, "y\r\n");
     ASSERT_EQ((int)t->region_scroll_seq, (int)before);
 
-    /* Entering and leaving the alternate screen does not bump it; scrolling
-     * on it does. */
+    /* Entering and leaving the alternate screen does not bump it, and nor
+     * does scrolling on it (its rows are its own; the capture reads the
+     * alt-screen flag). Region scrolls and reverse index on it stay uncounted. */
     feed_str(t, "\x1b[?1049h");
     ASSERT_EQ((int)t->region_scroll_seq, (int)before);
     for (int i = 0; i < 10; i++) feed_str(t, "z\r\n");
+    ASSERT_EQ((int)t->region_scroll_seq, (int)before);
+    feed_str(t, "\x1b[2;4r\x1b[4;1H\n\x1b[2;1H\x1bM\x1b[L\x1b[r");
+    ASSERT_EQ((int)t->region_scroll_seq, (int)before);
+    feed_str(t, "\x1b[?1049l");
+    ASSERT_EQ((int)t->region_scroll_seq, (int)before);
+    feed_str(t, "\x1b[2;4r\x1b[4;1H\n\x1b[r");   /* back on the primary: counted again */
     ASSERT_TRUE(t->region_scroll_seq > before);
     before = t->region_scroll_seq;
-    feed_str(t, "\x1b[?1049l");
     ASSERT_EQ((int)t->region_scroll_seq, (int)before);
 
     /* A resize does not bump it. */

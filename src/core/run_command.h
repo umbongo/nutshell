@@ -89,8 +89,11 @@ typedef enum {
  *                                     omitted_bytes between head and tail);
  *   head == NULL, EMPTY               nothing to show: "no output on the screen";
  *   head == NULL, no EMPTY, captured  the output could not be read or kept (an
- *                                     allocation failed): say it was dropped;
- *                                     omitted_bytes is its size when known, else 0. */
+ *                                     allocation failed): say it was dropped, never
+ *                                     "no output". omitted_bytes is its size when the
+ *                                     cut failed, 0 when the read failed; B8 need not
+ *                                     tell the two apart (one note either way). The
+ *                                     other flags (SCREEN, REDRAWN) are still set. */
 typedef struct {
     int      started, captured;      /* captured: spec section 10's once-only flag */
     uint64_t start_line;  uint32_t start_reflow_seq, start_region_seq;  int start_alt;
@@ -159,12 +162,13 @@ void runcmd_capture_start(RunCmdCapture *c, const Terminal *t);
  * nothing, unless started && !captured && t. Otherwise sets captured = 1 and
  * stores the excerpt (through runcmd_cut with cap) and the flags:
  *  - alternate screen on at the start or now, reflow_seq or region_scroll_seq
- *    moved: the visible screen rows, SCREEN;
+ *    (primary-screen scrolls only) moved: the visible screen rows, SCREEN;
  *  - else the primary range [start_line, cursor line) is empty or inverted:
  *    the screen rows, SCREEN | REDRAWN (just SCREEN when the screen is blank);
  *  - else that range with the echo (command) dropped; SCROLLED_OUT when its
  *    start has gone from the ring.
- * EMPTY whenever the final text is empty. Text never holds a control byte
+ * EMPTY whenever the final text is empty; a failed read or copy sets no EMPTY
+ * (see RunCmdCapture). Text never holds a control byte
  * (C0 but the row separator, DEL, C1): term_extract writes those cells as
  * spaces. Returns 1. */
 int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command,
