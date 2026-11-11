@@ -2281,7 +2281,6 @@ int test_ai_stream_gemini_signature_captured(void)
     ai_tools_stream_reset(&state);
     ASSERT_NULL(state.sig);
     ASSERT_EQ((int)state.sig_len, 0);
-    ASSERT_EQ((int)state.sig_cap, 0);
     TEST_END();
 }
 
@@ -2333,6 +2332,41 @@ int test_ai_stream_gemini_parallel_first_only(void)
     TEST_END();
 }
 
+/* The path the stream thread takes for one "data: " line: prepare, then the
+ * combined text/tool parser on what prepare returned. */
+static int read_line_like_thread(AiToolStreamState *state, const char *json,
+                                 char *content, size_t csz, char *thinking,
+                                 size_t tsz, int *in_tok, int *out_tok)
+{
+    char *owned = NULL;
+    const char *use = ai_stream_line_prepare(state, json, &owned);
+    if (!use) return -99;
+    int rc = ai_parse_stream_chunk_ex(use, content, csz, thinking, tsz, state,
+                                      "gemini", in_tok, out_tok);
+    free(owned);
+    return rc;
+}
+
+/* A chunk with text, reasoning, usage, a call carrying a `raw`-byte signature
+ * (escaped text `esc`) and a second call. */
+static char *long_sig_chunk(const char *esc)
+{
+    const char *head =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\","
+        "\"reasoning_content\":\"hmm\",\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"";
+    const char *tail =
+        "\"}}},{\"id\":\"b\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]}}],"
+        "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}";
+    char *chunk = (char *)malloc(strlen(head) + strlen(esc) + strlen(tail) + 1);
+    if (!chunk) return NULL;
+    sprintf(chunk, "%s%s%s", head, esc, tail);
+    return chunk;
+}
+
 int test_ai_stream_gemini_long_signature_kept(void)
 {
     TEST_BEGIN();
@@ -2341,24 +2375,44 @@ int test_ai_stream_gemini_long_signature_kept(void)
     ASSERT_NOT_NULL(sig);
     for (int i = 0; i < SIG_LEN; i++) sig[i] = (char)('A' + i % 26);
     sig[SIG_LEN] = '\0';
-
-    const char *head =
-        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
-        "\"type\":\"function\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
-        "\"extra_content\":{\"google\":{\"thought_signature\":\"";
-    const char *tail = "\"}}}]}}]}";
-    char *chunk = (char *)malloc(strlen(head) + SIG_LEN + strlen(tail) + 1);
+    char *chunk = long_sig_chunk(sig);
     ASSERT_NOT_NULL(chunk);
-    sprintf(chunk, "%s%s%s", head, sig, tail);
 
+    /* alone, the JSON parser refuses the line (its strings stop at 8191) */
     AiToolStreamState state;
     ai_tools_stream_init(&state);
-    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
-    ASSERT_EQ(state.pending_tool_count, 1);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), -1);
+
+    /* through the thread's path: text, reasoning, usage, both calls and the
+     * whole signature */
+    char content[64] = "", thinking[64] = "";
+    int in_tok = 0, out_tok = 0;
+    int rc = read_line_like_thread(&state, chunk, content, sizeof(content),
+                                   thinking, sizeof(thinking), &in_tok, &out_tok);
+    ASSERT_TRUE(rc >= 0);
+    ASSERT_STR_EQ(content, "hello");
+    ASSERT_STR_EQ(thinking, "hmm");
+    ASSERT_EQ(in_tok, 11);
+    ASSERT_EQ(out_tok, 7);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_STR_EQ(state.pending_tool_calls[0].name, "web_search");
+    ASSERT_STR_EQ(state.pending_tool_calls[1].name, "web_fetch");
     ASSERT_NOT_NULL(state.sig);
     ASSERT_EQ((int)state.sig_len, SIG_LEN);
-    ASSERT_TRUE(state.sig_cap > state.sig_len);
     ASSERT_TRUE(strcmp(state.sig, sig) == 0);
+
+    /* a later long signature in the same response is cut out and dropped, the
+     * line still read */
+    ai_tools_stream_reset(&state);
+    ai_tools_stream_init(&state);
+    state.sig_seen = 1;
+    content[0] = '\0';
+    rc = read_line_like_thread(&state, chunk, content, sizeof(content), thinking,
+                               sizeof(thinking), &in_tok, &out_tok);
+    ASSERT_TRUE(rc >= 0);
+    ASSERT_STR_EQ(content, "hello");
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_NULL(state.sig);
 
     ai_tools_stream_reset(&state);
     free(chunk);
@@ -2369,9 +2423,7 @@ int test_ai_stream_gemini_long_signature_kept(void)
 int test_ai_stream_gemini_long_signature_escapes(void)
 {
     TEST_BEGIN();
-    /* a signature past the JSON parser's string limit, with base64 slashes
-     * escaped as \/ and a + plus: decoded, and the rest of the chunk
-     * (the call, a second call) still read */
+    /* base64 slashes escaped as \/ and a \u002b plus, past the parser's limit */
     enum { RAW = 12000 };
     char *esc = (char *)malloc(RAW * 2 + 64);
     char *want = (char *)malloc(RAW + 8);
@@ -2385,47 +2437,96 @@ int test_ai_stream_gemini_long_signature_escapes(void)
     }
     esc[e] = '\0';
     want[w] = '\0';
-
-    const char *head =
-        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
-        "{\"id\":\"a\",\"type\":\"function\","
-        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
-        "\"extra_content\":{\"google\":{\"thought_signature\":\"";
-    const char *tail =
-        "\"}}},{\"id\":\"b\",\"type\":\"function\","
-        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]}}]}";
-    char *chunk = (char *)malloc(strlen(head) + e + strlen(tail) + 1);
+    char *chunk = long_sig_chunk(esc);
     ASSERT_NOT_NULL(chunk);
-    sprintf(chunk, "%s%s%s", head, esc, tail);
 
     AiToolStreamState state;
     ai_tools_stream_init(&state);
-    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
+    char content[64] = "", thinking[64] = "";
+    int in_tok = 0, out_tok = 0;
+    ASSERT_TRUE(read_line_like_thread(&state, chunk, content, sizeof(content),
+                                      thinking, sizeof(thinking), &in_tok,
+                                      &out_tok) >= 0);
     ASSERT_EQ(state.pending_tool_count, 2);
-    ASSERT_STR_EQ(state.pending_tool_calls[1].name, "web_fetch");
     ASSERT_NOT_NULL(state.sig);
     ASSERT_EQ((int)state.sig_len, (int)w);
     ASSERT_TRUE(strcmp(state.sig, want) == 0);
+    ASSERT_STR_EQ(content, "hello");
     ai_tools_stream_reset(&state);
 
-    /* a long string that is not a signature, or an escape it cannot decode,
-     * is still a parse failure */
-    char *bad = (char *)malloc(strlen(head) + 20000 + strlen(tail) + 8);
+    /* an escape the decoder refuses: the line cannot be read (NULL), nothing kept */
+    char *bad_esc = (char *)malloc(9100 + 16);
+    ASSERT_NOT_NULL(bad_esc);
+    memset(bad_esc, 'q', 9000);
+    memcpy(bad_esc + 9000, "\\ud83d", 6);
+    bad_esc[9006] = '\0';
+    char *bad = long_sig_chunk(bad_esc);
     ASSERT_NOT_NULL(bad);
-    size_t b = (size_t)sprintf(bad, "%s", head);
-    memset(bad + b, 'q', 9000);
-    b += 9000;
-    memcpy(bad + b, "\\ud83d", 6);
-    b += 6;
-    sprintf(bad + b, "%s", tail);
+    char *owned = NULL;
     ai_tools_stream_init(&state);
-    ASSERT_EQ(ai_parse_tool_stream_openai(bad, &state), -1);
+    ASSERT_NULL(ai_stream_line_prepare(&state, bad, &owned));
+    ASSERT_NULL(owned);
     ASSERT_NULL(state.sig);
     ai_tools_stream_reset(&state);
 
+    /* a cut value (no closing quote) is refused the same way */
+    char *cut = (char *)malloc(strlen(chunk) + 1);
+    ASSERT_NOT_NULL(cut);
+    strcpy(cut, chunk);
+    char *mid = strstr(cut, "thought_signature") + 9000;
+    *mid = '\0';
+    ai_tools_stream_init(&state);
+    ASSERT_NULL(ai_stream_line_prepare(&state, cut, &owned));
+    ai_tools_stream_reset(&state);
+
+    free(cut);
     free(bad);
+    free(bad_esc);
     free(chunk);
     free(esc);
     free(want);
+    TEST_END();
+}
+
+int test_ai_stream_line_prepare_leaves_other_lines(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    char *owned = NULL;
+
+    /* a short line, and one with the key but a short value, are returned as is */
+    const char *shortline =
+        "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"c2ln\"}}}]}}]}";
+    ASSERT_TRUE(ai_stream_line_prepare(&state, shortline, &owned) == shortline);
+    ASSERT_NULL(owned);
+    ASSERT_NULL(state.sig);
+
+    /* a long line whose text mentions the key (escaped quotes) is not touched,
+     * and neither is a long signature on a text part with no tool call */
+    size_t n = 9000;
+    char *big = (char *)malloc(n + 400);
+    ASSERT_NOT_NULL(big);
+    int o = sprintf(big, "{\"choices\":[{\"delta\":{\"content\":\"%s",
+                    "\\\"extra_content\\\":{\\\"google\\\":{\\\"thought_signature\\\":\\\"");
+    memset(big + o, 'x', n);
+    o += (int)n;
+    strcpy(big + o, "\"}}]}");
+    ASSERT_TRUE(ai_stream_line_prepare(&state, big, &owned) == big);
+    ASSERT_NULL(owned);
+    ASSERT_NULL(state.sig);
+
+    o = sprintf(big, "{\"choices\":[{\"delta\":{\"content\":\"hi\","
+                "\"extra_content\":{\"google\":{\"thought_signature\":\"");
+    memset(big + o, 'x', n);
+    o += (int)n;
+    strcpy(big + o, "\"}}}}]}");
+    ASSERT_TRUE(ai_stream_line_prepare(&state, big, &owned) == big);
+    ASSERT_NULL(owned);
+    ASSERT_NULL(state.sig);
+
+    free(big);
+    ai_tools_stream_reset(&state);
     TEST_END();
 }

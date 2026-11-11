@@ -9,6 +9,7 @@
 #include "chat_rebuild.h"
 #include "run_command.h"
 #include "json_parser.h"
+#include "sse_line.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -16,8 +17,9 @@
 /* Context for SSE streaming callback */
 typedef struct {
     AiStream *stream;            /* owns the abort flag and the post target */
-    char line_buf[8192];     /* SSE line accumulation buffer */
-    size_t line_len;
+    SseLine sse;             /* SSE line assembly: heap, bounded, owned by this thread */
+    int skipped_seen;        /* sse_line_skipped() as of the last look */
+    int *skip_noted;         /* the stream's "line skipped" row was posted (once per stream) */
     char full_content[AI_MSG_MAX];   /* accumulated full content */
     size_t content_len;
     char full_thinking[AI_MSG_MAX];  /* accumulated full thinking */
@@ -149,6 +151,23 @@ static int store_plain_reply(AiConversation *conv, const AiStream *s,
                              ctx->thinking_cut, s->provider, conv->model) == 0;
 }
 
+static void post_tool_msg(AiStream *s, ChatItemType type, const char *text);
+
+/* A reply line was thrown away (too long for SSE_LINE_MAX, a buffer that would
+ * not grow, or a signature that could not be read): its reasoning may have been
+ * in it, and the reply says so once. */
+static void stream_note_skipped_line(StreamContext *ctx)
+{
+    ctx->thinking_cut = 1;
+    if (ctx->skip_noted && !*ctx->skip_noted) {
+        *ctx->skip_noted = 1;
+        post_tool_msg(ctx->stream, CHAT_ITEM_STATUS,
+                      "[a line of the reply was too long and was skipped]");
+    }
+}
+
+static void stream_process_json(StreamContext *ctx, const char *json);
+
 /* Process a single SSE line from the stream */
 static void stream_process_line(StreamContext *ctx, const char *line, size_t len)
 {
@@ -161,7 +180,24 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     /* An error event already ended the stream; nothing after it counts. */
     if (ctx->stream_error) return;
 
+    /* A long Gemini thought signature is cut out of a copy first, so every
+     * parser below reads the same line (text, reasoning, usage and calls). */
     const char *json = line + 6;
+    char *owned = NULL;
+    if (ctx->tool_stream && strcmp(ctx->provider, "anthropic") != 0) {
+        json = ai_stream_line_prepare(ctx->tool_stream, json, &owned);
+        if (!json) {
+            stream_note_skipped_line(ctx);
+            return;
+        }
+    }
+    stream_process_json(ctx, json);
+    free(owned);
+}
+
+/* One line's JSON (after "data: "), as prepared. */
+static void stream_process_json(StreamContext *ctx, const char *json)
+{
     if (strncmp(json, "[DONE]", 6) == 0) ctx->saw_end = 1;
     /* An in-stream error event ({"error":{"message":...}}): the stream ends
      * and the reply says why, instead of finishing silently. */
@@ -262,6 +298,14 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     }
 }
 
+/* One assembled SSE line; a nonzero return stops the feed. */
+static int sse_line_cb(const char *line, size_t len, void *userdata)
+{
+    StreamContext *ctx = (StreamContext *)userdata;
+    stream_process_line(ctx, line, len);
+    return ctx->stream_error ? 1 : 0;
+}
+
 /* SSE stream callback — accumulates lines and processes them */
 static int stream_callback(const char *data, size_t len, void *userdata)
 {
@@ -274,25 +318,13 @@ static int stream_callback(const char *data, size_t len, void *userdata)
     if (ctx->stream_error)
         return 1; /* an error event ended the stream */
 
-    for (size_t i = 0; i < len; i++) {
-        char c = data[i];
-        if (c == '\n') {
-            /* Strip trailing \r */
-            if (ctx->line_len > 0 && ctx->line_buf[ctx->line_len - 1] == '\r')
-                ctx->line_len--;
-            ctx->line_buf[ctx->line_len] = '\0';
-            stream_process_line(ctx, ctx->line_buf, ctx->line_len);
-            ctx->line_len = 0;
-            if (ctx->stream_error)
-                return 1;   /* stop at once: nothing after the error counts */
-        } else {
-            if (ctx->line_len < sizeof(ctx->line_buf) - 1)
-                ctx->line_buf[ctx->line_len++] = c;
-            else
-                ctx->thinking_cut = 1;   /* a line cut short may have held reasoning */
-        }
+    /* A stream_error ends the feed at once: nothing after it counts. */
+    int rc = sse_line_feed(&ctx->sse, data, len, sse_line_cb, ctx);
+    if (sse_line_skipped(&ctx->sse) > ctx->skipped_seen) {
+        ctx->skipped_seen = sse_line_skipped(&ctx->sse);
+        stream_note_skipped_line(ctx);
     }
-    return 0;
+    return rc || ctx->stream_error ? 1 : 0;
 }
 
 /* Free a response message and everything it owns. Every site that drops an
@@ -438,6 +470,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
     char final_thinking[AI_MSG_MAX] = "";
     int total_input_tokens = 0, total_output_tokens = 0;
     int loop_done = 0;
+    int line_skip_noted = 0;   /* the "line skipped" row went out (once per stream) */
     int reply_stored = 0;   /* the normal end's ai_conv_add() of the reply took */
     /* A run_command reply's calls, copied from the stored turn and handed to
      * the panel in the done message (post_response_ex takes them). */
@@ -450,6 +483,8 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         memset(&ctx, 0, sizeof(ctx));
         ctx.stream = s;
         ctx.tool_stream = tool_stream_ptr;
+        ctx.skip_noted = &line_skip_noted;
+        sse_line_init(&ctx.sse);
         if (tool_stream_ptr)
             strncpy(ctx.provider, s->provider, sizeof(ctx.provider) - 1);
 
@@ -462,6 +497,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         int rc = ai_http_post_stream(url, req_headers, s->body, s->body_len,
                                      stream_callback, &ctx,
                                      &status, errbuf, sizeof(errbuf));
+        sse_line_free(&ctx.sse);   /* a half line at the end is dropped, as before */
 
         /* If stream was aborted (user cancelled), discard partial results */
         if (ai_stream_aborted(s))

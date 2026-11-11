@@ -2,7 +2,11 @@
  * accumulators (OpenAI and Anthropic format).
  *
  * First byte, low bit 0: the rest of the input is split into lines and each
- * line is fed as a raw stream chunk to both accumulators. Low bit 1: the rest
+ * line is fed as a raw stream chunk to both accumulators (the OpenAI one
+ * through ai_stream_line_prepare, as the stream thread does). Bit 1 (value 2),
+ * low bit 0: the rest, escaped, repeated 1..64 times, is the thought signature
+ * of a Gemini call, so it passes the 8000 bytes a 4 KiB input cannot reach.
+ * Low bit 1: the rest
  * is one text, escaped into a JSON string and sent as the arguments fragment
  * of one call, repeated 1..64 times so the sum passes AI_TOOL_INPUT_MAX, which
  * a 4 KiB input could not otherwise reach.
@@ -13,7 +17,8 @@
  * runcmd_parse_input(), and, as one call's stored input, to
  * agentic_sanitize_tool_inputs(): an input it keeps passes json_validate (the
  * check every request body goes through), one it replaces is exactly "{}".
- * The calls the accumulators finish are sanitised the same way. */
+ * The calls the accumulators finish are sanitised the same way. A thought
+ * signature, when one is kept, is non-empty, and sig_len is its strlen. */
 #include "ai_agentic.h"
 #include "ai_tools.h"
 #include "json_validate.h"
@@ -79,9 +84,17 @@ static void feed(int anthropic, AiToolStreamState *st, const char *chunk)
 {
     static Snap snap;
     snap_take(&snap, st);
-    if (anthropic) (void)ai_parse_tool_stream_anthropic(chunk, st);
-    else           (void)ai_parse_tool_stream_openai(chunk, st);
+    if (anthropic) {
+        (void)ai_parse_tool_stream_anthropic(chunk, st);
+    } else {
+        char *owned = NULL;
+        const char *use = ai_stream_line_prepare(st, chunk, &owned);
+        if (use) (void)ai_parse_tool_stream_openai(use, st);
+        free(owned);
+    }
     check_state(&snap, st);
+    if ((st->sig == NULL) != (st->sig_len == 0)) abort();
+    if (st->sig && strlen(st->sig) != st->sig_len) abort();
     for (int i = 0; i < st->pending_tool_count; i++)
         check_sanitised(st->pending_tool_calls[i].input_json);
 }
@@ -136,6 +149,34 @@ static void run_repeated(const uint8_t *data, size_t size)
     free(esc);
 }
 
+/* The rest of the input, escaped and repeated, as one call's thought signature. */
+static void run_signature(const uint8_t *data, size_t size)
+{
+    if (size < 3) return;
+    int reps = 1 + (int)(data[1] % 64u);
+    char *esc = json_escape(data + 2, size - 2);
+    if (!esc) return;
+    size_t el = strlen(esc);
+    const char *head = "{\"choices\":[{\"delta\":{\"content\":\"t\",\"tool_calls\":["
+        "{\"id\":\"c1\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"";
+    const char *tail = "\"}}}]}}]}";
+    size_t cap = strlen(head) + el * (size_t)reps + strlen(tail) + 1;
+    char *chunk = (char *)malloc(cap);
+    if (!chunk) { free(esc); return; }
+    size_t o = (size_t)snprintf(chunk, cap, "%s", head);
+    for (int i = 0; i < reps; i++) { memcpy(chunk + o, esc, el); o += el; }
+    memcpy(chunk + o, tail, strlen(tail) + 1);
+
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    feed(0, &st, chunk);
+    feed(0, &st, chunk);   /* a second one is dropped, never taken in place */
+    ai_tools_stream_reset(&st);
+    free(chunk);
+    free(esc);
+}
+
 static void run_lines(const uint8_t *data, size_t size)
 {
     char *s = (char *)malloc(size + 1);
@@ -182,7 +223,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     }
     free(text);
 
-    if (data[0] & 1u) run_repeated(data, size);
+    if (data[0] & 2u) run_signature(data, size);
+    else if (data[0] & 1u) run_repeated(data, size);
     else run_lines(data + 1, size - 1);
     return 0;
 }

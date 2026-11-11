@@ -197,15 +197,29 @@ typedef struct {
     /* Gemini's thought signature: the first
      * tool_calls[i].extra_content.google.thought_signature of the response
      * (only the first call of a parallel set carries one), kept whole in a
-     * heap buffer grown as needed (Google states no size). NULL and sig_len 0
-     * when there is none or an allocation failed (the call still stands);
+     * heap buffer of exactly its size (Google states no size). NULL and
+     * sig_len 0 when there is none or an allocation failed (the call still
+     * stands);
      * sig_seen is set at the first one seen, kept or not, so a later one is
      * never taken in its place. Freed by ai_tools_stream_reset. */
     char       *sig;
     size_t      sig_len;
-    size_t      sig_cap;
     int         sig_seen;
 } AiToolStreamState;
+
+/* Prepare one OpenAI-format stream line's JSON (the text after "data: ") for
+ * every parser of the line. The JSON parser holds a string of at most 8191
+ * bytes, and a Gemini thought signature can be longer: a
+ * tool_calls[i].extra_content.google.thought_signature value of more than 8000
+ * raw bytes is cut out of a copy (the copy carries "" in its place) and decoded
+ * on its own into state->sig, unless one was already seen this response (then
+ * it is dropped). Only that key under a "tool_calls" is looked at; text a
+ * model wrote cannot match. Returns the JSON every parser must read: `json`
+ * itself, or the copy (*owned, free it; NULL otherwise). NULL means the line
+ * cannot be read (a cut value, an escape the decoder refuses, out of memory):
+ * the caller skips it and says so. */
+const char *ai_stream_line_prepare(AiToolStreamState *state, const char *json,
+                                   char **owned);
 
 /* Streaming tool detection — Anthropic format */
 int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *state);
