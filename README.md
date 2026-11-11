@@ -29,7 +29,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 
 ## Features
 
-- AI chat assistant with terminal context, pending approval cards for command execution (never block the input, up to eight per session), streaming, and a Thinking disclosure for reasoning
+- AI chat assistant with terminal context, pending approval cards for command execution (never block the input, up to eight per session), a `run_command` tool as an alternative to `[EXEC]` markers, streaming, and a Thinking disclosure for reasoning
 - Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
 - **Telnet** sessions for devices that only speak telnet, with auto-login at the login and password prompts, and port checks ([see below](#telnet))
 - **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,644 unit tests across 141 test files, and cppcheck reports no errors or warnings
+- 4,029 unit tests across 150 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -190,6 +190,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **API key** — encrypted at rest with Windows DPAPI, per Windows user (same protection as saved passwords)
 - **Model** — type one, or press the refresh button to fetch the provider's model list
 - **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
+- **Commands as tool calls** — Automatic (default), On or Off: how the assistant runs terminal commands, through its `run_command` tool or through `[EXEC]` markers. Automatic is On for Anthropic, OpenAI and Moonshot and Off for DeepSeek, Gemini and Custom; see [Commands as Tool Calls](#commands-as-tool-calls)
 
 #### AI Assistant > Behaviour
 - **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens. It can read no more than the tab keeps, which is Scrollback lines plus the rows on screen.
@@ -253,7 +254,7 @@ With **Auto-approve** on, rows at or below the level are approved and start runn
 
 #### Tool Calls
 
-Tools work with Anthropic, OpenAI, DeepSeek and Moonshot (Kimi); the gate below applies to all four. Gemini and a Custom endpoint get no tools. Moonshot requests carry an output limit of 16384 tokens (half the context window for the small moonshot-v1-8k and -32k), and Kimi's reasoning travels back with its tool calls as its thinking models require. If a provider ends a reply at its output limit, the thread shows "reply cut off at the provider's output limit".
+Tools work with Anthropic, OpenAI, DeepSeek and Moonshot (Kimi); the gate below applies to every provider that has them. Gemini and a Custom endpoint get tools (the web tools included) only with **Commands as tool calls** set to On, see [Commands as Tool Calls](#commands-as-tool-calls). Moonshot requests carry an output limit of 16384 tokens (half the context window for the small moonshot-v1-8k and -32k), and Kimi's reasoning travels back with its tool calls as its thinking models require. If a provider ends a reply at its output limit, the thread shows "reply cut off at the provider's output limit".
 
 `web_search` and `read_debug_log` run as they always have. `web_fetch` asks first: the call lands in a one-row approval card (`web_fetch: <address>`, tagged **UNKNOWN**) headed "1 tool call", with **Deny all** and **Run 1 selected**, and the AI waits for your answer.
 
@@ -261,6 +262,18 @@ Tools work with Anthropic, OpenAI, DeepSeek and Moonshot (Kimi); the gate below 
 - **The row** — shows the address without its query string (a trailing `?…` marks one that was dropped); the row replaces every non-ASCII character with �, so nothing invisible reaches it; **Details** shows the full address minus any `user:password@` part, with every non-ASCII character escaped (`\u200B`, `\U000E0041`) and control characters shown as `\x1B`, and a very long address cut with `…`
 - **Redirects** — a fetch you approved on a card does not follow a redirect to another host: it returns "redirect to another host refused; ask again with the new URL"
 - **Waiting** — Stop, Retry and closing the tab release a waiting call. A card expires after the **Tool approval timeout** (default 60 s, 0 = never, **Settings > AI Assistant > Behaviour**, 15 to 3600 s), then reads "expired, not run". A change applies to cards shown after you Save; a card already waiting keeps its timeout
+
+#### Commands as Tool Calls
+
+With **Commands as tool calls** (Settings > AI Assistant > Provider) On, the assistant runs terminal commands through a `run_command` tool instead of `[EXEC]` markers in its reply. Each call is an ordinary command card, with the same rows, risk tags, chips and summary line as an `[EXEC]` card, under the same rules: the **Allowed** ceiling holds or blocks it, a sensitive command (a read of credentials, shell history and the like) still always asks, and **Auto-approve** and its 3-round pause work as described under [Command Execution](#command-execution). A reply can carry up to 16 commands, which land in one card. The card never expires: the **Tool approval timeout** is for tool cards (`web_fetch`) and does not apply to it, so it waits for Run, Deny, Stop, a typed message or New Chat, like an `[EXEC]` card.
+
+- **Which providers** — **Automatic** is On for Anthropic, OpenAI and Moonshot and Off for DeepSeek, Gemini and Custom, whose tool calls are written from their documentation and not yet verified against the live services. **On** enables the tool for any provider, and for Gemini and Custom it also brings the web tools (`web_search`, `web_fetch`, `read_debug_log`); with a Custom endpoint, On tells Nutshell the endpoint accepts the OpenAI `tools` field, and a server that silently ignores tools then leaves the assistant unable to run anything. **Off** keeps `[EXEC]` markers. If a request that carried the tool is rejected with an error about tools, a row under the error says to set the option to Off
+- **`[EXEC]` markers** — in a conversation where the tool is on, a marker in a reply is shown "quoted, not run" and never runs; a command comes only from a `run_command` call
+- **Output** — the output of each command goes back to the assistant as data. Each command keeps up to 16 KiB (the first three quarters and the last quarter, with a marker where the middle was cut); when more than four commands run in one reply they share 64 KiB, so each gets less. A prompt that changed while the command ran (a new host after `ssh`, a REPL after `python3`) is included as the last line of the output, so the assistant can see it. Older output is dropped to save room: only the two most recent rounds of commands keep theirs, and an older command stays in the conversation with a note that it ran
+- **No new request without your action** — Stop, **Deny all**, and a reply in which no command could run (all refused or held, or the session had ended) start no new request; the results are kept and go with your next typed message. A card you Run, or one Auto-approve ran, continues the conversation when its commands finish, as an `[EXEC]` card does
+- **A full conversation** — a conversation that cannot hold another message refuses a typed message in every case: the text stays in the input box and a row says "[conversation full: your message was not sent; start a New Chat]". A reply it cannot store is shown with "[reply not stored: conversation full; start a New Chat]", and a Nutshell note it cannot store shows a row too
+- **Switching tabs** — a reply that was answered without a card (no command could run) keeps its status row when you switch away and back, and the rows of the last 16 finished, stopped or cancelled cards come back with their chips (a command Nutshell stopped waiting for reads "unfinished")
+- **Save chat** — the saved text lists each command as `$ command`, followed by its output block
 
 #### How Commands Are Classified
 
@@ -346,7 +359,7 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 - **SSH key passphrases** are cached in memory only for the duration of the session and securely zeroed on close
 - **Threat model** — what Nutshell assumes and what it does not protect against:
   - The remote host and everything it prints are untrusted. Terminal output can carry text meant to steer the AI, which is why every command is classified and, unless you turn on Auto-approve, waits for your click.
-  - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log and fetched pages. Keep secrets off the screen while AI Assist is in use.
+  - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log, fetched pages and, with **Commands as tool calls** On, the output of every command it runs (up to 16 KiB each). Keep secrets off the screen while AI Assist is in use.
   - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. A fetch runs unasked only with Auto-approve on at Unknown or above, in the tab you are looking at and within the automatic-tool-round cap (Settings > AI Assistant > Behaviour, default 3); otherwise (Auto-approve off or at Read, a background tab, or past the cap) it waits for your click on a card. The query string is one channel for that text, and the card row hides it, but the path and a subdomain carry data too: reading the card, and **Details** for the address (non-ASCII and control characters escaped, a very long one cut with `…`), is the check, not the row's shape. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
   - A local shell runs with your Windows privileges, and so does anything the assistant runs in it.
   - `nutshell.config` kept in a shared folder exposes its non-secret fields (hosts, usernames, settings) to everyone who can read it. The secrets stay DPAPI-locked.
@@ -721,7 +734,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,644 unit tests across 141 test files
+├── tests/                              # 4,029 unit tests across 150 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion
