@@ -39,6 +39,7 @@ CmdBatch *cmd_batch_add(CmdBatchSet *set, const ApprovalQueue *defaults,
     }
 
     nb->id = set->next_id++;
+    nb->reply_msg = -1;
     chat_approval_init(&nb->q);
     if (defaults) {
         nb->q.policy = defaults->policy;

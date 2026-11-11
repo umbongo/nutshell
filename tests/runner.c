@@ -2550,6 +2550,14 @@ int test_chat_msg_batch_sync_run_unrelated_batch_untouched(void);
 int test_chat_msg_batch_sync_run_null_list_returns_zero(void);
 int test_chat_msg_batch_sync_run_null_queue_returns_zero(void);
 int test_chat_msg_batch_sync_run_empty_queue_leaves_items_untouched(void);
+int test_chat_cmd_label_unfinished(void);
+int test_chat_msg_batch_sync_run_executing_ending(void);
+int test_chat_batch_summary_order(void);
+int test_chat_batch_summary_zero_omitted(void);
+int test_chat_batch_summary_no_line(void);
+int test_chat_batch_summary_head(void);
+int test_chat_batch_summary_cap(void);
+int test_chat_msg_batch_counts_rows(void);
 
 /* test_ai_stream.c */
 int test_ai_conv_take_moves_overflow_and_clears_source(void);
@@ -2659,6 +2667,17 @@ int test_cmd_batch_first_pending_oldest_needing_user(void);
 int test_cmd_batch_first_pending_none(void);
 int test_cmd_batch_next_runnable_oldest_with_approved(void);
 int test_cmd_batch_conv_mark_defaults_zero_and_settable(void);
+int test_cmd_batch_reply_msg_defaults_unset(void);
+
+/* test_cmd_run_log.c */
+int test_cmd_run_row_every_state(void);
+int test_cmd_run_log_record_copies(void);
+int test_cmd_run_log_refusals(void);
+int test_cmd_run_log_drops_oldest(void);
+int test_cmd_run_log_free(void);
+int test_cmd_run_log_turn_hash(void);
+int test_cmd_run_record_matches_rule(void);
+int test_cmd_run_log_oom_records_nothing(void);
 int test_cmd_batch_next_runnable_none(void);
 int test_cmd_batch_add_user_acted_zero(void);
 
@@ -3942,6 +3961,9 @@ int test_ui_demo_policy_compact_matches_approval(void);
 int test_ui_demo_policy_for_other_states_is_write_off(void);
 int test_ui_demo_panel_width_only_for_narrow_states(void);
 int test_ui_demo_ansi_swatches(void);
+int test_ui_demo_runlist_rows(void);
+int test_ui_demo_runlist_record_matches_turn(void);
+int test_cmd_run_log_exec_note_before_mark(void);
 
 int test_dirty_flags_count_and_fill(void);
 int test_dirty_flags_null_buffer_and_small_max(void);
@@ -6520,6 +6542,14 @@ int main(void) {
     failed += test_chat_msg_batch_sync_run_null_list_returns_zero();
     failed += test_chat_msg_batch_sync_run_null_queue_returns_zero();
     failed += test_chat_msg_batch_sync_run_empty_queue_leaves_items_untouched();
+    failed += test_chat_cmd_label_unfinished();
+    failed += test_chat_msg_batch_sync_run_executing_ending();
+    failed += test_chat_batch_summary_order();
+    failed += test_chat_batch_summary_zero_omitted();
+    failed += test_chat_batch_summary_no_line();
+    failed += test_chat_batch_summary_head();
+    failed += test_chat_batch_summary_cap();
+    failed += test_chat_msg_batch_counts_rows();
 
     printf("\n--- Pending command batches: cmd_batch ---\n");
     failed += test_cmd_batch_set_init_empty();
@@ -6535,6 +6565,15 @@ int main(void) {
     failed += test_cmd_batch_first_pending_none();
     failed += test_cmd_batch_next_runnable_oldest_with_approved();
     failed += test_cmd_batch_conv_mark_defaults_zero_and_settable();
+    failed += test_cmd_batch_reply_msg_defaults_unset();
+    failed += test_cmd_run_row_every_state();
+    failed += test_cmd_run_log_record_copies();
+    failed += test_cmd_run_log_refusals();
+    failed += test_cmd_run_log_drops_oldest();
+    failed += test_cmd_run_log_free();
+    failed += test_cmd_run_log_turn_hash();
+    failed += test_cmd_run_record_matches_rule();
+    failed += test_cmd_run_log_oom_records_nothing();
     failed += test_cmd_batch_next_runnable_none();
     failed += test_cmd_batch_add_user_acted_zero();
 
@@ -7897,6 +7936,9 @@ int main(void) {
     failed += test_ui_demo_policy_for_other_states_is_write_off();
     failed += test_ui_demo_panel_width_only_for_narrow_states();
     failed += test_ui_demo_ansi_swatches();
+    failed += test_ui_demo_runlist_rows();
+    failed += test_ui_demo_runlist_record_matches_turn();
+    failed += test_cmd_run_log_exec_note_before_mark();
 
     failed += test_dirty_flags_count_and_fill();
     failed += test_dirty_flags_null_buffer_and_small_max();

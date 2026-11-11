@@ -309,3 +309,18 @@ int test_cmd_batch_full(void) {
     cmd_batch_set_free(&set);
     TEST_END();
 }
+
+/* reply_msg is the producing reply's index, set by the caller; a batch that
+ * was never given one says so (-1) instead of pointing at message 0. */
+int test_cmd_batch_reply_msg_defaults_unset(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->reply_msg, -1);
+    b->reply_msg = 6;
+    ASSERT_EQ(cmd_batch_find(&set, b->id)->reply_msg, 6);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}

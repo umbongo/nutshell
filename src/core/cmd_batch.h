@@ -26,6 +26,13 @@ typedef struct {
                       * whether "newer exchanges" have happened since (see
                       * ai_build_continue_text() in ai_prompt.h). Defaults
                       * to 0 from cmd_batch_add()'s calloc. */
+    int reply_msg;  /* index in the conversation of the assistant reply that
+                      * produced this batch -- the caller (ai_chat.c) sets it
+                      * beside conv_mark. Not conv_mark - 1: the displayed
+                      * [EXEC] branch adds its NOTE turns before conv_mark is
+                      * taken, so that can be a USER turn. The run log keeps it
+                      * (cmd_run_log.h) to replay the rows under the reply.
+                      * -1 from cmd_batch_add(): not set, matches no turn. */
     int user_acted; /* 1 once the user acted on this batch by hand (a
                       * Run/Approve click, or a user-initiated cancel).
                       * Read when the batch finishes: a batch the user

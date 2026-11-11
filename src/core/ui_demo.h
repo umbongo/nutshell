@@ -6,6 +6,7 @@
 #include "ai_prompt.h"
 #include "chat_approval.h"
 #include "cmd_policy.h"
+#include "cmd_run_log.h"
 
 /* Canned content for --ui-demo (Design-System Foundation, spec section 5,
  * "Verification harness"). Every state is built from the real
@@ -46,7 +47,13 @@
  *
  * "shortcuts" (2026-10-20, keyboard cheat sheet) builds an empty
  * conversation; the win32 side opens Help > Keyboard Shortcuts over it.
- * Not part of "all": the sheet is modal, like Settings in "settings-debug". */
+ * Not part of "all": the sheet is modal, like Settings in "settings-debug".
+ *
+ * "runlist" (2026-11-11, the command list, spec 2026-11-05-run-command-tool
+ * decision 21) builds a conversation of two replies; `approval` holds the
+ * live batch under the second one (ran, running, queued, queued) and
+ * ui_demo_run_log() the recorded one under the first (unfinished, not run,
+ * denied). Not part of "all", which keeps its pinned shape. */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.
@@ -67,6 +74,14 @@
 int ui_demo_build(const char *state, AiConversation *conv,
                   ApprovalQueue *approval, ApprovalQueue *approval2,
                   char *term_text, size_t term_cap);
+
+/* Fill `log` with the demo state's recorded batches, for the panel's replay.
+ * "runlist" gets one record under the first reply of `conv` (built by
+ * ui_demo_build("runlist", ...)) -- three rows, recorded with batch_ending 1,
+ * so they read "unfinished", "not run" and "denied". Any other state, NULL
+ * arguments, or a conv that is not that state's records nothing. `log` must
+ * be initialised (cmd_run_log_init()); the caller frees it. */
+void ui_demo_run_log(const char *state, CmdRunLog *log, const AiConversation *conv);
 
 /* 1 if `state` is a recognised demo state name, 0 otherwise (including
  * NULL). */

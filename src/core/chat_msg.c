@@ -356,6 +356,9 @@ const char *chat_cmd_label(int approved, int blocked, int quoted, int run,
     } else if (run == CHAT_RUN_ABORTED) {
         label = "not run";
         i = CHAT_CMD_INTENT_WARNING;
+    } else if (run == CHAT_RUN_UNFINISHED) {
+        label = "unfinished";
+        i = CHAT_CMD_INTENT_WARNING;
     } else {
         /* approved == 1, CHAT_RUN_NONE, or any unexpected run value */
         label = "queued";
@@ -409,7 +412,7 @@ int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
         int run;
         switch (e->status) {
         case APPROVE_EXECUTING:
-            run = batch_ending ? CHAT_RUN_ABORTED : CHAT_RUN_RUNNING;
+            run = batch_ending ? CHAT_RUN_UNFINISHED : CHAT_RUN_RUNNING;
             break;
         case APPROVE_COMPLETED:
             run = CHAT_RUN_DONE;
@@ -430,6 +433,70 @@ int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
         idx++;
     }
     return n;
+}
+
+int chat_msg_batch_counts(const ChatMsgList *list, int batch_id,
+                          ChatBatchCounts *out)
+{
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (!list) return 0;
+
+    for (const ChatMsgItem *it = list->head; it; it = it->next) {
+        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.batch != batch_id)
+            continue;
+        out->n++;
+        if (it->u.cmd.settled) out->decided++;
+
+        /* chat_cmd_label()'s priority order, except that a row still on the
+         * card has no run state yet: it awaits, or is held. */
+        if (it->u.cmd.quoted)               out->quoted++;
+        else if (it->u.cmd.blocked)         out->held++;
+        else if (!it->u.cmd.settled)        out->awaiting++;
+        else if (it->u.cmd.approved == 0)   out->denied++;
+        else if (it->u.cmd.approved == -1)  out->skipped++;
+        else if (it->u.cmd.run == CHAT_RUN_RUNNING)    out->running++;
+        else if (it->u.cmd.run == CHAT_RUN_DONE)       out->ran++;
+        else if (it->u.cmd.run == CHAT_RUN_ABORTED)    out->not_run++;
+        else if (it->u.cmd.run == CHAT_RUN_UNFINISHED) out->unfinished++;
+        else                                           out->queued++;
+    }
+    return out->n;
+}
+
+int chat_batch_summary_text(const ChatBatchCounts *c, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    buf[0] = '\0';
+    if (!c || c->n < 2 || c->decided < 1) return 0;
+
+    const struct { int count; const char *word; } parts[] = {
+        { c->ran,        "ran" },
+        { c->running,    "running" },
+        { c->unfinished, "unfinished" },
+        { c->queued,     "queued" },
+        { c->awaiting,   "awaiting approval" },
+        { c->held,       "held" },
+        { c->not_run,    "not run" },
+        { c->denied,     "denied" },
+        { c->skipped,    "skipped" },
+        { c->quoted,     "quoted" },
+    };
+
+    size_t pos = 0;
+    int w = snprintf(buf, cap, "%d commands: ", c->n);
+    if (w < 0 || (size_t)w >= cap) { buf[0] = '\0'; return 0; }
+    pos = (size_t)w;
+    int first = 1;
+    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+        if (parts[i].count <= 0) continue;
+        w = snprintf(buf + pos, cap - pos, "%s%d %s", first ? "" : ", ",
+                     parts[i].count, parts[i].word);
+        if (w < 0 || (size_t)w >= cap - pos) { buf[0] = '\0'; return 0; }
+        pos += (size_t)w;
+        first = 0;
+    }
+    return (int)pos;
 }
 
 size_t utf8_cut_at(char *buf, size_t max)

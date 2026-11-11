@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "ai_tools.h"
 #include "cmd_batch.h"
+#include "cmd_run_log.h"
 #include "chat_approval.h" /* ApprovalQueue for ai_build_continue_text() */
 #include "session_io.h"   /* SessionKind for the system-prompt opening */
 
@@ -567,6 +568,12 @@ typedef struct {
      * session is created, freed with cmd_batch_set_free() when it's
      * destroyed. */
     CmdBatchSet batches;
+    /* The commands of finished or cancelled batches, kept so a rebuilt display
+     * can show what ran again (src/core/cmd_run_log.h, spec 2026-11-05
+     * run-command tool, decision 21). cmd_run_log_init() beside each
+     * cmd_batch_set_init(), cmd_run_log_free() beside each
+     * cmd_batch_set_free(). */
+    CmdRunLog run_log;
     /* Per-session streaming state (supports concurrent AI requests) */
     volatile int busy;           /* 1 while a stream thread is running */
     char *stream_content;        /* heap-allocated accumulator, NULL when idle */

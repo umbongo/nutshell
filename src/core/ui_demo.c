@@ -1,6 +1,7 @@
 /* src/core/ui_demo.c */
 #include "ui_demo.h"
 #include "ai_agentic.h"
+#include "cmd_run_log.h"
 #include "ns_scale.h"
 #include <stdlib.h>
 #include <string.h>
@@ -10,14 +11,15 @@
  * State names, in the order ui_demo_states() reports them.  "all" is
  * always last and always means "union of the panel states" (not "ansi",
  * "local", "thinking", "cmddetail", "settings-debug", "policy-auto",
- * "policy-compact" or "shortcuts", which reuse or swap content or open a
- * modal window). "ansi" sits before "local" so the names
- * tests/test_ui_demo.c anchors from the end of the list keep their
- * positions; "shortcuts" sits immediately before "all".
+ * "policy-compact", "shortcuts" or "runlist", which reuse or swap content,
+ * open a modal window or exist to show one thing). "ansi" sits before "local"
+ * so the names tests/test_ui_demo.c anchors from the end of the list keep
+ * their positions, "runlist" before "ansi" for the same reason; "shortcuts"
+ * sits immediately before "all".
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "batches", "ansi", "local", "thinking", "cmddetail",
+    "nokey", "nosession", "batches", "runlist", "ansi", "local", "thinking", "cmddetail",
     "settings-debug", "policy-auto", "policy-compact", "shortcuts", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
@@ -441,6 +443,94 @@ static void build_batches(AiConversation *conv, ApprovalQueue *approval,
 }
 
 /* ---------------------------------------------------------------------
+ * "runlist" (spec 2026-11-05 run-command tool, decision 21): the command
+ * list. Two replies. The second one's batch is live -- a "ran", a "running"
+ * and two "queued" rows, under the summary line
+ * "4 commands: 1 ran, 1 running, 2 queued" -- and its rows are built into
+ * `approval` like "executing"'s. The first one's batch finished earlier and
+ * was recorded (ui_demo_run_log()): an "unfinished", a "not run" and a
+ * "denied" row, "3 commands: 1 unfinished, 1 not run, 1 denied". Not part of
+ * "all", which keeps its pinned shape.
+ * --------------------------------------------------------------------- */
+static const char RUNLIST_USER_MSG_1[] =
+    "Back up the web root, then clear the cache.";
+
+static const char RUNLIST_ASSISTANT_MSG_1[] =
+    "I'll archive the web root, copy it off this box and clear the cache:";
+
+static const char RUNLIST_USER_MSG_2[] =
+    "Thanks. Now update the packages and restart nginx.";
+
+static const char RUNLIST_ASSISTANT_MSG_2[] =
+    "Running those now -- one moment.";
+
+/* Index of the first reply, which the recorded batch sits under. */
+#define RUNLIST_FIRST_REPLY 2
+
+static void build_runlist(AiConversation *conv, ApprovalQueue *approval)
+{
+    if (conv) {
+        ai_conv_add(conv, AI_ROLE_USER, RUNLIST_USER_MSG_1);
+        ai_conv_add(conv, AI_ROLE_ASSISTANT, RUNLIST_ASSISTANT_MSG_1);
+        ai_conv_add(conv, AI_ROLE_USER, RUNLIST_USER_MSG_2);
+        ai_conv_add(conv, AI_ROLE_ASSISTANT, RUNLIST_ASSISTANT_MSG_2);
+    }
+    if (!approval) return;
+
+    /* Raise the ceiling so every row lands PENDING and can be approved by
+     * hand, as in build_executing(). */
+    cmd_policy_set_allowed(&approval->policy, CMD_CRITICAL);
+
+    int ran = chat_approval_add(approval, "apt-get update", CMD_PLATFORM_LINUX);
+    chat_approval_approve(approval, ran);
+    chat_approval_set_executing(approval, ran);
+    chat_approval_set_completed(approval, ran);
+
+    int running = chat_approval_add(approval, "apt-get -y upgrade",
+                                    CMD_PLATFORM_LINUX);
+    chat_approval_approve(approval, running);
+    chat_approval_set_executing(approval, running);
+
+    int queued1 = chat_approval_add(approval, "nginx -t", CMD_PLATFORM_LINUX);
+    chat_approval_approve(approval, queued1);
+    int queued2 = chat_approval_add(approval, "systemctl restart nginx",
+                                    CMD_PLATFORM_LINUX);
+    chat_approval_approve(approval, queued2);
+}
+
+void ui_demo_run_log(const char *state, CmdRunLog *log, const AiConversation *conv)
+{
+    if (!state || !log || !conv || strcmp(state, "runlist") != 0) return;
+    if (conv->msg_count <= RUNLIST_FIRST_REPLY ||
+        conv->messages[RUNLIST_FIRST_REPLY].role != AI_ROLE_ASSISTANT)
+        return;
+
+    CmdBatch *b = calloc(1, sizeof(*b));
+    if (!b) return;
+    chat_approval_init(&b->q);
+    cmd_policy_set_allowed(&b->q.policy, CMD_CRITICAL);
+
+    /* The batch ended while the first command ran: "unfinished"; the second
+     * was approved and never sent: "not run"; the third the user denied. */
+    int unfinished = chat_approval_add(&b->q, "tar czf /backup/www.tar.gz /var/www",
+                                       CMD_PLATFORM_LINUX);
+    chat_approval_approve(&b->q, unfinished);
+    chat_approval_set_executing(&b->q, unfinished);
+    int not_run = chat_approval_add(&b->q, "rsync -a /backup/ backup01:/srv/backups/",
+                                    CMD_PLATFORM_LINUX);
+    chat_approval_approve(&b->q, not_run);
+    int denied = chat_approval_add(&b->q, "rm -rf /var/www/cache",
+                                   CMD_PLATFORM_LINUX);
+    chat_approval_deny(&b->q, denied);
+
+    b->reply_msg = RUNLIST_FIRST_REPLY;
+    const AiMessage *reply = &conv->messages[RUNLIST_FIRST_REPLY];
+    (void)cmd_run_log_record(log, b,
+        cmd_run_log_turn_hash(ai_msg_content(reply), reply->content_len), 1);
+    free(b);
+}
+
+/* ---------------------------------------------------------------------
  * Terminal transcript: ~30 lines of plausible shell output ending at a
  * bare prompt, fed through term_process() by the win32 side.
  * --------------------------------------------------------------------- */
@@ -591,6 +681,10 @@ int ui_demo_build(const char *state, AiConversation *conv,
         build_error(conv);
     if (is_all || strcmp(state, "batches") == 0)
         build_batches(conv, approval, approval2);
+    /* "runlist" (2026-11-11): two replies, a live batch and a recorded one;
+     * not part of "all". */
+    if (strcmp(state, "runlist") == 0)
+        build_runlist(conv, approval);
     /* "policy-auto" (2026-10-18) is "executing" -- a running card -- and the
      * win32 side seeds the tab's policy from ui_demo_policy(): Write with
      * Auto-approve on, so the pill's solid cells and the filled button

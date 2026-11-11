@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "ui_demo.h"
 #include "chat_msg.h"
+#include "cmd_run_log.h"
 #include "chat_copy.h"
 #include "text_runs.h"
 #include <stdio.h>
@@ -40,7 +41,7 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 18);
+    ASSERT_EQ(count, 19);
     ASSERT_STR_EQ(states[count - 1], "all");
     ASSERT_STR_EQ(states[count - 2], "shortcuts");
     ASSERT_STR_EQ(states[count - 3], "policy-compact");
@@ -50,6 +51,7 @@ int test_ui_demo_states_list_ends_in_all(void)
     ASSERT_STR_EQ(states[count - 7], "thinking");
     ASSERT_STR_EQ(states[count - 8], "local");
     ASSERT_STR_EQ(states[count - 9], "ansi");
+    ASSERT_STR_EQ(states[count - 10], "runlist");   /* not part of "all" */
     TEST_END();
 }
 
@@ -745,6 +747,209 @@ int test_ui_demo_ansi_swatches(void)
     ASSERT_EQ(ui_demo_panel_width_px("ansi", 96), 260);
     ASSERT_EQ(ui_demo_panel_width_px("ansi", 192), 520);
     ASSERT_TRUE(!ui_demo_scrolls_to_top("ansi"));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* ---- "runlist" (spec 2026-11-05 run-command tool, decision 21) ---- */
+
+/* Append `n` settled rows of `batch` the way the panel's replay does: the
+ * label inputs come from the row, which came from the entry. */
+static void append_run_rows(ChatMsgList *list, int batch, const CmdRunRow *rows,
+                            const char *const *cmds, int n)
+{
+    for (int i = 0; i < n; i++) {
+        ChatMsgItem *it = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
+        if (!it) return;
+        chat_msg_set_command(it, cmds[i], rows[i].safety, rows[i].blocked);
+        chat_msg_set_batch(it, batch);
+        chat_msg_set_quoted(it, rows[i].quoted);
+        it->u.cmd.approved = rows[i].approved;
+        it->u.cmd.run = rows[i].run;
+        it->u.cmd.settled = 1;
+    }
+}
+
+static const char *row_label(const ChatMsgItem *it)
+{
+    return chat_cmd_label(it->u.cmd.approved, it->u.cmd.blocked,
+                          it->u.cmd.quoted, it->u.cmd.run, NULL);
+}
+
+int test_ui_demo_runlist_rows(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(ui_demo_state_valid("runlist"));
+
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("runlist", &conv, &approval, &approval2, NULL, 0), 0);
+    /* system, user, reply, user, reply */
+    ASSERT_EQ(conv.msg_count, 5);
+    ASSERT_EQ(approval.count, 4);
+    ASSERT_EQ(approval2.count, 0);
+    ASSERT_EQ(count_status(&approval, APPROVE_COMPLETED), 1);
+    ASSERT_EQ(count_status(&approval, APPROVE_EXECUTING), 1);
+    ASSERT_EQ(count_status(&approval, APPROVE_APPROVED), 2);
+
+    /* The live batch (id 2), rows as the live panel holds them. */
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    CmdRunRow live[APPROVAL_MAX_CMDS];
+    const char *live_cmds[APPROVAL_MAX_CMDS];
+    for (int i = 0; i < approval.count; i++) {
+        cmd_run_row_from_entry(&approval.entries[i], 0, &live[i]);
+        live_cmds[i] = approval.entries[i].command;
+    }
+    append_run_rows(&list, 2, live, live_cmds, approval.count);
+
+    /* The recorded batch (id -1), replayed from the log. */
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ui_demo_run_log("runlist", &log, &conv);
+    ASSERT_EQ(log.count, 1);
+    const CmdRunRecord *rec = log.rec[0];
+    ASSERT_NOT_NULL(rec);
+    ASSERT_EQ(rec->n, 3);
+    CmdRunRow recd[APPROVAL_MAX_CMDS];
+    const char *rec_cmds[APPROVAL_MAX_CMDS];
+    for (int i = 0; i < rec->n; i++) {
+        recd[i] = rec->rows[i];
+        rec_cmds[i] = rec->rows[i].command;
+    }
+    append_run_rows(&list, -1, recd, rec_cmds, rec->n);
+
+    /* Labels in list order: the live batch, then the recorded one. */
+    const char *want[] = { "ran", "running", "queued", "queued",
+                           "unfinished", "not run", "denied" };
+    int i = 0;
+    for (ChatMsgItem *it = list.head; it; it = it->next, i++) {
+        ASSERT_TRUE(i < 7);
+        if (i >= 7) break;
+        ASSERT_STR_EQ(row_label(it), want[i]);
+    }
+    ASSERT_EQ(i, 7);
+
+    /* Both summary lines, verbatim, from the functions the painter uses. */
+    ChatBatchCounts c;
+    char line[128];
+    ASSERT_EQ(chat_msg_batch_counts(&list, 2, &c), 4);
+    ASSERT_TRUE(chat_batch_summary_text(&c, line, sizeof(line)) > 0);
+    ASSERT_STR_EQ(line, "4 commands: 1 ran, 1 running, 2 queued");
+    ASSERT_EQ(chat_msg_batch_counts(&list, -1, &c), 3);
+    ASSERT_TRUE(chat_batch_summary_text(&c, line, sizeof(line)) > 0);
+    ASSERT_STR_EQ(line, "3 commands: 1 unfinished, 1 not run, 1 denied");
+
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ui_demo_runlist_record_matches_turn(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("runlist", &conv, &approval, &approval2, NULL, 0), 0);
+
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ui_demo_run_log("runlist", &log, &conv);
+    ASSERT_EQ(log.count, 1);
+    const CmdRunRecord *rec = log.rec[0];
+    ASSERT_NOT_NULL(rec);
+
+    /* Under the first reply: an assistant turn whose hash is the record's. */
+    int r = rec->reply_msg;
+    ASSERT_TRUE(r > 0 && r < conv.msg_count);
+    const AiMessage *m = &conv.messages[r];
+    ASSERT_EQ((int)m->role, (int)AI_ROLE_ASSISTANT);
+    ASSERT_EQ(cmd_run_record_matches(rec, r, 1, ai_msg_content(m), m->content_len), 1);
+    /* ... and the first one of the two. */
+    for (int k = 1; k < r; k++)
+        ASSERT_TRUE(conv.messages[k].role != AI_ROLE_ASSISTANT);
+    /* Not the second reply, the other turns, or an edited turn. */
+    for (int k = 0; k < conv.msg_count; k++) {
+        if (k == r) continue;
+        const AiMessage *o = &conv.messages[k];
+        ASSERT_EQ(cmd_run_record_matches(rec, k, o->role == AI_ROLE_ASSISTANT,
+                                         ai_msg_content(o), o->content_len), 0);
+    }
+    ASSERT_EQ(cmd_run_record_matches(rec, r, 1, "something else", 14), 0);
+
+    /* The recorded rows ended with the batch. */
+    ASSERT_EQ(rec->rows[0].run, CHAT_RUN_UNFINISHED);
+    ASSERT_EQ(rec->rows[1].run, CHAT_RUN_ABORTED);
+    ASSERT_EQ(rec->rows[2].approved, 0);
+
+    /* No other state has a record; a NULL argument is harmless. */
+    CmdRunLog none;
+    cmd_run_log_init(&none);
+    ui_demo_run_log("approval", &none, &conv);
+    ui_demo_run_log("all", &none, &conv);
+    ui_demo_run_log(NULL, &none, &conv);
+    ui_demo_run_log("runlist", NULL, &conv);
+    ASSERT_EQ(none.count, 0);
+
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* The displayed [EXEC] branch (ai_chat.c) adds a NOTE (a USER turn) after the
+ * reply when a marker is rejected, and only then takes conv_mark: so
+ * conv_mark - 1 is the NOTE, and the batch carries the reply's own index. */
+int test_cmd_run_log_exec_note_before_mark(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "demo");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "system");
+    ai_conv_add(&conv, AI_ROLE_USER, "tidy the logs");
+    const char *reply = "Doing it:\n[EXEC]ls /var/log[/EXEC]\n[EXEC]pwd[/EXEC]";
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, reply);
+    int reply_msg = conv.msg_count - 1;
+    const char *note = "[NOTE] one command marker sat inside a code block";
+    ai_conv_add(&conv, AI_ROLE_USER, note);
+    int conv_mark = conv.msg_count;
+    ASSERT_EQ(reply_msg, 2);
+    ASSERT_EQ(conv_mark, 4);
+
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+    b->conv_mark = conv_mark;
+    b->reply_msg = reply_msg;               /* not conv_mark - 1 */
+    b->q.policy.allowed = CMD_CRITICAL;
+    int i0 = chat_approval_add(&b->q, "ls /var/log", CMD_PLATFORM_LINUX);
+    int i1 = chat_approval_add(&b->q, "pwd", CMD_PLATFORM_LINUX);
+    chat_approval_approve(&b->q, i0);
+    chat_approval_approve(&b->q, i1);
+
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const AiMessage *rm = &conv.messages[b->reply_msg];
+    ASSERT_EQ(cmd_run_log_record(&log, b,
+                  cmd_run_log_turn_hash(ai_msg_content(rm), rm->content_len), 1), 0);
+    const CmdRunRecord *rec = log.rec[0];
+    ASSERT_EQ(rec->reply_msg, 2);
+
+    /* The replay lands under the reply ... */
+    ASSERT_EQ(cmd_run_record_matches(rec, 2, 1, ai_msg_content(rm),
+                                     rm->content_len), 1);
+    /* ... and not under the NOTE that conv_mark - 1 names, whether or not
+     * the caller takes it for an assistant turn. */
+    const AiMessage *nm = &conv.messages[conv_mark - 1];
+    ASSERT_STR_EQ(ai_msg_content(nm), note);
+    ASSERT_EQ(cmd_run_record_matches(rec, conv_mark - 1, 0, ai_msg_content(nm),
+                                     nm->content_len), 0);
+    ASSERT_EQ(cmd_run_record_matches(rec, conv_mark - 1, 1, ai_msg_content(nm),
+                                     nm->content_len), 0);
+
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
     ai_conv_reset(&conv);
     TEST_END();
 }

@@ -598,7 +598,7 @@ int test_chat_msg_batch_sync_run_batch_ending(void) {
     int n = chat_msg_batch_sync_run(&list, 9, &q, 1 /* batch_ending */);
     ASSERT_EQ(n, 3);
     ASSERT_EQ(c0->u.cmd.run, CHAT_RUN_DONE);     /* COMPLETED unaffected by batch_ending */
-    ASSERT_EQ(c1->u.cmd.run, CHAT_RUN_ABORTED);  /* EXECUTING + ending -> ABORTED */
+    ASSERT_EQ(c1->u.cmd.run, CHAT_RUN_UNFINISHED); /* EXECUTING + ending (decision 21) */
     ASSERT_EQ(c2->u.cmd.run, CHAT_RUN_ABORTED);  /* APPROVED + ending -> ABORTED */
 
     chat_msg_list_clear(&list);
@@ -1177,6 +1177,273 @@ int test_chat_msg_apply_ceiling_skips_tool(void) {
     chat_msg_apply_ceiling(usr, CMD_CRITICAL, CMD_READ);
     ASSERT_EQ(memcmp(before, usr, sizeof(*usr)), 0);
     chat_msg_apply_ceiling(NULL, CMD_READ, CMD_CRITICAL);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* ---- The command list: "unfinished" and the summary line (spec 2026-11-05
+ * run-command tool, decision 21) ---- */
+
+int test_chat_cmd_label_unfinished(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_UNFINISHED, &intent),
+                  "unfinished");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
+    /* A new value after ABORTED: the existing ones keep theirs. */
+    ASSERT_TRUE(CHAT_RUN_UNFINISHED > CHAT_RUN_ABORTED);
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_ABORTED, &intent), "not run");
+    /* The priority order still holds above it. */
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 1, CHAT_RUN_UNFINISHED, NULL),
+                  "quoted, not run");
+    ASSERT_STR_EQ(chat_cmd_label(1, 1, 0, CHAT_RUN_UNFINISHED, NULL), "held");
+    ASSERT_STR_EQ(chat_cmd_label(0, 0, 0, CHAT_RUN_UNFINISHED, NULL), "denied");
+    TEST_END();
+}
+
+int test_chat_msg_batch_sync_run_executing_ending(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
+    chat_msg_set_batch(c0, 9);
+    ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
+    chat_msg_set_batch(c1, 9);
+
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "pwd", CMD_PLATFORM_LINUX);
+    chat_approval_approve(&q, 0);
+    chat_approval_approve(&q, 1);
+    chat_approval_set_executing(&q, 0);
+    /* entry 1 stays APPROVED, never sent */
+
+    ASSERT_EQ(chat_msg_batch_sync_run(&list, 9, &q, 0), 2);
+    ASSERT_EQ(c0->u.cmd.run, CHAT_RUN_RUNNING);
+    ASSERT_EQ(c1->u.cmd.run, CHAT_RUN_NONE);
+
+    ASSERT_EQ(chat_msg_batch_sync_run(&list, 9, &q, 1), 2);
+    ASSERT_EQ(c0->u.cmd.run, CHAT_RUN_UNFINISHED);  /* EXECUTING + ending */
+    ASSERT_EQ(c1->u.cmd.run, CHAT_RUN_ABORTED);     /* APPROVED + ending */
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, c0->u.cmd.run, NULL), "unfinished");
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, c1->u.cmd.run, NULL), "not run");
+
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* One settled row per state in batch `batch`. */
+static ChatMsgItem *add_row(ChatMsgList *list, int batch, int approved,
+                            int blocked, int quoted, int run, int settled)
+{
+    ChatMsgItem *it = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
+    if (!it) return NULL;
+    chat_msg_set_command(it, "cmd", CMD_READ, blocked);
+    chat_msg_set_batch(it, batch);
+    chat_msg_set_quoted(it, quoted);
+    it->u.cmd.approved = approved;
+    it->u.cmd.run = run;
+    it->u.cmd.settled = settled;
+    return it;
+}
+
+/* One of every state: ran, running, unfinished, queued, awaiting, held (on
+ * the card), not run, denied, skipped, quoted. */
+static void add_every_state(ChatMsgList *list, int batch)
+{
+    add_row(list, batch,  1, 0, 0, CHAT_RUN_DONE,       1);
+    add_row(list, batch,  1, 0, 0, CHAT_RUN_RUNNING,    1);
+    add_row(list, batch,  1, 0, 0, CHAT_RUN_UNFINISHED, 1);
+    add_row(list, batch,  1, 0, 0, CHAT_RUN_NONE,       1);
+    add_row(list, batch, -1, 0, 0, CHAT_RUN_NONE,       0);   /* on the card */
+    add_row(list, batch, -1, 1, 0, CHAT_RUN_NONE,       0);   /* on the card, held */
+    add_row(list, batch,  1, 0, 0, CHAT_RUN_ABORTED,    1);
+    add_row(list, batch,  0, 0, 0, CHAT_RUN_NONE,       1);
+    add_row(list, batch, -1, 0, 0, CHAT_RUN_NONE,       1);   /* settled, skipped */
+    add_row(list, batch, -1, 1, 1, CHAT_RUN_NONE,       1);   /* quoted */
+}
+
+int test_chat_batch_summary_order(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    add_every_state(&list, 5);
+
+    ChatBatchCounts c;
+    ASSERT_EQ(chat_msg_batch_counts(&list, 5, &c), 10);
+    ASSERT_EQ(c.n, 10);
+    ASSERT_EQ(c.ran, 1);
+    ASSERT_EQ(c.running, 1);
+    ASSERT_EQ(c.unfinished, 1);
+    ASSERT_EQ(c.queued, 1);
+    ASSERT_EQ(c.awaiting, 1);
+    ASSERT_EQ(c.held, 1);
+    ASSERT_EQ(c.not_run, 1);
+    ASSERT_EQ(c.denied, 1);
+    ASSERT_EQ(c.skipped, 1);
+    ASSERT_EQ(c.quoted, 1);
+    ASSERT_EQ(c.decided, 8);   /* the settled rows: all but awaiting and held */
+    char buf[256];
+    int n = chat_batch_summary_text(&c, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf,
+        "10 commands: 1 ran, 1 running, 1 unfinished, 1 queued, "
+        "1 awaiting approval, 1 held, 1 not run, 1 denied, 1 skipped, "
+        "1 quoted");
+    ASSERT_EQ(n, (int)strlen(buf));
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_batch_summary_zero_omitted(void) {
+    TEST_BEGIN();
+    ChatBatchCounts c;
+    memset(&c, 0, sizeof(c));
+    c.n = 3; c.ran = 2; c.queued = 1; c.decided = 3;
+    char buf[64];
+    int n = chat_batch_summary_text(&c, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "3 commands: 2 ran, 1 queued");
+    ASSERT_EQ(n, (int)strlen(buf));
+    TEST_END();
+}
+
+int test_chat_batch_summary_no_line(void) {
+    TEST_BEGIN();
+    char buf[64];
+    ChatBatchCounts c;
+    memset(&c, 0, sizeof(c));
+
+    /* One command, decided: its chip says it all. */
+    c.n = 1; c.ran = 1; c.decided = 1;
+    strcpy(buf, "stale");
+    ASSERT_EQ(chat_batch_summary_text(&c, buf, sizeof(buf)), 0);
+    ASSERT_STR_EQ(buf, "");
+
+    /* Three rows, all still on the card: the card header counts them. */
+    memset(&c, 0, sizeof(c));
+    c.n = 3; c.awaiting = 2; c.held = 1; c.decided = 0;
+    strcpy(buf, "stale");
+    ASSERT_EQ(chat_batch_summary_text(&c, buf, sizeof(buf)), 0);
+    ASSERT_STR_EQ(buf, "");
+
+    /* Nothing at all. */
+    memset(&c, 0, sizeof(c));
+    strcpy(buf, "stale");
+    ASSERT_EQ(chat_batch_summary_text(&c, buf, sizeof(buf)), 0);
+    ASSERT_STR_EQ(buf, "");
+
+    /* NULL counts, NULL buffer, zero capacity. */
+    ASSERT_EQ(chat_batch_summary_text(NULL, buf, sizeof(buf)), 0);
+    c.n = 2; c.ran = 2; c.decided = 2;
+    ASSERT_EQ(chat_batch_summary_text(&c, NULL, 64), 0);
+    ASSERT_EQ(chat_batch_summary_text(&c, buf, 0), 0);
+    TEST_END();
+}
+
+int test_chat_batch_summary_head(void) {
+    TEST_BEGIN();
+    char buf[64];
+    ChatBatchCounts c;
+    memset(&c, 0, sizeof(c));
+    c.n = 2; c.ran = 1; c.denied = 1; c.decided = 2;
+    ASSERT_TRUE(chat_batch_summary_text(&c, buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strncmp(buf, "2 commands: ", 12) == 0);
+    ASSERT_STR_EQ(buf, "2 commands: 1 ran, 1 denied");
+
+    /* The singular never appears, whatever the counts say. */
+    for (int n = 0; n <= 1; n++) {
+        memset(&c, 0, sizeof(c));
+        c.n = n; c.ran = n; c.decided = n;
+        strcpy(buf, "stale");
+        ASSERT_EQ(chat_batch_summary_text(&c, buf, sizeof(buf)), 0);
+        ASSERT_TRUE(strstr(buf, "1 command") == NULL);
+    }
+    TEST_END();
+}
+
+int test_chat_batch_summary_cap(void) {
+    TEST_BEGIN();
+    ChatBatchCounts c;
+    memset(&c, 0, sizeof(c));
+    c.n = 3; c.ran = 2; c.queued = 1; c.decided = 3;
+    const char *want = "3 commands: 2 ran, 1 queued";
+    size_t len = strlen(want);
+
+    char buf[64];
+    strcpy(buf, "stale");
+    ASSERT_EQ(chat_batch_summary_text(&c, buf, 10), 0);
+    ASSERT_STR_EQ(buf, "");
+
+    /* Exact fit: len + 1 bytes holds it, len does not. */
+    char exact[28];
+    ASSERT_EQ(sizeof(exact), len + 1);
+    ASSERT_EQ(chat_batch_summary_text(&c, exact, sizeof(exact)), (int)len);
+    ASSERT_STR_EQ(exact, want);
+    strcpy(buf, "stale");
+    ASSERT_EQ(chat_batch_summary_text(&c, buf, len), 0);
+    ASSERT_STR_EQ(buf, "");
+    TEST_END();
+}
+
+int test_chat_msg_batch_counts_rows(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    /* Batch 3: five rows, one still on the card; batch 4: two rows. A
+     * non-command item and a row of no batch sit between them. */
+    add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE,    1);
+    add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE,    1);
+    chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "text");
+    add_row(&list, 4, 0, 0, 0, CHAT_RUN_NONE,    1);
+    add_row(&list, 3, 1, 0, 0, CHAT_RUN_RUNNING, 1);
+    add_row(&list, 3, -1, 1, 0, CHAT_RUN_NONE,   0);   /* on the card, held */
+    add_row(&list, 4, 1, 0, 0, CHAT_RUN_NONE,    1);
+    add_row(&list, 3, -1, 0, 0, CHAT_RUN_NONE,   0);   /* on the card */
+    add_row(&list, 0, 1, 0, 0, CHAT_RUN_DONE,    1);
+
+    ChatBatchCounts c3, c4, c9;
+    ASSERT_EQ(chat_msg_batch_counts(&list, 3, &c3), 5);
+    ASSERT_EQ(c3.n, 5);
+    ASSERT_EQ(c3.ran, 2);
+    ASSERT_EQ(c3.running, 1);
+    ASSERT_EQ(c3.held, 1);
+    ASSERT_EQ(c3.awaiting, 1);
+    ASSERT_EQ(c3.decided, 3);                 /* rows off the card */
+    ASSERT_EQ(c3.denied + c3.queued + c3.quoted + c3.skipped + c3.not_run +
+              c3.unfinished, 0);
+
+    ASSERT_EQ(chat_msg_batch_counts(&list, 4, &c4), 2);
+    ASSERT_EQ(c4.n, 2);
+    ASSERT_EQ(c4.denied, 1);
+    ASSERT_EQ(c4.queued, 1);
+    ASSERT_EQ(c4.decided, 2);
+
+    /* An id no row carries, a NULL list, a NULL out. */
+    memset(&c9, 0x5A, sizeof(c9));
+    ASSERT_EQ(chat_msg_batch_counts(&list, 99, &c9), 0);
+    ASSERT_EQ(c9.n, 0);
+    ASSERT_EQ(c9.ran + c9.decided, 0);
+    ASSERT_EQ(chat_msg_batch_counts(NULL, 3, &c9), 0);
+    ASSERT_EQ(chat_msg_batch_counts(&list, 3, NULL), 0);
+
+    /* The summary of each batch, from its own counts only. */
+    char buf[128];
+    ASSERT_TRUE(chat_batch_summary_text(&c3, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "5 commands: 2 ran, 1 running, 1 awaiting approval, 1 held");
+    ASSERT_TRUE(chat_batch_summary_text(&c4, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "2 commands: 1 queued, 1 denied");
+
+    /* Each row's tally agrees with its chip. */
+    int ran = 0;
+    for (ChatMsgItem *it = list.head; it; it = it->next)
+        if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.batch == 3 &&
+            strcmp(chat_cmd_label(it->u.cmd.approved, it->u.cmd.blocked,
+                                  it->u.cmd.quoted, it->u.cmd.run, NULL),
+                   "ran") == 0)
+            ran++;
+    ASSERT_EQ(ran, c3.ran);
     chat_msg_list_clear(&list);
     TEST_END();
 }

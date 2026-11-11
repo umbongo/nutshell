@@ -9,7 +9,8 @@
 
 /* Execution state of a command card, synced from the batch's ApprovalQueue
  * -- never set by hand (see chat_msg_batch_sync_run()). */
-enum { CHAT_RUN_NONE = 0, CHAT_RUN_RUNNING, CHAT_RUN_DONE, CHAT_RUN_ABORTED };
+enum { CHAT_RUN_NONE = 0, CHAT_RUN_RUNNING, CHAT_RUN_DONE, CHAT_RUN_ABORTED,
+       CHAT_RUN_UNFINISHED /* sent, and the panel stopped waiting for it */ };
 
 typedef enum {
     CHAT_ITEM_USER,
@@ -219,6 +220,10 @@ typedef enum {
  *   approved == 1, CHAT_RUN_RUNNING   -> "running",  INFO
  *   approved == 1, CHAT_RUN_DONE      -> "ran",      SUCCESS
  *   approved == 1, CHAT_RUN_ABORTED   -> "not run",  WARNING
+ *   approved == 1, CHAT_RUN_UNFINISHED -> "unfinished", WARNING
+ *
+ * "not run" is a command that was never sent; "unfinished" one that was sent
+ * and whose outcome the panel did not see (the batch ended while it ran).
  *
  * "held" only outranks the run states because raising the policy ceiling
  * clears u.cmd.blocked on unblock (src/ui/ai_chat_status.c, the unblock walk) --
@@ -247,7 +252,7 @@ int chat_card_header_text(const char *noun, int n, int held, int quoted, char *b
  * q->count, if any, are left untouched. Mapping, by the paired entry's
  * ApprovalStatus:
  *
- *   APPROVE_EXECUTING -> CHAT_RUN_RUNNING, or CHAT_RUN_ABORTED when
+ *   APPROVE_EXECUTING -> CHAT_RUN_RUNNING, or CHAT_RUN_UNFINISHED when
  *                        batch_ending (stopped mid-flight)
  *   APPROVE_COMPLETED -> CHAT_RUN_DONE
  *   APPROVE_APPROVED  -> CHAT_RUN_NONE, or CHAT_RUN_ABORTED when
@@ -264,6 +269,33 @@ int chat_card_header_text(const char *noun, int n, int held, int quoted, char *b
  * live panel. */
 int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
                             const ApprovalQueue *q, int batch_ending);
+
+/* How a batch's rows stand, for the summary line under it (spec 2026-11-05
+ * run-command tool, decision 21 (d)). Each row is counted once, by the rule
+ * of chat_cmd_label(), except that a row still on the card (not settled)
+ * counts `awaiting`, or `held` when blocked. A quoted row counts `quoted`
+ * wherever it sits. `decided` counts the rows that have left the card
+ * (settled). n is the sum of the ten state counts. */
+typedef struct {
+    int n, ran, running, unfinished, queued, awaiting, held, not_run, denied,
+        skipped, quoted, decided;
+} ChatBatchCounts;
+
+/* Fill *out with the counts of the CHAT_ITEM_COMMAND items of `list` whose
+ * u.cmd.batch == batch_id (zeroed first). Returns the number of such items,
+ * 0 when `list` or `out` is NULL (out is still zeroed when non-NULL). */
+int chat_msg_batch_counts(const ChatMsgList *list, int batch_id,
+                          ChatBatchCounts *out);
+
+/* The summary line for a batch: "<n> commands: " then the non-zero parts as
+ * "<count> <word>" joined by ", ", in the order ran, running, unfinished,
+ * queued, awaiting approval, held, not run, denied, skipped, quoted (the
+ * words are states and take no plural). Writes it into buf and returns its
+ * length. A line exists only for a batch of two or more rows of which at
+ * least one has left the card (n >= 2 && decided >= 1); otherwise, for NULL
+ * counts and when it does not fit in cap bytes (the NUL included), buf[0] is
+ * set to NUL (when buf is non-NULL and cap > 0) and 0 is returned. */
+int chat_batch_summary_text(const ChatBatchCounts *c, char *buf, size_t cap);
 
 /* If the NUL-terminated string in buf is longer than max-1 bytes, truncate
  * it at the last UTF-8 character boundary that fits in max-1 bytes and
