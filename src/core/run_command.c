@@ -526,6 +526,12 @@ int runcmd_cause_keep_free(RunCmdCause c)
     return c == RUNCMD_CAUSE_TYPED ? 2 : 0;
 }
 
+int runcmd_cause_starts_next(RunCmdCause c)
+{
+    return c == RUNCMD_CAUSE_SETTLED || c == RUNCMD_CAUSE_DECIDED ||
+           c == RUNCMD_CAUSE_TIMEOUT || c == RUNCMD_CAUSE_STOP;
+}
+
 int runcmd_finish_relaunches(RunCmdCause c, int displayed, int busy, int stored,
                              int room)
 {

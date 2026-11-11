@@ -277,6 +277,14 @@ int runcmd_cause_captures(RunCmdCause c);
  * its reply's), 0 for every other. */
 int runcmd_cause_keep_free(RunCmdCause c);
 
+/* 1 when a finish that starts no request of its own may start the next
+ * approved batch (ai_chat_maybe_start_next_batch): the panel and the session
+ * stay in place: SETTLED, DECIDED, TIMEOUT, STOP. 0 for the teardown causes
+ * (TAB_SWITCH, SESSION_ENDED, NEW_CHAT, SESSION_CLOSED, PANEL_CLOSED: the
+ * session is being left or freed), for TYPED and RETRY (a request follows) and
+ * for the whole-reply causes (no batch). */
+int runcmd_cause_starts_next(RunCmdCause c);
+
 /* 1 when the finish of a batch starts the next model request: the cause
  * relaunches (runcmd_cause_relaunches), the owner is the displayed session
  * (`displayed`) and has no stream running (`busy` 0), the results were stored

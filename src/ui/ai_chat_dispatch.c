@@ -347,10 +347,13 @@ void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch
         }
         /* Nothing launched, so the stream that would have ended in
          * ai_chat_maybe_start_next_batch() never runs: an approved batch
-         * waiting behind this one must not be stranded. Its own guards make it
-         * a no-op while a dispatch runs or a stream is busy; a background owner
-         * is never started here. */
-        if (displayed) ai_chat_maybe_start_next_batch(d);
+         * waiting behind this one must not be stranded. Only a cause that
+         * leaves the session in place asks (a teardown cause never does: the
+         * session is being left or freed). Its own guards make it a no-op
+         * while a dispatch runs or a stream is busy; a background owner is
+         * never started here. */
+        if (displayed && runcmd_cause_starts_next(cause))
+            ai_chat_maybe_start_next_batch(d);
     }
     if (displayed && d->hChatList) chat_listview_invalidate(d->hChatList);
 }

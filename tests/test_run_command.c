@@ -3868,3 +3868,22 @@ int test_runcmd_abort_keep_free_by_cause(void)
     ASSERT_EQ(runcmd_cause_keep_free(RUNCMD_CAUSE_PANEL_CLOSED), 0);
     TEST_END();
 }
+
+/* Only a finish that leaves the session in place and starts no request of its
+ * own may start the next approved batch (review of B16, fix round 2). */
+int test_runcmd_cause_starts_next_table(void)
+{
+    TEST_BEGIN();
+    static const struct { RunCmdCause c; int starts; } t[] = {
+        { RUNCMD_CAUSE_SETTLED, 1 },        { RUNCMD_CAUSE_DECIDED, 1 },
+        { RUNCMD_CAUSE_TIMEOUT, 1 },        { RUNCMD_CAUSE_STOP, 1 },
+        { RUNCMD_CAUSE_RETRY, 0 },          { RUNCMD_CAUSE_TYPED, 0 },
+        { RUNCMD_CAUSE_TAB_SWITCH, 0 },     { RUNCMD_CAUSE_SESSION_ENDED, 0 },
+        { RUNCMD_CAUSE_NEW_CHAT, 0 },       { RUNCMD_CAUSE_SESSION_CLOSED, 0 },
+        { RUNCMD_CAUSE_PANEL_CLOSED, 0 },   { RUNCMD_CAUSE_EVICTED, 0 },
+        { RUNCMD_CAUSE_NO_SLOT, 0 },        { RUNCMD_CAUSE_SESSION_GONE, 0 },
+        { RUNCMD_CAUSE_SET_FULL, 0 } };
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
+        ASSERT_EQ(runcmd_cause_starts_next(t[i].c), t[i].starts);
+    TEST_END();
+}
