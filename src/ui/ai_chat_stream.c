@@ -135,19 +135,18 @@ static void stream_pin_fetch_host(AiStream *s, const AiToolCall *call)
     json_free(input);
 }
 
-/* Store a reply as a plain assistant turn together with its reasoning (every
- * turn's is kept, spec decision 23: only DeepSeek's builder reads a plain
- * turn's). The turn is marked reasoning_cut when the accumulator dropped some,
- * the AI_REASONING_MAX cap cut it or its copy failed. Touches only `conv`, the
- * stream's own. Returns 1 when the reply was stored (ai_conv_add took it). */
-static int store_plain_reply(AiConversation *conv, const StreamContext *ctx)
+/* Store a reply as a plain assistant turn together with its reasoning and its
+ * issuer, the stream's provider and the conversation's model (every turn's
+ * reasoning is kept, spec decision 23; only DeepSeek's builder reads a plain
+ * turn's, and only the one its own model wrote, R68). The turn is marked
+ * reasoning_cut when the accumulator dropped some, the AI_REASONING_MAX cap cut
+ * it or its copy failed. Touches only `conv`, the stream's own. Returns 1 when
+ * the reply was stored. */
+static int store_plain_reply(AiConversation *conv, const AiStream *s,
+                             const StreamContext *ctx)
 {
-    if (ai_conv_add(conv, AI_ROLE_ASSISTANT, ctx->full_content) != 0)
-        return 0;
-    AiMessage *turn = &conv->messages[conv->msg_count - 1];
-    (void)ai_msg_set_reasoning(turn, ctx->full_thinking);   /* -1 sets the flag itself */
-    if (ctx->thinking_cut) turn->reasoning_cut = 1;
-    return 1;
+    return ai_conv_add_reply(conv, ctx->full_content, ctx->full_thinking,
+                             ctx->thinking_cut, s->provider, conv->model) == 0;
 }
 
 /* Process a single SSE line from the stream */
@@ -645,7 +644,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                  * empty one is not: no provider takes an empty turn). */
                 char full_row[128];
                 if (ctx.full_content[0])
-                    reply_stored = store_plain_reply(&s->conv, &ctx);
+                    reply_stored = store_plain_reply(&s->conv, s, &ctx);
                 (void)agentic_full_row(n_calls, full_row, sizeof(full_row));
                 DLOG(DLOG_AI, DLOG_WARN, 0, "stream.round_full",
                      "stream=%u iter=%d calls=%d stage=turn", stream_id,
@@ -944,7 +943,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         } else {
             /* Normal end (no tool-use stop) — add assistant message and exit loop */
             loop_done = 1;
-            reply_stored = store_plain_reply(&s->conv, &ctx);
+            reply_stored = store_plain_reply(&s->conv, s, &ctx);
             if (!reply_stored)   /* the reply stays on screen, but not in the conversation */
                 post_tool_msg(s, CHAT_ITEM_STATUS,
                               "[reply not stored: conversation full; start a New Chat]");

@@ -173,8 +173,25 @@ void ai_msg_move_reasoning(AiMessage *dst, AiMessage *src)
     free(dst->reasoning);
     dst->reasoning = src->reasoning;
     dst->reasoning_cut = src->reasoning_cut;
+    memcpy(dst->tool_provider, src->tool_provider, sizeof(dst->tool_provider));
+    memcpy(dst->tool_model, src->tool_model, sizeof(dst->tool_model));
     src->reasoning = NULL;
     src->reasoning_cut = 0;
+    src->tool_provider[0] = '\0';
+    src->tool_model[0] = '\0';
+}
+
+int ai_conv_add_reply(AiConversation *conv, const char *content,
+                      const char *reasoning, int reasoning_cut,
+                      const char *provider, const char *model)
+{
+    if (ai_conv_add(conv, AI_ROLE_ASSISTANT, content) != 0) return -1;
+    AiMessage *turn = &conv->messages[conv->msg_count - 1];
+    (void)ai_msg_set_reasoning(turn, reasoning);   /* a failure sets the flag itself */
+    if (reasoning_cut) turn->reasoning_cut = 1;
+    snprintf(turn->tool_provider, sizeof(turn->tool_provider), "%s", provider ? provider : "");
+    snprintf(turn->tool_model, sizeof(turn->tool_model), "%s", model ? model : "");
+    return 0;
 }
 
 void ai_conv_init(AiConversation *conv, const char *model)
@@ -1136,10 +1153,24 @@ static int turn_as_text(const AiMessage *msg, const char *tools_json,
            strcmp(msg->tool_model, want_m) != 0;
 }
 
+/* 1 when an assistant turn's stored reasoning goes back to this request's
+ * provider and model. A turn with tool calls: yes (turn_as_text has already
+ * said whether it goes out structured at all). A plain turn: only to the
+ * provider and model that wrote it (R68, spec decision 16: reasoning goes back
+ * only to its issuer), or when no issuer was recorded (older callers, tests). */
+static int reasoning_goes_back(const AiMessage *msg, const char *provider,
+                               const char *model)
+{
+    if (msg->n_tool_calls > 0 || !msg->tool_provider[0]) return 1;
+    return strcmp(msg->tool_provider, provider ? provider : "") == 0 &&
+           strcmp(msg->tool_model, model ? model : "") == 0;
+}
+
 /* 1 when a request to `provider` with `tools_json` would send an assistant turn
  * whose reasoning was cut (AiMessage.reasoning_cut) and DeepSeek must have it
  * whole: provider "deepseek" with a tools array, and a turn that goes out
- * structured (a turn rendered as text carries no reasoning_content). The
+ * structured and whose reasoning would go back (a turn rendered as text carries
+ * no reasoning_content, nor does a plain turn another provider or model wrote). The
  * builder refuses such a request; ai_body_failure_text_for says why. */
 int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provider,
                                   const char *tools_json)
@@ -1149,7 +1180,8 @@ int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provid
     for (int i = 0; i < conv->msg_count; i++) {
         const AiMessage *m = &conv->messages[i];
         if (m->role == AI_ROLE_ASSISTANT && m->reasoning_cut &&
-            !turn_as_text(m, tools_json, provider, conv->model))
+            !turn_as_text(m, tools_json, provider, conv->model) &&
+            reasoning_goes_back(m, provider, conv->model))
             return 1;
     }
     return 0;
@@ -1726,7 +1758,11 @@ static size_t build_body_core(const AiConversation *conv,
             if (pos == 0) return 0;
 
             if (deepseek_reasoning && msg->role == AI_ROLE_ASSISTANT) {
-                pos = emit_reasoning_field(msg->reasoning, buf, buf_size, pos);
+                /* only the reasoning this provider and model wrote (R68) */
+                pos = emit_reasoning_field(
+                    reasoning_goes_back(msg, provider, conv->model)
+                        ? msg->reasoning : NULL,
+                    buf, buf_size, pos);
                 if (pos == 0) return 0;
             }
 

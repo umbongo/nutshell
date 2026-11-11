@@ -111,6 +111,9 @@ typedef struct {
 
     /* For ROLE_ASSISTANT messages that contain tool calls: the provider and
      * the model that produced them, "" when unknown (older callers, tests).
+     * A plain assistant turn (no tool calls) records its issuer here too
+     * (ai_conv_add_reply); turn_as_text ignores a turn without tool calls, so
+     * there it feeds only the DeepSeek reasoning rule.
      * Ids, reasoning and signatures are sent back only to the issuer: the
      * body builder renders a turn recorded under another provider or model
      * as text (spec 2026-11-05 run-command decision 16). Set by
@@ -624,18 +627,33 @@ int ai_msg_set_content(AiMessage *msg, const char *data, size_t len);
  * that cuts nothing clears it. */
 int ai_msg_set_reasoning(AiMessage *msg, const char *text);
 
-/* Move src's reasoning and reasoning_cut to dst, freeing dst's own and leaving
- * src with none: no allocation, so it cannot fail. The panel uses it to carry a
- * reply's reasoning from the stream thread's copy of the conversation to the
- * working copy that stores the reply again. NULL or dst == src: no-op. */
+/* Move src's reasoning, reasoning_cut and issuer (tool_provider, tool_model) to
+ * dst, freeing dst's own reasoning and leaving src with none: no allocation, so
+ * it cannot fail. The panel uses it to carry a reply's reasoning from the
+ * stream thread's copy of the conversation to the working copy that stores the
+ * reply again. NULL or dst == src: no-op. */
 void ai_msg_move_reasoning(AiMessage *dst, AiMessage *src);
 
+/* Append a plain assistant reply with its reasoning and its issuer: the
+ * provider and model that wrote it (NULL or "" for unknown), recorded in
+ * tool_provider / tool_model, which on a turn without tool calls are read by
+ * nothing but the DeepSeek reasoning rule (R68: DeepSeek gets back only the
+ * reasoning it wrote). `reasoning` is stored with ai_msg_set_reasoning;
+ * reasoning_cut is set when `reasoning_cut` is nonzero as well as by that
+ * call's own cut. Returns 0, or -1 when ai_conv_add refuses (full, no memory):
+ * nothing is stored then. */
+int ai_conv_add_reply(AiConversation *conv, const char *content,
+                      const char *reasoning, int reasoning_cut,
+                      const char *provider, const char *model);
+
 /* 1 when a request to `provider` with `tools_json` (NULL or "" for none) holds
- * an assistant turn with reasoning_cut that the request would send structured:
+ * an assistant turn with reasoning_cut whose reasoning it would send:
  * provider "deepseek" with a tools array sends every assistant turn's
  * reasoning_content, and DeepSeek wants it whole, so the builder returns 0 for
  * such a request (spec decision 23). A turn that goes out as text counts for
- * nothing. Any other provider, or no tools: 0. */
+ * nothing, nor does a plain turn another provider or model wrote (it is sent
+ * as "": DeepSeek gets back only the reasoning it wrote, R68). Any other
+ * provider, or no tools: 0. */
 int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provider,
                                   const char *tools_json);
 

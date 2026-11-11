@@ -848,13 +848,19 @@ int test_ai_reasoning_move_between_messages(void)
     memset(&b, 0, sizeof(b));
     ASSERT_EQ(ai_msg_set_reasoning(&a, "from a"), 0);
     a.reasoning_cut = 1;
+    snprintf(a.tool_provider, sizeof(a.tool_provider), "deepseek");
+    snprintf(a.tool_model, sizeof(a.tool_model), "deepseek-chat");
     ASSERT_EQ(ai_msg_set_reasoning(&b, "old b"), 0);
 
     ai_msg_move_reasoning(&b, &a);
     ASSERT_STR_EQ(b.reasoning, "from a");
     ASSERT_EQ(b.reasoning_cut, 1);
+    ASSERT_STR_EQ(b.tool_provider, "deepseek");
+    ASSERT_STR_EQ(b.tool_model, "deepseek-chat");
     ASSERT_NULL(a.reasoning);
     ASSERT_EQ(a.reasoning_cut, 0);
+    ASSERT_STR_EQ(a.tool_provider, "");
+    ASSERT_STR_EQ(a.tool_model, "");
 
     /* an empty source clears the destination; NULL and self are no-ops */
     ai_msg_move_reasoning(&b, &a);
@@ -867,6 +873,113 @@ int test_ai_reasoning_move_between_messages(void)
     ASSERT_STR_EQ(b.reasoning, "kept");
     ai_msg_free(&a);
     ai_msg_free(&b);
+    TEST_END();
+}
+
+/* sys, user, a plain assistant turn issued by `provider` / `model` carrying
+ * `reasoning` (flagged cut when `cut`), user. The conversation's own model is
+ * `conv_model`. */
+static void issuer_conv(AiConversation *conv, const char *conv_model,
+                        const char *provider, const char *model,
+                        const char *reasoning, int cut)
+{
+    ai_conv_init(conv, conv_model);
+    ai_conv_add(conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(conv, AI_ROLE_USER, "q");
+    ai_conv_add_reply(conv, "answer", reasoning, cut, provider, model);
+    ai_conv_add(conv, AI_ROLE_USER, "next");
+}
+
+int test_ai_reasoning_deepseek_foreign_plain_turn_empty(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    char buf[16384];
+
+    /* (a) a Moonshot plain turn, then a switch to deepseek with tools */
+    issuer_conv(&conv, "deepseek-chat", "moonshot", "kimi-k2", "rm", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "{\"role\":\"assistant\",\"content\":\"answer\","
+                            "\"reasoning_content\":\"\"}") != NULL);
+    ASSERT_NULL(strstr(buf, "\"rm\""));
+    ai_conv_reset(&conv);
+
+    /* (b) deepseek-chat wrote it, the request is for deepseek-reasoner */
+    issuer_conv(&conv, "deepseek-reasoner", "deepseek", "deepseek-chat", "chat thoughts", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"content\":\"answer\",\"reasoning_content\":\"\"}") != NULL);
+    ASSERT_NULL(strstr(buf, "chat thoughts"));
+    ai_conv_reset(&conv);
+
+    /* the same model gets it back */
+    issuer_conv(&conv, "deepseek-reasoner", "deepseek", "deepseek-reasoner", "own thoughts", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"content\":\"answer\",\"reasoning_content\":\"own thoughts\"}") != NULL);
+    ai_conv_reset(&conv);
+
+    /* a turn with no recorded issuer is judged as before: sent */
+    issuer_conv(&conv, "deepseek-reasoner", "", "", "legacy", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"content\":\"answer\",\"reasoning_content\":\"legacy\"}") != NULL);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_foreign_cut_plain_turn_not_refused(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    char buf[16384];
+
+    /* (c) a cut turn of another provider, or of another model, refuses nothing */
+    issuer_conv(&conv, "deepseek-chat", "moonshot", "kimi-k2", "rm", 1);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS), 0);
+    ai_conv_reset(&conv);
+    issuer_conv(&conv, "deepseek-reasoner", "deepseek", "deepseek-chat", "x", 1);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ai_conv_reset(&conv);
+
+    /* a deepseek turn of the same model, cut, still refuses */
+    issuer_conv(&conv, "deepseek-chat", "deepseek", "deepseek-chat", "x", 1);
+    ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
+    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS), 1);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_conv_add_reply_records_issuer(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    ASSERT_EQ(ai_conv_add_reply(&conv, "hi", "why", 1, "deepseek", "deepseek-chat"), 0);
+    const AiMessage *t = &conv.messages[0];
+    ASSERT_EQ((int)t->role, (int)AI_ROLE_ASSISTANT);
+    ASSERT_STR_EQ(ai_msg_content(t), "hi");
+    ASSERT_STR_EQ(t->reasoning, "why");
+    ASSERT_EQ(t->reasoning_cut, 1);
+    ASSERT_STR_EQ(t->tool_provider, "deepseek");
+    ASSERT_STR_EQ(t->tool_model, "deepseek-chat");
+    ASSERT_EQ(t->n_tool_calls, 0);
+
+    /* nothing cut, no reasoning, no issuer */
+    ASSERT_EQ(ai_conv_add_reply(&conv, "yo", NULL, 0, NULL, NULL), 0);
+    ASSERT_NULL(conv.messages[1].reasoning);
+    ASSERT_EQ(conv.messages[1].reasoning_cut, 0);
+    ASSERT_STR_EQ(conv.messages[1].tool_provider, "");
+
+    /* the issuer does not turn a plain turn into text: a tool conversation of
+     * another provider still builds the plain turn structured */
+    ASSERT_EQ(ai_conv_add_reply(NULL, "x", NULL, 0, NULL, NULL), -1);
+    ASSERT_EQ(ai_conv_add_reply(&conv, NULL, NULL, 0, NULL, NULL), -1);
+    ASSERT_EQ(conv.msg_count, 2);
+
+    /* a full conversation stores nothing */
+    while (conv.msg_count < AI_MAX_MESSAGES) ai_conv_add(&conv, AI_ROLE_USER, "u");
+    ASSERT_EQ(ai_conv_add_reply(&conv, "x", "r", 0, "a", "b"), -1);
+    ASSERT_EQ(conv.msg_count, AI_MAX_MESSAGES);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
