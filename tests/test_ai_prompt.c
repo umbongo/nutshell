@@ -3199,6 +3199,10 @@ int test_ai_build_body_assistant_tool_use_anthropic(void) {
                  "{\"command\":\"ls\"}");
         asst->n_tool_calls = 1;
     }
+    /* the answer: a body with an unanswered tool call is refused */
+    ai_conv_add(&conv, AI_ROLE_TOOL, "ok");
+    snprintf(conv.messages[conv.msg_count - 1].tool_call_id,
+             sizeof(conv.messages[conv.msg_count - 1].tool_call_id), "%s", "toolu_01");
 
     char buf[4096];
     size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, "anthropic");
@@ -3274,6 +3278,10 @@ int test_ai_build_body_assistant_tool_use_openai(void) {
                  "{\"command\":\"ls\"}");
         asst->n_tool_calls = 1;
     }
+    /* the answer: a body with an unanswered tool call is refused */
+    ai_conv_add(&conv, AI_ROLE_TOOL, "ok");
+    snprintf(conv.messages[conv.msg_count - 1].tool_call_id,
+             sizeof(conv.messages[conv.msg_count - 1].tool_call_id), "%s", "call_001");
 
     char buf[4096];
     size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, NULL);

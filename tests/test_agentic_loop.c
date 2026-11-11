@@ -975,11 +975,14 @@ int test_agentic_results_oom_notes_only(void)
     ai_conv_init(&conv, "m");
     ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
     five_calls(calls, res, bufs);
+    /* the calls the results answer: the body builders refuse a results turn
+     * with no assistant turn before it */
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "go", calls, 5), 0);
     alloc_plan(2, 0);
     ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 0);
     agentic_set_alloc_for_test(NULL);
-    ASSERT_EQ(conv.msg_count, 2);
-    AiMessage *m = &conv.messages[1];
+    ASSERT_EQ(conv.msg_count, 3);
+    AiMessage *m = &conv.messages[2];
     ASSERT_EQ((int)m->role, (int)AI_ROLE_TOOL);
     ASSERT_EQ(m->n_parts, 5);
     if (m->parts && m->n_parts == 5) {

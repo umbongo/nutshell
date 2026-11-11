@@ -1,4 +1,5 @@
 #include "ai_agentic.h"
+#include "ai_conv_guard.h"
 #include "json_validate.h"
 #include "json_parser.h"
 #include "run_command.h"
@@ -228,10 +229,13 @@ int agentic_add_tool_results(AiConversation *conv,
     if (!parts) {
         /* Out of memory: answer every call from static text instead, so no
          * tool_use is left without its result. If even that array cannot be
-         * had, nothing is stored and the caller must drop the open assistant
-         * turn (Task B4's ai_conv_drop_open_tool_turn wires it in here). */
+         * had, the open assistant turn is dropped (spec decision 25) so the
+         * conversation stays well-formed, and -1 says no results were stored. */
         parts = parts_notes_only(calls, results, n_results);
-        if (!parts) return -1;
+        if (!parts) {
+            ai_conv_drop_open_tool_turn(conv);
+            return -1;
+        }
     }
 
     AiMessage *msg = &conv->messages[conv->msg_count];

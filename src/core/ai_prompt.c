@@ -1,5 +1,6 @@
 #include "ai_prompt.h"
 #include "ai_tools.h"
+#include "ai_conv_guard.h"
 #include "ai_data_block.h"
 #include "json_parser.h"
 #include "json_validate.h"
@@ -876,6 +877,11 @@ static size_t build_body_core(const AiConversation *conv,
                               const char *provider)
 {
     if (!conv || !buf || buf_size == 0 || conv->msg_count == 0) return 0;
+
+    /* A tool call without its answer, an answer without its call, or a turn
+     * between them is a 400 from every provider: send nothing, the caller
+     * shows an error row (spec 2026-11-05 run-command tool, decision 19). */
+    if (!ai_conv_tool_pairs_well_formed(conv)) return 0;
 
     /* The data block goes in the last user message (never a tool result). */
     int block_idx = -1;

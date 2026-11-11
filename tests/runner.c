@@ -3083,6 +3083,26 @@ int test_web_fetch_pinned_host_spellings(void);
 int test_web_fetch_no_backend_not_available(void);
 #endif
 
+/* test_ai_conv_guard.c */
+int test_pairs_plain_ok(void);
+int test_pairs_tool_round_ok(void);
+int test_pairs_legacy_tool_messages_ok(void);
+int test_pairs_note_between_fails(void);
+int test_pairs_exec_continue_between_fails(void);
+int test_pairs_missing_results_fails(void);
+int test_pairs_partial_results_fails(void);
+int test_pairs_wrong_id_fails(void);
+int test_pairs_orphan_result_fails(void);
+int test_pairs_open_at_end_fails(void);
+int test_conv_note_queued_while_open(void);
+int test_conv_note_deferred_while_busy(void);
+int test_conv_note_refusals(void);
+int test_conv_note_long_text_cut(void);
+int test_conv_room_for_send(void);
+int test_conv_drop_open_tool_turn(void);
+int test_agentic_results_oom_drops_open_turn(void);
+int test_body_refuses_malformed(void);
+
 /* test_agentic_loop.c */
 int test_agentic_can_continue_initial(void);
 int test_agentic_max_iterations(void);
@@ -8234,6 +8254,24 @@ int main(void) {
         failed += test_pw_layout_today_unchanged();
         failed += test_pw_layout_text_row();
         failed += test_pw_text_crlf();
+        failed += test_pairs_plain_ok();
+        failed += test_pairs_tool_round_ok();
+        failed += test_pairs_legacy_tool_messages_ok();
+        failed += test_pairs_note_between_fails();
+        failed += test_pairs_exec_continue_between_fails();
+        failed += test_pairs_missing_results_fails();
+        failed += test_pairs_partial_results_fails();
+        failed += test_pairs_wrong_id_fails();
+        failed += test_pairs_orphan_result_fails();
+        failed += test_pairs_open_at_end_fails();
+        failed += test_conv_note_queued_while_open();
+        failed += test_conv_note_deferred_while_busy();
+        failed += test_conv_note_refusals();
+        failed += test_conv_note_long_text_cut();
+        failed += test_conv_room_for_send();
+        failed += test_conv_drop_open_tool_turn();
+        failed += test_agentic_results_oom_drops_open_turn();
+        failed += test_body_refuses_malformed();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);

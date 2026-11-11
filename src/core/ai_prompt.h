@@ -619,6 +619,21 @@ typedef enum {
  * shift_held: 1 if Shift is down, 0 otherwise. */
 AiInputAction ai_input_key_action(int is_enter, int shift_held);
 
+/* Nutshell's own USER notes that cannot enter the conversation yet (spec
+ * 2026-11-05 run-command tool, decision 19): the "policy raised" note, an
+ * older [EXEC] batch's continue text and the like, held while an assistant
+ * turn's tool calls are unanswered or while the session is busy. Fixed inline
+ * slots, no heap. AI_NOTE_TEXT_MAX is the size of the largest text the door
+ * is handed (the continue text's buffer), terminating NUL included. The door
+ * is ai_conv_add_user_note() (ai_conv_guard.h). */
+#define AI_NOTE_QUEUE_MAX 4
+#define AI_NOTE_TEXT_MAX  4096
+
+typedef struct {
+    char text[AI_NOTE_QUEUE_MAX][AI_NOTE_TEXT_MAX];
+    int count;
+} AiNoteQueue;
+
 /* Per-session AI state: wraps a conversation with a validity flag.
  * Sessions embed this so the AI chat window can save/restore conversations
  * when the user switches tabs. */
@@ -640,6 +655,9 @@ typedef struct {
      * cmd_batch_set_init(), cmd_run_log_free() beside each
      * cmd_batch_set_free(). */
     CmdRunLog run_log;
+    /* USER notes waiting for the conversation to accept them (see
+     * ai_conv_add_user_note(), ai_conv_guard.h). Zero at creation. */
+    AiNoteQueue notes;
     /* Per-session streaming state (supports concurrent AI requests) */
     volatile int busy;           /* 1 while a stream thread is running */
     char *stream_content;        /* heap-allocated accumulator, NULL when idle */
