@@ -4037,10 +4037,12 @@ int test_runcmd_quoted_row(void)
     memset(big, 'x', 1023);
     big[1023] = '\0';
     ASSERT_EQ((int)runcmd_quoted_row(big, out, sizeof(out)), 17 + 1023);
-    /* A small buffer cuts, on a UTF-8 boundary. */
-    char small[22];
+    /* A small buffer cuts, on a UTF-8 boundary: 21 bytes leave room for 3 of
+     * the command, so the cut falls between the lead and continuation byte of
+     * the second e-acute and steps back to the whole first one. */
+    char small[21];
     runcmd_quoted_row("\xC3\xA9\xC3\xA9\xC3\xA9", small, sizeof(small));
-    ASSERT_STR_EQ(small, "quoted, not run: \xC3\xA9\xC3\xA9");
+    ASSERT_STR_EQ(small, "quoted, not run: \xC3\xA9");
     ASSERT_EQ((int)runcmd_quoted_row(NULL, out, sizeof(out)), 0);
     ASSERT_STR_EQ(out, "");
     ASSERT_EQ((int)runcmd_quoted_row("ls", NULL, 10), 0);

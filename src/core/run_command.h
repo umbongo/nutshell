@@ -289,7 +289,7 @@ int runcmd_cause_starts_next(RunCmdCause c);
  * relaunches (runcmd_cause_relaunches), the owner is the displayed session
  * (`displayed`) and has no stream running (`busy` 0), the results were stored
  * (`stored`: the store returned 0 or 1) and the conversation has room for the
- * round (`room`: agentic_room_for_tool_round with the owner's queue). Any
+ * round (`room`: agentic_room_for_finish with the owner's queue). Any
  * other combination starts nothing (spec decision 8 and the governing
  * principle). */
 int runcmd_finish_relaunches(RunCmdCause c, int displayed, int busy, int stored,
