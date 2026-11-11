@@ -1189,7 +1189,7 @@ int test_runcmd_capture_probe_matches_dup(void)
 
 #define NOTE_OTHER_TOOL \
     "not run: a reply that calls run_command may call no other tool; call it again in a reply of its own"
-#define NOTE_STOP "stopped by the user: do not run it again unless the user asks"
+#define NOTE_STOP "stopped by the user; do not run it again unless the user asks"
 #define NOTE_SCREEN \
     "the screen changed while the command ran; this is the screen as it ended"
 #define NOTE_SCROLLED "the start of the output scrolled out of the terminal's history"
@@ -2935,5 +2935,215 @@ int test_runcmd_capture_prompt_edges(void)
     ASSERT_HEAD(i2, "out\n$ ls");
     cap_free(&i2);
     term_free(v);
+    TEST_END();
+}
+
+/* ---- Review of B1-B11 (FW4): one Stop wording, never-captured, aging by command rounds ---- */
+
+/* The Stop wording is spec decision 13's table text, spelled out here (not
+ * through the source's define): a semicolon, in the note and inside the
+ * EXECUTING note's brackets alike. */
+int test_runcmd_stop_wording_literals(void)
+{
+    TEST_BEGIN();
+    RunCmdReply *r = plan_runs(3);
+    ASSERT_NOT_NULL(r);
+    const ApprovalStatus st[3] = { APPROVE_EXECUTING, APPROVE_APPROVED, APPROVE_PENDING };
+    ApprovalQueue q;
+    queue_of(&q, r, st, 3);
+    cap_excerpt(&r->calls[0], "rows so far", NULL, 0, 0);
+    AiToolResult res[3];
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_STOP, res), 3);
+    ASSERT_STR_EQ(res[0].tool_note,
+        "the panel stopped waiting; the command may still be running "
+        "(stopped by the user; do not run it again unless the user asks)");
+    ASSERT_STR_EQ(res[1].tool_note,
+        "not run: stopped by the user; do not run it again unless the user asks");
+    ASSERT_STR_EQ(res[2].tool_note,
+        "not run: stopped by the user; do not run it again unless the user asks");
+    free_results(res, 3);
+    runcmd_reply_free(r);
+    TEST_END();
+}
+
+/* A COMPLETED or EXECUTING call whose capture never ran says so; it is never
+ * a bare "ran" (spec decision 13, review of B1-B11). */
+int test_runcmd_never_captured_notes(void)
+{
+    TEST_BEGIN();
+    RunCmdReply *r = plan_runs(2);
+    ASSERT_NOT_NULL(r);
+    const ApprovalStatus st[2] = { APPROVE_COMPLETED, APPROVE_EXECUTING };
+    ApprovalQueue q;
+    queue_of(&q, r, st, 2);                            /* no capture on either call */
+    AiToolResult res[2];
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_SETTLED, res), 2);
+    ASSERT_STR_EQ(res[0].tool_note, "ran; output not captured");
+    ASSERT_STR_EQ(res[1].tool_note,
+        "the panel stopped waiting; the command may still be running "
+        "(the batch finished); output not captured");
+    ASSERT_NULL(res[0].content);
+    ASSERT_NULL(res[1].content);
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_RETRY, res), 2);
+    ASSERT_STR_EQ(res[1].tool_note,
+        "ran; the panel stopped waiting; the command may still be running "
+        "(the user retried); output not captured");
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_STOP, res), 2);
+    ASSERT_STR_EQ(res[1].tool_note,
+        "the panel stopped waiting; the command may still be running "
+        "(stopped by the user; do not run it again unless the user asks); "
+        "output not captured");
+    /* a call that was captured (an empty screen) keeps its own note */
+    cap_excerpt(&r->calls[0], NULL, NULL, 0, RUNCMD_CAP_EMPTY);
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_SETTLED, res), 2);
+    ASSERT_STR_EQ(res[0].tool_note, "ran; no output on the screen");
+    runcmd_reply_free(r);
+    TEST_END();
+}
+
+/* One tool round of a single call: name, content (NULL: notes-only), cut
+ * (omit_at, omitted) and note. */
+static void add_one_round(AiConversation *c, int round, const char *name,
+                          const char *content, size_t omit_at, size_t omitted,
+                          const char *note)
+{
+    AiToolCall call;
+    AiToolResult res;
+    char id[16];
+    snprintf(id, sizeof(id), "t%d", round);
+    set_call(&call, id, name,
+             strcmp(name, RUNCMD_TOOL_NAME) == 0 ? "{\"command\":\"ls\"}" : "{\"query\":\"q\"}");
+    memset(&res, 0, sizeof(res));
+    snprintf(res.tool_use_id, sizeof(res.tool_use_id), "%s", id);
+    if (content) { res.content = rc_dup(content); res.content_len = strlen(content); }
+    res.omit_at = omit_at;
+    res.omitted_bytes = omitted;
+    snprintf(res.tool_note, sizeof(res.tool_note), "%s", note);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1);
+    agentic_add_tool_results(c, &call, &res, 1);
+    free(res.content);
+}
+
+/* The stub says the output is gone, so the note's "output cut: N bytes
+ * omitted" goes with it; the rest of the note and its joins stay. */
+int test_runcmd_age_removes_cut_note(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    char big[201];
+    memset(big, 'o', 200); big[200] = '\0';
+    add_one_round(c, 1, RUNCMD_TOOL_NAME, big, 100, 5000,
+                  "ran; output cut: 5000 bytes omitted from the middle");
+    add_one_round(c, 2, RUNCMD_TOOL_NAME, big, 100, 5000,
+                  "ran; the screen changed while the command ran; this is the screen as it ended; "
+                  "output cut: 5000 bytes omitted from the middle");
+    add_one_round(c, 3, RUNCMD_TOOL_NAME, big, 100, 5000,
+                  "output cut: 5000 bytes omitted from the middle; later words");
+    add_one_round(c, 4, RUNCMD_TOOL_NAME, big, 100, 5000,
+                  "ran; output cut: 5000 bytes omitted from the middle");
+    add_one_round(c, 5, RUNCMD_TOOL_NAME, big, 100, 5000,
+                  "ran; output cut: 5000 bytes omitted from the middle");
+    ASSERT_EQ(runcmd_age_results(c), 3);
+    const AiMessage *m1 = &c->messages[2];
+    ASSERT_EQ((int)m1->role, (int)AI_ROLE_TOOL);
+    ASSERT_STR_EQ(m1->parts[0].content, RUNCMD_AGED_STUB);
+    ASSERT_STR_EQ(m1->parts[0].tool_note, "ran");
+    ASSERT_STR_EQ(c->messages[4].parts[0].content, RUNCMD_AGED_STUB);
+    ASSERT_STR_EQ(c->messages[4].parts[0].tool_note,
+        "ran; the screen changed while the command ran; this is the screen as it ended");
+    ASSERT_STR_EQ(c->messages[6].parts[0].content, RUNCMD_AGED_STUB);
+    ASSERT_STR_EQ(c->messages[6].parts[0].tool_note, "later words");
+    /* the newest two rounds keep their output and their cut note */
+    ASSERT_STR_EQ(c->messages[8].parts[0].tool_note,
+                  "ran; output cut: 5000 bytes omitted from the middle");
+    ASSERT_EQ((int)c->messages[8].parts[0].omitted_bytes, 5000);
+    ASSERT_STR_EQ(c->messages[10].parts[0].tool_note,
+                  "ran; output cut: 5000 bytes omitted from the middle");
+    ASSERT_EQ(runcmd_age_results(c), 0);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
+/* Aging counts run_command rounds: web results between them age nothing. */
+int test_runcmd_age_counts_command_rounds(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    char big[201];
+    memset(big, 'o', 200); big[200] = '\0';
+    add_one_round(c, 1, RUNCMD_TOOL_NAME, big, 0, 0, "ran");
+    add_one_round(c, 2, "web_search", "found", 0, 0, "");
+    add_one_round(c, 3, RUNCMD_TOOL_NAME, big, 0, 0, "ran");
+    add_one_round(c, 4, "web_search", "found", 0, 0, "");
+    add_one_round(c, 5, RUNCMD_TOOL_NAME, big, 0, 0, "ran");
+    add_one_round(c, 6, "web_search", "found", 0, 0, "");
+    add_one_round(c, 7, "web_search", "found", 0, 0, "");
+    ASSERT_TRUE(ai_conv_tool_pairs_well_formed(c));
+    ASSERT_EQ(runcmd_age_results(c), 1);               /* only the oldest of three command rounds */
+    ASSERT_STR_EQ(c->messages[2].parts[0].content, RUNCMD_AGED_STUB);
+    ASSERT_STR_EQ(c->messages[6].parts[0].content, big);
+    ASSERT_STR_EQ(c->messages[10].parts[0].content, big);
+    for (int m = 4; m < 14; m += 4)                    /* the web results are untouched */
+        ASSERT_STR_EQ(c->messages[m].parts[0].content, "found");
+    /* the part check agrees: the coming append (a command round) ages round 3 */
+    ASSERT_EQ(runcmd_part_ages(c, 6, &c->messages[6].parts[0], 1), 1);
+    ASSERT_EQ(runcmd_part_ages(c, 6, &c->messages[6].parts[0], 2), 0);
+    ASSERT_EQ(runcmd_part_ages(c, 10, &c->messages[10].parts[0], 1), 0);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
+/* The estimate follows the same rule: with web turns between command rounds
+ * the newest command round counts in full, the two before it as the stub. */
+int test_runcmd_estimate_follows_command_rounds(void)
+{
+    TEST_BEGIN();
+    AiConversation *a = (AiConversation *)calloc(1, sizeof(*a));
+    AiConversation *b = (AiConversation *)calloc(1, sizeof(*b));
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ai_conv_init(a, "m");
+    ai_conv_init(b, "m");
+    ai_conv_add(a, AI_ROLE_USER, "go");
+    ai_conv_add(b, AI_ROLE_USER, "go");
+    char big[201];
+    memset(big, 'o', 200); big[200] = '\0';
+    char stub[256];
+    snprintf(stub, sizeof(stub), "%s", RUNCMD_AGED_STUB);
+    for (int round = 1; round <= 7; round++) {
+        int cmd = round <= 5 && round % 2 == 1;           /* command rounds 1, 3, 5; web 2, 4, 6, 7 */
+        add_one_round(a, round, cmd ? RUNCMD_TOOL_NAME : "web_search",
+                      cmd ? big : "found", 0, 0, cmd ? "ran" : "");
+        /* B: command rounds 1 and 3 already the stub */
+        add_one_round(b, round, cmd ? RUNCMD_TOOL_NAME : "web_search",
+                      cmd ? (round < 5 ? stub : big) : "found", 0, 0, cmd ? "ran" : "");
+    }
+    ASSERT_EQ((int)runcmd_request_estimate(a, "anthropic", 0, 0),
+              (int)runcmd_request_estimate(b, "anthropic", 0, 0));
+    /* the newest command round counts in full: 100 more bytes there, 100
+     * more in the estimate (web turns after it do not age it) */
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    char bigger[301];
+    memset(bigger, 'o', 300); bigger[300] = '\0';
+    for (int round = 1; round <= 7; round++) {
+        int cmd = round <= 5 && round % 2 == 1;
+        add_one_round(c, round, cmd ? RUNCMD_TOOL_NAME : "web_search",
+                      cmd ? (round == 5 ? bigger : big) : "found", 0, 0, cmd ? "ran" : "");
+    }
+    ASSERT_EQ((int)runcmd_request_estimate(c, "anthropic", 0, 0),
+              (int)runcmd_request_estimate(a, "anthropic", 0, 0) + 100);
+    ai_conv_reset(a); ai_conv_reset(b); ai_conv_reset(c);
+    free(a); free(b); free(c);
     TEST_END();
 }

@@ -537,11 +537,12 @@ RunCmdPathPlan runcmd_path_plan(RunCmdPath p)
 #define NOTE_RAN            "ran"
 #define NOTE_OTHER_TOOL \
     "not run: a reply that calls run_command may call no other tool; call it again in a reply of its own"
-#define NOTE_STOP_REASON    "stopped by the user: do not run it again unless the user asks"
+#define NOTE_STOP_REASON    "stopped by the user; do not run it again unless the user asks"
 #define NOTE_SCREEN \
     "the screen changed while the command ran; this is the screen as it ended"
 #define NOTE_SCROLLED       "the start of the output scrolled out of the terminal's history"
 #define NOTE_NO_OUTPUT      "no output on the screen"
+#define NOTE_NOT_CAPTURED   "output not captured"
 #define NOTE_OOM_DROPPED    "output dropped: Nutshell ran out of memory"
 #define NOTE_FIT_DROPPED    "output dropped: no room left in this conversation"
 #define NOTE_CUT_FMT        "output cut: %zu bytes omitted from the middle"
@@ -595,7 +596,9 @@ static void note_part_n(NoteBuf *nb, const char *pre, size_t n, const char *post
  * excerpt, the cut note. */
 static void capture_notes(NoteBuf *nb, const RunCmdCapture *cap)
 {
-    if (!cap->captured) return;
+    /* the capture never ran (the call has no terminal to read): say so, so
+     * a bare "ran" never reads as "ran with no output" (review of B1-B11) */
+    if (!cap->captured) { note_part(nb, NOTE_NOT_CAPTURED); return; }
     int has_excerpt = cap->head || cap->tail;
     if (cap->flags & RUNCMD_CAP_SCREEN)       note_part(nb, NOTE_SCREEN);
     if (cap->flags & RUNCMD_CAP_SCROLLED_OUT) note_part(nb, NOTE_SCROLLED);
@@ -811,18 +814,24 @@ static void note_set_cut(char *note, size_t cap, size_t omitted)
         snprintf(note + len, cap - len, "%s%s", sep ? "; " : "", add);
 }
 
+/* Drop the cut note and one "; " join beside it (the one before it, else the
+ * one after), keeping the rest of the note as it is. */
+static void note_drop_cut(char *note, size_t cap)
+{
+    size_t from, digits, to;
+    if (!find_cut_note(note, &from, &digits, &to)) return;
+    char rest[AI_TOOL_PART_NOTE_MAX];
+    snprintf(rest, sizeof(rest), "%s", note + to);
+    const char *r = rest;
+    if (from >= 2 && note[from - 2] == ';' && note[from - 1] == ' ') from -= 2;
+    else if (r[0] == ';' && r[1] == ' ') r += 2;
+    snprintf(note + from, cap - from, "%s", r);
+}
+
 /* Drop the cut note (and the separator before it), then add the fit note. */
 static void note_set_dropped(char *note, size_t cap)
 {
-    size_t from, digits, to;
-    if (find_cut_note(note, &from, &digits, &to)) {
-        char rest[AI_TOOL_PART_NOTE_MAX];
-        snprintf(rest, sizeof(rest), "%s", note + to);
-        const char *r = rest;
-        if (from >= 2 && note[from - 2] == ';' && note[from - 1] == ' ') from -= 2;
-        else if (r[0] == ';' && r[1] == ' ') r += 2;
-        snprintf(note + from, cap - from, "%s", r);
-    }
+    note_drop_cut(note, cap);
     size_t len = strlen(note), sep = len ? 2 : 0;
     if (len + sep + strlen(NOTE_FIT_DROPPED) < cap)
         snprintf(note + len, cap - len, "%s%s", sep ? "; " : "", NOTE_FIT_DROPPED);
@@ -975,6 +984,17 @@ char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out
 
 /* ---- Aging ---- */
 
+/* A results turn that holds a run_command part: a command round. Web results
+ * turns between command rounds are not rounds for aging (spec decision 11,
+ * review of B1-B11). */
+static int turn_is_command_round(const AiMessage *msg)
+{
+    if (msg->role != AI_ROLE_TOOL) return 0;
+    for (int k = 0; msg->parts && k < msg->n_parts; k++)
+        if (strcmp(msg->parts[k].tool_name, RUNCMD_TOOL_NAME) == 0) return 1;
+    return 0;
+}
+
 int runcmd_part_ages(const AiConversation *conv, int m, const AiToolPart *p, int keep)
 {
     if (!conv || !p || keep <= 0 || m < 0 || m >= conv->msg_count) return 0;
@@ -982,7 +1002,7 @@ int runcmd_part_ages(const AiConversation *conv, int m, const AiToolPart *p, int
     if (!p->content || p->content_len < strlen(RUNCMD_AGED_STUB)) return 0;
     int later = 0;
     for (int j = m + 1; j < conv->msg_count; j++)
-        if (conv->messages[j].role == AI_ROLE_TOOL) later++;
+        if (turn_is_command_round(&conv->messages[j])) later++;
     return later >= keep;
 }
 
@@ -1004,6 +1024,9 @@ int runcmd_age_results(AiConversation *conv)
             p->content_len = stub_len;
             p->omit_at = 0;
             p->omitted_bytes = 0;
+            /* the stub says the output is gone: the cut note goes with it.
+             * (A fit or out-of-memory note never sits beside content.) */
+            note_drop_cut(p->tool_note, sizeof(p->tool_note));
             aged++;
         }
     }

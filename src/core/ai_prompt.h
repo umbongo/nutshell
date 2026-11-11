@@ -667,7 +667,7 @@ int ai_context_estimate_tokens(const AiConversation *conv);
  * AI_TOOL_WIRE_PART and ai_tool_frame_bytes() of its stored content. Zero for
  * a conversation with neither. The turns' content and notes are not counted
  * here. age_keep > 0: a run_command part that runcmd_part_ages() says is aged
- * with that many newest results turns kept is counted as the stub (the size
+ * with that many newest command rounds kept is counted as the stub (the size
  * of a request once the coming append has aged it); 0: parts as stored. */
 #define AI_TOOL_WIRE_CALL 64u  /* the JSON around one tool_use / tool_calls entry (the larger form) */
 #define AI_TOOL_WIRE_PART 52u  /* the JSON around one tool_result / "tool" message */

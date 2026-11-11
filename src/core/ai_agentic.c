@@ -252,11 +252,35 @@ static AiToolPart *parts_from_results(const AiToolCall *calls,
     return parts;
 }
 
-#define AGENTIC_OOM_NOTE "not run: Nutshell ran out of memory"
+#define AGENTIC_OUTPUT_DROPPED "output dropped: Nutshell ran out of memory"
+
+/* The result's own note with, when the result had output, the phrase that
+ * says it was dropped ("; " after a note, alone after none), in note[cap]. A
+ * note too long to take the phrase is cut back on a UTF-8 boundary first, so
+ * it is the end of the note that goes, never a part of the phrase. A result
+ * with no output keeps its note as it is. */
+static void notes_only_note(char *note, size_t cap, const AiToolResult *r)
+{
+    snprintf(note, cap, "%s", r->tool_note);
+    if (!r->content || r->content_len == 0) return;
+    size_t phrase = strlen(AGENTIC_OUTPUT_DROPPED);
+    size_t len = strlen(note);
+    if (len == 0) {
+        memcpy(note, AGENTIC_OUTPUT_DROPPED, phrase + 1);
+        return;
+    }
+    if (len + 2 + phrase > cap - 1) {
+        len = cap - 1 - 2 - phrase;
+        while (len > 0 && ((unsigned char)note[len] & 0xC0) == 0x80) len--;
+    }
+    memcpy(note + len, "; ", 2);
+    memcpy(note + len + 2, AGENTIC_OUTPUT_DROPPED, phrase + 1);
+}
 
 /* The answer used when the results cannot be copied: one part per call, no
- * content, the static note (spec decision 25). Only the array is allocated.
- * NULL when even that cannot be had. */
+ * content, the result's own note plus "output dropped" where there was
+ * output (spec decision 25: a command that ran is never reported as not
+ * run). Only the array is allocated. NULL when even that cannot be had. */
 static AiToolPart *parts_notes_only(const AiToolCall *calls,
                                     const AiToolResult *results, int n,
                                     const AiToolCall *stored, int n_stored)
@@ -266,7 +290,8 @@ static AiToolPart *parts_notes_only(const AiToolCall *calls,
     memset(parts, 0, (size_t)n * sizeof(AiToolPart));
     for (int i = 0; i < n; i++) {
         part_fill_head(&parts[i], calls, &results[i], i, stored, n_stored);
-        memcpy(parts[i].tool_note, AGENTIC_OOM_NOTE, sizeof(AGENTIC_OOM_NOTE));
+        parts[i].is_error = results[i].is_error;
+        notes_only_note(parts[i].tool_note, sizeof(parts[i].tool_note), &results[i]);
     }
     return parts;
 }
@@ -299,7 +324,7 @@ int agentic_add_tool_results(AiConversation *conv,
     AiToolPart *parts = parts_from_results(calls, results, n_results,
                                            stored, n_stored);
     if (!parts) {
-        /* Out of memory: answer every call from static text instead, so no
+        /* Out of memory: answer every call from its own note instead, so no
          * tool_use is left without its result (1). If even that array cannot
          * be had, the open assistant turn is dropped (spec decision 25) so the
          * conversation stays well-formed, and -2 says nothing was stored. */

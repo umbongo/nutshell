@@ -619,6 +619,17 @@ part in results turns older than the two most recent rounds (N = 2) has
 its output replaced in storage by the stub "[output dropped to save room;
 run the command again if you need it]"; its note, its call and the fact
 that it ran stay. Other tools' parts are untouched.
+*(review of B1-B11, 2026-11-11)* **Aging counts command rounds.** A results
+turn is a round for aging only if it holds a `run_command` part; web-results
+turns between command rounds age nothing, so the newest two command rounds
+keep their output however many web searches follow them
+(`runcmd_part_ages`, `runcmd_age_results` and the estimate's "the coming
+append" rule agree; the coming append is a command round). **An aged part
+loses its cut note too:** "output cut: N bytes omitted from the middle" is
+removed from the part's note (its other notes, such as "ran" and the capture
+notes, stay, the "; " joins tidied) so the stub and the note do not
+contradict; the stub keeps its place in the content. A fit or
+out-of-memory note never sits beside content, so there is none to remove.
 
 **12. Framing.** Trust 5's framed tools gain `run_command` (sentence below).
 A cut result is two blocks under the request's delimiter, the marker
@@ -644,8 +655,9 @@ sends the note alone. Trust's 64 KiB cap never cuts a run_command result.
 | State when the batch goes | Note | Excerpt |
 |---|---|---|
 | COMPLETED | "ran" | yes |
-| EXECUTING (Stop, tab switch, session ended, panel close) | *(round 2)* "the panel stopped waiting; the command may still be running (<reason>)" | rows so far |
+| EXECUTING (Stop, tab switch, session ended, panel close) | *(round 2)* "the panel stopped waiting; the command may still be running (<reason>)"; at Stop the whole note is "the panel stopped waiting; the command may still be running (stopped by the user; do not run it again unless the user asks)" *(review of B1-B11, 2026-11-11)* | rows so far |
 | *(round 2)* EXECUTING at Retry | "ran; the panel stopped waiting; the command may still be running (the user retried)" | rows so far |
+| *(review of B1-B11, 2026-11-11)* COMPLETED or EXECUTING whose capture never ran | the row's note with "; output not captured" appended: "ran; output not captured"; "the panel stopped waiting; the command may still be running (<reason>); output not captured"; "ran; the panel stopped waiting; the command may still be running (the user retried); output not captured" | no |
 | APPROVED, never sent (tab switch, session ended, panel close, or the ambiguous-prompt timeout) | "cancelled before it was sent (<reason>)" | no |
 | *(round 2)* PENDING or APPROVED-not-sent at Retry | "not run (the user retried)" | no |
 | DENIED | "not run (denied)" | no |
@@ -658,8 +670,13 @@ sends the note alone. Trust's 64 KiB cap never cuts a run_command result.
 | APPROVED never sent, at Stop | "not run: stopped by the user; do not run it again unless the user asks" | no |
 | OTHER_TOOL; INVALID | decision 4's; decision 2's; `is_error` 1 | no |
 
-`<reason>` at Stop reads "stopped by the user: do not run it again unless
-the user asks"; elsewhere it names the cause. Stop sends Ctrl+C only at a
+`<reason>` at Stop reads "stopped by the user; do not run it again unless
+the user asks" *(review of B1-B11, 2026-11-11: a semicolon, as in the table
+row above, which is the authority; the paragraph and the code used a colon)*;
+elsewhere it names the cause. *(review of B1-B11, 2026-11-11)* A call whose
+capture never ran (the call was COMPLETED or EXECUTING but nothing read the
+screen) is never a bare "ran": "ran" alone says the command printed nothing
+worth keeping, so the note ends "output not captured". Stop sends Ctrl+C only at a
 continuation prompt; a tab switch and panel close send nothing, so the
 note never says the command stopped.
 
@@ -1095,9 +1112,9 @@ that passes the check can always be stored.
 Every new heap path (the parts array and each part's content, the frozen
 snapshot, the run log's command copies, `thought_sig`, the planner's
 reply, the stored reasoning) has a fallback that does not allocate: a
-results turn that cannot be built is replaced by a notes-only answer from
-static text ("not run: Nutshell ran out of memory"), one inline part per
-call (`AiToolPart` with `content` NULL); if even the parts array cannot be
+results turn that cannot be built is replaced by a notes-only answer, one
+inline part per call (`AiToolPart` with `content` NULL) that keeps the
+result's own note (see the review decision below); if even the parts array cannot be
 had, the open assistant tool turn is dropped (`ai_conv_drop_open_tool_turn`)
 so the conversation stays well-formed; a reasoning copy that fails sets
 `reasoning_cut`; a run-log or snapshot copy that fails records nothing.
@@ -1111,6 +1128,20 @@ open assistant tool turn is dropped (`ai_conv_drop_open_tool_turn`), so after
 any return the conversation passes `ai_conv_tool_pairs_well_formed` (a full
 conversation used to leave the turn open, an allocation failure used to drop
 it). The caller ends the loop with its row on a negative value.
+
+*(review of B1-B11, 2026-11-11)* **The notes-only answer does not say a
+command did not run.** It used to give every part "not run: Nutshell ran out
+of memory", which after a COMPLETED or EXECUTING command could make the model
+run a command that is not idempotent again. Each part now keeps its result's
+own note (already filled without allocating) and `is_error`, and a result that
+had output adds "output dropped: Nutshell ran out of memory": "ran; output
+dropped: Nutshell ran out of memory", or the phrase alone after an empty note;
+a result with no output (DENIED, BLOCKED, INVALID, an empty web result) keeps
+its note unchanged. A note too long for the phrase to fit in the 512-byte note
+loses its end, cut on a UTF-8 boundary, never the phrase. "not run: Nutshell
+ran out of memory" is reserved for a call that truly did not run (the
+planner-failure path); this fallback no longer writes it. The function returns
+1 for the notes-only answer, so the caller can show a row.
 
 **26. Token counts on the tool path** *(critique 2)*. The tool-aware chunk
 parser passes NULL for the token counts (`ai_parse_stream_chunk_ex`,

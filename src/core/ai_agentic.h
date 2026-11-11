@@ -79,8 +79,12 @@ int agentic_cap_tool_result(AiToolResult *r);
  * results: array of tool results.
  * n_results: number of results; 0 stores nothing and returns 0.
  * Out of memory: the round is stored as a notes-only turn instead, one part
- * per call with no content and the note "not run: Nutshell ran out of
- * memory", so no call is left unanswered (spec decision 25).
+ * per call with no content and the result's own note (and is_error), plus
+ * "output dropped: Nutshell ran out of memory" for a result that had output
+ * ("; " after a note, alone after none; a note too long for it is cut on a
+ * UTF-8 boundary), so no call is left unanswered and a command that ran is
+ * never reported as not run (spec decision 25). A result with no output
+ * keeps its note unchanged.
  * Each part's tool_call_id is the id of the open stored assistant turn's call
  * at the same position (results are in call order everywhere), not the id in
  * the caller's array, which is only used when no stored call is there.

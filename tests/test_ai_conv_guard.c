@@ -878,7 +878,7 @@ int test_agentic_results_return_values(void)
         agentic_set_alloc_for_test(NULL);
         ASSERT_NULL(c->messages[c->msg_count - 1].parts[0].content);
         ASSERT_STR_EQ(c->messages[c->msg_count - 1].parts[0].tool_note,
-                      "not run: Nutshell ran out of memory");
+                      "output dropped: Nutshell ran out of memory");
         ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
 
         /* -2: not even the notes-only array: dropped, well-formed */

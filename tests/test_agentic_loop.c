@@ -1,6 +1,8 @@
 #include "test_framework.h"
 #include "ai_agentic.h"
 #include "run_command.h"
+#include "ai_conv_guard.h"
+#include "ai_prompt.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -994,8 +996,22 @@ int test_agentic_results_oom_notes_only(void)
             ASSERT_NULL(m->parts[i].content);
             ASSERT_EQ(m->parts[i].content_len, 0);
             ASSERT_EQ(m->parts[i].omitted_bytes, 0);
-            ASSERT_STR_EQ(m->parts[i].tool_note,
-                          "not run: Nutshell ran out of memory");
+            /* each result keeps its own note, and says its output is gone
+             * when it had one (a cut note keeps its tail: 511 bytes cannot
+             * hold the phrase too); result 4 had no output and no note */
+            if (i == 1) {
+                char cut[AI_TOOL_PART_NOTE_MAX];
+                size_t room = AI_TOOL_PART_NOTE_MAX - 1 - strlen("; output dropped: Nutshell ran out of memory");
+                memset(cut, 'n', room);
+                strcpy(cut + room, "; output dropped: Nutshell ran out of memory");
+                ASSERT_STR_EQ(m->parts[i].tool_note, cut);
+            } else if (i == 3) {
+                ASSERT_STR_EQ(m->parts[i].tool_note, "ran; output dropped: Nutshell ran out of memory");
+            } else if (i == 4) {
+                ASSERT_STR_EQ(m->parts[i].tool_note, "");
+            } else {
+                ASSERT_STR_EQ(m->parts[i].tool_note, "output dropped: Nutshell ran out of memory");
+            }
         }
     }
     /* the caller still owns its results */
@@ -1006,7 +1022,8 @@ int test_agentic_results_oom_notes_only(void)
     ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, "[{\"name\":\"run_command\"}]",
                                             body, sizeof(body), 0, "anthropic") > 0);
     ASSERT_TRUE(strstr(body, "\"tool_use_id\":\"call_4\"") != NULL);
-    ASSERT_TRUE(strstr(body, "not run: Nutshell ran out of memory") != NULL);
+    ASSERT_TRUE(strstr(body, "ran; output dropped: Nutshell ran out of memory") != NULL);
+    ASSERT_TRUE(strstr(body, "not run: Nutshell ran out of memory") == NULL);
     ai_conv_reset(&conv);
 
     /* a failure at a later part falls back the same way */
@@ -1035,6 +1052,75 @@ int test_agentic_results_oom_notes_only(void)
     ASSERT_EQ(conv.msg_count, 1);
     ai_conv_reset(&conv);
     for (int i = 0; i < 5; i++) free(bufs[i]);
+    TEST_END();
+}
+
+/* The notes-only fallback keeps each result's own note (decision 25, review
+ * of B1-B11): a result that had output says "output dropped: Nutshell ran out
+ * of memory" after its note; one that had none keeps its note, so a command
+ * that ran is never reported as not run. */
+int test_agentic_notes_only_keeps_notes(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    AiToolCall calls[4];
+    AiToolResult res[4];
+    memset(calls, 0, sizeof(calls));
+    memset(res, 0, sizeof(res));
+    static const char *names[4] = { RUNCMD_TOOL_NAME, RUNCMD_TOOL_NAME, RUNCMD_TOOL_NAME, "web_search" };
+    static const char *notes[4] = { "ran", "not run (denied)", "", "" };
+    char out0[] = "hello", out2[] = "world";
+    for (int i = 0; i < 4; i++) {
+        snprintf(calls[i].id, sizeof(calls[i].id), "c%d", i);
+        snprintf(calls[i].name, sizeof(calls[i].name), "%s", names[i]);
+        snprintf(res[i].tool_use_id, sizeof(res[i].tool_use_id), "c%d", i);
+        snprintf(res[i].tool_note, sizeof(res[i].tool_note), "%s", notes[i]);
+    }
+    res[0].content = out0; res[0].content_len = 5;
+    res[2].content = out2; res[2].content_len = 5;
+    res[3].is_error = 1;
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "", calls, 4), 0);
+    alloc_plan(2, 0);                           /* the first content copy fails */
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 4), 1);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_TRUE(ai_conv_tool_pairs_well_formed(&conv));
+    const AiMessage *m = &conv.messages[conv.msg_count - 1];
+    ASSERT_EQ(m->n_parts, 4);
+    if (m->parts && m->n_parts == 4) {
+        ASSERT_STR_EQ(m->parts[0].tool_note, "ran; output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[1].tool_note, "not run (denied)");
+        ASSERT_STR_EQ(m->parts[2].tool_note, "output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[3].tool_note, "");
+        ASSERT_EQ(m->parts[3].is_error, 1);
+        for (int i = 0; i < 4; i++) ASSERT_NULL(m->parts[i].content);
+    }
+    char body[8192];
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, "[{\"name\":\"run_command\"}]",
+                                            body, sizeof(body), 0, "anthropic") > 0);
+    ai_conv_reset(&conv);
+
+    /* a note too long to take the phrase is cut on a UTF-8 boundary, never
+     * mid-character and never mid-phrase */
+    const char *phrase = "; output dropped: Nutshell ran out of memory";
+    size_t room = AI_TOOL_PART_NOTE_MAX - 1 - strlen(phrase);
+    memset(res[0].tool_note, 'x', room - 1);
+    memcpy(res[0].tool_note + room - 1, "\xC3\xA9" "tail", 7);   /* the cut falls inside the e-acute */
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "", calls, 4), 0);
+    alloc_plan(2, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 4), 1);
+    agentic_set_alloc_for_test(NULL);
+    m = &conv.messages[conv.msg_count - 1];
+    if (m->parts && m->n_parts == 4) {
+        char want[AI_TOOL_PART_NOTE_MAX];
+        memset(want, 'x', room - 1);
+        strcpy(want + room - 1, phrase);
+        ASSERT_STR_EQ(m->parts[0].tool_note, want);
+    }
+    ai_conv_reset(&conv);
     TEST_END();
 }
 

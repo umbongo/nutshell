@@ -297,6 +297,10 @@ RunCmdPathPlan runcmd_path_plan(RunCmdPath p);
  * INVALID and OTHER_TOOL calls keep their own rows under every cause. A
  * capture whose excerpt was lost to an allocation failure (captured, no
  * head or tail, no EMPTY) says "output dropped: Nutshell ran out of memory".
+ * A COMPLETED or EXECUTING call whose capture never ran (captured 0) ends its
+ * note with "output not captured" ("ran; output not captured"), never a bare
+ * "ran". The Stop reason reads "stopped by the user; do not run it again
+ * unless the user asks" in every note that carries it.
  * An excerpt that cannot be copied (the allocation fails) is dropped with the
  * same note and the call is still answered, so no allocation failure leaves a
  * call without a result (spec decision 25). Returns r->n_calls, or -1 for a
@@ -313,9 +317,9 @@ int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCau
  * twice for its escaping and its block), plus, for "moonshot", every stored
  * assistant turn's escaped reasoning (the only provider sending it back so
  * far; DeepSeek's is added with its request path). A run_command part that
- * the append about to happen will age (a results turn with at least
- * RUNCMD_AGE_ROUNDS - 1 results turns after it) is counted as the stub, which
- * is what the next request carries. NULL conv: tools and snapshot only.
+ * the append about to happen will age (a command round with at least
+ * RUNCMD_AGE_ROUNDS - 1 command rounds after it) is counted as the stub, which
+ * is what the next request carries (the append being a command round). NULL conv: tools and snapshot only.
  * provider may be NULL. */
 size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
                                size_t tools_json_len, size_t snapshot_len);
@@ -363,21 +367,25 @@ size_t runcmd_result_bytes(const AiToolResult *r);
 char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out_len);
 
 /* Aging (spec decision 11): the output of a run_command part in a results
- * turn older than the newest RUNCMD_AGE_ROUNDS results turns is replaced by
- * the stub. */
+ * turn older than the newest RUNCMD_AGE_ROUNDS command rounds is replaced by
+ * the stub. A command round is a results turn that holds a run_command part;
+ * web results turns between them are not rounds. */
 #define RUNCMD_AGE_ROUNDS 2
 #define RUNCMD_AGED_STUB "[output dropped to save room; run the command again if you need it]"
 
 /* Write the stub over such a part's content in place (no allocation, the
  * part keeps owning its heap block; content_len becomes the stub's length;
- * omit_at and omitted_bytes 0). A part whose content is shorter than the stub
- * or NULL, or already the stub, is left as it is; its note and its call stay.
+ * omit_at and omitted_bytes 0). The part's note loses its "output cut: N bytes
+ * omitted from the middle" phrase (the rest of the note, joins tidied, stays).
+ * A part whose content is shorter than the stub or NULL, or already the stub,
+ * is left as it is; its note and its call stay.
  * Other tools' parts are untouched. Returns the number of parts changed. */
 int runcmd_age_results(AiConversation *conv);
 
 /* 1 when part p, which sits in the results turn at message index m of conv, is
  * a run_command part whose output is at least the stub's size and that has at
- * least `keep` results turns (AI_ROLE_TOOL messages) after its own: the parts
+ * least `keep` command rounds (results turns holding a run_command part) after
+ * its own: the parts
  * runcmd_age_results() (keep = RUNCMD_AGE_ROUNDS) replaces by the stub.
  * keep <= 0: 0. */
 int runcmd_part_ages(const AiConversation *conv, int m, const AiToolPart *p, int keep);
