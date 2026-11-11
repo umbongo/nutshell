@@ -3255,6 +3255,7 @@ int test_settings_help_ranges_in_text(void);
 int test_settings_help_keep_entries(void);
 int test_settings_help_font_sizes_and_notes(void);
 int test_settings_help_labels_match_sources(void);
+int test_settings_help_every_id_in_settings_c(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -7167,6 +7168,7 @@ int main(void) {
     failed += test_settings_help_keep_entries();
     failed += test_settings_help_font_sizes_and_notes();
     failed += test_settings_help_labels_match_sources();
+    failed += test_settings_help_every_id_in_settings_c();
 
     printf("\n--- Design System: scale & type ---\n");
     failed += test_ns_scale_identity_at_96();

@@ -12,6 +12,7 @@
 #include "dlog_types.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- local helpers ---------------------------------------------------- */
@@ -453,5 +454,70 @@ int test_settings_help_labels_match_sources(void) {
                 printf("  Search text lacks \"%s\"\n", search_provider_label(i));
             ASSERT_TRUE(strstr(e->text, search_provider_label(i)) != NULL);
         }
+    TEST_END();
+}
+
+/* ---- source scan ------------------------------------------------------- */
+
+/* Whole file, as bytes; NULL when it cannot be read. */
+static char *read_whole(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long len = ftell(f);
+    if (len < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = (char *)malloc((size_t)len + 1u);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1u, (size_t)len, f);
+    fclose(f);
+    buf[got] = '\0';
+    return buf;
+}
+
+static int is_ident_char(char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/* name occurs in src as a whole identifier (SH_AI_SEARCH must not match
+ * inside SH_AI_SEARCH_URL, nor FOO_SH_AI_SEARCH). */
+static int has_identifier(const char *src, const char *name)
+{
+    size_t n = strlen(name);
+    for (const char *p = strstr(src, name); p != NULL; p = strstr(p + 1, name)) {
+        int before = p == src ? 0 : is_ident_char(p[-1]);
+        int after = is_ident_char(p[n]);
+        if (!before && !after) return 1;
+    }
+    return 0;
+}
+
+/* Every help id is named in src/ui/settings.c, so every control is created
+ * with its id. make test runs from the repository root; run from elsewhere the
+ * source is not there and the check skips -- except under CI, where it fails. */
+int test_settings_help_every_id_in_settings_c(void) {
+    TEST_BEGIN();
+    char *src = read_whole("src/ui/settings.c");
+    if (!src) {
+        const char *ci = getenv("CI");
+        if (ci && ci[0]) {
+            printf("  src/ui/settings.c not readable from the working directory under CI\n");
+            ASSERT_TRUE(0);
+        } else {
+            printf("  [settings_help] src/ui/settings.c not readable from cwd -- skipping\n");
+        }
+        TEST_END();
+    }
+    size_t count = 0;
+    const SettingsHelp *tab = settings_help_table(&count);
+    ASSERT_NOT_NULL(tab);
+    for (size_t i = 0; tab != NULL && i < count; i++) {
+        int found = has_identifier(src, tab[i].name);
+        if (!found) printf("  src/ui/settings.c never names %s\n", tab[i].name);
+        ASSERT_TRUE(found);
+    }
+    free(src);
     TEST_END();
 }
