@@ -1013,6 +1013,66 @@ static int clv_reason_width(ChatListView *lv, HDC hdc, const ChatMsgItem *item,
     return sz.cx + ns_scale(SP_SM, dpi);
 }
 
+/* ── The summary line under a batch (spec 2026-11-05 run-command tool,
+ *    decision 21 (d)) ────────────────────────────────────────────────
+ * One caption line, "<n> commands: 1 ran, 1 running, 2 queued", directly
+ * under a batch's LAST item in list order: its last settled row, or the
+ * card when that item is a row still on the card. The text is built by
+ * chat_msg_batch_counts() + chat_batch_summary_text() from the batch's rows,
+ * so it changes exactly when a chip does. It is counted per batch id: a live
+ * batch (positive id) and a replayed one (negative, see
+ * ai_chat_rebuild_display()) each get their own. Drawn only -- no hit-test,
+ * no hover, no timer; the caption's height is part of the row's (or card's)
+ * measured height. */
+#define CLV_SUMMARY_MAX 192
+
+/* 1 and the line in `buf` when `item` is a command row that is the last of
+ * its batch and the batch has a summary (two or more rows, one decided). */
+static int clv_batch_summary_text(const ChatListView *lv, const ChatMsgItem *item,
+                                  char *buf, size_t cap)
+{
+    if (buf && cap > 0) buf[0] = '\0';
+    if (!lv || !lv->msg_list || !item || !buf || cap == 0) return 0;
+    if (item->type != CHAT_ITEM_COMMAND || item->u.cmd.tool ||
+        item->u.cmd.batch == 0)
+        return 0;
+    const int batch = item->u.cmd.batch;
+    for (const ChatMsgItem *it = item->next; it; it = it->next)
+        if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.batch == batch)
+            return 0;   /* a later row of the batch carries the line */
+    ChatBatchCounts c;
+    chat_msg_batch_counts(lv->msg_list, batch, &c);
+    return chat_batch_summary_text(&c, buf, cap) > 0;
+}
+
+/* The summary line's height: SP_XS above the caption-font line. */
+static int clv_batch_summary_h(ChatListView *lv, HDC hdc)
+{
+    int dpi = CLV_DPI(lv);
+    HGDIOBJ old = SelectObject(hdc, ns_font(FONT_CAPTION, dpi));
+    TEXTMETRICA tm;
+    GetTextMetricsA(hdc, &tm);
+    SelectObject(hdc, old);
+    return ns_scale(SP_XS, dpi) + tm.tmHeight;
+}
+
+/* Draw `text` as the summary line in the strip [top, top + summary_h) of the
+ * item, its left edge at `left`, ellipsised at `right`. */
+static void paint_batch_summary(ChatListView *lv, HDC hdc, const char *text,
+                                int left, int right, int top, int bottom)
+{
+    int dpi = CLV_DPI(lv);
+    RECT rc = { left, top + ns_scale(SP_XS, dpi), right, bottom };
+    if (rc.right <= rc.left || rc.bottom <= rc.top) return;
+    int saved = SaveDC(hdc);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB_FROM_THEME(ns_tokens()->text_dim));
+    SelectObject(hdc, ns_font(FONT_CAPTION, dpi));
+    draw_text_utf8(hdc, text, &rc, DT_SINGLELINE | DT_TOP | DT_NOPREFIX |
+                                   DT_LEFT | DT_END_ELLIPSIS);
+    RestoreDC(hdc, saved);
+}
+
 /* Approval-card row height at the current DPI. v2 rows are always
  * single-line regardless of card width (approval_row_height no longer
  * takes one) -- see ns_layout.h. */
@@ -1042,6 +1102,9 @@ typedef struct {
     int row_h;
     int total_h;                           /* n * row_h */
     int visible_h;                         /* min(n, APPROVAL_VISIBLE_MAX) * row_h */
+    int summary_h;                         /* the batch summary line under the card
+                                            * (0 when the card's last row is not
+                                            * its batch's last, or it has none) */
 } CmdContainerInfo;
 
 static void cmd_container_measure(ChatListView *lv, HDC hdc_for_measure,
@@ -1082,6 +1145,11 @@ static void cmd_container_measure(ChatListView *lv, HDC hdc_for_measure,
     if (hdc_for_measure && old_font) SelectObject(hdc_for_measure, old_font);
 
     out->n = n;
+    if (hdc_for_measure && n > 0) {
+        char summary[CLV_SUMMARY_MAX];
+        if (clv_batch_summary_text(lv, out->items[n - 1], summary, sizeof(summary)))
+            out->summary_h = clv_batch_summary_h(lv, hdc_for_measure);
+    }
     out->row_h = clv_cmd_row_h(lv, out->text_h);
     int visible_rows = (n < APPROVAL_VISIBLE_MAX) ? n : APPROVAL_VISIBLE_MAX;
     out->total_h = n * out->row_h;
@@ -1148,7 +1216,9 @@ static void recalc_layout(ChatListView *lv)
                 int border_w   = ns_scale(1, CLV_DPI(lv));
                 int visible_rows = (ci.n < APPROVAL_VISIBLE_MAX) ? ci.n : APPROVAL_VISIBLE_MAX;
                 int interior_h = 2 * pad + 2 * ctrl_h + 2 * gap_sm + visible_rows * ci.row_h;
-                int container_h = 2 * border_w + interior_h;
+                /* + the summary line under the card, when its batch has one
+                 * (build_cmd_card_geometry takes it back off the box). */
+                int container_h = 2 * border_w + interior_h + ci.summary_h;
 
                 /* First command absorbs the full container height; the
                  * rest of this container's items (already known from the
@@ -1318,7 +1388,11 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 text_line_h = tm.tmHeight;
             }
             SelectObject(hdc, old_font);
-            return clv_cmd_row_h(lv, text_line_h);
+            int row_h = clv_cmd_row_h(lv, text_line_h);
+            char summary[CLV_SUMMARY_MAX];
+            if (clv_batch_summary_text(lv, item, summary, sizeof(summary)))
+                row_h += clv_batch_summary_h(lv, hdc);
+            return row_h;
         }
         /* Unsettled commands are grouped by recalc_layout's Pass 2 into a
          * single scrollable container (first item absorbs the container
@@ -2162,8 +2236,21 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     paint_copy_glyph(lv, hdc, &layout.copy,
                      id_ok ? CLV_SETTLED_HIT_ID(item->id, HIT_COPY) : -1);
 
-    /* Fixed single-line row height -- exactly what measure_item()
-     * returned via clv_cmd_row_h(), never wraps. */
+    /* The batch summary line, under the row when this is its batch's last
+     * item: measure_item() added its height to the row's, so it fills the
+     * rest of rc, at the command text's inset. */
+    char summary[CLV_SUMMARY_MAX];
+    if (clv_batch_summary_text(lv, item, summary, sizeof(summary)))
+        paint_batch_summary(lv, hdc, summary,
+                            layout.text.x > 0 ? layout.text.x
+                                              : rc->left + lv->ai_indent,
+                            rc->right,
+                            rc->top + approval_row_height(sg.text_h,
+                                                          CLV_DPI(lv)),
+                            rc->bottom);
+
+    /* Single-line row height (plus the summary line, when drawn) -- exactly
+     * what measure_item() returned, never wraps. */
     return rc->bottom - rc->top;
 }
 
@@ -2187,6 +2274,7 @@ typedef struct {
     int needs_scroll;
     int border_w;
     int total_h, visible_h, row_h;   /* container geometry, for scrollbar/wheel maths */
+    int summary_h;       /* the batch summary line under the box (0: none) */
 } CmdCardGeometry;
 
 /* `first` must be a container's first item (see cmd_container_measure()).
@@ -2201,6 +2289,7 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
 
     CmdContainerInfo cinfo;
     cmd_container_measure(lv, hdc_for_measure, first, &cinfo);
+    g->summary_h = cinfo.summary_h;
 
     int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
     int border_w = ns_scale(1, CLV_DPI(lv));
@@ -2210,7 +2299,7 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
     g->box_left  = side_pad + side_pad;
     g->box_right = cw - side_pad - side_pad;
     g->box_top   = y;
-    g->box_bot   = y + h;
+    g->box_bot   = y + h - cinfo.summary_h;   /* the summary line is under the box */
 
     g->clip_left  = g->box_left + border_w;
     g->clip_right = g->box_right - border_w;
@@ -2404,7 +2493,15 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
     /* The container's own height is fully determined by recalc_layout()'s
      * Pass 2 (first_cmd->measured_height) before this ever paints, and
      * build_cmd_card_geometry() above derives every row from that same
-     * geometry -- so the box always exactly fills rc, never taller. */
+     * geometry -- so the box always exactly fills rc less the summary line
+     * below it, never taller. */
+    if (g.summary_h > 0) {
+        char summary[CLV_SUMMARY_MAX];
+        ChatMsgItem *last_row = g.n > 0 ? g.cmd_items[g.n - 1] : NULL;
+        if (clv_batch_summary_text(lv, last_row, summary, sizeof(summary)))
+            paint_batch_summary(lv, hdc, summary, g.layout.header.x,
+                                g.box_right, g.box_bot, rc->bottom);
+    }
     return rc->bottom - rc->top;
 }
 

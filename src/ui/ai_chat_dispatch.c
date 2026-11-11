@@ -25,6 +25,48 @@ CmdBatch *ai_chat_resolve_batch(AiChatData *d, LPARAM lParam)
               : cmd_batch_first_pending(&d->active_state->batches);
 }
 
+AiConversation *ai_chat_owner_conv(AiChatData *d, AiSessionState *owner)
+{
+    return (owner == d->active_state) ? &d->conv : &owner->conv;
+}
+
+/* The hash of the assistant reply at `reply_msg` of `conv`, 0 when that is
+ * not an assistant turn (cmd_run_record_matches() then never shows it). */
+static uint32_t reply_turn_hash(const AiConversation *conv, int reply_msg)
+{
+    if (!conv || reply_msg < 0 || reply_msg >= conv->msg_count) return 0;
+    const AiMessage *m = &conv->messages[reply_msg];
+    if (m->role != AI_ROLE_ASSISTANT) return 0;
+    return cmd_run_log_turn_hash(ai_msg_content(m), m->content_len);
+}
+
+/* Record a command batch's rows in the owner's run log. A tool batch, an
+ * empty queue or an allocation failure records nothing (the log refuses). */
+static void batch_record(AiChatData *d, AiSessionState *owner,
+                         const CmdBatch *batch, int batch_ending)
+{
+    if (!d || !owner || !batch || cmd_batch_is_tool(batch)) return;
+    (void)cmd_run_log_record(&owner->run_log, batch,
+        reply_turn_hash(ai_chat_owner_conv(d, owner), batch->reply_msg),
+        batch_ending);
+}
+
+void ai_chat_batch_remove_recorded(AiChatData *d, AiSessionState *owner,
+                                   CmdBatch *batch, int batch_ending)
+{
+    if (!d || !owner || !batch) return;
+    const int id = batch->id;   /* batch is freed by the remove below */
+    batch_record(d, owner, batch, batch_ending);
+    cmd_batch_remove(&owner->batches, id);
+}
+
+void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner)
+{
+    if (!d || !owner || owner->batches.count < CMD_BATCH_MAX) return;
+    /* cmd_batch_add() evicts b[0] and frees it. */
+    batch_record(d, owner, owner->batches.b[0], 1);
+}
+
 /* Once every entry in a batch has been decided (chat_approval_all_decided
  * -- PENDING is the only thing that blocks this; BLOCKED counts as
  * decided), render its command items inline (chat_msg_batch_settle) and,
@@ -52,7 +94,7 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
 
     chat_msg_batch_settle(&d->msg_list, batch_id);
     if (!has_runnable && d->active_state)
-        cmd_batch_remove(&d->active_state->batches, batch_id);
+        ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
 }
 
@@ -479,7 +521,7 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
         ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
         : NULL;
     if (batch) {
-        /* Read before cmd_batch_remove() below frees the batch. */
+        /* Read before ai_chat_batch_remove_recorded() below frees the batch. */
         unattended = !batch->user_acted;
         chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 1);
 
@@ -505,7 +547,7 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
         }
 
         chat_msg_batch_settle(&d->msg_list, batch->id);
-        cmd_batch_remove(&d->active_state->batches, batch->id);
+        ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
     }
     d->dispatch_batch_id = 0;
@@ -946,7 +988,7 @@ void ai_chat_dispatch_tick(AiChatData *d)
         }
 
         int batch_id = batch->id;
-        /* Read before cmd_batch_remove() below frees the batch. */
+        /* Read before ai_chat_batch_remove_recorded() below frees the batch. */
         int unattended = !batch->user_acted;
         int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
         char first_cmd[1024] = "";
@@ -983,7 +1025,7 @@ void ai_chat_dispatch_tick(AiChatData *d)
         d->dispatch_ambiguous_reported = 0;
 
         chat_msg_batch_settle(&d->msg_list, batch_id);
-        cmd_batch_remove(&d->active_state->batches, batch_id);
+        ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
         if (d->hSendBtn) {

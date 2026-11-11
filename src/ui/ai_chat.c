@@ -523,6 +523,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     ai_chat_cancel_tool_batches(d, d->active_state);
                     cmd_batch_set_free(&d->active_state->batches);
                     cmd_batch_set_init(&d->active_state->batches);
+                    cmd_run_log_free(&d->active_state->run_log);
                 }
                 d->indicator_pos = -1;
                 d->pending_request[0] = '\0';
@@ -1212,10 +1213,20 @@ next_coalesce:;
                     chat_approval_init(&bg_defaults);
                     bg_defaults.policy = cmd_policy_attended(src->policy);
 
+                    /* The reply is the last message here, before any NOTE
+                     * below is added: reply_msg names it, not conv_mark - 1
+                     * (the run log's key, cmd_run_log.h). */
+                    const int reply_msg =
+                        (src->conv.msg_count > 0 &&
+                         src->conv.messages[src->conv.msg_count - 1].role ==
+                             AI_ROLE_ASSISTANT)
+                        ? src->conv.msg_count - 1 : -1;
+                    ai_chat_batch_record_oldest_if_full(d, src);
                     CmdBatch *batch = cmd_batch_add(&src->batches,
                                                     &bg_defaults, NULL);
                     if (batch) {
                         batch->conv_mark = src->conv.msg_count;
+                        batch->reply_msg = reply_msg;
                         for (int ci = 0; ci < ncmds; ci++) {
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
@@ -1299,6 +1310,14 @@ next_coalesce:;
             if (text) {
                 ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text);
             }
+            /* The reply's index, taken now: the NOTEs added below make
+             * conv_mark - 1 a user turn, and the run log keys a batch to
+             * the reply that produced it (cmd_run_log.h). */
+            const int reply_msg =
+                (text && d->conv.msg_count > 0 &&
+                 d->conv.messages[d->conv.msg_count - 1].role ==
+                     AI_ROLE_ASSISTANT)
+                ? d->conv.msg_count - 1 : -1;
 
             /* Save thinking for this assistant message in history. */
             if (d->stream_thinking_len > 0 &&
@@ -1425,6 +1444,8 @@ next_coalesce:;
                     d->active_state, d->approval_q.policy);
                 int rounds_paused = ai_rounds_paused(d->active_state,
                                                      d->approval_q.policy);
+                /* A full set evicts its oldest batch: record it first. */
+                ai_chat_batch_record_oldest_if_full(d, d->active_state);
                 CmdBatch *batch = cmd_batch_add(&d->active_state->batches,
                                                 &batch_defaults, &evicted_id);
 
@@ -1435,6 +1456,7 @@ next_coalesce:;
                      * the continue message needs to name it explicitly
                      * (ai_build_continue_text's newer_exchanges). */
                     batch->conv_mark = d->conv.msg_count;
+                    batch->reply_msg = reply_msg;
 
                     if (evicted_id > 0) {
                         chat_msg_batch_settle(&d->msg_list, evicted_id);
@@ -2466,6 +2488,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
     /* Free every pending batch (the caller frees the AiSessionState itself
      * right after this call returns). */
     cmd_batch_set_free(&state->batches);
+    cmd_run_log_free(&state->run_log);
 
     if (d->active_state == state) {
         d->active_state = NULL;
@@ -2526,6 +2549,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         ai_chat_cancel_tool_batches(d, d->active_state);
         cmd_batch_set_free(&d->active_state->batches);
         cmd_batch_set_init(&d->active_state->batches);
+        cmd_run_log_free(&d->active_state->run_log);
 
         const ApprovalQueue *queues[2] = { approval, approval2 };
         for (int qi = 0; qi < 2; qi++) {
@@ -2539,6 +2563,11 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
                     any_executing = 1;
         }
     }
+
+    /* "runlist": one recorded batch under the first reply, which the
+     * rebuild below replays as a real session's does. */
+    if (d->active_state)
+        ui_demo_run_log(state, &d->active_state->run_log, &d->conv);
 
     /* Rebuilds msg_list from d->conv (now including the thinking block
      * just attached, plus any tool_call/tool_result items) and appends a

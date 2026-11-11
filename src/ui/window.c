@@ -1030,6 +1030,7 @@ static Session *create_session(int rows, int cols) {
     s->conn_dots = 0;
     memset(&s->ai_state, 0, sizeof(s->ai_state));
     cmd_batch_set_init(&s->ai_state.batches);
+    cmd_run_log_init(&s->ai_state.run_log);
     /* Unconnected/pre-detect state must be the safe one, not Linux (value 0). */
     s->ai_state.platform = (int)CMD_PLATFORM_UNKNOWN;
     s->shell_name[0] = '\0';
@@ -1137,6 +1138,7 @@ static void free_session(Session *s) {
          * decision 20). */
         ai_chat_cancel_tool_batches_for(g_hwndAiChat, &s->ai_state);
         cmd_batch_set_free(&s->ai_state.batches);
+        cmd_run_log_free(&s->ai_state.run_log);
         free(s->ai_state.stream_content);
         free(s->ai_state.stream_thinking);
         ai_conv_reset(&s->ai_state.conv);   /* its overflow/attachment buffers */

@@ -168,6 +168,30 @@ void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch
     chat_msg_batch_sync_run(list, batch->id, &batch->q, 0);
 }
 
+/* Append a recorded batch (cmd_run_log.h) as settled CHAT_ITEM_COMMAND rows,
+ * tagged with `batch_id` (negative: live batch ids start at 1, so no
+ * chat_msg_batch_sync_run() or settle ever touches a replayed row). The
+ * fields are the ones the rows had when the batch ended, so the same painter
+ * draws the same chips; `run` is set directly because nothing syncs these
+ * rows. */
+static void append_run_record_items(ChatMsgList *list, const CmdRunRecord *rec,
+                                    int batch_id)
+{
+    for (int i = 0; i < rec->n; i++) {
+        const CmdRunRow *r = &rec->rows[i];
+        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
+        if (!item) continue;
+        chat_msg_set_command(item, r->command ? r->command : "", r->safety,
+                             r->blocked);
+        chat_msg_set_quoted(item, r->quoted);
+        chat_msg_set_reason(item, r->reason);
+        chat_msg_set_batch(item, batch_id);
+        item->u.cmd.approved = r->approved;
+        item->u.cmd.run = r->run;
+        item->u.cmd.settled = 1;
+    }
+}
+
 /* Rebuild the chat display from the conversation history.
  * Used when switching sessions to replay the loaded conversation.
  * Populates the ChatMsgList and invalidates the ChatListView. */
@@ -211,16 +235,41 @@ void ai_chat_rebuild_display(AiChatData *d)
                 }
             }
             const char *content = ai_msg_content(msg);
-            if (content && content[0] != '\0') {
+            /* Records of the displayed session's run log that belong to this
+             * reply (cmd_run_record_matches(): same index, still an
+             * assistant turn, same text). Such a reply shows only its
+             * pre-command text, as it does live, and its commands follow as
+             * the recorded rows -- so each command appears once. */
+            const CmdRunLog *rlog = d->active_state ? &d->active_state->run_log
+                                                    : NULL;
+            int has_record = 0;
+            for (int ri = 0; rlog && ri < rlog->count; ri++)
+                if (cmd_run_record_matches(rlog->rec[ri], i, 1, content,
+                                           msg->content_len))
+                    has_record = 1;
+
+            char pre_text[AI_MSG_MAX];
+            const char *shown = content;
+            if (has_record && content) {
+                ai_response_split(content, pre_text, sizeof(pre_text), NULL, 0);
+                shown = pre_text;
+            }
+            int has_thinking = d->thinking_history[i] &&
+                               d->thinking_history[i][0];
+            if (shown && (shown[0] != '\0' || (has_record && has_thinking))) {
                 ChatMsgItem *item = chat_msg_append(&d->msg_list,
                                                      CHAT_ITEM_AI_TEXT,
-                                                     content);
-                if (item && d->thinking_history[i] &&
-                    d->thinking_history[i][0]) {
+                                                     shown);
+                if (item && has_thinking) {
                     chat_msg_set_thinking(item, d->thinking_history[i]);
                     item->u.ai.thinking_complete = 1;
                 }
             }
+            for (int ri = 0; has_record && ri < rlog->count; ri++)
+                if (cmd_run_record_matches(rlog->rec[ri], i, 1, content,
+                                           msg->content_len))
+                    append_run_record_items(&d->msg_list, rlog->rec[ri],
+                                            -(ri + 1));
         } else if (msg->role == AI_ROLE_TOOL) {
             const char *content = ai_msg_content(msg);
             size_t clen = content ? strlen(content) : 0;

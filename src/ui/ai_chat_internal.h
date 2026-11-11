@@ -511,6 +511,21 @@ void ai_chat_input_sync_scroll(AiChatData *d);
 /* ai_chat_dispatch.c */
 CmdBatch *ai_chat_resolve_batch(AiChatData *d, LPARAM lParam);
 void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch);
+/* The conversation `owner` reads and writes: the panel's working copy for
+ * the displayed session, the session's own otherwise. */
+AiConversation *ai_chat_owner_conv(AiChatData *d, AiSessionState *owner);
+/* Record a command batch in `owner`'s run log (cmd_run_log.h), then remove it
+ * from the owner's set and free it: the one way a command batch leaves the
+ * set, so a rebuilt display can show what ran (spec 2026-11-05 run-command
+ * tool, decision 21). `batch_ending` is 1 for every removal: a removed batch
+ * never runs again, so its replay must not read "queued" or "running". A tool
+ * batch is removed without a record. `batch` is freed. */
+void ai_chat_batch_remove_recorded(AiChatData *d, AiSessionState *owner,
+                                   CmdBatch *batch, int batch_ending);
+/* Call before cmd_batch_add() on `owner`'s set: when the set is full the add
+ * evicts the oldest batch, which is recorded here first (batch_ending 1) so
+ * its commands are not lost. Does nothing when there is room. */
+void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner);
 void ai_chat_dispatch_start(AiChatData *d, int batch_id);
 void ai_chat_maybe_start_next_batch(AiChatData *d);
 void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);
