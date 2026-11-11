@@ -335,6 +335,15 @@ RunCmdPathPlan runcmd_path_plan(RunCmdPath p);
 int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCause cause,
                          AiToolResult *out);
 
+/* The answer for a reply whose planner ran out of memory (runcmd_plan or
+ * cmd_batch_add failed, so no call was planned; spec decision 13's last row,
+ * R41): one result per call of `calls` (the stored turn's, ids as stored), in
+ * order, into out[n] (every element zeroed first): tool_use_id the call's id,
+ * is_error 0, no content, tool_note "not run: Nutshell ran out of memory".
+ * Allocates nothing, so it works where the planner could not. Returns n, or -1
+ * for NULL calls or out, or n <= 0. */
+int runcmd_oom_results(const AiToolCall *calls, int n, AiToolResult *out);
+
 /* An estimate of the request body in bytes, before the results are added:
  * the summed JSON-escaped length of every stored message's content and of
  * every results part's content and note, plus what the tool turns add around

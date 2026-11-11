@@ -62,6 +62,14 @@ int ai_conv_room_for_send(const AiConversation *conv, int open_batch,
  * keep_free counts as 0. NULL-safe (0). */
 int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q, int keep_free);
 
+/* The assistant turn whose tool calls are still unanswered at the end of the
+ * conversation (the one ai_conv_tool_calls_open() sees, and the one
+ * ai_conv_drop_open_tool_turn() drops), or NULL when none is open. It is not
+ * necessarily the last message: partial results may follow it. The pointer
+ * stays valid until the conversation is changed. The panel reads the calls'
+ * ids and inputs from it, never from the response the provider sent. */
+const AiMessage *ai_conv_open_tool_turn(const AiConversation *conv);
+
 /* Free a trailing open assistant tool turn and any partial results after it,
  * so the conversation is well-formed again. Returns 1 when it dropped one,
  * else 0. NULL-safe. */

@@ -286,6 +286,93 @@ int test_cmd_run_record_matches_rule(void)
     TEST_END();
 }
 
+/* The hash of a reply that made tool calls mixes in the calls' ids, in order:
+ * an empty-content tool-only reply would otherwise hash alike at every index
+ * (Review Focus 6). A reply with no calls hashes exactly as before. */
+static void set_call_id(AiToolCall *c, const char *id)
+{
+    memset(c, 0, sizeof(*c));
+    snprintf(c->id, sizeof(c->id), "%s", id);
+    snprintf(c->name, sizeof(c->name), "run_command");
+    snprintf(c->input_json, sizeof(c->input_json), "{\"command\":\"ls\"}");
+}
+
+int test_cmd_run_log_reply_hash_no_calls_is_turn_hash(void)
+{
+    TEST_BEGIN();
+    AiToolCall c;
+    set_call_id(&c, "call_1");
+    /* a plain [EXEC] reply: exactly the FNV-1a of the content, as at cec497a */
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, NULL, 0) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, NULL, 0) == 0x811C9DC5u);
+    ASSERT_TRUE(cmd_run_log_reply_hash(NULL, 0, NULL, 0) == 0x811C9DC5u);
+    /* n_calls 0 (or a NULL array) ignores the calls */
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, &c, 0) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, NULL, 2) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_reply_hash("abcdef", 3, NULL, 0) == 0x1A47E90Bu);
+    TEST_END();
+}
+
+int test_cmd_run_log_reply_hash_mixes_ids(void)
+{
+    TEST_BEGIN();
+    AiToolCall one[1], two[2];
+    set_call_id(&one[0], "call_1");
+    /* empty content, one id: the pinned value */
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, one, 1) == 0x97E49933u);
+    set_call_id(&one[0], "call_2");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, one, 1) == 0x98E49AC6u);
+    set_call_id(&one[0], "toolu_01");
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) == 0x803FDB7Cu);
+    /* the same content with different ids differs; the same ids match */
+    AiToolCall other[1];
+    set_call_id(&other[0], "toolu_02");
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) !=
+                cmd_run_log_reply_hash("abc", 3, other, 1));
+    AiToolCall same[1];
+    set_call_id(&same[0], "toolu_01");
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) ==
+                cmd_run_log_reply_hash("abc", 3, same, 1));
+    /* a tool turn never hashes like the plain reply with the same text */
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) != 0x1A47E90Bu);
+    /* ids in order: two calls, and the order counts */
+    set_call_id(&two[0], "a");  set_call_id(&two[1], "b");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, two, 2) == 0xC132AD24u);
+    set_call_id(&two[0], "b");  set_call_id(&two[1], "a");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, two, 2) == 0x434B96ACu);
+    /* the names and inputs do not enter the hash: only the ids */
+    set_call_id(&one[0], "call_1");
+    snprintf(one[0].input_json, sizeof(one[0].input_json), "{\"command\":\"pwd\"}");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, one, 1) == 0x97E49933u);
+    TEST_END();
+}
+
+/* The rebuild's match with a hash taken from a stored turn. */
+int test_cmd_run_record_matches_hash_rule(void)
+{
+    TEST_BEGIN();
+    AiToolCall c[1];
+    set_call_id(&c[0], "call_1");
+    CmdRunRecord rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.reply_msg = 3;
+    rec.turn_hash = cmd_run_log_reply_hash("", 0, c, 1);
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 1, rec.turn_hash), 1);
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 4, 1, rec.turn_hash), 0);   /* other index */
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 0, rec.turn_hash), 0);   /* not an assistant turn */
+    ASSERT_EQ(cmd_run_record_matches_hash(NULL, 3, 1, rec.turn_hash), 0);
+    /* a different empty tool-only reply at the same index does not match */
+    set_call_id(&c[0], "call_2");
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 1,
+                  cmd_run_log_reply_hash("", 0, c, 1)), 0);
+    /* and an [EXEC] record still matches through the older function */
+    rec.turn_hash = cmd_run_log_turn_hash("abc", 3);
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 1,
+                  cmd_run_log_reply_hash("abc", 3, NULL, 0)), 1);
+    ASSERT_EQ(cmd_run_record_matches(&rec, 3, 1, "abc", 3), 1);
+    TEST_END();
+}
+
 /* Spec 25: a copy that cannot be allocated records nothing, whichever
  * allocation fails, with the log full or not, and nothing leaks. */
 int test_cmd_run_log_oom_records_nothing(void)

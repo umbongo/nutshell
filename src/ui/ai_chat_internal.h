@@ -16,6 +16,7 @@
 #include "ai_tool_web_search.h"
 #include "ai_tool_web_fetch.h"
 #include "ai_agentic.h"
+#include "run_command.h"
 #include "ai_http.h"
 #include "ai_stream.h"
 #include "ai_data_block.h"
@@ -558,6 +559,27 @@ void ai_chat_batch_remove_recorded(AiChatData *d, AiSessionState *owner,
  * evicts the oldest batch, which is recorded here first (batch_ending 1) so
  * its commands are not lost. Does nothing when there is room. */
 void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner);
+/* Answer a run_command reply that has no batch (spec decisions 5 and 7): one
+ * result per call of `r` in call order (runcmd_build_results with no queue
+ * under `cause`: NO_SLOT, SESSION_GONE or SET_FULL), fitted to the budget and
+ * stored in `owner`'s conversation against the open assistant tool turn, its
+ * calls passed in the stored order so each part is recognised as run_command;
+ * then runcmd_age_results and a flush of the owner's queued notes (keep_free
+ * 0). The return of the store is handled as spec decision 25: 1, -1 and -2
+ * each show a status row (the turn is already dropped on a negative one).
+ * Appends the status row of spec decision 5 for `cause` when `owner` is
+ * displayed (a background owner's list is not drawn; the rebuild shows the
+ * stored results). It never relaunches: no model request starts here. Frees
+ * `r`. When even the results array cannot be had, the open turn is dropped
+ * (ai_conv_drop_open_tool_turn) and a row says so. */
+void ai_chat_runcmd_answer_reply(AiChatData *d, AiSessionState *owner,
+                                 RunCmdReply *r, RunCmdCause cause);
+/* The planner-failure answer (runcmd_plan or cmd_batch_add ran out of memory,
+ * so there is no RunCmdReply): every call of the open stored tool turn is
+ * answered "not run: Nutshell ran out of memory" (runcmd_oom_results, R41),
+ * stored as above; the turn is dropped when even that array cannot be had.
+ * Never relaunches. */
+void ai_chat_runcmd_answer_oom(AiChatData *d, AiSessionState *owner);
 void ai_chat_dispatch_start(AiChatData *d, int batch_id);
 void ai_chat_maybe_start_next_batch(AiChatData *d);
 void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);

@@ -63,6 +63,12 @@ int ai_conv_tool_calls_open(const AiConversation *conv)
     return open_turn_index(conv) >= 0;
 }
 
+const AiMessage *ai_conv_open_tool_turn(const AiConversation *conv)
+{
+    int idx = open_turn_index(conv);
+    return idx >= 0 ? &conv->messages[idx] : NULL;
+}
+
 int ai_conv_drop_open_tool_turn(AiConversation *conv)
 {
     int idx = open_turn_index(conv);

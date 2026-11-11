@@ -517,6 +517,38 @@ int test_conv_drop_open_tool_turn(void)
     TEST_END();
 }
 
+/* The open turn itself, for the code that answers its calls (Task B15). */
+int test_conv_open_tool_turn(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiToolCall calls[2];
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_NULL(ai_conv_open_tool_turn(c));          /* nothing open */
+        ASSERT_NULL(ai_conv_open_tool_turn(NULL));
+        ASSERT_EQ(add_asst(c, 2, calls), 0);
+        const AiMessage *t = ai_conv_open_tool_turn(c);
+        ASSERT_TRUE(t == &c->messages[c->msg_count - 1]);
+        ASSERT_EQ(t->n_tool_calls, 2);
+        /* partly answered: still the assistant turn, not the results */
+        ASSERT_EQ(add_results(c, calls, 0, 1), 0);
+        t = ai_conv_open_tool_turn(c);
+        ASSERT_TRUE(t == &c->messages[c->msg_count - 2]);
+        ASSERT_EQ(t->role, AI_ROLE_ASSISTANT);
+        /* a closed round has none */
+        ai_conv_drop_open_tool_turn(c);
+        ASSERT_EQ(add_asst(c, 2, calls), 0);
+        ASSERT_EQ(add_results(c, calls, 0, 2), 0);
+        ASSERT_NULL(ai_conv_open_tool_turn(c));
+        /* a plain assistant turn is not one */
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "done"), 0);
+        ASSERT_NULL(ai_conv_open_tool_turn(c));
+    }
+    free_conv(c);
+    TEST_END();
+}
+
 /* An allocator that never succeeds. */
 static void *no_alloc(size_t n)
 {

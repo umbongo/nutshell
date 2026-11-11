@@ -3522,3 +3522,154 @@ int test_runcmd_estimate_follows_command_rounds(void)
     free(a); free(b); free(c);
     TEST_END();
 }
+
+/* ---- Task B15: calls are read from the stored turn; the planner-failure answer ---- */
+
+/* The answer for a reply whose planner ran out of memory: one result per call,
+ * the stored call's id, the note of spec decision 13's last row, is_error 0. */
+int test_runcmd_oom_results(void)
+{
+    TEST_BEGIN();
+    AiToolCall calls[3];
+    AiToolResult res[3];
+    set_call(&calls[0], "call_a", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
+    set_call(&calls[1], "call_b", "web_search", "{\"query\":\"q\"}");
+    set_call(&calls[2], "call_c", RUNCMD_TOOL_NAME, "{}");
+    memset(res, 0x55, sizeof(res));                 /* every element is zeroed first */
+    ASSERT_EQ(runcmd_oom_results(calls, 3, res), 3);
+    ASSERT_STR_EQ(res[0].tool_use_id, "call_a");
+    ASSERT_STR_EQ(res[1].tool_use_id, "call_b");
+    ASSERT_STR_EQ(res[2].tool_use_id, "call_c");
+    for (int i = 0; i < 3; i++) {
+        ASSERT_NULL(res[i].content);
+        ASSERT_EQ((int)res[i].content_len, 0);
+        ASSERT_EQ(res[i].is_error, 0);
+        ASSERT_EQ((int)res[i].omit_at, 0);
+        ASSERT_EQ((int)res[i].omitted_bytes, 0);
+        ASSERT_STR_EQ(res[i].tool_note, "not run: Nutshell ran out of memory");
+    }
+    ASSERT_EQ(runcmd_oom_results(NULL, 3, res), -1);
+    ASSERT_EQ(runcmd_oom_results(calls, 0, res), -1);
+    ASSERT_EQ(runcmd_oom_results(calls, 3, NULL), -1);
+    TEST_END();
+}
+
+/* The answer stores, pairs and builds a request body, whatever ids the
+ * provider sent (C0 item 4). */
+int test_runcmd_oom_results_store_and_pair(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_SYSTEM, "You are an assistant.");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    AiToolCall calls[2];
+    set_call(&calls[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
+    set_call(&calls[1], "", RUNCMD_TOOL_NAME, "{\"command\":\"pwd\"}");
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", calls, 2), 0);
+    const AiMessage *turn = &c->messages[c->msg_count - 1];
+    ASSERT_EQ(turn->n_tool_calls, 2);
+    AiToolResult res[2];
+    ASSERT_EQ(runcmd_oom_results(turn->tool_calls, turn->n_tool_calls, res), 2);
+    ASSERT_EQ(agentic_add_tool_results(c, turn->tool_calls, res, 2), 0);
+    ASSERT_TRUE(ai_conv_tool_pairs_well_formed(c));
+    const AiMessage *rm = &c->messages[c->msg_count - 1];
+    ASSERT_EQ((int)rm->role, (int)AI_ROLE_TOOL);
+    ASSERT_EQ(rm->n_parts, 2);
+    ASSERT_STR_EQ(rm->parts[0].tool_call_id, "call_1");
+    ASSERT_STR_EQ(rm->parts[1].tool_call_id, "call_2");
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
+/* An id-less run_command call: the store makes the id up (call_1), the planner
+ * reads that id from the stored turn, the results pair with it, and a request
+ * body builds from the round. Reading the provider's own (empty) id instead
+ * would plan a call with no id. `provider` is the one the turn is stored under
+ * and the request goes to (another provider would render the turn as text). */
+static int idless_round(const char *provider)
+{
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    char *body = (char *)malloc(AI_BODY_MAX);
+    int ok = 0;
+    RunCmdReply *r = NULL;
+    if (!c || !body) goto done;
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_SYSTEM, "You are an assistant.");
+    ai_conv_add(c, AI_ROLE_USER, "list the files");
+    AiToolCall provider_calls[2];
+    set_call(&provider_calls[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls -la\",\"note\":\"list\"}");
+    set_call(&provider_calls[1], "", RUNCMD_TOOL_NAME, "{\"command\":\"pwd\"}");
+    if (agentic_add_assistant_tool_msg_ex(c, "", NULL, provider, "m", provider_calls, 2) != 0) goto done;
+
+    /* the stored turn carries the made-up ids */
+    const AiMessage *turn = &c->messages[c->msg_count - 1];
+    if (turn->n_tool_calls != 2 || strcmp(turn->tool_calls[0].id, "call_1") != 0 ||
+        strcmp(turn->tool_calls[1].id, "call_2") != 0 || !ai_conv_tool_calls_open(c)) goto done;
+
+    /* plan from the stored calls: the ids are the stored ones */
+    if (!runcmd_reply_has_call(turn->tool_calls, turn->n_tool_calls)) goto done;
+    r = runcmd_plan(turn->tool_calls, turn->n_tool_calls, 0);
+    if (!r || r->n_slot != 2 || strcmp(r->calls[0].tool_use_id, "call_1") != 0 ||
+        strcmp(r->calls[1].tool_use_id, "call_2") != 0 ||
+        strcmp(r->calls[0].command, "ls -la") != 0) goto done;
+
+    /* the whole-reply answer pairs by those ids */
+    AiToolResult res[2];
+    if (runcmd_build_results(r, NULL, RUNCMD_CAUSE_NO_SLOT, res) != 2) goto done;
+    int rc = agentic_add_tool_results(c, turn->tool_calls, res, 2);
+    for (int i = 0; i < 2; i++) free(res[i].content);
+    if (rc != 0 || !ai_conv_tool_pairs_well_formed(c) || ai_conv_tool_calls_open(c)) goto done;
+    const AiMessage *rm = &c->messages[c->msg_count - 1];
+    if (rm->role != AI_ROLE_TOOL || rm->n_parts != 2 ||
+        strcmp(rm->parts[0].tool_call_id, "call_1") != 0 ||
+        strcmp(rm->parts[1].tool_call_id, "call_2") != 0 ||
+        strcmp(rm->parts[0].tool_name, RUNCMD_TOOL_NAME) != 0) goto done;
+
+    /* a request builds from the round, the ids in it, and is valid JSON */
+    AiBodyFrame frame = { NULL, FRAME_DELIM, 0 };
+    size_t len = ai_build_request_body_frame(c, NULL, "[{\"name\":\"run_command\"}]",
+                                             &frame, body, AI_BODY_MAX, 0, provider);
+    if (len == 0 || !json_validate(body, len, NULL, 0)) goto done;
+    if (!strstr(body, "\"call_1\"") || !strstr(body, "\"call_2\"") ||
+        strstr(body, "\"id\":\"\"")) goto done;
+    ok = 1;
+done:
+    runcmd_reply_free(r);
+    if (c) { ai_conv_reset(c); free(c); }
+    free(body);
+    return ok;
+}
+
+int test_runcmd_idless_call_stores_plans_pairs_builds(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(idless_round("anthropic"));
+    ASSERT_TRUE(idless_round("openai"));
+    TEST_END();
+}
+
+/* The results array may carry the provider's own empty ids: the store made the
+ * ids up, so each result still pairs by position. */
+int test_runcmd_idless_results_with_empty_ids_pair_by_position(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    AiToolCall provider[1];
+    set_call(&provider[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", provider, 1), 0);
+    AiToolResult res[1];
+    memset(res, 0, sizeof(res));                     /* tool_use_id "" as the provider sent it */
+    snprintf(res[0].tool_note, sizeof(res[0].tool_note), "ran");
+    ASSERT_EQ(agentic_add_tool_results(c, provider, res, 1), 0);
+    ASSERT_TRUE(ai_conv_tool_pairs_well_formed(c));
+    ASSERT_STR_EQ(c->messages[c->msg_count - 1].parts[0].tool_call_id, "call_1");
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}

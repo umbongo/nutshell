@@ -30,6 +30,22 @@ uint32_t cmd_run_log_turn_hash(const char *text, size_t len)
     return h;
 }
 
+uint32_t cmd_run_log_reply_hash(const char *text, size_t len,
+                                const AiToolCall *calls, int n_calls)
+{
+    uint32_t h = cmd_run_log_turn_hash(text, len);
+    if (!calls || n_calls <= 0) return h;
+    for (int i = 0; i < n_calls; i++) {
+        h ^= 0u;                      /* the separator byte: ids hold no NUL */
+        h *= 16777619u;
+        for (const char *p = calls[i].id; *p; p++) {
+            h ^= (unsigned char)*p;
+            h *= 16777619u;
+        }
+    }
+    return h;
+}
+
 void cmd_run_row_from_entry(const ApprovalEntry *e, int batch_ending,
                             CmdRunRow *out)
 {
@@ -124,8 +140,15 @@ int cmd_run_log_record(CmdRunLog *log, const CmdBatch *batch, uint32_t turn_hash
 int cmd_run_record_matches(const CmdRunRecord *rec, int msg_index,
                            int is_assistant, const char *content, size_t len)
 {
+    return cmd_run_record_matches_hash(rec, msg_index, is_assistant,
+                                       cmd_run_log_turn_hash(content, len));
+}
+
+int cmd_run_record_matches_hash(const CmdRunRecord *rec, int msg_index,
+                                int is_assistant, uint32_t reply_hash)
+{
     if (!rec || !is_assistant || rec->reply_msg != msg_index) return 0;
-    return cmd_run_log_turn_hash(content, len) == rec->turn_hash;
+    return reply_hash == rec->turn_hash;
 }
 
 int cmd_run_reply_index(int stored, int msg_count, int last_is_assistant)

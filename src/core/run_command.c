@@ -752,6 +752,18 @@ int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCau
     return r->n_calls;
 }
 
+int runcmd_oom_results(const AiToolCall *calls, int n, AiToolResult *out)
+{
+    if (!calls || n <= 0 || !out) return -1;
+    for (int i = 0; i < n; i++) {
+        memset(&out[i], 0, sizeof(out[i]));
+        snprintf(out[i].tool_use_id, sizeof(out[i].tool_use_id), "%s", calls[i].id);
+        snprintf(out[i].tool_note, sizeof(out[i].tool_note), "%s",
+                 "not run: Nutshell ran out of memory");
+    }
+    return n;
+}
+
 /* ---- The estimate, the budget and the fit ---- */
 
 static size_t escaped_len(const char *s, size_t len)

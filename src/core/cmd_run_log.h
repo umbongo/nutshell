@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "ai_tools.h"
 #include "cmd_batch.h"
 
 /*
@@ -55,6 +56,19 @@ void cmd_run_log_init(CmdRunLog *log);
 /* FNV-1a 32 of `len` bytes of `text` (a NULL text is the empty string). */
 uint32_t cmd_run_log_turn_hash(const char *text, size_t len);
 
+/* The hash that keys a record to the reply that produced it. A reply with no
+ * calls (n_calls <= 0 or calls NULL: a plain [EXEC] reply) hashes exactly as
+ * cmd_run_log_turn_hash(text, len). A reply that made tool calls mixes in the
+ * calls' ids as well, in order: after the content's FNV-1a, for each call a 0
+ * byte and then the id's bytes (the same FNV-1a steps). A run_command reply
+ * that is only a tool call has empty content, so without the ids every such
+ * turn at one index would hash alike and a recorded batch would be replayed
+ * under the next reply at that index. Names and inputs do not enter it. The
+ * batch builder (from the stored turn's calls) and the rebuild (from the
+ * assistant turn's tool_calls) both call this one function. */
+uint32_t cmd_run_log_reply_hash(const char *text, size_t len,
+                                const AiToolCall *calls, int n_calls);
+
 /* Map one queue entry to the row it leaves in a record: the label inputs
  * only, `command` is left NULL (not copied). `batch_ending` is 1 when the
  * batch is being removed with work undone:
@@ -88,6 +102,13 @@ int cmd_run_log_record(CmdRunLog *log, const CmdBatch *batch, uint32_t turn_hash
  * this header need not include ai_prompt.h (which includes this one). */
 int cmd_run_record_matches(const CmdRunRecord *rec, int msg_index,
                            int is_assistant, const char *content, size_t len);
+
+/* cmd_run_record_matches() with the reply's hash already taken
+ * (cmd_run_log_reply_hash of the assistant turn): 1 when rec->reply_msg ==
+ * msg_index, the message is an assistant turn and the hashes are equal. A NULL
+ * rec is 0. cmd_run_record_matches() is this with cmd_run_log_turn_hash(). */
+int cmd_run_record_matches_hash(const CmdRunRecord *rec, int msg_index,
+                                int is_assistant, uint32_t reply_hash);
 
 /* The index to key a new batch's rows to (CmdBatch.reply_msg): the last
  * message of the conversation, `msg_count - 1`, when it is the reply that was

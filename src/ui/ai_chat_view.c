@@ -249,10 +249,15 @@ void ai_chat_rebuild_display(AiChatData *d)
              * the recorded rows -- so each command appears once. */
             const CmdRunLog *rlog = d->active_state ? &d->active_state->run_log
                                                     : NULL;
+            /* A tool turn's hash mixes in its calls' ids, the same function
+             * the batch builder keyed the record with. */
+            const uint32_t turn_hash = cmd_run_log_reply_hash(
+                content, msg->content_len, msg->tool_calls,
+                msg->n_tool_calls);
             int has_record = 0;
             for (int ri = 0; rlog && ri < rlog->count; ri++)
-                if (cmd_run_record_matches(rlog->rec[ri], i, 1, content,
-                                           msg->content_len))
+                if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1,
+                                                turn_hash))
                     has_record = 1;
 
             char pre_text[AI_MSG_MAX];
@@ -273,8 +278,8 @@ void ai_chat_rebuild_display(AiChatData *d)
                 }
             }
             for (int ri = 0; has_record && ri < rlog->count; ri++)
-                if (cmd_run_record_matches(rlog->rec[ri], i, 1, content,
-                                           msg->content_len))
+                if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1,
+                                                turn_hash))
                     append_run_record_items(&d->msg_list, rlog->rec[ri],
                                             -(ri + 1));
         } else if (msg->role == AI_ROLE_TOOL) {
