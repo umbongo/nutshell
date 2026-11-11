@@ -475,6 +475,31 @@ int test_term_utf8_reject_above_max_codepoint(void) {
     TEST_END();
 }
 
+/* 0xFE and 0xFF never occur in UTF-8. The fuzz target takes them out of the
+ * data stream as command bytes (tests/fuzz/fuzz_term.c), so pin what the
+ * parser does with them: each is its own replacement character, and a lead
+ * byte interrupted by one gets a replacement of its own first. */
+int test_term_utf8_reject_fe_ff(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xFE" "A", 2);
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, (uint32_t)'A');
+
+    term_process(t, "\r\n\xFF" "B", 4);
+    ASSERT_EQ(get_cell(t, 1, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 1, 1).codepoint, (uint32_t)'B');
+
+    term_process(t, "\r\n\xE2\xFE" "C", 5);
+    ASSERT_EQ(get_cell(t, 2, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 2, 1).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 2, 2).codepoint, (uint32_t)'C');
+
+    term_free(t);
+    TEST_END();
+}
+
 /* A 3-byte sequence cut short by an ASCII byte: the two consumed bytes
  * collapse into ONE replacement character (a single maximal subpart), not
  * one per byte -- distinct from the stray-continuation-byte cases above. */

@@ -920,7 +920,9 @@ before it ends.
   `lines_count`, and the select-all text (wrapped rows joined) is the text
   from before the first resize. A 3-row terminal with one line of
   scrollback, holding two lines and resized to 6 rows, covers padding
-  where the padding slots overlap the spare rows. The same on the
+  where the padding slots overlap the spare rows; its text is the old text
+  under the four blank rows the padding prepends (growing pads above the
+  content), so the test expects exactly that. The same on the
   alternate screen: enter, resize, leave, and the primary's text and
   `ring_ok` hold.
 - Allocation failure while growing: with every call failing, filling the

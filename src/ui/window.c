@@ -715,10 +715,14 @@ static void sync_session_grid(HWND hwnd, Session *s)
         DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "grid.sync",
              "rows_before=%d rows=%d cols_before=%d cols=%d client_w=%ld client_h=%ld",
              s->term->rows, rows, s->term->cols, cols, (long)rc.right, (long)rc.bottom);
-        term_resize(s->term, rows, cols);
-        term_mark_all_dirty(s->term);
-        dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-        if (s->io.ctx) s->io.resize(s->io.ctx, cols, rows);
+        /* A resize that could not allocate leaves the terminal at its old
+         * size: the display buffer and the remote end keep it too, and the
+         * next grid sync tries again. */
+        if (term_resize(s->term, rows, cols)) {
+            term_mark_all_dirty(s->term);
+            dispbuf_resize(&g_renderer.dispbuf, rows, cols);
+            if (s->io.ctx) s->io.resize(s->io.ctx, cols, rows);
+        }
     }
 }
 
@@ -5634,11 +5638,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                       g_renderer.charWidth, g_renderer.charHeight,
                                       &rows, &cols)) {
                 if (cols != g_active_session->term->cols || rows != g_active_session->term->rows) {
-                    term_resize(g_active_session->term, rows, cols);
-                    term_mark_all_dirty(g_active_session->term);
-                    dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-                    if (g_active_session->io.ctx)
-                        g_active_session->io.resize(g_active_session->io.ctx, cols, rows);
+                    /* False: the terminal kept its old size (see the grid
+                     * sync above); the next WM_SIZE tries again. */
+                    if (term_resize(g_active_session->term, rows, cols)) {
+                        term_mark_all_dirty(g_active_session->term);
+                        dispbuf_resize(&g_renderer.dispbuf, rows, cols);
+                        if (g_active_session->io.ctx)
+                            g_active_session->io.resize(g_active_session->io.ctx, cols, rows);
+                    }
                 }
             }
             /* Always repaint the full window on resize so gutter areas
