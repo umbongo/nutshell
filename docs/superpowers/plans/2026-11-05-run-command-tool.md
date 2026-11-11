@@ -173,6 +173,23 @@ int test_cmd_run_log_exec_note_before_mark(void); /* an [EXEC] reply with a reje
 
 ## Part B: the `run_command` tool
 
+### Carried from Part A (built and reviewed; head `cec497a`, 3727 native tests, 0 failed)
+
+Part A ended with these interfaces, some beyond what Tasks A1 to A4 name. Part B uses them and duplicates none:
+
+- `CmdBatch.reply_msg`, `CmdBatch.reply_hash` (the reply's hash, taken when the batch is created) and `CmdBatch.settled` (set only by `ai_chat_batch_settle_rows(d, batch)`, the one place the live view settles a batch's rows; the rebuild reads the flag).
+- `int cmd_run_reply_index(int stored, int msg_count, int last_is_assistant)`; `AiResponseMsg.reply_stored` (the stream thread's own `ai_conv_add` result, passed through `post_response`).
+- `cmd_run_log_record(log, batch, turn_hash, batch_ending)`, `cmd_run_record_matches(rec, idx, is_assistant, content, len)`, `cmd_run_log_forget(log, reply_msg)`, `cmd_run_batches_unkey(set, reply_msg)`, `cmd_batch_finished(b)`, `chat_msg_batch_counts` with `chat_batch_summary_text`, `ai_chat_batch_remove_recorded`, `ai_chat_batch_record_oldest_if_full`, `ai_chat_owner_conv`. `CmdRunRow` carries the command's note.
+
+Four things Part A's reviews found that Part B must do, each in the task named:
+
+1. **Task B15:** the batch builder sets `reply_hash` as well as `reply_msg`, through `cmd_run_reply_index`. A run_command reply that is only a tool call has empty content, so its hash mixes in the calls' ids (in order) as well as the content; the rebuild computes the same hash for an assistant tool turn. Without this every empty assistant turn at one index hashes alike (Review Focus 6). Put the hash in one core function used by both sides, with native tests: same content and different ids differ; same ids match; a plain `[EXEC]` reply hashes exactly as it does at `cec497a`.
+2. **Task B18, first step:** move `ai_chat_append_batch_command_items` (`src/ui/ai_chat_view.c`; it touches no Win32) into `src/core` beside `chat_msg`, and give it the regression tests Part A could not have: a settled batch stays settled after a ceiling raise turns its BLOCKED rows PENDING; a card stays a card after a ceiling drop leaves every row BLOCKED; a half-decided card rebuilds with its decided rows on the card.
+3. **Task B18:** the rebuild appends every "using tool" row before it knows whether a run-log record matches (`ai_chat_view.c`, the block before `has_record`). Reorder it, or make the tool row conditional on the match, so a command is never shown twice. This also covers a hidden-tab reply whose `[EXEC]` text sits in a non-final tool round: that turn's text is drawn split at the first marker, as the live view draws it.
+4. **Every Part B task that builds a request:** never build one from `ai_chat_owner_conv()` of a background owner and trust its `model`. After Task A2 a hidden session's `conv.model` is set once and not refreshed; take the model from the settings at launch, as `ai_chat_launch_stream_thread` does.
+
+Also for Task B16 (`WM_DESTROY`): undocking the panel while a command runs sets `dispatch_active = 0` but neither cancels nor records the batch, so after a redock its row may read "running" for good. This predates the branch; the finish function ends that batch with its cause ("while dispatching", spec §13) for `[EXEC]` batches too, and the final review checks it.
+
 ### Task B1: the tool, its parser and the provider predicates
 
 **Files:**
