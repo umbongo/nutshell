@@ -344,6 +344,27 @@ int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCau
  * for NULL calls or out, or n <= 0. */
 int runcmd_oom_results(const AiToolCall *calls, int n, AiToolResult *out);
 
+/* The status rows of a reply answered without a card, and of the store of its
+ * results (spec decisions 5 and 25): one text for the live row and the
+ * rebuild's. NONE writes nothing. */
+typedef enum {
+    RUNCMD_ROW_NONE,
+    RUNCMD_ROW_SESSION_GONE,   /* "... the session ended ..." */
+    RUNCMD_ROW_SET_FULL,       /* "... too many pending cards ..." */
+    RUNCMD_ROW_NO_SLOT,        /* "... N refused ...": n the reply's calls, none could run */
+    RUNCMD_ROW_PLANNER_OOM,    /* "... Nutshell ran out of memory ..." */
+    RUNCMD_ROW_REDUCED,        /* the results were stored as notes only (store returned 1) */
+    RUNCMD_ROW_FULL,           /* the conversation is full: n tool calls not run (-1) */
+    RUNCMD_ROW_STORE_FAILED    /* not even the notes-only answer could be stored (-2) */
+} RunCmdStatusRow;
+
+/* Write the row's text into buf and return its length; 0 and "" (when cap > 0)
+ * for NONE, an unknown kind, a NULL buf or a cap too small. `n` is the reply's
+ * number of calls: for NO_SLOT every call of the reply (none of them could
+ * run: refused, invalid, another tool, or over the cap), for FULL the calls
+ * not run. */
+int runcmd_status_text(RunCmdStatusRow kind, int n, char *buf, size_t cap);
+
 /* An estimate of the request body in bytes, before the results are added:
  * the summed JSON-escaped length of every stored message's content and of
  * every results part's content and note, plus what the tool turns add around

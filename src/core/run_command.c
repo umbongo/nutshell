@@ -764,6 +764,43 @@ int runcmd_oom_results(const AiToolCall *calls, int n, AiToolResult *out)
     return n;
 }
 
+#define ROW_TAIL "; type a message to carry on]"
+
+int runcmd_status_text(RunCmdStatusRow kind, int n, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    buf[0] = '\0';
+    int len = 0;
+    switch (kind) {
+    case RUNCMD_ROW_SESSION_GONE:
+        len = snprintf(buf, cap, "[no command in this reply could run: the session ended" ROW_TAIL);
+        break;
+    case RUNCMD_ROW_SET_FULL:
+        len = snprintf(buf, cap, "[no command in this reply could run: too many pending cards" ROW_TAIL);
+        break;
+    case RUNCMD_ROW_NO_SLOT:
+        len = snprintf(buf, cap, "[no command in this reply could run: %d refused" ROW_TAIL, n);
+        break;
+    case RUNCMD_ROW_PLANNER_OOM:
+        len = snprintf(buf, cap, "[no command in this reply could run: Nutshell ran out of memory" ROW_TAIL);
+        break;
+    case RUNCMD_ROW_REDUCED:
+        len = snprintf(buf, cap, "%s", "[some results were reduced to notes: Nutshell ran out of memory]");
+        break;
+    case RUNCMD_ROW_FULL:
+        len = snprintf(buf, cap, "[conversation full: %d tool call(s) not run; start a New Chat]", n);
+        break;
+    case RUNCMD_ROW_STORE_FAILED:
+        len = snprintf(buf, cap, "%s", "[the command results could not be stored: Nutshell ran out of memory]");
+        break;
+    case RUNCMD_ROW_NONE:
+    default:
+        return 0;
+    }
+    if (len < 0 || (size_t)len >= cap) { buf[0] = '\0'; return 0; }
+    return len;
+}
+
 /* ---- The estimate, the budget and the fit ---- */
 
 static size_t escaped_len(const char *s, size_t len)

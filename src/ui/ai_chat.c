@@ -1422,7 +1422,10 @@ next_coalesce:;
          * ai_chat_rebuild_display() replays every batch in the set the moment
          * the user switches to it, same as an active-session reply. */
         if (src != d->active_state) {
-            if (wParam == 2 && src && rmsg->content) {
+            /* A taken run_command turn is answered even when the reply's text
+             * could not be copied (post_response_ex): its calls must not stay
+             * unanswered (spec decision 25). */
+            if (wParam == 2 && src && (rmsg->content || took_calls)) {
                 /* In a run_command chat the reply's [EXEC] text is not acted
                  * on: its markers become quoted entries of the batch, or
                  * nothing (spec decision 5). */
@@ -1431,9 +1434,11 @@ next_coalesce:;
                 memset(mk.quoted, 0, sizeof(mk.quoted));
                 memset(mk.landed, 0, sizeof(mk.landed));
                 int rejected = 0, rejected_long = 0;
-                mk.n = ai_extract_commands_full(rmsg->content, mk.cmds,
-                                                mk.notes, mk.quoted, 16,
-                                                &rejected, &rejected_long);
+                mk.n = rmsg->content
+                    ? ai_extract_commands_full(rmsg->content, mk.cmds,
+                                               mk.notes, mk.quoted, 16,
+                                               &rejected, &rejected_long)
+                    : 0;
                 const int ncmds = mk.n;
                 int nquoted = 0;
                 for (int qi = 0; qi < ncmds; qi++)

@@ -95,6 +95,18 @@ static void free_record(CmdRunRecord *r)
     free(r);
 }
 
+/* Append a complete record; the 17th drops the oldest first. */
+static void push_record(CmdRunLog *log, CmdRunRecord *r)
+{
+    if (log->count >= CMD_RUN_LOG_MAX) {
+        free_record(log->rec[0]);
+        for (int i = 1; i < log->count; i++) log->rec[i - 1] = log->rec[i];
+        log->count--;
+        log->rec[log->count] = NULL;
+    }
+    log->rec[log->count++] = r;
+}
+
 int cmd_run_log_record(CmdRunLog *log, const CmdBatch *batch, uint32_t turn_hash,
                        int batch_ending)
 {
@@ -127,13 +139,29 @@ int cmd_run_log_record(CmdRunLog *log, const CmdBatch *batch, uint32_t turn_hash
         r->n = i + 1;
     }
 
-    if (log->count >= CMD_RUN_LOG_MAX) {
-        free_record(log->rec[0]);
-        for (int i = 1; i < log->count; i++) log->rec[i - 1] = log->rec[i];
-        log->count--;
-        log->rec[log->count] = NULL;
+    push_record(log, r);
+    return 0;
+}
+
+int cmd_run_log_record_status(CmdRunLog *log, int reply_msg, uint32_t turn_hash,
+                              const char *const *texts, int n_texts)
+{
+    if (!log || !texts || n_texts < 1 || n_texts > CMD_RUN_STATUS_ROWS) return -1;
+    for (int i = 0; i < n_texts; i++)
+        if (!texts[i] || !texts[i][0]) return -1;
+    CmdRunRecord *r = g_alloc(sizeof(*r));
+    if (!r) return -1;
+    memset(r, 0, sizeof(*r));
+    r->reply_msg = reply_msg;
+    r->turn_hash = turn_hash;
+    for (int i = 0; i < n_texts; i++) {
+        size_t len = strlen(texts[i]);
+        if (len > CMD_RUN_STATUS_MAX - 1) len = CMD_RUN_STATUS_MAX - 1;
+        memcpy(r->status[i], texts[i], len);
+        r->status[i][len] = '\0';
     }
-    log->rec[log->count++] = r;
+    r->n_status = n_texts;
+    push_record(log, r);
     return 0;
 }
 

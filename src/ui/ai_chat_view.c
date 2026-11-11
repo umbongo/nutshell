@@ -197,6 +197,10 @@ static void append_run_record_items(ChatMsgList *list, const CmdRunRecord *rec,
         item->u.cmd.run = r->run;
         item->u.cmd.settled = 1;
     }
+    /* A reply answered without a card (R64): its rows, after the command rows
+     * (a record has one kind or the other). */
+    for (int i = 0; i < rec->n_status && i < CMD_RUN_STATUS_ROWS; i++)
+        chat_msg_append(list, CHAT_ITEM_STATUS, rec->status[i]);
 }
 
 /* Rebuild the chat display from the conversation history.

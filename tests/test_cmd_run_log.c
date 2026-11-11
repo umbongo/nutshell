@@ -373,6 +373,72 @@ int test_cmd_run_record_matches_hash_rule(void)
     TEST_END();
 }
 
+/* A reply answered without a card keeps its status rows in the log (R64): a
+ * record with no command rows, keyed like any other. */
+int test_cmd_run_log_record_status(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *texts[2] = { "[first row]", "[second row]" };
+    uint32_t h = cmd_run_log_turn_hash("abc", 3);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, texts, 2), 0);
+    ASSERT_EQ(log.count, 1);
+    ASSERT_EQ(log.rec[0]->reply_msg, 4);
+    ASSERT_TRUE(log.rec[0]->turn_hash == h);
+    ASSERT_EQ(log.rec[0]->n, 0);
+    ASSERT_EQ(log.rec[0]->n_status, 2);
+    ASSERT_STR_EQ(log.rec[0]->status[0], "[first row]");
+    ASSERT_STR_EQ(log.rec[0]->status[1], "[second row]");
+    /* it matches its reply like any record */
+    ASSERT_EQ(cmd_run_record_matches_hash(log.rec[0], 4, 1, h), 1);
+    ASSERT_EQ(cmd_run_record_matches_hash(log.rec[0], 5, 1, h), 0);
+    /* and is forgotten with it on a pop */
+    ASSERT_EQ(cmd_run_log_forget(&log, 4), 1);
+    ASSERT_EQ(log.count, 0);
+    /* bad arguments record nothing */
+    ASSERT_EQ(cmd_run_log_record_status(NULL, 4, h, texts, 2), -1);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, NULL, 2), -1);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, texts, 0), -1);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, texts, 3), -1);
+    const char *blank[1] = { "" };
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, blank, 1), -1);
+    ASSERT_EQ(log.count, 0);
+    /* a one-row record */
+    ASSERT_EQ(cmd_run_log_record_status(&log, 2, h, texts, 1), 0);
+    ASSERT_EQ(log.rec[0]->n_status, 1);
+    /* a row longer than the field is cut, still terminated */
+    char big[400];
+    memset(big, 'x', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    const char *longrow[1] = { big };
+    ASSERT_EQ(cmd_run_log_record_status(&log, 3, h, longrow, 1), 0);
+    ASSERT_EQ((int)strlen(log.rec[1]->status[0]), CMD_RUN_STATUS_MAX - 1);
+    /* the 17th record drops the oldest, as for a batch */
+    for (int i = 0; i < 15; i++)
+        ASSERT_EQ(cmd_run_log_record_status(&log, 10 + i, h, texts, 1), 0);
+    ASSERT_EQ(log.count, CMD_RUN_LOG_MAX);
+    ASSERT_EQ(log.rec[0]->reply_msg, 3);              /* the reply_msg 2 record went */
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+int test_cmd_run_log_record_status_oom(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *texts[1] = { "[row]" };
+    cmd_run_log_set_alloc_for_test(failing_alloc);
+    g_alloc_calls = 0;
+    g_alloc_fail_at = 1;
+    ASSERT_EQ(cmd_run_log_record_status(&log, 1, 7u, texts, 1), -1);
+    ASSERT_EQ(log.count, 0);
+    cmd_run_log_set_alloc_for_test(NULL);
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
 /* Spec 25: a copy that cannot be allocated records nothing, whichever
  * allocation fails, with the log full or not, and nothing leaks. */
 int test_cmd_run_log_oom_records_nothing(void)

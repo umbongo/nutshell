@@ -299,6 +299,11 @@ static void post_response_ex(AiStream *s, WPARAM kind, const char *content,
     }
     rmsg->stream_id = s->id;
     rmsg->content = _strdup(content ? content : "");
+    /* A NULL content is still posted: the handler tolerates it, and a taken
+     * run_command turn (calls) must still reach its answer (spec decision 25). */
+    if (!rmsg->content)
+        DLOG(DLOG_AI, DLOG_WARN, 0, "stream.post_oom",
+             "stream=%u kind=%d calls=%d", s->id, (int)kind, calls ? n_calls : 0);
     rmsg->thinking = (thinking && thinking[0]) ? _strdup(thinking) : NULL;
     rmsg->input_tokens = in_tok;
     rmsg->output_tokens = out_tok;

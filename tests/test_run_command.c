@@ -3673,3 +3673,73 @@ int test_runcmd_idless_results_with_empty_ids_pair_by_position(void)
     free(c);
     TEST_END();
 }
+
+/* ---- Task B15 fix round: the rows of an answer without a card, one core text ---- */
+
+int test_runcmd_status_text(void)
+{
+    TEST_BEGIN();
+    char buf[200];
+    ASSERT_TRUE(runcmd_status_text(RUNCMD_ROW_NO_SLOT, 3, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "[no command in this reply could run: 3 refused; type a message to carry on]");
+    ASSERT_TRUE(runcmd_status_text(RUNCMD_ROW_SESSION_GONE, 2, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "[no command in this reply could run: the session ended; type a message to carry on]");
+    ASSERT_TRUE(runcmd_status_text(RUNCMD_ROW_SET_FULL, 2, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "[no command in this reply could run: too many pending cards; type a message to carry on]");
+    ASSERT_TRUE(runcmd_status_text(RUNCMD_ROW_PLANNER_OOM, 2, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "[no command in this reply could run: Nutshell ran out of memory; type a message to carry on]");
+    ASSERT_TRUE(runcmd_status_text(RUNCMD_ROW_REDUCED, 2, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "[some results were reduced to notes: Nutshell ran out of memory]");
+    ASSERT_TRUE(runcmd_status_text(RUNCMD_ROW_FULL, 2, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "[conversation full: 2 tool call(s) not run; start a New Chat]");
+    ASSERT_TRUE(runcmd_status_text(RUNCMD_ROW_STORE_FAILED, 2, buf, sizeof(buf)) > 0);
+    ASSERT_STR_EQ(buf, "[the command results could not be stored: Nutshell ran out of memory]");
+    /* none, NULL and a buffer too small give nothing */
+    snprintf(buf, sizeof(buf), "stale");
+    ASSERT_EQ(runcmd_status_text(RUNCMD_ROW_NONE, 2, buf, sizeof(buf)), 0);
+    ASSERT_STR_EQ(buf, "");
+    ASSERT_EQ(runcmd_status_text(RUNCMD_ROW_NO_SLOT, 2, NULL, 0), 0);
+    snprintf(buf, sizeof(buf), "stale");
+    ASSERT_EQ(runcmd_status_text(RUNCMD_ROW_NO_SLOT, 2, buf, 10), 0);
+    ASSERT_STR_EQ(buf, "");
+    TEST_END();
+}
+
+/* The batch builder and the rebuild hash the same stored turn: an id-less
+ * run_command turn is keyed by its made-up ids, so what the batch recorded
+ * matches the turn on replay, and a turn with other ids does not. */
+int test_runcmd_idless_batch_and_rebuild_hashes_agree(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    AiToolCall provider[1];
+    set_call(&provider[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", provider, 1), 0);
+    const AiMessage *turn = ai_conv_open_tool_turn(c);
+    ASSERT_NOT_NULL(turn);
+    const int idx = (int)(turn - c->messages);
+    /* the batch side: the stored turn's calls */
+    uint32_t batch_hash = cmd_run_log_reply_hash(ai_msg_content(turn), turn->content_len,
+                                                 turn->tool_calls, turn->n_tool_calls);
+    CmdRunRecord rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.reply_msg = idx;
+    rec.turn_hash = batch_hash;
+    /* the rebuild side: the assistant turn after the results were appended */
+    AiToolResult res[1];
+    ASSERT_EQ(runcmd_oom_results(turn->tool_calls, 1, res), 1);
+    ASSERT_EQ(agentic_add_tool_results(c, turn->tool_calls, res, 1), 0);
+    const AiMessage *m = &c->messages[idx];
+    uint32_t rebuild_hash = cmd_run_log_reply_hash(ai_msg_content(m), m->content_len,
+                                                   m->tool_calls, m->n_tool_calls);
+    ASSERT_TRUE(rebuild_hash == batch_hash);
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, idx, 1, rebuild_hash), 1);
+    /* hashing the provider's own (empty) id would not have matched */
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, provider, 1) != batch_hash);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}

@@ -137,7 +137,8 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
 /* ---- run_command: answering a reply that has no batch (spec decisions 5, 7, 25) ---- */
 
 /* A status row where the owner is displayed; a background owner has no list
- * to draw into (its rebuild shows the stored results). */
+ * to draw into: the row is in its run log (runcmd_store_results), and the
+ * rebuild draws it. */
 static void owner_status_row(AiChatData *d, const AiSessionState *owner,
                              const char *text)
 {
@@ -146,19 +147,26 @@ static void owner_status_row(AiChatData *d, const AiSessionState *owner,
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
 }
 
-#define RUNCMD_STORE_FAILED_ROW \
-    "[the command results could not be stored: Nutshell ran out of memory]"
-
 /* Fit `res` (n results, heap) and store them against the owner's open tool
- * turn; age, flush the owner's notes (keep_free 0) and show the row for the
- * store's return. The caller frees `res` and each content. Returns the store's
- * return (0, 1, -1, -2). */
+ * turn; age, flush the owner's notes (keep_free 0) and say what happened: the
+ * row for the store's return and `cause_row` (RUNCMD_ROW_NONE: none) when the
+ * results are stored. Each row is shown when the owner is displayed and, with
+ * the turn kept, recorded in the owner's run log keyed to that reply (R64), so
+ * a rebuild or a background owner's later display draws it under its reply.
+ * The caller frees `res` and each content. Returns the store's return (0, 1,
+ * -1, -2). */
 static int runcmd_store_results(AiChatData *d, AiSessionState *owner,
-                                AiToolResult *res, int n)
+                                AiToolResult *res, int n,
+                                RunCmdStatusRow cause_row, int cause_n)
 {
     AiConversation *conv = ai_chat_owner_conv(d, owner);
     const AiMessage *turn = ai_conv_open_tool_turn(conv);
     if (!turn) return -1;
+    /* The key of the record, taken now: a negative return frees the turn. */
+    const int reply_msg = (int)(turn - conv->messages);
+    const uint32_t reply_hash = cmd_run_log_reply_hash(
+        ai_msg_content(turn), turn->content_len, turn->tool_calls,
+        turn->n_tool_calls);
     /* The budget uses the panel's current model (the one the next request
      * goes to), never a background owner's conv.model (Part A review item 4). */
     const size_t snap = ai_conv_has_snapshot(conv) ? conv->snapshot_len : 0;
@@ -171,15 +179,28 @@ static int runcmd_store_results(AiChatData *d, AiSessionState *owner,
     const int rc = agentic_add_tool_results(conv, turn->tool_calls, res, n);
     if (rc >= 0) runcmd_age_results(conv);
     (void)ai_conv_flush_notes(conv, &owner->notes, 0);
-    if (rc == 1) {
-        owner_status_row(d, owner, AGENTIC_REDUCED_ROW);
-    } else if (rc == -1) {
-        char row[128];
-        (void)agentic_full_row(n, row, sizeof(row));
-        owner_status_row(d, owner, row);
-    } else if (rc < 0) {
-        owner_status_row(d, owner, RUNCMD_STORE_FAILED_ROW);
+
+    char rows[CMD_RUN_STATUS_ROWS][CMD_RUN_STATUS_MAX];
+    const char *texts[CMD_RUN_STATUS_ROWS];
+    int nt = 0;
+    RunCmdStatusRow kinds[2];
+    int ks = 0;
+    if (rc == 1) kinds[ks++] = RUNCMD_ROW_REDUCED;
+    else if (rc == -1) kinds[ks++] = RUNCMD_ROW_FULL;
+    else if (rc < 0) kinds[ks++] = RUNCMD_ROW_STORE_FAILED;
+    if (rc >= 0 && cause_row != RUNCMD_ROW_NONE) kinds[ks++] = cause_row;
+    for (int k = 0; k < ks; k++) {
+        if (runcmd_status_text(kinds[k], kinds[k] == RUNCMD_ROW_FULL ? n : cause_n,
+                               rows[nt], sizeof(rows[nt])) == 0)
+            continue;
+        owner_status_row(d, owner, rows[nt]);
+        texts[nt] = rows[nt];
+        nt++;
     }
+    /* With the turn gone (a negative return) there is no reply to key to. */
+    if (rc >= 0 && nt > 0)
+        (void)cmd_run_log_record_status(&owner->run_log, reply_msg, reply_hash,
+                                        texts, nt);
     return rc;
 }
 
@@ -206,30 +227,13 @@ void ai_chat_runcmd_answer_reply(AiChatData *d, AiSessionState *owner,
         ai_chat_runcmd_answer_oom(d, owner);
         return;
     }
-    const int rc = runcmd_store_results(d, owner, res, n);
+    RunCmdStatusRow row = RUNCMD_ROW_NONE;
+    if (cause == RUNCMD_CAUSE_SESSION_GONE) row = RUNCMD_ROW_SESSION_GONE;
+    else if (cause == RUNCMD_CAUSE_SET_FULL) row = RUNCMD_ROW_SET_FULL;
+    else if (cause == RUNCMD_CAUSE_NO_SLOT) row = RUNCMD_ROW_NO_SLOT;
+    /* "N refused" counts every call of the reply: none of them could run. */
+    (void)runcmd_store_results(d, owner, res, n, row, n);
     free_results(res, n);
-    if (rc >= 0) {
-        char row[200];
-        switch (cause) {
-        case RUNCMD_CAUSE_SESSION_GONE:
-            snprintf(row, sizeof(row), "[no command in this reply could run: "
-                     "the session ended; type a message to carry on]");
-            owner_status_row(d, owner, row);
-            break;
-        case RUNCMD_CAUSE_SET_FULL:
-            snprintf(row, sizeof(row), "[no command in this reply could run: "
-                     "too many pending cards; type a message to carry on]");
-            owner_status_row(d, owner, row);
-            break;
-        case RUNCMD_CAUSE_NO_SLOT:
-            snprintf(row, sizeof(row), "[no command in this reply could run: "
-                     "%d refused; type a message to carry on]", n);
-            owner_status_row(d, owner, row);
-            break;
-        default:
-            break;
-        }
-    }
     runcmd_reply_free(r);
 }
 
@@ -244,14 +248,13 @@ void ai_chat_runcmd_answer_oom(AiChatData *d, AiSessionState *owner)
     if (!res || runcmd_oom_results(turn->tool_calls, n, res) != n) {
         free(res);
         (void)ai_conv_drop_open_tool_turn(conv);
-        owner_status_row(d, owner, RUNCMD_STORE_FAILED_ROW);
+        char row[CMD_RUN_STATUS_MAX];
+        if (runcmd_status_text(RUNCMD_ROW_STORE_FAILED, n, row, sizeof(row)) > 0)
+            owner_status_row(d, owner, row);
         return;
     }
-    const int rc = runcmd_store_results(d, owner, res, n);
+    (void)runcmd_store_results(d, owner, res, n, RUNCMD_ROW_PLANNER_OOM, n);
     free_results(res, n);
-    if (rc >= 0)
-        owner_status_row(d, owner, "[no command in this reply could run: "
-                         "Nutshell ran out of memory; type a message to carry on]");
 }
 
 /* ---- Tool cards (trust boundary spec decisions 14, 15, 20, 22) ---- */

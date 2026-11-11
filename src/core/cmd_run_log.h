@@ -38,11 +38,19 @@ typedef struct {
     int approved, blocked, run;          /* chat_cmd_label's inputs as the row ended */
 } CmdRunRow;
 
+/* A record may instead (or also) carry the status rows of a reply answered
+ * without a card (spec decision 5, R64): at most CMD_RUN_STATUS_ROWS texts of
+ * CMD_RUN_STATUS_MAX bytes, drawn under the reply by the rebuild. */
+#define CMD_RUN_STATUS_ROWS 2
+#define CMD_RUN_STATUS_MAX  200
+
 typedef struct {
     int reply_msg;                       /* CmdBatch.reply_msg */
     uint32_t turn_hash;                  /* cmd_run_log_turn_hash() of that reply */
     int n;
     CmdRunRow rows[APPROVAL_MAX_CMDS];
+    int n_status;                        /* status rows: 0 for a batch's record */
+    char status[CMD_RUN_STATUS_ROWS][CMD_RUN_STATUS_MAX];
 } CmdRunRecord;
 
 typedef struct {
@@ -94,6 +102,18 @@ void cmd_run_row_from_entry(const ApprovalEntry *e, int batch_ending,
  * oldest, but only once the new one is complete. */
 int cmd_run_log_record(CmdRunLog *log, const CmdBatch *batch, uint32_t turn_hash,
                        int batch_ending);
+
+/* Record the status rows of a reply that was answered without a card (R64):
+ * a record with no command rows (n 0) and `n_texts` (1 to
+ * CMD_RUN_STATUS_ROWS) non-empty texts, each cut to CMD_RUN_STATUS_MAX - 1
+ * bytes, keyed to `reply_msg` with `turn_hash` (cmd_run_log_reply_hash of the
+ * stored turn) like any record, so Retry's cmd_run_log_forget() and the
+ * oldest-dropped rule treat it the same. Returns 0 when recorded; -1, nothing
+ * recorded and the log unchanged, for a NULL log or texts, n_texts outside the
+ * range, an empty text or an allocation failure (the row is then just not
+ * kept). */
+int cmd_run_log_record_status(CmdRunLog *log, int reply_msg, uint32_t turn_hash,
+                              const char *const *texts, int n_texts);
 
 /* The rebuild's rule: 1 when `rec` belongs to message `msg_index`, i.e. its
  * reply_msg == msg_index, that message is an assistant turn (`is_assistant`)
