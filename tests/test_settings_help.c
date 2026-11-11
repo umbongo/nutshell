@@ -374,6 +374,53 @@ int test_settings_help_ranges_in_text(void) {
     TEST_END();
 }
 
+/* The table's ranges for the settings whose limits settings_validate() holds
+ * as bare literals: feeding the table's boundary values through it pins the
+ * two together. In-range values are kept, values one outside are clamped. */
+int test_settings_help_ranges_match_validate(void) {
+    TEST_BEGIN();
+    const SettingsHelp *sb = settings_help_get((int)SH_SCROLLBACK);
+    ASSERT_NOT_NULL(sb);
+    if (sb != NULL) {
+        ASSERT_EQ(sb->min, SETTINGS_SCROLLBACK_MIN);
+        ASSERT_EQ(sb->max, SETTINGS_SCROLLBACK_MAX);
+    }
+    const SettingsHelp *idle = settings_help_get((int)SH_SSH_IDLE);
+    const SettingsHelp *res = settings_help_get((int)SH_AI_MAX_RESULTS);
+    ASSERT_NOT_NULL(idle);
+    ASSERT_NOT_NULL(res);
+    if (idle == NULL || res == NULL) { TEST_END(); }
+    Settings s;
+    /* Idle Timeout */
+    config_default_settings(&s);
+    s.ssh_user_idle_timeout_mins = idle->min;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, idle->min);
+    s.ssh_user_idle_timeout_mins = idle->max;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, idle->max);
+    s.ssh_user_idle_timeout_mins = idle->min - 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, idle->min);
+    s.ssh_user_idle_timeout_mins = idle->max + 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, idle->max);
+    /* Max Results */
+    s.ai_max_search_results = res->min;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_max_search_results, res->min);
+    s.ai_max_search_results = res->max;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_max_search_results, res->max);
+    s.ai_max_search_results = res->min - 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_max_search_results, res->min);
+    s.ai_max_search_results = res->max + 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_max_search_results, res->max);
+    TEST_END();
+}
+
 int test_settings_help_keep_entries(void) {
     TEST_BEGIN();
     size_t n = 0;

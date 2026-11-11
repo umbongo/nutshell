@@ -1149,7 +1149,7 @@ whose out-of-range entry is not saved (the stored value stays) through
 #### Scrollback Lines:
 `SH_SCROLLBACK` · setting · `scrollback_lines` · default 10,000 · range 100 to 50,000
 
-> Lines that scroll off the top of the screen are kept here so you can scroll back to them; once a tab holds this many, the oldest are dropped. Set from 100 to 50,000. Memory is used only as lines are kept, about 20 bytes per character cell: a new tab costs little, and a full buffer on a 200-column tab takes about 40 MB at 10,000 lines and 200 MB at 50,000, and briefly about as much again while the tab is resized. A change applies to tabs opened after Save; tabs already open keep their size.
+> Lines that scroll off the top of the screen are kept here so you can scroll back to them; once a tab holds this many, the oldest are dropped. Set from 100 to 50,000. Memory is used only as lines are kept, about 20 bytes per character cell: a new tab costs little, and a full buffer on a 200-column tab takes about 40 MB at 10,000 lines and 200 MB at 50,000, and briefly about as much again while the tab is resized. The AI assistant can read no more than the tab keeps, whatever Max Terminal Lines says. A change applies to tabs opened after Save; tabs already open keep their size.
 > Default: 10,000.
 
 #### Paste Delay (ms):
@@ -1242,7 +1242,7 @@ whose out-of-range entry is not saved (the stored value stays) through
 #### Max Terminal Lines:
 `SH_AI_CONTEXT_LINES` · setting · `ai_max_context_lines` · default 1,000 · range 1 to 50,000
 
-> How many of the latest terminal lines the assistant reads with every message you send, from 1 to 50,000. More lines let it see more of your session, but every line is sent each time, so cost and reply time grow with it. Lower it if replies get slow or the context meter on the AI panel fills up; raise it when the assistant misses output that scrolled past.
+> How many of the latest terminal lines the assistant reads with every message you send, from 1 to 50,000. It can read no more than the tab keeps, which is Scrollback Lines plus the rows on screen. More lines let it see more of your session, but every line is sent each time, so cost and reply time grow with it. Lower it if replies get slow or the context meter on the AI panel fills up; raise it when the assistant misses output that scrolled past.
 > Default: 1,000.
 
 #### System Instructions:

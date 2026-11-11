@@ -3278,6 +3278,7 @@ int test_settings_help_text_shape(void);
 int test_settings_help_defaults_match_config(void);
 int test_settings_help_model_names_default(void);
 int test_settings_help_ranges_in_text(void);
+int test_settings_help_ranges_match_validate(void);
 int test_settings_help_keep_entries(void);
 int test_settings_help_font_sizes_and_notes(void);
 int test_settings_help_labels_match_sources(void);
@@ -7232,6 +7233,7 @@ int main(void) {
     failed += test_settings_help_defaults_match_config();
     failed += test_settings_help_model_names_default();
     failed += test_settings_help_ranges_in_text();
+    failed += test_settings_help_ranges_match_validate();
     failed += test_settings_help_keep_entries();
     failed += test_settings_help_font_sizes_and_notes();
     failed += test_settings_help_labels_match_sources();

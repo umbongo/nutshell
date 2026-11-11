@@ -71,7 +71,9 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "is used only as lines are kept, about 20 bytes per character "
       "cell: a new tab costs little, and a full buffer on a 200-column "
       "tab takes about 40 MB at 10,000 lines and 200 MB at 50,000, and "
-      "briefly about as much again while the tab is resized. A change "
+      "briefly about as much again while the tab is resized. The AI "
+      "assistant can read no more than the tab keeps, whatever Max "
+      "Terminal Lines says. A change "
       "applies to tabs opened after Save; tabs already open keep their "
       "size.\nDefault: 10,000.",
       "10,000",
@@ -238,6 +240,8 @@ static const SettingsHelp k_help[SH_COUNT] = {
       NULL,
       "Max Terminal Lines:\n\nHow many of the latest terminal lines the "
       "assistant reads with every message you send, from 1 to 50,000. "
+      "It can read no more than the tab keeps, which is Scrollback "
+      "Lines plus the rows on screen. "
       "More lines let it see more of your session, but every line is "
       "sent each time, so cost and reply time grow with it. Lower it if "
       "replies get slow or the context meter on the AI panel fills up; "
