@@ -135,6 +135,15 @@ static void note_copy(char *dst, const char *text)
     memcpy(dst + keep, NOTE_CUT_MARKER, marker + 1);
 }
 
+/* Append `text` as a USER turn marked as Nutshell's own: the one place the
+ * mark is set (spec decision 22). */
+static int add_note_turn(AiConversation *conv, const char *text)
+{
+    if (ai_conv_add(conv, AI_ROLE_USER, text) != 0) return -1;
+    conv->messages[conv->msg_count - 1].nutshell_note = 1;
+    return 0;
+}
+
 int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q)
 {
     if (!conv || !q || q->count <= 0) return 0;
@@ -143,7 +152,7 @@ int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q)
      * every later one stay queued (review of B1-B11, 2026-11-11). */
     int appended = 0;
     while (appended < q->count
-           && ai_conv_add(conv, AI_ROLE_USER, q->text[appended]) == 0)
+           && add_note_turn(conv, q->text[appended]) == 0)
         appended++;
     if (appended == 0) return 0;
     int left = q->count - appended;
@@ -177,7 +186,7 @@ int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
 
     char cut[AI_NOTE_TEXT_MAX];
     note_copy(cut, text);
-    return ai_conv_add(conv, AI_ROLE_USER, cut) == 0 ? 0 : -1;
+    return add_note_turn(conv, cut) == 0 ? 0 : -1;
 }
 
 int ai_conv_room_for_send(const AiConversation *conv, int open_batch,

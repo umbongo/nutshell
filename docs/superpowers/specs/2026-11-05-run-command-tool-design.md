@@ -849,6 +849,11 @@ run_command call never runs under that count.
   after its take when no call is open. A continue text that was queued
   launches nothing; it rides the relaunch. The typed message is not a
   note: it first removes the batch (decision 8), so nothing is open.
+- *(review of B1-B11, 2026-11-11)* **The note mark.** `AiMessage` gains
+  `int nutshell_note`, set to 1 only by this door (the direct append and
+  `ai_conv_flush_notes`) and 0 for every other message (`ai_conv_add`
+  clears it); it tells decision 22 which USER turns are Nutshell's own, so
+  the frozen snapshot stays on the question while only notes follow.
 - *(review of B1-B11, 2026-11-11)* **The flush drops nothing.**
   `ai_conv_flush_notes` appends the queued notes in order and stops at the
   first one the conversation cannot store; that note and every later one stay
@@ -1019,6 +1024,38 @@ copy, so no step leaves a request without its snapshot. So the original question
 no fresh block is added on a resumed request, and the results carry the
 output. The in-stream tool-loop rebuild reuses the same snapshot, as
 today.
+
+- *(review of B1-B11, 2026-11-11)* **The block stays on the question while
+  only Nutshell's notes follow.** *The coordinator's ruling; the maintainer
+  can overturn it.* The rule above ("while that is the last USER turn")
+  dropped the block as soon as a note went in after the results, so
+  [S, Q (frozen), A(run_command), T, USER "policy raised"] sent Q without its
+  block: Q's bytes changed and the prompt-cache prefix broke, and the next
+  freeze would have put a fresh snapshot on the note. Now the block stays on
+  `messages[snapshot_msg]` while every USER turn after it is one Nutshell
+  wrote; a USER turn the user typed after it means no block on the question
+  (as before), and that turn takes the next freeze. The reason: the
+  question's bytes, and so the cache prefix, stay the same, and only the
+  tool rounds and Nutshell's notes follow it. To tell the two apart
+  `AiMessage` gains `int nutshell_note` (1 on a USER turn Nutshell wrote):
+  set only by the note door (decision 19: `ai_conv_add_user_note`'s direct
+  append and `ai_conv_flush_notes`), cleared by `ai_conv_add`, carried by
+  copy and take (struct copy). An older `[EXEC]` continue text goes through
+  the door, so it counts as Nutshell's own. `AiBodyFrame.snapshot_at` k > 0
+  attaches to message k − 1 while it is a USER turn and every USER turn after
+  it has `nutshell_note`; `snapshot_at` 0 keeps trust's last-USER rule
+  unchanged. `ai_conv_freeze_snapshot` refuses (returns 1, nothing changed)
+  when the last message is a note, so only a typed USER turn takes a fresh
+  snapshot. A body for a conversation with no note in it is byte for byte
+  what it was.
+- *(review of B1-B11, 2026-11-11)* **Bookkeeping helpers.**
+  `ai_conv_has_snapshot(conv)` is `snapshot != NULL` (NULL-safe; a
+  zero-filled session conversation has `snapshot_msg` 0 and no snapshot, so
+  the index is never the test). `ai_conv_snapshot_trim(conv)` frees the
+  snapshot and sets `snapshot_msg` −1 when the index is negative or
+  >= `msg_count`, or the message there is no longer a USER turn; a valid
+  snapshot is kept. Every site that pops messages off the end of a
+  conversation must call it (the pop sites in `src/ui` are task B17's).
 
 **23. DeepSeek's reasoning, whole or not at all** *(critique 2: DeepSeek
 only)*. The stream keeps at most 16 KiB of reasoning (`ctx.full_thinking`,

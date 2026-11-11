@@ -107,6 +107,16 @@ typedef struct {
      * agentic_add_assistant_tool_msg_ex, copied with the message. */
     char tool_provider[16];
     char tool_model[64];
+
+    /* 1 on a USER turn that Nutshell wrote (a policy note, an [EXEC] continue
+     * text, the policy-blocked and quoted NOTEs), 0 on one the user typed and
+     * on every other role. Set only by the note door (ai_conv_add_user_note's
+     * direct append and ai_conv_flush_notes, ai_conv_guard.c); ai_conv_add
+     * clears it; a struct copy (ai_conv_copy, ai_conv_take) carries it. The
+     * frozen snapshot stays on its question while only such turns follow it,
+     * and ai_conv_freeze_snapshot refuses to attach one to such a turn (spec
+     * decision 22, review of B1-B11, 2026-11-11). */
+    int nutshell_note;
 } AiMessage;
 
 /* Cap on a stored reasoning text, terminating NUL included: the same 16 KiB
@@ -157,13 +167,28 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src);
 void ai_prompt_set_alloc_for_test(void *(*alloc)(size_t));
 
 /* Freeze `text` (len bytes) as the conversation's snapshot, attached to the
- * LAST message when that is AI_ROLE_USER: any older snapshot is freed, then
- * the new one is stored with snapshot_msg = msg_count - 1 and 0 is returned.
- * When the last message is not a user turn (or conv is NULL) nothing changes
- * and 1 is returned. A NULL or empty text leaves no snapshot (0). An
+ * LAST message when that is a USER turn the user typed: any older snapshot is
+ * freed, then the new one is stored with snapshot_msg = msg_count - 1 and 0 is
+ * returned. When the last message is not a user turn, or is one Nutshell wrote
+ * (nutshell_note), or conv is NULL, nothing changes and 1 is returned. A NULL or empty text leaves no snapshot (0). An
  * allocation failure leaves none either and returns -1: a snapshot that
  * cannot be kept is recorded as absent, never half there. */
 int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len);
+
+/* 1 when the conversation has a frozen snapshot (snapshot != NULL), else 0.
+ * NULL-safe. Keyed on the pointer, never on snapshot_msg: a zero-filled
+ * conversation (a session's ai_state after memset) has snapshot_msg 0 and no
+ * snapshot. */
+int ai_conv_has_snapshot(const AiConversation *conv);
+
+/* Drop the snapshot (free it; snapshot NULL, snapshot_len 0, snapshot_msg -1)
+ * when it no longer belongs to a message: snapshot_msg is negative or
+ * >= msg_count, or the message there is no longer an AI_ROLE_USER turn.
+ * A valid snapshot is kept. NULL-safe. EVERY site that pops messages off the
+ * end of a conversation (ai_msg_free(&messages[--msg_count])) must call this
+ * afterwards, or snapshot_msg is left pointing past the end and a later
+ * message appended there inherits the old screen text. */
+void ai_conv_snapshot_trim(AiConversation *conv);
 
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
@@ -250,8 +275,10 @@ typedef struct {
     const char *delim;     /* this request's delimiter; NULL: no block, tool output unframed */
     /* Which message carries the snapshot (spec decision 22). 0, the zero
      * value: the last AI_ROLE_USER message, as always. k > 0: message k - 1,
-     * and only while that is the last AI_ROLE_USER message; otherwise no
-     * block. A launch with a frozen snapshot passes snapshot_msg + 1. */
+     * and only while it is an AI_ROLE_USER message and every AI_ROLE_USER
+     * message after it has nutshell_note set (a note of Nutshell's own); a
+     * typed USER turn after it means no block. A launch with a frozen
+     * snapshot passes snapshot_msg + 1. */
     int snapshot_at;
 } AiBodyFrame;
 

@@ -803,3 +803,247 @@ int test_snapshot_copy_take_free(void)
     free_conv(b);
     TEST_END();
 }
+
+/* ---- The snapshot stays on its question while only notes follow ----------- */
+/* (review of B1-B11, 2026-11-11, I6 and M9; spec decisions 19 and 22) */
+
+#include "ai_conv_guard.h"
+
+/* [S, Q (frozen "screen1"), A(run_command), T(results)] */
+static AiConversation *frozen_after_round(void)
+{
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    if (!c) return NULL;
+    ai_conv_init(c, "test-model");
+    ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+    ai_conv_add(c, AI_ROLE_USER, "Q");
+    ai_conv_freeze_snapshot(c, "screen1", 7);
+    add_runcmd_round(c, "r1");
+    return c;
+}
+
+int test_snapshot_note_keeps_it_on_question(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = frozen_after_round();
+    char *b1 = (char *)malloc(BODY_CAP), *b2 = (char *)malloc(BODY_CAP);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(b1); ASSERT_NOT_NULL(b2);
+    if (c && b1 && b2) {
+        AiBodyFrame f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, b1, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(b1, "screen1"), 1);
+
+        /* the note goes in through the door, after the results */
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ASSERT_EQ(c->messages[c->msg_count - 1].nutshell_note, 1);
+        ASSERT_EQ(c->snapshot_msg, 1);
+
+        f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, b2, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(b2, "screen1"), 1);
+        ASSERT_EQ(count_of(b2, "policy raised"), 1);
+
+        /* Q's message, block included, is the same bytes as before the note */
+        char m1[4096], m2[4096];
+        const char *q1 = strstr(b1, "{\"role\":\"user\"");
+        const char *q2 = strstr(b2, "{\"role\":\"user\"");
+        ASSERT_NOT_NULL(q1); ASSERT_NOT_NULL(q2);
+        if (q1 && q2) {
+            ASSERT_TRUE(message_at(q1, m1, sizeof(m1)) > 0);
+            ASSERT_TRUE(message_at(q2, m2, sizeof(m2)) > 0);
+            ASSERT_STR_EQ(m1, m2);
+            ASSERT_TRUE(strstr(m1, "screen1") != NULL);
+        }
+        /* the note itself carries no block and comes after the block */
+        ASSERT_TRUE(strstr(b2, "screen1") < strstr(b2, "policy raised"));
+
+        /* the Anthropic builder follows the same rule */
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, b2, BODY_CAP, 1, "anthropic") > 0);
+        ASSERT_EQ(count_of(b2, "screen1"), 1);
+        ASSERT_TRUE(strstr(b2, "screen1") < strstr(b2, "policy raised"));
+
+        /* a second note changes nothing for the question either */
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "another note"), 0);
+        f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, b2, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(b2, "screen1"), 1);
+    }
+    free(b1); free(b2);
+    free_conv(c);
+    TEST_END();
+}
+
+int test_snapshot_typed_turn_after_results_drops_it(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = frozen_after_round();
+    char *buf = (char *)malloc(BODY_CAP);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
+    if (c && buf) {
+        /* a note and then a typed turn: the typed turn takes the block's place */
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ai_conv_add(c, AI_ROLE_USER, "typed question");
+        AiBodyFrame f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(buf, "screen1"), 0);
+
+        /* a freeze on the typed turn attaches there, once */
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 0);
+        ASSERT_EQ(c->snapshot_msg, c->msg_count - 1);
+        f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(buf, "screen1"), 0);
+        ASSERT_EQ(count_of(buf, "screen2"), 1);
+        ASSERT_TRUE(strstr(buf, "screen2") < strstr(buf, "typed question"));
+
+        /* a note after the typed turn leaves the block on the typed turn */
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "later note"), 0);
+        f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(buf, "screen2"), 1);
+        ASSERT_TRUE(strstr(buf, "screen2") < strstr(buf, "typed question"));
+        ASSERT_TRUE(strstr(buf, "typed question") < strstr(buf, "later note"));
+    }
+    free(buf);
+    free_conv(c);
+    TEST_END();
+}
+
+int test_snapshot_freeze_refused_on_note(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = frozen_after_round();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        /* the last message is Nutshell's note: nothing changes */
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 1);
+        ASSERT_NOT_NULL(c->snapshot);
+        if (c->snapshot) ASSERT_STR_EQ(c->snapshot, "screen1");
+        ASSERT_EQ((int)c->snapshot_len, 7);
+        ASSERT_EQ(c->snapshot_msg, 1);
+        /* a NULL text is refused the same way, the old snapshot kept */
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, NULL, 0), 1);
+        ASSERT_NOT_NULL(c->snapshot);
+        if (c->snapshot) ASSERT_STR_EQ(c->snapshot, "screen1");
+        /* only a typed USER turn takes one */
+        ai_conv_add(c, AI_ROLE_USER, "typed");
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 0);
+        ASSERT_STR_EQ(c->snapshot, "screen2");
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+int test_snapshot_note_flag_door_copy_take(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    AiConversation *d = (AiConversation *)calloc(1, sizeof(*d));
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(d);
+    if (c && d) {
+        ai_conv_init(c, "m");
+        ai_conv_init(d, "m2");
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        /* a stale 1 in the next slot is cleared by an ordinary add */
+        c->messages[1].nutshell_note = 1;
+        ai_conv_add(c, AI_ROLE_USER, "typed");
+        ASSERT_EQ(c->messages[1].nutshell_note, 0);
+
+        /* the door's direct append and the flush both mark; a typed add does not */
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "direct"), 0);
+        AiNoteQueue q;
+        memset(&q, 0, sizeof(q));
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "queued"), 1);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q), 1);
+        ai_conv_add(c, AI_ROLE_USER, "typed again");
+        ASSERT_EQ(c->msg_count, 5);
+        ASSERT_EQ(c->messages[2].nutshell_note, 1);
+        ASSERT_EQ(c->messages[3].nutshell_note, 1);
+        ASSERT_EQ(c->messages[4].nutshell_note, 0);
+
+        /* the flag survives a copy and a take */
+        ASSERT_EQ(ai_conv_copy(d, c), 0);
+        ASSERT_EQ(d->messages[1].nutshell_note, 0);
+        ASSERT_EQ(d->messages[2].nutshell_note, 1);
+        ASSERT_EQ(d->messages[3].nutshell_note, 1);
+        ASSERT_EQ(d->messages[4].nutshell_note, 0);
+        AiConversation *t = (AiConversation *)calloc(1, sizeof(*t));
+        ASSERT_NOT_NULL(t);
+        if (t) {
+            ai_conv_init(t, "m3");
+            ai_conv_take(t, d);
+            ASSERT_EQ(t->msg_count, 5);
+            ASSERT_EQ(t->messages[2].nutshell_note, 1);
+            ASSERT_EQ(t->messages[3].nutshell_note, 1);
+            ASSERT_EQ(t->messages[4].nutshell_note, 0);
+            free_conv(t);
+        }
+    }
+    free_conv(c);
+    free_conv(d);
+    TEST_END();
+}
+
+int test_snapshot_has_and_trim(void)
+{
+    TEST_BEGIN();
+    /* a zero-filled conversation (a session's ai_state after memset) has none,
+     * though its snapshot_msg is 0 */
+    AiConversation *z = (AiConversation *)calloc(1, sizeof(*z));
+    ASSERT_NOT_NULL(z);
+    if (z) {
+        ASSERT_EQ(z->snapshot_msg, 0);
+        ASSERT_EQ(ai_conv_has_snapshot(z), 0);
+        ai_conv_snapshot_trim(z);                 /* nothing to do, no crash */
+        ASSERT_NULL(z->snapshot);
+        free(z);
+    }
+    ASSERT_EQ(ai_conv_has_snapshot(NULL), 0);
+    ai_conv_snapshot_trim(NULL);
+
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ai_conv_init(c, "m");
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "Q");
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7), 0);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 1);
+
+        /* a valid snapshot is kept */
+        ai_conv_snapshot_trim(c);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 1);
+        ASSERT_STR_EQ(c->snapshot, "screen1");
+        ASSERT_EQ(c->snapshot_msg, 1);
+
+        /* a pop that removed the frozen message leaves it past the end */
+        ai_msg_free(&c->messages[--c->msg_count]);
+        ASSERT_EQ(c->snapshot_msg, 1);
+        ai_conv_snapshot_trim(c);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ASSERT_NULL(c->snapshot);
+        ASSERT_EQ((int)c->snapshot_len, 0);
+        ASSERT_EQ(c->snapshot_msg, -1);
+
+        /* a pop that left something else at the index clears it too */
+        ai_conv_add(c, AI_ROLE_USER, "Q2");
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 0);
+        ai_msg_free(&c->messages[--c->msg_count]);
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "reply");
+        ai_conv_snapshot_trim(c);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ASSERT_EQ(c->snapshot_msg, -1);
+
+        /* a snapshot with a negative index is not valid either */
+        ai_conv_add(c, AI_ROLE_USER, "Q3");
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen3", 7), 0);
+        c->snapshot_msg = -1;
+        ai_conv_snapshot_trim(c);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ASSERT_NULL(c->snapshot);
+    }
+    free_conv(c);
+    TEST_END();
+}

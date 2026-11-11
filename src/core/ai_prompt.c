@@ -290,8 +290,11 @@ fail:
 
 int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len)
 {
+    /* Only a typed USER turn takes a snapshot: a note of Nutshell's own leaves
+     * the one the question already carries (spec decision 22). */
     if (!conv || conv->msg_count <= 0 ||
-        conv->messages[conv->msg_count - 1].role != AI_ROLE_USER)
+        conv->messages[conv->msg_count - 1].role != AI_ROLE_USER ||
+        conv->messages[conv->msg_count - 1].nutshell_note)
         return 1;
     free(conv->snapshot);
     conv->snapshot = NULL;
@@ -306,6 +309,24 @@ int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len)
     conv->snapshot_len = len;
     conv->snapshot_msg = conv->msg_count - 1;
     return 0;
+}
+
+int ai_conv_has_snapshot(const AiConversation *conv)
+{
+    return conv && conv->snapshot ? 1 : 0;
+}
+
+void ai_conv_snapshot_trim(AiConversation *conv)
+{
+    if (!conv || !conv->snapshot) return;
+    int at = conv->snapshot_msg;
+    if (at >= 0 && at < conv->msg_count &&
+        conv->messages[at].role == AI_ROLE_USER)
+        return;
+    free(conv->snapshot);
+    conv->snapshot = NULL;
+    conv->snapshot_len = 0;
+    conv->snapshot_msg = -1;
 }
 
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
@@ -329,6 +350,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->tool_model[0] = '\0';
     m->parts = NULL;
     m->n_parts = 0;
+    m->nutshell_note = 0;
     conv->msg_count++;
     return 0;
 }
@@ -1189,15 +1211,25 @@ static size_t build_body_core(const AiConversation *conv,
     if (!ai_conv_tool_pairs_well_formed(conv)) return 0;
 
     /* The data block goes in the last user message (never a tool result), or
-     * in message snapshot_at - 1 while that is the last user message (the
+     * in message snapshot_at - 1 while no user-typed message follows it (the
      * frozen snapshot: it stays with the turn it was taken for). */
     int block_idx = -1;
     if (frame && frame->delim && frame->snapshot && frame->snapshot[0]) {
-        int last_user = -1;
-        for (int k = conv->msg_count - 1; k >= 0; k--)
-            if (conv->messages[k].role == AI_ROLE_USER) { last_user = k; break; }
-        if (frame->snapshot_at <= 0 || last_user == frame->snapshot_at - 1)
-            block_idx = last_user;
+        if (frame->snapshot_at <= 0) {
+            for (int k = conv->msg_count - 1; k >= 0; k--)
+                if (conv->messages[k].role == AI_ROLE_USER) { block_idx = k; break; }
+        } else {
+            /* message snapshot_at - 1 while it is a USER turn and every USER
+             * turn after it is one Nutshell wrote (a note): only a message the
+             * user typed moves the block (spec decision 22). */
+            int at = frame->snapshot_at - 1;
+            if (at < conv->msg_count && conv->messages[at].role == AI_ROLE_USER) {
+                block_idx = at;
+                for (int k = at + 1; k < conv->msg_count; k++)
+                    if (conv->messages[k].role == AI_ROLE_USER &&
+                        !conv->messages[k].nutshell_note) { block_idx = -1; break; }
+            }
+        }
     }
 
     int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
