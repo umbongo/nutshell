@@ -3302,6 +3302,14 @@ int test_sl_scroll_clamp_within_range(void);
 int test_sl_scroll_clamp_negative_pins_zero(void);
 int test_sl_scroll_clamp_over_max_pins_max(void);
 int test_sl_scroll_clamp_zero_max(void);
+int test_sl_initial_1080p_fits_behaviour(void);
+int test_sl_initial_scroll_expectations(void);
+int test_sl_initial_follows_row_count(void);
+int test_sl_initial_laptop_height(void);
+int test_sl_initial_tiny_work_area(void);
+int test_sl_initial_narrow_clamps_width(void);
+int test_sl_initial_144dpi_capped(void);
+int test_sl_initial_negative_origin(void);
 
 /* test_ns_scale.c */
 int test_ns_scale_identity_at_96(void);
@@ -7152,6 +7160,14 @@ int main(void) {
     failed += test_sl_scroll_clamp_negative_pins_zero();
     failed += test_sl_scroll_clamp_over_max_pins_max();
     failed += test_sl_scroll_clamp_zero_max();
+    failed += test_sl_initial_1080p_fits_behaviour();
+    failed += test_sl_initial_scroll_expectations();
+    failed += test_sl_initial_follows_row_count();
+    failed += test_sl_initial_laptop_height();
+    failed += test_sl_initial_tiny_work_area();
+    failed += test_sl_initial_narrow_clamps_width();
+    failed += test_sl_initial_144dpi_capped();
+    failed += test_sl_initial_negative_origin();
 
     failed += test_search_providers_table();
     failed += test_search_provider_index_case_and_unknown();

@@ -1,5 +1,6 @@
 #include "settings_layout.h"
 #include "ns_scale.h"
+#include "ns_type.h"
 #include <stddef.h>
 
 /* ---- Nav table -----------------------------------------------------------
@@ -187,6 +188,41 @@ int settings_page_height(int rows, const SettingsMetrics *m)
     if (!m) return 0;
     if (rows < 0) rows = 0;
     return m->pad * 2 + rows * m->row_h;
+}
+
+/* One axis of the placement: centre a window of `size` in [origin, origin +
+ * extent), pull its far edge inside, then its near edge (near edge wins). */
+static int place_axis(int origin, int extent, int size)
+{
+    int pos = origin + (extent - size) / 2;
+    if (pos + size > origin + extent) pos = origin + extent - size;
+    if (pos < origin) pos = origin;
+    return pos;
+}
+
+void settings_initial_placement(const SettingsMetrics *m, int target_rows,
+                                int work_x, int work_y, int work_w, int work_h,
+                                int nc_w, int nc_h,
+                                int *client_w, int *client_h,
+                                int *win_x, int *win_y)
+{
+    if (!m) return;
+
+    int margin  = ns_scale(SP_XL, m->dpi);
+    int target_h = settings_page_height(target_rows, m) + m->btnbar_h;
+    int avail_h = work_h - nc_h - 2 * margin;
+    int ch = target_h < avail_h ? target_h : avail_h;
+    if (ch < m->min_h) ch = m->min_h;
+
+    int avail_w = work_w - nc_w - 2 * margin;
+    int cw = ns_scale(760, m->dpi);
+    if (avail_w < cw) cw = avail_w;
+    if (cw < m->min_w) cw = m->min_w;
+
+    if (client_w) *client_w = cw;
+    if (client_h) *client_h = ch;
+    if (win_x) *win_x = place_axis(work_x, work_w, cw + nc_w);
+    if (win_y) *win_y = place_axis(work_y, work_h, ch + nc_h);
 }
 
 /* ---- Scrolling -------------------------------------------------------------- */

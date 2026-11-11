@@ -634,7 +634,7 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
                                             IDC_DBG_RECORDER_LEVEL };
         for (size_t i = 0; i < sizeof(k_rect_tools) / sizeof(k_rect_tools[0]); i++) {
             HWND hc = GetDlgItem(d->hPage, k_rect_tools[i]);
-            if (hc && IsWindowVisible(hc)) {
+            if (hc && (GetWindowLongA(hc, GWL_STYLE) & WS_VISIBLE) != 0) {
                 RECT rc;
                 GetWindowRect(hc, &rc);
                 MapWindowPoints(NULL, d->hPage, (POINT *)&rc, 2);
@@ -1513,6 +1513,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         /* ==== AI_WEB ==== */
         {
+            HWND chk = make_check2(nd, IDC_AI_WEB_FETCH, SH_AI_WEB_FETCH);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.ai_web_fetch_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 1);
+        }
+        {
         int is_custom_search =
             (_stricmp(nd->cfg->settings.ai_search_provider, "custom") == 0);
         {
@@ -1545,12 +1551,6 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             HWND ed = make_edit2(nd, buf, IDC_AI_MAX_RESULTS, ES_NUMBER,
                                  SH_AI_MAX_RESULTS);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_WEB, 70, 0, 1, 0, 1, 0);
-        }
-        {
-            HWND chk = make_check2(nd, IDC_AI_WEB_FETCH, SH_AI_WEB_FETCH);
-            SendMessage(chk, BM_SETCHECK,
-                        nd->cfg->settings.ai_web_fetch_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 1);
         }
 
         /* ==== DEBUGGING ==== */
@@ -2278,8 +2278,10 @@ static int settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
     wcPage.lpszClassName = PAGE_CLASS;
     RegisterClassEx(&wcPage);
 
-    /* Default client size, DPI-scaled; AdjustWindowRect turns that into the
-     * window size the non-client area (title bar, borders) needs. */
+    /* The window is created hidden at the owner monitor's work-area top-left
+     * at a provisional size, so it lands on that monitor and WM_CREATE reads
+     * that monitor's DPI. Once the pages are built it is sized and placed by
+     * settings_initial_placement() and only then shown. */
     int pdpi = get_window_dpi(parent);
     int client_w = ns_scale(760, pdpi);
     int client_h = ns_scale(560, pdpi);
@@ -2288,16 +2290,49 @@ static int settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
     RECT wr = {0, 0, client_w, client_h};
     AdjustWindowRect(&wr, style, FALSE);
 
+    MONITORINFO mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    HMONITOR mon = MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST);
+    if (!mon || !GetMonitorInfo(mon, &mi)) {
+        mi.rcWork.left = 0;
+        mi.rcWork.top = 0;
+        mi.rcWork.right = GetSystemMetrics(SM_CXSCREEN);
+        mi.rcWork.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",
-        style | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT,
+        style,
+        mi.rcWork.left, mi.rcWork.top,
         wr.right - wr.left, wr.bottom - wr.top,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {
         s_open = hwnd;
         EnableWindow(parent, FALSE);
+
+        /* Behaviour's rows (title included) set the opening height. Read
+         * everything from d now: WM_DESTROY frees it. */
+        int target_rows = 1;
+        for (int i = 0; i < d->n_ctrls; i++) {
+            if (d->ctrls[i].page == SETTINGS_PAGE_AI_BEHAVIOUR)
+                target_rows += d->ctrls[i].rows;
+        }
+        SettingsMetrics pm;
+        settings_metrics_init(&pm, d->dpi);
+        int ncw = (int)(wr.right - wr.left) - client_w;
+        int nch = (int)(wr.bottom - wr.top) - client_h;
+        int cw = 0, ch = 0, wx = 0, wy = 0;
+        settings_initial_placement(&pm, target_rows,
+                                   (int)mi.rcWork.left, (int)mi.rcWork.top,
+                                   (int)(mi.rcWork.right - mi.rcWork.left),
+                                   (int)(mi.rcWork.bottom - mi.rcWork.top),
+                                   ncw, nch, &cw, &ch, &wx, &wy);
+        SetWindowPos(hwnd, NULL, wx, wy, cw + ncw, ch + nch,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(hwnd, SW_SHOW);
+
         MSG msg;
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
             TranslateMessage(&msg);
