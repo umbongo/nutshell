@@ -1140,8 +1140,8 @@ ends on a USER turn the user typed or an `[EXEC]` continue text that launched
 its own request (a typed message, Retry of a question, a continue launch)
 takes a fresh snapshot and freezes it to that turn; a launch whose
 conversation ends on tool results (a run_command resume, Retry from
-results) or on a USER note Nutshell queued or appended (see the bullet below)
-takes none. *(review of the fix wave, 2026-11-11, R48; replaces review of
+results) or, for a request that offers run_command, on a USER note Nutshell
+queued or appended (see the bullet below) takes none. *(review of the fix wave, 2026-11-11, R48; replaces review of
 B1-B11's R44 wording, which exempted only a continue text that launched its
 own request)* **The note mark and the question-keeping rule apply to a request
 that offers run_command, and to no other.** A request that does not offer it
