@@ -2,6 +2,7 @@
 #include "run_command.h"
 #include "ai_prompt.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -302,5 +303,196 @@ int test_runcmd_reject_hint(void)
     ASSERT_STR_EQ(runcmd_reject_hint(),
         "[If this provider does not accept Nutshell's tool calls, set Settings > "
         "AI Assistant > Provider > Commands as tool calls to Off]");
+    TEST_END();
+}
+
+/* ---- the planner (spec decisions 4 to 6) ---- */
+
+static void set_call(AiToolCall *c, const char *id, const char *name, const char *input)
+{
+    memset(c, 0, sizeof(*c));
+    snprintf(c->id, sizeof(c->id), "%s", id);
+    snprintf(c->name, sizeof(c->name), "%s", name);
+    snprintf(c->input_json, sizeof(c->input_json), "%s", input);
+}
+
+static void set_cmd_call(AiToolCall *c, int i)
+{
+    char id[32], in[64];
+    snprintf(id, sizeof(id), "call_%d", i);
+    snprintf(in, sizeof(in), "{\"command\":\"echo %d\"}", i);
+    set_call(c, id, RUNCMD_TOOL_NAME, in);
+}
+
+static int g_plan_alloc_calls, g_plan_alloc_fail_at;
+static void *plan_failing_alloc(size_t n)
+{
+    g_plan_alloc_calls++;
+    if (g_plan_alloc_calls == g_plan_alloc_fail_at) return NULL;
+    return malloc(n);
+}
+
+int test_runcmd_plan_order(void)
+{
+    TEST_BEGIN();
+    AiToolCall *c = calloc(4, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    set_call(&c[0], "id0", RUNCMD_TOOL_NAME, "{\"command\":\"ls\",\"note\":\"list\"}");
+    set_call(&c[1], "id1", "web_fetch", "{\"url\":\"https://example.com\"}");
+    set_call(&c[2], "id2", RUNCMD_TOOL_NAME, "{}");
+    set_call(&c[3], "id3", RUNCMD_TOOL_NAME, "{\"command\":\"a\\nb\"}");
+
+    RunCmdReply *r = runcmd_plan(c, 4, 1);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(r->n_calls, 4);
+    ASSERT_EQ(r->n_slot, 1);
+    ASSERT_EQ(r->calls[0].kind, RUNCMD_KIND_SLOT);
+    ASSERT_EQ(r->calls[1].kind, RUNCMD_KIND_OTHER_TOOL);
+    ASSERT_EQ(r->calls[2].kind, RUNCMD_KIND_INVALID);
+    ASSERT_EQ(r->calls[2].parse, RUNCMD_PARSE_NO_COMMAND);
+    ASSERT_EQ(r->calls[3].kind, RUNCMD_KIND_INVALID);
+    ASSERT_EQ(r->calls[3].parse, RUNCMD_PARSE_UNSAFE);
+    ASSERT_STR_EQ(r->calls[0].tool_use_id, "id0");
+    ASSERT_STR_EQ(r->calls[1].tool_use_id, "id1");
+    ASSERT_STR_EQ(r->calls[2].tool_use_id, "id2");
+    ASSERT_STR_EQ(r->calls[3].tool_use_id, "id3");
+    ASSERT_STR_EQ(r->calls[1].tool_name, "web_fetch");
+    ASSERT_STR_EQ(r->calls[0].tool_name, RUNCMD_TOOL_NAME);
+    ASSERT_STR_EQ(r->calls[0].command, "ls");
+    ASSERT_STR_EQ(r->calls[0].note, "list");
+    ASSERT_STR_EQ(r->calls[2].command, "");
+    for (int i = 0; i < 4; i++) {
+        ASSERT_EQ(r->calls[i].entry, -1);
+        ASSERT_EQ(r->calls[i].fetch_off, 0);
+        ASSERT_EQ(r->calls[i].cap.started, 0);
+        ASSERT_EQ(r->calls[i].cap.captured, 0);
+        ASSERT_NULL(r->calls[i].cap.head);
+        ASSERT_NULL(r->calls[i].cap.tail);
+    }
+    runcmd_reply_free(r);
+
+    r = runcmd_plan(c, 4, 0);
+    ASSERT_NOT_NULL(r);
+    for (int i = 0; i < 4; i++)
+        ASSERT_EQ(r->calls[i].fetch_off, i == 1 ? 1 : 0);
+    runcmd_reply_free(r);
+    free(c);
+    TEST_END();
+}
+
+int test_runcmd_plan_over_cap(void)
+{
+    TEST_BEGIN();
+    AiToolCall *c = calloc(17, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    for (int i = 0; i < 17; i++) set_cmd_call(&c[i], i);
+    RunCmdReply *r = runcmd_plan(c, 17, 1);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(r->n_calls, 17);
+    ASSERT_EQ(r->n_slot, 16);
+    for (int i = 0; i < 16; i++) ASSERT_EQ(r->calls[i].kind, RUNCMD_KIND_SLOT);
+    ASSERT_EQ(r->calls[16].kind, RUNCMD_KIND_OVER_CAP);
+    ASSERT_EQ(r->calls[16].parse, RUNCMD_PARSE_OK);
+    ASSERT_STR_EQ(r->calls[16].command, "echo 16");
+    runcmd_reply_free(r);
+
+    /* the streamed list can reach AI_TOOL_STREAM_CALLS_MAX */
+    free(c);
+    c = calloc(AI_TOOL_STREAM_CALLS_MAX, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    for (int i = 0; i < AI_TOOL_STREAM_CALLS_MAX; i++) set_cmd_call(&c[i], i);
+    r = runcmd_plan(c, AI_TOOL_STREAM_CALLS_MAX, 1);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(r->n_slot, RUNCMD_SLOT_MAX);
+    ASSERT_EQ(r->calls[AI_TOOL_STREAM_CALLS_MAX - 1].kind, RUNCMD_KIND_OVER_CAP);
+    runcmd_reply_free(r);
+    free(c);
+    TEST_END();
+}
+
+int test_runcmd_plan_mixed_cap(void)
+{
+    TEST_BEGIN();
+    AiToolCall *c = calloc(19, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    for (int i = 0; i < 3; i++) set_call(&c[i], "bad", RUNCMD_TOOL_NAME, "{}");
+    for (int i = 3; i < 19; i++) set_cmd_call(&c[i], i);
+    RunCmdReply *r = runcmd_plan(c, 19, 1);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(r->n_slot, 16);
+    for (int i = 0; i < 3; i++) ASSERT_EQ(r->calls[i].kind, RUNCMD_KIND_INVALID);
+    for (int i = 3; i < 19; i++) ASSERT_EQ(r->calls[i].kind, RUNCMD_KIND_SLOT);
+    runcmd_reply_free(r);
+    free(c);
+    TEST_END();
+}
+
+int test_runcmd_plan_edges(void)
+{
+    TEST_BEGIN();
+    AiToolCall c;
+    set_cmd_call(&c, 1);
+    ASSERT_NULL(runcmd_plan(NULL, 1, 1));
+    ASSERT_NULL(runcmd_plan(&c, 0, 1));
+    ASSERT_NULL(runcmd_plan(&c, -3, 1));
+    runcmd_reply_free(NULL);                       /* NULL-safe */
+
+    /* a stream that cut the input to {} is INVALID, not a slot */
+    set_call(&c, "x", RUNCMD_TOOL_NAME, "{}");
+    c.overflowed = 1;
+    RunCmdReply *r = runcmd_plan(&c, 1, 1);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(r->calls[0].kind, RUNCMD_KIND_INVALID);
+    ASSERT_EQ(r->n_slot, 0);
+    runcmd_reply_free(r);
+    TEST_END();
+}
+
+int test_runcmd_plan_oom_returns_null(void)
+{
+    TEST_BEGIN();
+    AiToolCall c;
+    set_cmd_call(&c, 1);
+    for (int at = 1; at <= 2; at++) {
+        runcmd_set_alloc_for_test(plan_failing_alloc);
+        g_plan_alloc_calls = 0;
+        g_plan_alloc_fail_at = at;
+        ASSERT_NULL(runcmd_plan(&c, 1, 1));
+    }
+    runcmd_set_alloc_for_test(NULL);
+    RunCmdReply *r = runcmd_plan(&c, 1, 1);
+    ASSERT_NOT_NULL(r);
+    runcmd_reply_free(r);
+    TEST_END();
+}
+
+int test_runcmd_call_for_entry(void)
+{
+    TEST_BEGIN();
+    AiToolCall *c = calloc(3, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    for (int i = 0; i < 3; i++) set_cmd_call(&c[i], i);
+    RunCmdReply *r = runcmd_plan(c, 3, 1);
+    ASSERT_NOT_NULL(r);
+    r->calls[2].entry = 5;
+    ASSERT_TRUE(runcmd_call_for_entry(r, 5) == &r->calls[2]);
+    ASSERT_NULL(runcmd_call_for_entry(r, -1));     /* unqueued calls are -1 */
+    ASSERT_NULL(runcmd_call_for_entry(r, 4));
+    ASSERT_NULL(runcmd_call_for_entry(NULL, 5));
+    runcmd_reply_free(r);
+    free(c);
+    TEST_END();
+}
+
+int test_runcmd_reply_has_call(void)
+{
+    TEST_BEGIN();
+    AiToolCall c[2];
+    set_call(&c[0], "a", "web_search", "{\"query\":\"x\"}");
+    ASSERT_EQ(runcmd_reply_has_call(c, 1), 0);
+    set_cmd_call(&c[1], 1);
+    ASSERT_EQ(runcmd_reply_has_call(c, 2), 1);
+    ASSERT_EQ(runcmd_reply_has_call(c, 0), 0);
+    ASSERT_EQ(runcmd_reply_has_call(NULL, 2), 0);
     TEST_END();
 }

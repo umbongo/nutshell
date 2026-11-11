@@ -1,8 +1,10 @@
 /* tests/test_cmd_batch.c */
 #include "test_framework.h"
 #include "cmd_batch.h"
+#include "run_command.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 int test_cmd_batch_set_init_empty(void) {
     TEST_BEGIN();
@@ -427,6 +429,105 @@ int test_cmd_batch_settled_flag_lifecycle(void) {
     ASSERT_TRUE(evicted > 0);
     ASSERT_EQ(b->settled, 0);
     ASSERT_EQ(set.b[0]->settled, 1);   /* the survivors keep theirs */
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* ---- run_command's per-batch state (spec decision 6) ---- */
+
+/* A reply with `n` command calls whose captures own heap text. */
+static struct RunCmdReply *make_runcmd_reply(int n)
+{
+    AiToolCall *c = calloc((size_t)n, sizeof(*c));
+    if (!c) return NULL;
+    for (int i = 0; i < n; i++) {
+        snprintf(c[i].id, sizeof(c[i].id), "id%d", i);
+        snprintf(c[i].name, sizeof(c[i].name), "%s", RUNCMD_TOOL_NAME);
+        snprintf(c[i].input_json, sizeof(c[i].input_json), "{\"command\":\"echo %d\"}", i);
+    }
+    RunCmdReply *r = runcmd_plan(c, n, 1);
+    free(c);
+    if (!r) return NULL;
+    for (int i = 0; i < r->n_calls; i++) {
+        r->calls[i].cap.head = malloc(8);
+        r->calls[i].cap.tail = malloc(8);
+        if (r->calls[i].cap.head) memcpy(r->calls[i].cap.head, "head", 5);
+        if (r->calls[i].cap.tail) memcpy(r->calls[i].cap.tail, "tail", 5);
+        r->calls[i].cap.head_len = 4;
+        r->calls[i].cap.tail_len = 4;
+    }
+    return r;
+}
+
+int test_cmd_batch_release_frees_runcmd(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+
+    /* removed */
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    a->runcmd = make_runcmd_reply(2);
+    ASSERT_NOT_NULL(a->runcmd);
+    int aid = a->id;
+    cmd_batch_remove(&set, aid);
+    ASSERT_EQ(set.count, 0);
+
+    /* freed by set_free */
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+    b->runcmd = make_runcmd_reply(3);
+    ASSERT_NOT_NULL(b->runcmd);
+    cmd_batch_set_free(&set);
+    ASSERT_EQ(set.count, 0);
+
+    /* evicted by the 9th add, id reported */
+    cmd_batch_set_init(&set);
+    CmdBatch *first = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(first);
+    first->runcmd = make_runcmd_reply(1);
+    ASSERT_NOT_NULL(first->runcmd);
+    int first_id = first->id;
+    for (int i = 1; i < CMD_BATCH_MAX; i++)
+        ASSERT_NOT_NULL(cmd_batch_add(&set, NULL, NULL));
+    int evicted = 0;
+    CmdBatch *ninth = cmd_batch_add(&set, NULL, &evicted);
+    ASSERT_NOT_NULL(ninth);
+    ASSERT_EQ(evicted, first_id);
+    ASSERT_EQ(set.count, CMD_BATCH_MAX);
+    ASSERT_NULL(cmd_batch_find(&set, first_id));
+    cmd_batch_set_free(&set);
+
+    /* direct release; NULL-safe; a batch with no runcmd */
+    CmdBatch *d = calloc(1, sizeof(*d));
+    ASSERT_NOT_NULL(d);
+    d->runcmd = make_runcmd_reply(2);
+    ASSERT_NOT_NULL(d->runcmd);
+    cmd_batch_release(d);
+    cmd_batch_release(NULL);
+    d = calloc(1, sizeof(*d));
+    ASSERT_NOT_NULL(d);
+    cmd_batch_release(d);
+    TEST_END();
+}
+
+int test_cmd_batch_runcmd_finds(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    ASSERT_NULL(cmd_batch_runcmd(NULL));
+    ASSERT_NULL(cmd_batch_runcmd(&set));
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ASSERT_NULL(a->runcmd);
+    ASSERT_NULL(cmd_batch_runcmd(&set));
+    b->runcmd = make_runcmd_reply(1);
+    ASSERT_NOT_NULL(b->runcmd);
+    ASSERT_TRUE(cmd_batch_runcmd(&set) == b);
     cmd_batch_set_free(&set);
     TEST_END();
 }

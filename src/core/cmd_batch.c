@@ -1,7 +1,15 @@
 /* src/core/cmd_batch.c */
 #include "cmd_batch.h"
+#include "run_command.h"
 #include <stdlib.h>
 #include <string.h>
+
+void cmd_batch_release(CmdBatch *b)
+{
+    if (!b) return;
+    runcmd_reply_free(b->runcmd);
+    free(b);
+}
 
 void cmd_batch_set_init(CmdBatchSet *set)
 {
@@ -14,7 +22,7 @@ void cmd_batch_set_free(CmdBatchSet *set)
 {
     if (!set) return;
     for (int i = 0; i < set->count; i++) {
-        free(set->b[i]);
+        cmd_batch_release(set->b[i]);
         set->b[i] = NULL;
     }
     set->count = 0;
@@ -32,7 +40,10 @@ CmdBatch *cmd_batch_add(CmdBatchSet *set, const ApprovalQueue *defaults,
     if (set->count >= CMD_BATCH_MAX) {
         CmdBatch *old = set->b[0];
         if (evicted_id) *evicted_id = old->id;
-        free(old);
+        /* Spec 8: a run_command batch is unreachable here. Its conversation
+         * ends on the tool_use, so no reply can add the batch that would push
+         * it out; release frees its state all the same. */
+        cmd_batch_release(old);
         for (int i = 1; i < set->count; i++)
             set->b[i - 1] = set->b[i];
         set->count--;
@@ -66,7 +77,7 @@ void cmd_batch_remove(CmdBatchSet *set, int id)
     if (!set) return;
     for (int i = 0; i < set->count; i++) {
         if (set->b[i] && set->b[i]->id == id) {
-            free(set->b[i]);
+            cmd_batch_release(set->b[i]);
             for (int j = i + 1; j < set->count; j++)
                 set->b[j - 1] = set->b[j];
             set->count--;
@@ -84,6 +95,14 @@ int cmd_batch_is_tool(const CmdBatch *b)
 int cmd_batch_full(const CmdBatchSet *set)
 {
     return !set || set->count >= CMD_BATCH_MAX;
+}
+
+CmdBatch *cmd_batch_runcmd(CmdBatchSet *set)
+{
+    if (!set) return NULL;
+    for (int i = 0; i < set->count; i++)
+        if (set->b[i] && set->b[i]->runcmd) return set->b[i];
+    return NULL;
 }
 
 CmdBatch *cmd_batch_first_pending(CmdBatchSet *set)

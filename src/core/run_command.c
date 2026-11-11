@@ -1,6 +1,7 @@
 #include "run_command.h"
 #include "json_parser.h"
 #include "paste_filter.h"
+#include "tool_decision.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -191,4 +192,82 @@ const char *runcmd_reject_hint(void)
 {
     return "[If this provider does not accept Nutshell's tool calls, set Settings > "
            "AI Assistant > Provider > Commands as tool calls to Off]";
+}
+
+/* ---- The planner ---- */
+
+static void *(*g_alloc)(size_t) = malloc;
+
+void runcmd_set_alloc_for_test(void *(*alloc)(size_t))
+{
+    g_alloc = alloc ? alloc : malloc;
+}
+
+RunCmdReply *runcmd_plan(const AiToolCall *calls, int n_calls,
+                         int fetch_registered)
+{
+    if (!calls || n_calls <= 0) return NULL;
+
+    RunCmdReply *r = g_alloc(sizeof(*r));
+    if (!r) return NULL;
+    r->calls = g_alloc((size_t)n_calls * sizeof(*r->calls));
+    if (!r->calls) {
+        free(r);
+        return NULL;
+    }
+    memset(r->calls, 0, (size_t)n_calls * sizeof(*r->calls));
+    r->n_calls = n_calls;
+    r->n_slot = 0;
+
+    for (int i = 0; i < n_calls; i++) {
+        RunCmdCall *c = &r->calls[i];
+        snprintf(c->tool_use_id, sizeof(c->tool_use_id), "%s", calls[i].id);
+        snprintf(c->tool_name, sizeof(c->tool_name), "%s", calls[i].name);
+        c->entry = -1;
+        c->parse = RUNCMD_PARSE_OK;
+
+        if (strncmp(calls[i].name, RUNCMD_TOOL_NAME, AI_TOOL_NAME_MAX) != 0) {
+            c->kind = RUNCMD_KIND_OTHER_TOOL;
+            c->fetch_off = tool_dispatch_rule(calls[i].name, fetch_registered)
+                           == TOOL_DISPATCH_FETCH_OFF;
+            continue;
+        }
+        c->parse = runcmd_parse_input(calls[i].input_json, c->command, c->note);
+        if (c->parse != RUNCMD_PARSE_OK)
+            c->kind = RUNCMD_KIND_INVALID;
+        else if (r->n_slot >= RUNCMD_SLOT_MAX)
+            c->kind = RUNCMD_KIND_OVER_CAP;
+        else {
+            c->kind = RUNCMD_KIND_SLOT;
+            r->n_slot++;
+        }
+    }
+    return r;
+}
+
+void runcmd_reply_free(RunCmdReply *r)
+{
+    if (!r) return;
+    for (int i = 0; i < r->n_calls; i++) {
+        free(r->calls[i].cap.head);
+        free(r->calls[i].cap.tail);
+    }
+    free(r->calls);
+    free(r);
+}
+
+RunCmdCall *runcmd_call_for_entry(RunCmdReply *r, int entry)
+{
+    if (!r || entry < 0) return NULL;
+    for (int i = 0; i < r->n_calls; i++)
+        if (r->calls[i].entry == entry) return &r->calls[i];
+    return NULL;
+}
+
+int runcmd_reply_has_call(const AiToolCall *calls, int n_calls)
+{
+    if (!calls) return 0;
+    for (int i = 0; i < n_calls; i++)
+        if (strncmp(calls[i].name, RUNCMD_TOOL_NAME, AI_TOOL_NAME_MAX) == 0) return 1;
+    return 0;
 }

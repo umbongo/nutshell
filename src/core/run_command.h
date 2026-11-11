@@ -2,8 +2,10 @@
 #define NUTSHELL_RUN_COMMAND_H
 
 #include "ai_tools.h"
+#include "chat_approval.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* The run_command tool: the assistant's way of running one terminal command
  * through an ordinary approval card (spec 2026-11-05-run-command-tool-design.md,
@@ -58,5 +60,65 @@ int  runcmd_reject_hint_applies(int http_status, const char *error_text);
 
 /* The hint row's text. */
 const char *runcmd_reject_hint(void);
+
+/* ---- The planner and the reply's per-call state (spec decisions 4 to 6) ---- */
+
+typedef enum {
+    RUNCMD_KIND_SLOT,         /* a valid run_command call that has an approval slot */
+    RUNCMD_KIND_OVER_CAP,     /* valid, but past APPROVAL_MAX_CMDS slots */
+    RUNCMD_KIND_INVALID,      /* a run_command call whose input does not parse */
+    RUNCMD_KIND_OTHER_TOOL    /* any other tool in a reply that calls run_command */
+} RunCmdKind;
+
+#define RUNCMD_CAP_SCREEN        1u   /* screen rows: alt screen, reflow, region scroll, or empty/inverted range */
+#define RUNCMD_CAP_SCROLLED_OUT  4u
+#define RUNCMD_CAP_EMPTY         8u   /* nothing readable at all */
+#define RUNCMD_CAP_REDRAWN      16u   /* screen rows: empty or inverted range, screen has content */
+
+/* What was read back from the terminal for one call (filled by later tasks). */
+typedef struct {
+    int      started, captured;      /* captured: spec section 10's once-only flag */
+    uint64_t start_line;  uint32_t start_reflow_seq, start_region_seq;  int start_alt;
+    char    *head; size_t head_len;  /* heap; NULL when no excerpt */
+    char    *tail; size_t tail_len;  /* heap; NULL when uncut */
+    size_t   omitted_bytes;
+    unsigned flags;                  /* RUNCMD_CAP_* */
+} RunCmdCapture;
+
+typedef struct {
+    char tool_use_id[AI_TOOL_ID_MAX], tool_name[AI_TOOL_NAME_MAX];
+    RunCmdKind kind;  RunCmdParse parse;
+    char command[RUNCMD_COMMAND_MAX + 1], note[RUNCMD_NOTE_MAX];
+    int  entry;                      /* ApprovalEntry index; -1 unless SLOT and queued */
+    int  fetch_off;                  /* OTHER_TOOL web_fetch the stream's registry lacked (spec section 4) */
+    RunCmdCapture cap;
+} RunCmdCall;
+
+typedef struct RunCmdReply { RunCmdCall *calls; int n_calls; int n_slot; } RunCmdReply;
+
+#define RUNCMD_SLOT_MAX APPROVAL_MAX_CMDS
+
+/* Sort every call of a reply, in call order: OTHER_TOOL (any name but
+ * run_command), INVALID (the input does not parse), OVER_CAP (valid, but
+ * RUNCMD_SLOT_MAX slots are taken) or SLOT. INVALID and OTHER_TOOL calls take
+ * no slot. n_calls may exceed RUNCMD_SLOT_MAX (the stream keeps up to
+ * AI_TOOL_STREAM_CALLS_MAX). When !fetch_registered, a web_fetch call has
+ * fetch_off set (tool_dispatch_rule's TOOL_DISPATCH_FETCH_OFF). command and
+ * note are filled for SLOT and OVER_CAP; every entry is -1 and every capture
+ * zero. NULL when calls is NULL, n_calls <= 0 or an allocation fails. */
+RunCmdReply *runcmd_plan(const AiToolCall *calls, int n_calls,
+                         int fetch_registered);
+
+/* Free every capture's text, the calls and the reply. NULL-safe. */
+void runcmd_reply_free(RunCmdReply *r);
+
+/* The call whose entry is `entry`, NULL when none (entry -1 never matches). */
+RunCmdCall *runcmd_call_for_entry(RunCmdReply *r, int entry);
+
+/* 1 when any of the calls is named run_command. */
+int runcmd_reply_has_call(const AiToolCall *calls, int n_calls);
+
+/* Tests only: the allocator the planner uses (NULL restores malloc). */
+void runcmd_set_alloc_for_test(void *(*alloc)(size_t));
 
 #endif

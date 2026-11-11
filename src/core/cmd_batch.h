@@ -17,6 +17,8 @@
 
 #define CMD_BATCH_MAX 8
 
+struct RunCmdReply;   /* run_command.h; not included here (ai_prompt.h includes this file) */
+
 typedef struct {
     int id;
     ApprovalQueue q;
@@ -61,6 +63,9 @@ typedef struct {
                       * 14). 0 = a command batch. */
     unsigned tool_gen;       /* the decision slot's generation for that call
                       * (decision 20); 0 for a command batch. */
+    struct RunCmdReply *runcmd; /* a run_command reply's per-call state (heap,
+                      * run_command.h): NULL for every other batch. Freed by
+                      * cmd_batch_release(), never by a bare free(). */
 } CmdBatch;
 
 typedef struct {
@@ -68,6 +73,10 @@ typedef struct {
     int count;
     int next_id;   /* ids start at 1 and never repeat within this set */
 } CmdBatchSet;
+
+/* Free a batch and its run_command state. NULL-safe. Every place that frees
+ * a CmdBatch goes through this, never a bare free(). */
+void cmd_batch_release(CmdBatch *b);
 
 /* Initialize an empty set. */
 void cmd_batch_set_init(CmdBatchSet *set);
@@ -79,7 +88,9 @@ void cmd_batch_set_free(CmdBatchSet *set);
  * CmdPolicy from `defaults` (may be NULL, leaving the queue's own default)
  * so the session's policy carries over to the new batch. Appends it
  * to the set (oldest-first order). If the set is already at CMD_BATCH_MAX,
- * evicts the oldest batch first (freeing it) and, when evicted_id is
+ * evicts the oldest batch first (cmd_batch_release; a run_command batch is
+ * never the oldest to be evicted, since its conversation ends on the tool_use
+ * and nothing can add a batch behind it) and, when evicted_id is
  * non-NULL, writes its id there so the caller can settle its rows in the
  * list view; evicted_id is set to 0 when no eviction occurs. Returns the
  * new batch, or NULL on allocation failure (set is left unchanged and
@@ -109,6 +120,10 @@ int cmd_batch_full(const CmdBatchSet *set);
  * removes a batch only when this holds: a batch with a command still running
  * stays until the dispatcher's tick sees it finish. */
 int cmd_batch_finished(const CmdBatch *b);
+
+/* The set's run_command batch (its runcmd is non-NULL), or NULL. At most one
+ * exists per session. */
+CmdBatch *cmd_batch_runcmd(CmdBatchSet *set);
 
 /* Oldest command batch (list order) whose queue still needs the user, per
  * chat_approval_needs_user(). Tool batches are skipped. NULL if none. */
