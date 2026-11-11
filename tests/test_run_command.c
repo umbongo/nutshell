@@ -2733,6 +2733,29 @@ int test_runcmd_capture_home_erase_below(void)
     TEST_END();
 }
 
+/* A two-line prompt redrawn as a transient one (`\r ESC[1A ESC[J`) leaves the
+ * cursor at the home position without a CUP: not a clear (C0). Prompt on rows 0
+ * and 1 of 24, 40 lines of output: all 40 lines, flags 0. The new prompt's
+ * first line is a complete row of the range (a known limit, spec section 10). */
+int test_runcmd_capture_transient_prompt_not_clear(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 1000);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "~/src main\r\n> ");
+    cap_run(t, &c, "ls",
+            "ls\r\x1b[1A\x1b[J> ls\r\n"
+            "file00\r\nfile01\r\nfile02\r\nfile03\r\nfile04\r\nfile05\r\nfile06\r\nfile07\r\nfile08\r\nfile09\r\nfile10\r\nfile11\r\nfile12\r\nfile13\r\nfile14\r\nfile15\r\nfile16\r\nfile17\r\nfile18\r\nfile19\r\nfile20\r\nfile21\r\nfile22\r\nfile23\r\nfile24\r\nfile25\r\nfile26\r\nfile27\r\nfile28\r\nfile29\r\nfile30\r\nfile31\r\nfile32\r\nfile33\r\nfile34\r\nfile35\r\nfile36\r\nfile37\r\nfile38\r\nfile39\r\n"
+            "~/src main\r\n> ");
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_HEAD(c, "file00\nfile01\nfile02\nfile03\nfile04\nfile05\nfile06\nfile07\nfile08\nfile09\nfile10\nfile11\nfile12\nfile13\nfile14\nfile15\nfile16\nfile17\nfile18\nfile19\nfile20\nfile21\nfile22\nfile23\nfile24\nfile25\nfile26\nfile27\nfile28\nfile29\nfile30\nfile31\nfile32\nfile33\nfile34\nfile35\nfile36\nfile37\nfile38\nfile39\n~/src main");
+    ASSERT_NULL(c.tail);
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
 /* Three cursor moves that must not trigger the screen fallback (the
  * re-review's experiments; the outputs are what the tree before the cursor
  * test gave): none of them erases the screen, so none is a screen result. */

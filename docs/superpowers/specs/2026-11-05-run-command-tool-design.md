@@ -630,10 +630,16 @@ cursor, while `active_term` exists.
   `uint32_t erase_seq`, set to 0 in `term_init`, untouched by `term_resize`
   and by the alternate screen, bumped on the **primary** screen only (as
   `region_scroll_seq`, Ruling R30) by exactly two things: **ED 2**, and
-  **ED 0 issued with the cursor at row 0, column 0** (the Linux console's
-  `clear` sends `ESC[H ESC[J`; xterm's sends `ESC[H ESC[2J`). Nothing else
-  counts: no cursor move (CUP, CUU, RI, DECSC/DECRC, DECSTBM) and no other
-  erase. Today's parser handles ED 0, 1 and 2; **ED 3 and RIS (ESC c) are not
+  **ED 0 straight after a CUP or HVP that placed the cursor at row 0,
+  column 0** (the Linux console's `clear` sends `ESC[H ESC[J`; xterm's sends
+  `ESC[H ESC[2J`; `ESC[1;1H` and `ESC[f` count too). *(C0, 2026-11-11: the
+  first version counted any ED 0 reached at the home position, and a
+  transient prompt redrawn with `\r ESC[1A ESC[J` is one: with the prompt on
+  rows 0 and 1 it made every command read the whole screen. The trigger is
+  now the parser's memory of the control function before: nothing, not a
+  printed byte, a C0 control or another escape sequence, may sit between the
+  CUP/HVP and the ED.)* Nothing else counts: no cursor move (CUP, CUU, RI,
+  DECSC/DECRC, DECSTBM) and no other erase. Today's parser handles ED 0, 1 and 2; **ED 3 and RIS (ESC c) are not
   handled** (they neither erase nor move the cursor, so they bump nothing); a
   terminal that gains them bumps `erase_seq` there. *(The review of B1-B11
   first added a second trigger, a cursor low-water mark: the cursor going
@@ -644,9 +650,13 @@ cursor, while `active_term` exists.
   without erasing, and each made a capture that worked read the whole
   screen.)*
   **Known limit:** a program that homes the cursor and repaints the primary
-  screen without erasing it (no ED 2, no home ED 0) is captured from the
-  start row down, with no screen note: the rows it overwrote above the start
-  row are not read, and rows it repainted below it show their new text.
+  screen without erasing it (no ED 2, no ED 0 straight after a home) is
+  captured from the start row down, with no screen note: the rows it
+  overwrote above the start row are not read, and rows it repainted below it
+  show their new text. **A `clear` sent in any other form is not detected**
+  (the cursor reaches home another way, or a byte sits between the CUP and
+  the ED): its capture reads from the start row down, as a program that
+  repaints does.
 - *(review of B1-B11, 2026-11-11)* **The cursor's own row.** The range ends
   at the cursor's line, so a row the command wrote without a final newline
   (`printf foo`, `cat` of a file with no last newline, a progress line when

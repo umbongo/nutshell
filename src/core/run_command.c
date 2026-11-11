@@ -425,7 +425,7 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
     int screen = c->start_alt || t->alt_screen_active ||
                  t->reflow_seq != c->start_reflow_seq ||
                  t->region_scroll_seq != c->start_region_seq;
-    /* A clear (ED 2, or ED 0 from the home position): the numbering still
+    /* A clear (ED 2, or ED 0 straight after a CUP/HVP home): the numbering still
      * counts rows, but the rows from the start line on are no longer the
      * command's output. A cursor move is never read as one (spec section 10). */
     int redrawn = 0;

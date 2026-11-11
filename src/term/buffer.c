@@ -119,6 +119,7 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->reflow_seq             = 0;
     term->region_scroll_seq      = 0;
     term->erase_seq              = 0;
+    term->after_cup_home         = false;
     term->write_gen              = 0;
     term->grow_failing           = false;
     term->resize_failing         = false;

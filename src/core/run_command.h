@@ -75,15 +75,15 @@ typedef enum {
 #define RUNCMD_CAP_SCREEN        1u   /* the excerpt is the screen rows, not the command's own range:
                                        * the alternate screen was on at the start or the take, the
                                        * terminal reflowed, a scroll region scrolled, the display
-                                       * was erased (ED 2, or ED 0 from the home position: clear; ls),
+                                       * was erased (ED 2, or ED 0 straight after a CUP/HVP home: clear; ls),
                                        * or the range was empty or inverted. Set on every screen-rows result,
                                        * empty ones included; B8's one note ("the screen changed
                                        * while the command ran; this is the screen as it ended"). */
 #define RUNCMD_CAP_SCROLLED_OUT  4u   /* primary range: the start scrolled out of the terminal's history */
 #define RUNCMD_CAP_EMPTY         8u   /* the final text, after the echo drop and the blank-row trim,
                                        * is empty (on either path): "no output on the screen" */
-#define RUNCMD_CAP_REDRAWN      16u   /* with SCREEN: the cause was a clear (ED 2, ED 0 from the home
-                                       * position, or an empty or inverted range: clear; ls, cls) and
+#define RUNCMD_CAP_REDRAWN      16u   /* with SCREEN: the cause was a clear (ED 2, ED 0 straight after a CUP/HVP
+                                       * home, or an empty or inverted range: clear; ls, cls) and
                                        * the screen has content. Never set for the alternate screen,
                                        * a reflow or a region scroll. */
 #define RUNCMD_CAP_PROMPT       32u   /* primary range: the final text is empty, and the cursor row was
@@ -193,8 +193,8 @@ void runcmd_capture_start(RunCmdCapture *c, const Terminal *t);
  * stores the excerpt (through runcmd_cut with cap) and the flags:
  *  - alternate screen on at the start or now, reflow_seq or region_scroll_seq
  *    (primary-screen scrolls only) moved: the visible screen rows, SCREEN;
- *  - else erase_seq moved (an ED 2 on the primary screen, or an ED 0 with the
- *    cursor at row 0 column 0, which is how `clear` erases; ED 3 and RIS are
+ *  - else erase_seq moved (an ED 2 on the primary screen, or an ED 0 straight
+ *    after a CUP/HVP to row 0 column 0, which is how `clear` erases; ED 3 and RIS are
  *    not handled by the parser), or the primary range [start_line, cursor line)
  *    is empty or inverted: the screen rows, SCREEN | REDRAWN (just SCREEN when
  *    the screen is blank). A cursor move alone (a home, an up-and-erase of a

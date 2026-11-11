@@ -744,6 +744,54 @@ int test_term_erase_seq(void) {
     TEST_END();
 }
 
+/* ED 0 counts only straight after a CUP or HVP that homed the cursor (C0): any
+ * other way of reaching the home position, or anything between, does not. */
+int test_term_erase_seq_home_cup_only(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    /* a prompt on two rows, then \r ESC[1A ESC[J (a transient prompt redraw):
+     * the cursor is at home but did not get there by a CUP */
+    feed_str(t, "a\r\nb\r\x1b[1A\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 0);
+    /* CUP, HVP and the bare forms, straight before the ED, count once each */
+    feed_str(t, "\x1b[H\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 1);
+    feed_str(t, "\x1b[1;1H\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 2);
+    feed_str(t, "\x1b[f\x1b[0J");
+    ASSERT_EQ((int)t->erase_seq, 3);
+    feed_str(t, "\x1b[3;3H\x1b[1;1H\x1b[J");        /* the last CUP is the one that counts */
+    ASSERT_EQ((int)t->erase_seq, 4);
+    /* split over two writes: still straight after */
+    feed_str(t, "\x1b[H");
+    feed_str(t, "\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 5);
+    /* a printed byte, a C0 control, another control function between: not counted,
+     * though the cursor is back at the home position each time */
+    feed_str(t, "\x1b[Hx\b\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 5);
+    feed_str(t, "\x1b[H\r\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 5);
+    feed_str(t, "\x1b[H\x1b[m\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 5);
+    feed_str(t, "\x1b[H\x1b[?25h\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 5);
+    feed_str(t, "\x1b[H\x1b" "M\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 5);
+    feed_str(t, "\x1b[H\x1b]0;t\x07\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 5);
+    /* ED 2 counts as before, and an ED 0 after it needs its own CUP */
+    feed_str(t, "\x1b[2J");
+    ASSERT_EQ((int)t->erase_seq, 6);
+    feed_str(t, "\x1b[H\x1b[2J\x1b[J");
+    ASSERT_EQ((int)t->erase_seq, 7);
+    /* the alternate screen counts nothing, even after a CUP home */
+    feed_str(t, "\x1b[?1049h\x1b[H\x1b[J\x1b[2J");
+    ASSERT_EQ((int)t->erase_seq, 7);
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_extract_cursor_prefix(void) {
     TEST_BEGIN();
     Terminal *t = term_init(4, 20, 50);

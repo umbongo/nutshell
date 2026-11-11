@@ -166,13 +166,20 @@ typedef struct {
     uint32_t reflow_seq;
     uint32_t region_scroll_seq;
     /* One more, for a capture that must notice a clear. erase_seq: bumped on
-     * the PRIMARY screen by ED 2 (erase whole display) and by ED 0 issued with
-     * the cursor at row 0, column 0 (`clear` sends ESC[H ESC[J). Nothing else
-     * bumps it: no cursor move (CUP, CUU, RI, DECRC), no other erase. ED 3 and
-     * RIS (ESC c) are not handled by the parser, so they bump nothing and move
-     * nothing; the alternate screen does not touch it; a failed term_resize
-     * leaves it, a committed one does not touch it. */
+     * the PRIMARY screen by ED 2 (erase whole display) and by ED 0 straight
+     * after a CUP or HVP that placed the cursor at row 0, column 0 (`clear`
+     * sends ESC[H ESC[J): nothing, not a printed byte, a C0 control or another
+     * escape sequence, between the two. An ED 0 that reaches the home position
+     * any other way (a transient prompt's \r ESC[1A ESC[J) is not counted.
+     * Nothing else bumps it: no cursor move (CUP, CUU, RI, DECRC), no other
+     * erase. ED 3 and RIS (ESC c) are not handled by the parser, so they bump
+     * nothing and move nothing; the alternate screen does not touch it; a
+     * failed term_resize leaves it, a committed one does not touch it.
+     * after_cup_home: the parser's memory of that "straight after" (true from
+     * a CUP/HVP that homed the cursor until the next byte that is not the
+     * start of an escape sequence; not part of the interface). */
     uint32_t erase_seq;
+    bool after_cup_home;
     uint64_t write_gen;
 
     /* The debug log's session id (the "s3" in a log line; 0 prints "-").
