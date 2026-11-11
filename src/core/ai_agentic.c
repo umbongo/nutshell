@@ -1,5 +1,7 @@
 #include "ai_agentic.h"
 #include "json_validate.h"
+#include "json_parser.h"
+#include "run_command.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -128,6 +130,32 @@ int agentic_cap_tool_result(AiToolResult *r)
     return 1;
 }
 
+/* Copy an AiToolResult note (up to AI_TOOL_PART_NOTE_MAX) into a stored
+ * message's smaller buffer. A note that fits is copied whole. A longer one is
+ * cut on a UTF-8 boundary; when it ends with the cap's "\n" truncation line,
+ * that line is kept and the text before it shortened instead. */
+static void store_tool_note(char *dst, size_t dst_size, const char *note)
+{
+    size_t len = strlen(note);
+    if (len < dst_size) {
+        memcpy(dst, note, len + 1);
+        return;
+    }
+    size_t marker = strlen(AI_TOOL_TRUNC_NOTE);
+    size_t head = dst_size - 1;
+    size_t tail = 0;
+    if (len > marker + 1 && note[len - marker - 1] == '\n' &&
+        strcmp(note + len - marker, AI_TOOL_TRUNC_NOTE) == 0 &&
+        marker + 1 < dst_size) {
+        tail = marker + 1;           /* "\n" + marker */
+        head = dst_size - 1 - tail;
+    }
+    while (head > 0 && ((unsigned char)note[head] & 0xC0) == 0x80) head--;
+    memcpy(dst, note, head);
+    if (tail) memcpy(dst + head, note + len - tail, tail);
+    dst[head + tail] = '\0';
+}
+
 int agentic_add_tool_results(AiConversation *conv,
                               const AiToolCall *calls,
                               const AiToolResult *results, int n_results)
@@ -149,7 +177,10 @@ int agentic_add_tool_results(AiConversation *conv,
             memcpy(capped.content, results[i].content, results[i].content_len);
             capped.content[results[i].content_len] = '\0';
         }
-        (void)agentic_cap_tool_result(&capped);
+        /* run_command's output is bounded by its own executor (64 KiB
+         * escaped, with its own cut note): no second cap. */
+        if (!(calls && strcmp(calls[i].name, RUNCMD_TOOL_NAME) == 0))
+            (void)agentic_cap_tool_result(&capped);
 
         const char *content = capped.content ? capped.content : "";
         size_t content_len = capped.content ? capped.content_len : 0;
@@ -157,8 +188,8 @@ int agentic_add_tool_results(AiConversation *conv,
         free(capped.content);
         if (set_rc != 0) return -1;
 
-        memcpy(msg->tool_note, capped.tool_note, sizeof(msg->tool_note));
-        msg->tool_note[sizeof(msg->tool_note) - 1] = '\0';
+        store_tool_note(msg->tool_note, sizeof(msg->tool_note),
+                        capped.tool_note);
 
         strncpy(msg->tool_call_id, results[i].tool_use_id,
                 sizeof(msg->tool_call_id) - 1);
@@ -177,10 +208,38 @@ int agentic_add_tool_results(AiConversation *conv,
     return 0;
 }
 
-int agentic_truncation_warning(const char *tool_name, char *buf, size_t buf_size)
+int agentic_truncation_warning(const char *tool_name, size_t omitted_bytes,
+                               char *buf, size_t buf_size)
 {
     if (!buf || buf_size == 0) return 0;
-    return snprintf(buf, buf_size,
-                    "Tool result from '%s' was truncated to 1MB.",
-                    tool_name ? tool_name : "");
+    const char *name = tool_name ? tool_name : "";
+    if (omitted_bytes == 0)
+        return snprintf(buf, buf_size, "[%s output truncated at 64 KiB]", name);
+    return snprintf(buf, buf_size, "[%s output cut: %zu bytes omitted]", name,
+                    omitted_bytes);
+}
+
+int agentic_sanitize_tool_inputs(AiToolCall *calls, int n)
+{
+    if (!calls || n <= 0) return 0;
+    int fixed = 0;
+    for (int i = 0; i < n; i++) {
+        int bad = calls[i].overflowed;
+        if (!bad) {
+            JsonNode *root = json_parse(calls[i].input_json);
+            bad = !root || root->type != JSON_OBJECT;
+            if (root) json_free(root);
+        }
+        if (bad) {
+            memcpy(calls[i].input_json, "{}", 3);
+            fixed++;
+        }
+    }
+    return fixed;
+}
+
+int agentic_room_for_tool_round(const AiConversation *conv)
+{
+    if (!conv) return 0;
+    return conv->msg_count + 3 <= AI_MAX_MESSAGES;
 }

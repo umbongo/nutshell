@@ -287,7 +287,7 @@ void ai_chat_rebuild_display(AiChatData *d)
             chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
             if (clen > 200) {
                 char warn[256];
-                agentic_truncation_warning(msg->tool_name, warn, sizeof(warn));
+                agentic_truncation_warning(msg->tool_name, 0, warn, sizeof(warn));
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
             }
         }

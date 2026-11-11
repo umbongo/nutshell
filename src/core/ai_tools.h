@@ -10,7 +10,11 @@
 #define AI_TOOL_RESULT_MAX     (1024 * 1024)  /* 1MB dynamic buffer cap */
 #define AI_TOOL_DESC_MAX       512
 #define AI_TOOL_SCHEMA_MAX     2048
-#define AI_TOOL_NOTE_MAX       256   /* Nutshell's own text about a result */
+#define AI_TOOL_NOTE_MAX       256   /* Nutshell's own text about a stored message */
+/* An AiToolResult can carry a longer note than a stored message keeps: the
+ * composed notes of one round (a refusal, a limit, the truncation line) need
+ * the room. AiMessage.tool_note stays AI_TOOL_NOTE_MAX. */
+#define AI_TOOL_PART_NOTE_MAX  512
 
 /* Most tool calls one streamed reply can carry. A call at or past this index
  * (OpenAI "index", or the 65th tool_use block of an Anthropic reply) is not
@@ -60,7 +64,7 @@ typedef struct {
     /* Nutshell's own words about this result (a refusal, a rate limit, the
      * truncation line), never tool output: sent after the data block, not
      * inside it. Inline, so there is nothing to free or copy. */
-    char tool_note[AI_TOOL_NOTE_MAX];
+    char tool_note[AI_TOOL_PART_NOTE_MAX];
 } AiToolResult;
 
 typedef struct {

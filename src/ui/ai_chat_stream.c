@@ -153,9 +153,11 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
         ctx->stream_error = 1;
         return;
     }
-    /* Only a chunk that carries the word can be a "length" finish: skip the
-     * extra JSON parse for every other chunk of the stream. */
-    if (strstr(json, "\"length\"") && ai_stream_chunk_cut_off(json))
+    /* Only a chunk that carries the word can be a "length" (OpenAI style) or
+     * "max_tokens" (Anthropic) finish: skip the extra JSON parse for every
+     * other chunk of the stream. */
+    if ((strstr(json, "\"length\"") || strstr(json, "\"max_tokens\"")) &&
+        ai_stream_chunk_cut_off(json))
         ctx->cut_off = 1;
     char content_delta[1024] = "";
     char thinking_delta[1024] = "";
@@ -668,7 +670,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 /* Truncation warning */
                 if (results[ti].was_truncated) {
                     char warn[256];
-                    agentic_truncation_warning(call->name, warn, sizeof(warn));
+                    agentic_truncation_warning(call->name, 0, warn, sizeof(warn));
                     post_tool_msg(s, CHAT_ITEM_STATUS, warn);
                 }
 

@@ -60,7 +60,10 @@ int agentic_cap_tool_result(AiToolResult *r);
 /* Add tool result messages to the conversation.
  * Each result is capped (agentic_cap_tool_result) on a private copy before it
  * is stored, so the caller's results are never modified and still own their
- * content; tool_note is copied into the stored message.
+ * content; except a run_command result, whose executor has already bounded
+ * it. tool_note is copied into the stored message, cut on a UTF-8 boundary
+ * to AI_TOOL_NOTE_MAX - 1 bytes (the truncation line, when the cap added
+ * one, is kept and the note before it shortened).
  * calls: array of tool calls (used to copy tool names).
  * results: array of tool results.
  * n_results: number of results.
@@ -70,9 +73,25 @@ int agentic_add_tool_results(AiConversation *conv,
                              const AiToolResult *results, int n_results);
 
 /* Generate a truncation warning message.
- * tool_name: name of the tool that was truncated.
+ * tool_name: name of the tool whose output was cut.
+ * omitted_bytes: how many bytes were left out; 0 when not known, which says
+ * what the cap is: "[%s output truncated at 64 KiB]". Otherwise
+ * "[%s output cut: %zu bytes omitted]".
  * buf/size: output buffer.
- * Returns bytes written. */
-int agentic_truncation_warning(const char *tool_name, char *buf, size_t buf_size);
+ * Returns bytes written (snprintf's value), 0 for a NULL or empty buffer. */
+int agentic_truncation_warning(const char *tool_name, size_t omitted_bytes,
+                               char *buf, size_t buf_size);
+
+/* Make every call's stored input something a provider will accept back: an
+ * input that overflowed AI_TOOL_INPUT_MAX (a cut or spliced command must
+ * never be read as a different one) or does not parse as a JSON object (a
+ * reply cut off mid-call leaves an unterminated string) is replaced with
+ * "{}". The overflowed flag is left set. Returns how many were replaced. */
+int agentic_sanitize_tool_inputs(AiToolCall *calls, int n);
+
+/* 1 when the conversation has room for one tool round (the assistant turn,
+ * the results turn and a closing reply): msg_count + 3 <= AI_MAX_MESSAGES.
+ * 0 for a NULL conversation. */
+int agentic_room_for_tool_round(const AiConversation *conv);
 
 #endif /* NUTSHELL_AI_AGENTIC_H */

@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "ai_agentic.h"
+#include "run_command.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -240,10 +241,173 @@ int test_agentic_truncation_warning(void)
 {
     TEST_BEGIN();
     char buf[256];
-    int n = agentic_truncation_warning("web_search", buf, sizeof(buf));
+    int n = agentic_truncation_warning("web_search", 0, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "web_search") != NULL);
     ASSERT_TRUE(strstr(buf, "truncated") != NULL);
+    TEST_END();
+}
+
+/* The warning names the real cap, or the bytes omitted: never "1MB". */
+int test_agentic_truncation_warning_text(void)
+{
+    TEST_BEGIN();
+    char buf[256];
+    int n = agentic_truncation_warning("web_fetch", 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[web_fetch output truncated at 64 KiB]");
+    ASSERT_EQ(n, (int)strlen(buf));
+    n = agentic_truncation_warning("run_command", 1234, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[run_command output cut: 1234 bytes omitted]");
+    ASSERT_EQ(n, (int)strlen(buf));
+    ASSERT_NULL(strstr(buf, "1MB"));
+    /* A NULL name reads as empty; a NULL or empty buffer writes nothing. */
+    agentic_truncation_warning(NULL, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[ output truncated at 64 KiB]");
+    ASSERT_EQ(agentic_truncation_warning("x", 0, NULL, 10), 0);
+    ASSERT_EQ(agentic_truncation_warning("x", 0, buf, 0), 0);
+    /* A small buffer is cut, never overrun. */
+    char small[8];
+    agentic_truncation_warning("web_fetch", 5, small, sizeof(small));
+    ASSERT_EQ(strlen(small), 7);
+    TEST_END();
+}
+
+/* ---- The cut-off input and the room for a tool round (spec 4) -------------- */
+
+/* A 4000-byte unterminated heredoc: the JSON stops mid-string. Stored as-is
+ * it would be sent back to the provider as invalid input. */
+int test_agentic_sanitize_cut_heredoc(void)
+{
+    TEST_BEGIN();
+    AiToolCall c;
+    memset(&c, 0, sizeof(c));
+    strcpy(c.id, "toolu_1");
+    strcpy(c.name, RUNCMD_TOOL_NAME);
+    size_t n = (size_t)snprintf(c.input_json, sizeof(c.input_json),
+                                "{\"command\":\"cat > f <<'EOF'\\n");
+    while (n < 4000) c.input_json[n++] = 'x';
+    c.input_json[n] = '\0';
+    ASSERT_EQ(agentic_sanitize_tool_inputs(&c, 1), 1);
+    ASSERT_STR_EQ(c.input_json, "{}");
+    char cmd[RUNCMD_COMMAND_MAX + 1], note[RUNCMD_NOTE_MAX];
+    ASSERT_EQ(runcmd_parse_input(c.input_json, cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+
+    /* The same call marked overflowed: its bytes are replaced even when
+     * what was kept parses as an object (a spliced command must not run). */
+    AiToolCall o;
+    memset(&o, 0, sizeof(o));
+    strcpy(o.name, RUNCMD_TOOL_NAME);
+    strcpy(o.input_json, "{\"command\":\"rm -rf build-cache\"}");
+    o.overflowed = 1;
+    ASSERT_EQ(agentic_sanitize_tool_inputs(&o, 1), 1);
+    ASSERT_STR_EQ(o.input_json, "{}");
+    ASSERT_EQ(runcmd_parse_input(o.input_json, cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+    TEST_END();
+}
+
+int test_agentic_sanitize_keeps_valid(void)
+{
+    TEST_BEGIN();
+    AiToolCall c[5];
+    memset(c, 0, sizeof(c));
+    strcpy(c[0].input_json, "{\"command\":\"ls\"}");
+    strcpy(c[1].input_json, "");
+    strcpy(c[2].input_json, "[1]");
+    strcpy(c[3].input_json, "null");
+    strcpy(c[4].input_json, "{}");
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 5), 3);
+    ASSERT_STR_EQ(c[0].input_json, "{\"command\":\"ls\"}");
+    ASSERT_STR_EQ(c[1].input_json, "{}");
+    ASSERT_STR_EQ(c[2].input_json, "{}");
+    ASSERT_STR_EQ(c[3].input_json, "{}");
+    ASSERT_STR_EQ(c[4].input_json, "{}");
+    /* Nothing left to fix: a second pass changes nothing. */
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 5), 0);
+    ASSERT_EQ(agentic_sanitize_tool_inputs(NULL, 3), 0);
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 0), 0);
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, -1), 0);
+    TEST_END();
+}
+
+int test_agentic_room_for_tool_round(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    memset(&conv, 0, sizeof(conv));
+    conv.msg_count = 61;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv), 1);
+    conv.msg_count = 62;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv), 0);
+    conv.msg_count = 0;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv), 1);
+    conv.msg_count = AI_MAX_MESSAGES;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv), 0);
+    ASSERT_EQ(agentic_room_for_tool_round(NULL), 0);
+    TEST_END();
+}
+
+/* A run_command result is bounded by its executor (64 KiB, escaped): the
+ * generic cap must not cut or strip it a second time. Another tool's result
+ * of the same size is still capped. */
+int test_agentic_runcmd_result_not_capped(void)
+{
+    TEST_BEGIN();
+    size_t big = 70000;
+    char *a = (char *)malloc(big + 1);
+    char *b = (char *)malloc(big + 1);
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    memset(a, 'a', big); a[big] = '\0';
+    memset(b, 'b', big); b[big] = '\0';
+
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall calls[2];
+    memset(calls, 0, sizeof(calls));
+    strcpy(calls[0].name, RUNCMD_TOOL_NAME);
+    strcpy(calls[1].name, "web_fetch");
+    AiToolResult res[2];
+    memset(res, 0, sizeof(res));
+    res[0].content = a; res[0].content_len = big;
+    res[1].content = b; res[1].content_len = big;
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 2), 0);
+    ASSERT_EQ(conv.msg_count, 2);
+    ASSERT_EQ(conv.messages[0].content_len, big);
+    ASSERT_STR_EQ(conv.messages[0].tool_note, "");
+    ASSERT_TRUE(conv.messages[1].content_len < big);
+    ASSERT_STR_EQ(conv.messages[1].tool_note, AI_TOOL_TRUNC_NOTE);
+    ai_conv_reset(&conv);
+    free(a);
+    free(b);
+    TEST_END();
+}
+
+/* AiToolResult carries up to 512 bytes of note; a stored AiMessage keeps 256.
+ * A longer note is cut on a UTF-8 boundary, never mid-sequence. */
+int test_agentic_long_note_copy_cut_safely(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(sizeof(((AiToolResult *)0)->tool_note), AI_TOOL_PART_NOTE_MAX);
+    ASSERT_EQ(AI_TOOL_PART_NOTE_MAX, 512);
+    ASSERT_EQ(sizeof(((AiMessage *)0)->tool_note), AI_TOOL_NOTE_MAX);
+    ASSERT_EQ(AI_TOOL_NOTE_MAX, 256);
+
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    strcpy(call.name, "web_fetch");
+    AiToolResult r;
+    memset(&r, 0, sizeof(r));
+    /* 254 ASCII bytes then a 2-byte character that straddles byte 255. */
+    memset(r.tool_note, 'n', 254);
+    memcpy(r.tool_note + 254, "\xC3\xA9", 2);
+    memset(r.tool_note + 256, 'm', 100);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
+    ASSERT_EQ(strlen(conv.messages[0].tool_note), 254);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -536,9 +700,29 @@ int test_ai_stream_chunk_cut_off(void)
     ASSERT_EQ(ai_stream_chunk_cut_off("not json"), 0);
     ASSERT_EQ(ai_stream_chunk_cut_off(""), 0);
     ASSERT_EQ(ai_stream_chunk_cut_off(NULL), 0);
-    /* Anthropic's own stop reason is a different format and not reported here */
+    TEST_END();
+}
+
+/* Anthropic ends a cut-off reply with message_delta and stop_reason
+ * "max_tokens"; any other reason is not a cut-off. */
+int test_stream_cut_off_anthropic_max_tokens(void)
+{
+    TEST_BEGIN();
     ASSERT_EQ(ai_stream_chunk_cut_off(
-        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}"), 0);
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\","
+        "\"stop_sequence\":null},\"usage\":{\"output_tokens\":8096}}"), 1);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}"), 0);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}"), 0);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":null}}"), 0);
+    /* The word as text is not a stop reason. */
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\","
+        "\"text\":\"max_tokens\"}}"), 0);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{}}"), 0);
     TEST_END();
 }
 

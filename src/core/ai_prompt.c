@@ -1444,6 +1444,13 @@ int ai_stream_chunk_cut_off(const char *json)
             if (fr && strcmp(fr, "length") == 0) cut = 1;
         }
     }
+    /* Anthropic ends a cut-off reply with a message_delta whose
+     * delta.stop_reason is "max_tokens". */
+    JsonNode *delta = json_obj_get(root, "delta");
+    if (!cut && delta && delta->type == JSON_OBJECT) {
+        const char *sr = json_obj_str(delta, "stop_reason");
+        if (sr && strcmp(sr, "max_tokens") == 0) cut = 1;
+    }
     json_free(root);
     return cut;
 }
