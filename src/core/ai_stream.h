@@ -48,15 +48,17 @@ typedef struct AiStream {
     char   custom_url[256];
     char  *body;               /* AI_BODY_MAX bytes, rebuilt by the tool loop */
     size_t body_len;
-    char  *snapshot;           /* malloc'd copy of the terminal text taken at launch
-                                * (one per launch, reused by every tool-loop rebuild);
-                                * NULL when there is no terminal or it is empty.
-                                * Read-only for the thread, freed with the stream. */
+    char  *snapshot;           /* No longer set by the launch (R55): the terminal text the
+                                * request carries is frozen in conv (conv.snapshot,
+                                * ai_conv_snapshot_frame), the one copy every tool-loop
+                                * rebuild reuses. Freed with the stream if ever set. */
 
     /* Tool snapshot: tools[].tool_data points at search/fetch/debug_log below, never
      * at the panel's own copies, so a settings change or a closed panel
      * cannot reach a running tool. */
     int              has_tools;
+    int              run_command;  /* 1: the launch registered run_command (ai_provider_runcmd at launch);
+                                    * the thread's own copy, never re-derived from the panel */
     unsigned         tools_gen;   /* the panel's registry generation it came from */
     AiToolRegistry   tools;
     WebSearchContext search;

@@ -5,6 +5,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "ai_conv_guard.h"
 #include "json_parser.h"
 
 #ifdef _WIN32
@@ -723,13 +724,13 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 int last_msg = s->conv.msg_count - 1;
                 const AiAttachment *att2 = (last_msg >= 0)
                     ? s->conv.messages[last_msg].attachment : NULL;
-                /* A fresh delimiter for this request, the launch's snapshot. */
+                /* A fresh delimiter for this request, the launch's snapshot
+                 * (frozen in s->conv, on the same turn the launch put it). */
                 char delim2[AI_DELIM_MAX];
                 ai_delim_make(crypto_random_bytes, NULL, delim2);
                 AiBodyFrame frame2;
-                frame2.snapshot = s->snapshot;
                 frame2.delim = delim2;
-                frame2.snapshot_at = 0;
+                ai_conv_snapshot_frame(&s->conv, &frame2);
                 s->body_len = ai_build_request_body_frame(
                     &s->conv, att2,
                     s->tools_json[0] ? s->tools_json : NULL,
@@ -738,8 +739,13 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                     1, s->provider);
                 {
                     char json_err[256] = "";
-                    if (s->body_len == 0 ||
-                        !json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
+                    if (s->body_len == 0) {
+                        /* pairing, overflow or allocation: the row says which */
+                        post_tool_msg(s, CHAT_ITEM_STATUS,
+                                      ai_body_failure_text(&s->conv));
+                        loop_done = 1;
+                    } else if (!json_validate(s->body, s->body_len, json_err,
+                                              sizeof(json_err))) {
                         post_tool_msg(s, CHAT_ITEM_STATUS,
                             json_err[0] ? json_err : "JSON rebuild failed in tool loop");
                         loop_done = 1;

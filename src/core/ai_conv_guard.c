@@ -1,4 +1,5 @@
 #include "ai_conv_guard.h"
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- parts of a results turn ------------------------------------------------ */
@@ -211,4 +212,49 @@ int ai_conv_room_for_send(const AiConversation *conv, int open_batch,
     if (!conv) return 0;
     int notes = q && q->count > 0 ? q->count : 0;
     return conv->msg_count + 2 + (open_batch ? 1 : 0) + notes <= AI_MAX_MESSAGES;
+}
+
+/* Drop a snapshot unconditionally (ai_conv_snapshot_trim keeps a valid one). */
+static void snapshot_drop(AiConversation *conv)
+{
+    free(conv->snapshot);
+    conv->snapshot = NULL;
+    conv->snapshot_len = 0;
+    conv->snapshot_msg = -1;
+}
+
+int ai_conv_launch_snapshot(AiConversation *conv, const char *text, size_t len,
+                            int offers_runcmd)
+{
+    if (!conv) return 0;
+    int r = ai_conv_freeze_snapshot(conv, text, len, offers_runcmd);
+    if (r < 0) return -1;
+    if (r == 1) {
+        if (offers_runcmd)
+            ai_conv_snapshot_trim(conv);
+        else
+            snapshot_drop(conv);
+    }
+    return ai_conv_has_snapshot(conv);
+}
+
+void ai_conv_snapshot_frame(const AiConversation *conv, AiBodyFrame *frame)
+{
+    if (!frame) return;
+    if (ai_conv_has_snapshot(conv)) {
+        frame->snapshot = conv->snapshot;
+        frame->snapshot_at = conv->snapshot_msg + 1;
+    } else {
+        frame->snapshot = NULL;
+        frame->snapshot_at = 0;
+    }
+}
+
+const char *ai_body_failure_text(const AiConversation *conv)
+{
+    if (!ai_conv_tool_pairs_well_formed(conv))
+        return "[request not sent: tool calls and results do not pair up; "
+               "start a New Chat]";
+    return "[request not sent: the conversation does not fit in one request, "
+           "or Nutshell ran out of memory; start a New Chat]";
 }

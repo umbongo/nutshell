@@ -1,6 +1,8 @@
 #include "test_framework.h"
 #include "ai_conv_guard.h"
 #include "ai_agentic.h"
+#include "ai_tools.h"
+#include "run_command.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1436,5 +1438,280 @@ int test_agentic_results_return_values(void)
         ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
     }
     free_conv(c);
+    TEST_END();
+}
+
+/* ---- the launch's snapshot decision (Task B12, R48, R55) -------------------- */
+
+static size_t count_str(const char *hay, const char *needle)
+{
+    size_t n = 0;
+    for (const char *p = hay; (p = strstr(p, needle)) != NULL; p += strlen(needle)) n++;
+    return n;
+}
+
+/* The request body for conv as a launch builds it: the frame from the frozen
+ * snapshot, the tools array with or without run_command. */
+static size_t launch_body(const AiConversation *c, int with_runcmd, char *buf, size_t cap)
+{
+    static const char k_with[] =
+        "[{\"type\":\"function\",\"function\":{\"name\":\"run_command\"}}]";
+    AiBodyFrame f;
+    f.snapshot = NULL;
+    f.delim = "----nutshell-data-test";
+    f.snapshot_at = 0;
+    ai_conv_snapshot_frame(c, &f);
+    return ai_build_request_body_frame(c, NULL, with_runcmd ? k_with : NULL, &f,
+                                       buf, cap, 1, "openai");
+}
+
+static AiConversation *typed_conv(void)
+{
+    AiConversation *c = new_conv();   /* SYS, "go" */
+    return c;
+}
+
+int test_launch_snapshot_typed_turn_freezes(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = typed_conv();
+    char *body = (char *)malloc(65536);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(body);
+    if (c && body) {
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-A", 8, 1), 1);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 1);
+        ASSERT_EQ(c->snapshot_msg, 1);
+        ASSERT_STR_EQ(c->snapshot, "screen-A");
+        AiBodyFrame f;
+        f.snapshot = NULL; f.delim = NULL; f.snapshot_at = 99;
+        ai_conv_snapshot_frame(c, &f);
+        ASSERT_STR_EQ(f.snapshot, "screen-A");
+        ASSERT_EQ(f.snapshot_at, 2);
+        ASSERT_TRUE(launch_body(c, 1, body, 65536) > 0);
+        ASSERT_EQ((int)count_str(body, "screen-A"), 1);
+
+        /* a later typed turn moves it */
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "ok");
+        ai_conv_add(c, AI_ROLE_USER, "again");
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-B", 8, 1), 1);
+        ASSERT_EQ(c->snapshot_msg, 3);
+        ASSERT_STR_EQ(c->snapshot, "screen-B");
+    }
+    free(body);
+    free_conv(c);
+    TEST_END();
+}
+
+int test_launch_snapshot_after_note_keeps_question(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = typed_conv();
+    char *body = (char *)malloc(65536);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(body);
+    if (c && body) {
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-A", 8, 1), 1);
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "reply");
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "policy raised"), 0);
+        /* a run_command launch right after a note: the screen is not retaken */
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-NEW", 10, 1), 1);
+        ASSERT_STR_EQ(c->snapshot, "screen-A");
+        ASSERT_EQ(c->snapshot_msg, 1);
+        AiBodyFrame f;
+        f.snapshot = NULL; f.delim = NULL; f.snapshot_at = 0;
+        ai_conv_snapshot_frame(c, &f);
+        ASSERT_STR_EQ(f.snapshot, "screen-A");
+        ASSERT_EQ(f.snapshot_at, 2);
+        ASSERT_TRUE(launch_body(c, 1, body, 65536) > 0);
+        ASSERT_EQ((int)count_str(body, "screen-A"), 1);
+        ASSERT_EQ((int)count_str(body, "screen-NEW"), 0);
+        const char *blk = strstr(body, "screen-A");
+        const char *note = strstr(body, "policy raised");
+        ASSERT_NOT_NULL(blk); ASSERT_NOT_NULL(note);
+        if (blk && note) ASSERT_TRUE(blk < note);
+    }
+    free(body);
+    free_conv(c);
+    TEST_END();
+}
+
+int test_launch_snapshot_exec_note_does_not_carry_over(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = typed_conv();
+    char *body = (char *)malloc(65536);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(body);
+    if (c && body) {
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "[EXEC]ls[/EXEC]");
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "continue text"), 0);
+        /* an [EXEC] launch freezes a fresh one onto the note, as today */
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-X", 8, 0), 1);
+        ASSERT_EQ(c->snapshot_msg, c->msg_count - 1);
+        ASSERT_STR_EQ(c->snapshot, "screen-X");
+        ASSERT_TRUE(launch_body(c, 0, body, 65536) > 0);
+        ASSERT_EQ((int)count_str(body, "screen-X"), 1);
+
+        /* the provider switches to run_command with no typed turn since: the
+         * snapshot on the note is dropped and the request carries none */
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-Y", 8, 1), 0);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ASSERT_NULL(c->snapshot);
+        ASSERT_EQ(c->snapshot_msg, -1);
+        AiBodyFrame f;
+        f.snapshot = "stale"; f.delim = NULL; f.snapshot_at = 7;
+        ai_conv_snapshot_frame(c, &f);
+        ASSERT_NULL(f.snapshot);
+        ASSERT_EQ(f.snapshot_at, 0);
+        ASSERT_TRUE(launch_body(c, 1, body, 65536) > 0);
+        ASSERT_EQ((int)count_str(body, "screen-X"), 0);
+        ASSERT_EQ((int)count_str(body, "screen-Y"), 0);
+    }
+    free(body);
+    free_conv(c);
+    TEST_END();
+}
+
+int test_launch_snapshot_exec_after_note_is_fresh(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = typed_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-A", 8, 0), 1);
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "reply");
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "a note"), 0);
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-B", 8, 0), 1);
+        ASSERT_STR_EQ(c->snapshot, "screen-B");
+        ASSERT_EQ(c->snapshot_msg, 3);
+        ASSERT_EQ(c->messages[3].nutshell_note, 1);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+static void *refuse_alloc(size_t n) { (void)n; return NULL; }
+
+int test_launch_snapshot_alloc_failure_attaches_none(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = typed_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-A", 8, 1), 1);
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "reply");
+        ai_conv_add(c, AI_ROLE_USER, "second typed");
+        ai_prompt_set_alloc_for_test(refuse_alloc);
+        int rc = ai_conv_launch_snapshot(c, "screen-B", 8, 1);
+        ai_prompt_set_alloc_for_test(NULL);
+        ASSERT_EQ(rc, -1);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ASSERT_EQ(c->snapshot_msg, -1);
+        ASSERT_EQ((int)c->snapshot_len, 0);
+        AiBodyFrame f;
+        f.snapshot = "stale"; f.delim = NULL; f.snapshot_at = 7;
+        ai_conv_snapshot_frame(c, &f);
+        ASSERT_NULL(f.snapshot);
+        ASSERT_EQ(f.snapshot_at, 0);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+int test_launch_snapshot_edges(void)
+{
+    TEST_BEGIN();
+    /* no terminal text: the typed turn carries no block, the old one is gone */
+    AiConversation *c = typed_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-A", 8, 1), 1);
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "reply");
+        ai_conv_add(c, AI_ROLE_USER, "second typed");
+        ASSERT_EQ(ai_conv_launch_snapshot(c, NULL, 0, 1), 0);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "", 0, 0), 0);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+
+        /* a launch whose last message is not a USER turn and whose request
+         * lacks run_command takes none, and keeps no stale one */
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-C", 8, 1), 1);
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "reply2");
+        ASSERT_EQ(ai_conv_launch_snapshot(c, "screen-D", 8, 0), 0);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+    }
+    free_conv(c);
+    /* NULL conversation, and a conversation with no message */
+    ASSERT_EQ(ai_conv_launch_snapshot(NULL, "x", 1, 1), 0);
+    AiConversation *e = (AiConversation *)calloc(1, sizeof(*e));
+    ASSERT_NOT_NULL(e);
+    if (e) {
+        ai_conv_init(e, "m");
+        ASSERT_EQ(ai_conv_launch_snapshot(e, "x", 1, 1), 0);
+        ASSERT_EQ(ai_conv_has_snapshot(e), 0);
+    }
+    free_conv(e);
+    AiBodyFrame f;
+    f.snapshot = "stale"; f.delim = NULL; f.snapshot_at = 7;
+    ai_conv_snapshot_frame(NULL, &f);
+    ASSERT_NULL(f.snapshot);
+    ASSERT_EQ(f.snapshot_at, 0);
+    TEST_END();
+}
+
+int test_body_failure_text_names_cause(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        AiToolCall calls[2];
+        ASSERT_STR_EQ(ai_body_failure_text(c),
+            "[request not sent: the conversation does not fit in one request, "
+            "or Nutshell ran out of memory; start a New Chat]");
+        ASSERT_EQ(add_asst(c, 2, calls), 0);   /* open tool turn: does not pair */
+        ASSERT_STR_EQ(ai_body_failure_text(c),
+            "[request not sent: tool calls and results do not pair up; start a New Chat]");
+    }
+    free_conv(c);
+    ASSERT_STR_EQ(ai_body_failure_text(NULL),
+        "[request not sent: tool calls and results do not pair up; start a New Chat]");
+    TEST_END();
+}
+
+/* The launch's registry: the panel's tools plus run_command exactly when
+ * ai_provider_runcmd(provider, mode), serialised for the provider. */
+int test_launch_tools_json_matches_runcmd_predicate(void)
+{
+    TEST_BEGIN();
+    static const char *const provs[] = { "anthropic", "openai", "deepseek",
+                                         "moonshot", "gemini", "custom" };
+    static const int expect[3][6] = {
+        /* AUTO */ { 1, 1, 0, 1, 0, 0 },
+        /* ON   */ { 1, 1, 1, 1, 1, 1 },
+        /* OFF  */ { 0, 0, 0, 0, 0, 0 },
+    };
+    static const int modes[3] = { AI_RUNCMD_AUTO, AI_RUNCMD_ON, AI_RUNCMD_OFF };
+    AiToolRegistry *reg = (AiToolRegistry *)malloc(sizeof(*reg));
+    char *json = (char *)malloc(AI_TOOL_SCHEMA_MAX * AI_TOOL_MAX);
+    ASSERT_NOT_NULL(reg); ASSERT_NOT_NULL(json);
+    if (reg && json) {
+        for (int m = 0; m < 3; m++) {
+            for (int p = 0; p < 6; p++) {
+                int runcmd = ai_provider_runcmd(provs[p], modes[m]);
+                ASSERT_EQ(runcmd, expect[m][p]);
+                ai_tools_init(reg);
+                if (runcmd) ASSERT_EQ(runcmd_register(reg), 0);
+                json[0] = '\0';
+                if (strcmp(provs[p], "anthropic") == 0)
+                    ai_tools_serialize_anthropic(reg, json, AI_TOOL_SCHEMA_MAX * AI_TOOL_MAX);
+                else
+                    ai_tools_serialize_openai(reg, json, AI_TOOL_SCHEMA_MAX * AI_TOOL_MAX);
+                ASSERT_EQ(strstr(json, "\"run_command\"") != NULL ? 1 : 0, runcmd);
+                /* a request that offers run_command goes to a provider whose
+                 * tools the launch sends at all */
+                if (runcmd) ASSERT_EQ(ai_provider_tools(provs[p], modes[m]), 1);
+            }
+        }
+    }
+    free(reg); free(json);
     TEST_END();
 }

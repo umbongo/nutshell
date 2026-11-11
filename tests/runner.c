@@ -3231,6 +3231,14 @@ int test_tool_stream_index_reuse_overflows(void);
 int test_conv_drop_open_tool_turn(void);
 int test_agentic_results_oom_drops_open_turn(void);
 int test_body_refuses_malformed(void);
+int test_launch_snapshot_typed_turn_freezes(void);
+int test_launch_snapshot_after_note_keeps_question(void);
+int test_launch_snapshot_exec_note_does_not_carry_over(void);
+int test_launch_snapshot_exec_after_note_is_fresh(void);
+int test_launch_snapshot_alloc_failure_attaches_none(void);
+int test_launch_snapshot_edges(void);
+int test_body_failure_text_names_cause(void);
+int test_launch_tools_json_matches_runcmd_predicate(void);
 
 /* test_agentic_loop.c */
 int test_agentic_can_continue_initial(void);
@@ -8584,6 +8592,14 @@ int main(void) {
         failed += test_conv_drop_open_tool_turn();
         failed += test_agentic_results_oom_drops_open_turn();
         failed += test_body_refuses_malformed();
+        failed += test_launch_snapshot_typed_turn_freezes();
+        failed += test_launch_snapshot_after_note_keeps_question();
+        failed += test_launch_snapshot_exec_note_does_not_carry_over();
+        failed += test_launch_snapshot_exec_after_note_is_fresh();
+        failed += test_launch_snapshot_alloc_failure_attaches_none();
+        failed += test_launch_snapshot_edges();
+        failed += test_body_failure_text_names_cause();
+        failed += test_launch_tools_json_matches_runcmd_predicate();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);

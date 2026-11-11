@@ -77,4 +77,38 @@ int ai_conv_drop_open_tool_turn(AiConversation *conv);
  * Every request body builder returns 0 when this is 0. NULL gives 0. */
 int ai_conv_tool_pairs_well_formed(const AiConversation *conv);
 
+/* The launch's snapshot decision, in one place for the launch and the
+ * in-stream rebuild (spec decision 22, R48, R55). `text`/`len` is the
+ * terminal text the launch just read (NULL or 0: none). `offers_runcmd` is
+ * 1 when the request offers run_command (ai_provider_runcmd).
+ *   - last message a USER turn the user typed, or a Nutshell note and the
+ *     request does not offer run_command: freeze `text` onto it (a fresh
+ *     snapshot, as every launch took before the tool existed);
+ *   - last message a Nutshell note and the request offers run_command: no
+ *     fresh snapshot; the one the question carries is kept, but a snapshot
+ *     that sits on a note (an [EXEC] launch froze it there) is dropped, since
+ *     no typed turn has come since and the builder would drop it anyway;
+ *   - last message not a USER turn (or no message) and the request does not
+ *     offer run_command: none is kept (the builder would put an old one on
+ *     the last USER turn, stale).
+ * Returns 1 when the request carries a snapshot (ai_conv_has_snapshot), 0
+ * when it carries none (also a NULL conv), -1 when an allocation failed (no
+ * snapshot kept: launch without one rather than fail). */
+int ai_conv_launch_snapshot(AiConversation *conv, const char *text, size_t len,
+                            int offers_runcmd);
+
+/* Set frame->snapshot and frame->snapshot_at from the conversation's frozen
+ * snapshot: its text and snapshot_msg + 1 when ai_conv_has_snapshot(conv),
+ * else NULL and 0 (a fresh snapshot with snapshot_at 0 would land in the
+ * question of a request that offers run_command, which spec decision 22
+ * forbids). Leaves frame->delim alone. frame NULL: no-op. conv NULL: none. */
+void ai_conv_snapshot_frame(const AiConversation *conv, AiBodyFrame *frame);
+
+/* The status row that says why a request body could not be built (the builder
+ * returns 0 for pairing, overflow and allocation alike): the pairing text when
+ * !ai_conv_tool_pairs_well_formed(conv) (NULL included), else the text for an
+ * overflow or an allocation failure, which the builder does not tell apart.
+ * Static strings, never freed. */
+const char *ai_body_failure_text(const AiConversation *conv);
+
 #endif /* NUTSHELL_AI_CONV_GUARD_H */
