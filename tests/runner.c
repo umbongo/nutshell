@@ -3046,6 +3046,8 @@ int test_runcmd_capture_no_final_newline(void);
 int test_runcmd_capture_partial_row_at_cancel(void);
 int test_runcmd_capture_prompt_rules(void);
 int test_runcmd_capture_start_resets(void);
+int test_runcmd_capture_take_oom_cursor_row(void);
+int test_runcmd_capture_prompt_edges(void);
 int test_runcmd_results_every_row(void);
 int test_runcmd_results_executing_each_cause(void);
 int test_runcmd_results_typed_new_chat(void);
@@ -7145,6 +7147,8 @@ int main(void) {
     failed += test_runcmd_capture_partial_row_at_cancel();
     failed += test_runcmd_capture_prompt_rules();
     failed += test_runcmd_capture_start_resets();
+    failed += test_runcmd_capture_take_oom_cursor_row();
+    failed += test_runcmd_capture_prompt_edges();
     failed += test_runcmd_results_every_row();
     failed += test_runcmd_results_executing_each_cause();
     failed += test_runcmd_results_typed_new_chat();

@@ -59,6 +59,7 @@ static void feed_run(Terminal *t, const uint8_t *data, size_t from, size_t to)
 {
     if (to > from) {
         uint32_t erase = t->erase_seq;
+        term_reset_cursor_low(t);   /* a live mark: the parser has something to lower */
         term_process(t, (const char *)data + from, to - from);
         check_invariant(t);
         /* The capture counters: erase_seq never goes back; the low-water mark
@@ -96,6 +97,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             if (!(ok && changed) && t->cursor_low_line != low) __builtin_trap();
             if (ok && changed && t->cursor_low_line != 0) __builtin_trap();
             check_invariant(t);
+            term_reset_cursor_low(t);
             i += 3;
             run = i;
         } else if (data[i] == 0xFE && i + 1 < size) {

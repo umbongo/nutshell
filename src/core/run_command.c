@@ -381,7 +381,7 @@ static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *
 {
     *len_out = 0;
     size_t full = c->prompt_long ? 0 : term_extract_cursor_prefix(t, NULL, 0);
-    char *row = (char *)malloc(full + 1);
+    char *row = (char *)g_alloc(full + 1);
     if (!row) return NULL;
     row[0] = '\0';
     if (full > 0) (void)term_extract_cursor_prefix(t, row, full + 1);
@@ -447,7 +447,7 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
             if (!rest) {
                 oom = 1;
             } else if (rest_len > 0) {
-                char *joined = (char *)malloc(len + 1 + rest_len + 1);
+                char *joined = (char *)g_alloc(len + 1 + rest_len + 1);
                 if (!joined) {
                     oom = 1;
                 } else {
