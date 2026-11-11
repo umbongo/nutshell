@@ -287,13 +287,17 @@ fail:
     return -1;
 }
 
-int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len)
+int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len,
+                            int offers_runcmd)
 {
-    /* Only a typed USER turn takes a snapshot: a note of Nutshell's own leaves
-     * the one the question already carries (spec decision 22). */
+    /* A request that offers run_command: only a typed USER turn takes a
+     * snapshot, a note of Nutshell's own leaves the one the question already
+     * carries. A request that does not is built as it always was, a fresh
+     * snapshot on its last USER turn, marked note or not (spec decision 22,
+     * R48). */
     if (!conv || conv->msg_count <= 0 ||
         conv->messages[conv->msg_count - 1].role != AI_ROLE_USER ||
-        conv->messages[conv->msg_count - 1].nutshell_note)
+        (offers_runcmd && conv->messages[conv->msg_count - 1].nutshell_note))
         return 1;
     free(conv->snapshot);
     conv->snapshot = NULL;
@@ -1073,6 +1077,16 @@ static size_t emit_tool_view(const ToolView *v, const AiBodyFrame *frame,
 
 /* ---- Tool turns sent as text (spec decision 16) ---- */
 
+/* 1 when the request's tools array offers run_command: a non-empty tools_json
+ * that names it. The one test turn_as_text and the snapshot rule in
+ * build_body_core share (spec decision 22, R48): a request that does not
+ * offer run_command is built exactly as it was before the tool existed. */
+static int tools_offer_runcmd(const char *tools_json)
+{
+    return tools_json && tools_json[0] != '\0' &&
+           strstr(tools_json, "\"" RUNCMD_TOOL_NAME "\"") != NULL;
+}
+
 /* 1 when an assistant turn with tool calls goes out as text, not as tool_use /
  * tool_calls blocks. Ids, reasoning and signatures go back only to the
  * provider and model that issued them, and a request whose tools lack
@@ -1093,8 +1107,7 @@ static int turn_as_text(const AiMessage *msg, const char *tools_json,
     for (int t = 0; t < msg->n_tool_calls; t++)
         if (strcmp(msg->tool_calls[t].name, RUNCMD_TOOL_NAME) == 0) has_runcmd = 1;
 
-    if (has_runcmd &&
-        !(has_tools && strstr(tools_json, "\"" RUNCMD_TOOL_NAME "\"")))
+    if (has_runcmd && !tools_offer_runcmd(tools_json))
         return 1;
     if (!msg->tool_provider[0]) return 0;
     if (!has_tools) return 1;
@@ -1213,10 +1226,14 @@ static size_t build_body_core(const AiConversation *conv,
 
     /* The data block goes in the last user message (never a tool result), or
      * in message snapshot_at - 1 while no user-typed message follows it (the
-     * frozen snapshot: it stays with the turn it was taken for). */
+     * frozen snapshot: it stays with the turn it was taken for). Only a request
+     * that offers run_command keeps it on the question; one that does not is
+     * built exactly as it was before the tool existed, the block on the last
+     * USER message, marked note or not, whatever snapshot_at says (spec
+     * decision 22, R48). */
     int block_idx = -1;
     if (frame && frame->delim && frame->snapshot && frame->snapshot[0]) {
-        if (frame->snapshot_at <= 0) {
+        if (frame->snapshot_at <= 0 || !tools_offer_runcmd(tools_json)) {
             for (int k = conv->msg_count - 1; k >= 0; k--)
                 if (conv->messages[k].role == AI_ROLE_USER) { block_idx = k; break; }
         } else {

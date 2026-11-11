@@ -208,7 +208,8 @@ it was.
   maintainer on `kimi-k3.1-pro`: sent on tool-call turns only, `""` when
   none (~1037-1050), within the existing 16 KiB `AI_REASONING_MAX`. Nothing
   in this spec changes a byte of a Moonshot request body for a conversation
-  `[EXEC]` would also produce; a pinned-body test guards it. (Kimi's guide,
+  `[EXEC]` would also produce, notes and snapshot included (decision 22,
+  R48); pinned-body tests guard it. (Kimi's guide,
   https://platform.kimi.ai/docs/guide/use-thinking-models, asks for "the
   complete assistant message ... as-is", which would add plain turns; not
   done, since the shipped form works.) Risks: a mis-split call becomes
@@ -899,7 +900,10 @@ fit never cuts it.
   text; the frozen snapshot leaves the original question's bytes the same
   in round 1 and round 2; DeepSeek with a cut reasoning is not sent;
   a pinned Moonshot body is byte-identical before and after this PR for a
-  conversation `[EXEC]` would also produce; Gemini's signature on the first
+  conversation `[EXEC]` would also produce, among them one that ends on a
+  note the door marked and a plain `[EXEC]` exchange, each built with the
+  snapshot both ways (`snapshot_at` 0, and frozen for a launch that does not
+  offer run_command) *(review of the fix wave, 2026-11-11, R48)*; Gemini's signature on the first
   call only. *(critique 2)* Aging: body size across 20 rounds stays under
   the budget, the stub text exact, the newest two rounds untouched; the
   context meter across N rounds; the hint present for a 400 naming
@@ -958,7 +962,9 @@ run_command call never runs under that count.
   `int nutshell_note`, set to 1 only by this door (the direct append and
   `ai_conv_flush_notes`) and 0 for every other message (`ai_conv_add`
   clears it); it tells decision 22 which USER turns are Nutshell's own, so
-  the frozen snapshot stays on the question while only notes follow.
+  the frozen snapshot stays on the question while only notes follow *(review
+  of the fix wave, 2026-11-11, R48: in a request that offers run_command
+  only; the mark changes nothing in an `[EXEC]` request)*.
 - *(review of B1-B11, 2026-11-11)* **The flush drops nothing.**
   `ai_conv_flush_notes` appends the queued notes in order and stops at the
   first one the conversation cannot store; that note and every later one stay
@@ -1135,12 +1141,23 @@ its own request (a typed message, Retry of a question, a continue launch)
 takes a fresh snapshot and freezes it to that turn; a launch whose
 conversation ends on tool results (a run_command resume, Retry from
 results) or on a USER note Nutshell queued or appended (see the bullet below)
-takes none. *(review of B1-B11, 2026-11-11, Ruling R44)* A continue text that
-launched its own request is not a Nutshell note for this rule (it stays an
-unmarked USER turn and takes a fresh snapshot, exactly as today, so a body
-the `[EXEC]` path also produces does not change by a byte); one the door
-queued behind an open run_command turn (decision 19's "older `[EXEC]`
-batch") is a marked note. Every request attaches the frozen snapshot
+takes none. *(review of the fix wave, 2026-11-11, R48; replaces review of
+B1-B11's R44 wording, which exempted only a continue text that launched its
+own request)* **The note mark and the question-keeping rule apply to a request
+that offers run_command, and to no other.** A request that does not offer it
+(no tools array, or tools without `run_command`: every `[EXEC]` request, on
+Moonshot and everywhere else) is built exactly as it was before the tool
+existed, in every case: a fresh snapshot on the last USER turn, marked note
+or not, whatever `snapshot_at` says. So a body the `[EXEC]` path also
+produces does not change by a byte, whichever USER turns the door marked
+(a continue text the door queued behind an open run_command turn, decision
+19's "older `[EXEC]` batch", is a marked note, and in an `[EXEC]` request it
+is just the last USER turn). "Offers run_command" is the one test
+`turn_as_text` already makes on the request's `tools_json` (non-empty and
+naming `run_command`); the builder decides from the request it is given, and
+`ai_conv_freeze_snapshot(conv, text, len, offers_runcmd)` takes whether the
+launch offers it (the launch passes `ai_chat_provider_runcmd(d)`). Only a
+request that offers run_command attaches the frozen snapshot
 to `messages[snapshot_msg]` while that is a typed USER turn and only
 Nutshell's own USER notes follow it, and none otherwise *(review of B1-B11,
 2026-11-11: reworded from "while that is the last USER turn"; the bullet
@@ -1169,16 +1186,21 @@ today.
   set only by the note door (decision 19: `ai_conv_add_user_note`'s direct
   append and `ai_conv_flush_notes`), cleared by `ai_conv_add`, carried by
   copy and take (struct copy). An older `[EXEC]` continue text that the door queues
-  behind an open run_command turn counts as Nutshell's own; one that launches
-  its own request does not (R44). `AiBodyFrame.snapshot_at` k > 0
+  behind an open run_command turn counts as Nutshell's own *(review of the
+  fix wave, 2026-11-11, R48: the mark is read only by a request that offers
+  run_command; an `[EXEC]` request ignores it, see the paragraph above, so
+  every Nutshell USER turn may go through the door without changing an
+  `[EXEC]` body)*. For such a request `AiBodyFrame.snapshot_at` k > 0
   attaches to message k − 1 while it is a USER turn that is not itself a note
   (`nutshell_note` 0: a block is only ever taken for a message the user typed,
   so an index that points at a note is invalid: `ai_conv_snapshot_trim`
   clears it and the builder attaches nothing) and every USER turn after it
   has `nutshell_note`; `snapshot_at` 0 keeps trust's last-USER rule
   unchanged. `ai_conv_freeze_snapshot` refuses (returns 1, nothing changed)
-  when the last message is a note, so only a typed USER turn takes a fresh
-  snapshot. A body for a conversation with no note in it is byte for byte
+  when the last message is a note and the launch offers run_command, so only
+  a typed USER turn takes a fresh snapshot there; a launch that does not
+  offer it freezes onto its last USER turn, note or not (R48), and the
+  builder then ignores the index. A body for a conversation with no note in it is byte for byte
   what it was.
 - *(review of B1-B11, 2026-11-11)* **Bookkeeping helpers.**
   `ai_conv_has_snapshot(conv)` is `snapshot != NULL` (NULL-safe; a

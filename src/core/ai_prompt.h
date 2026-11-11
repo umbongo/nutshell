@@ -109,15 +109,15 @@ typedef struct {
     char tool_model[64];
 
     /* 1 on a USER turn that Nutshell wrote (a policy note, the policy-blocked
-     * and quoted NOTEs, an [EXEC] continue text the door queued behind an open
-     * run_command turn), 0 on one the user typed, on a continue text that
-     * launched its own request (spec decision 22, R44) and on every other role.
-     * Set only by the note door (ai_conv_add_user_note's
+     * and quoted NOTEs, an [EXEC] continue text), 0 on one the user typed and
+     * on every other role. Set only by the note door (ai_conv_add_user_note's
      * direct append and ai_conv_flush_notes, ai_conv_guard.c); ai_conv_add
-     * clears it; a struct copy (ai_conv_copy, ai_conv_take) carries it. The
-     * frozen snapshot stays on its question while only such turns follow it,
-     * and ai_conv_freeze_snapshot refuses to attach one to such a turn (spec
-     * decision 22, review of B1-B11, 2026-11-11). */
+     * clears it; a struct copy (ai_conv_copy, ai_conv_take) carries it. In a
+     * request that offers run_command the frozen snapshot stays on its question
+     * while only such turns follow it, and ai_conv_freeze_snapshot refuses to
+     * attach one to such a turn; a request that does not offer run_command
+     * ignores the mark (spec decision 22, review of B1-B11 and of the fix wave,
+     * 2026-11-11, R48). */
     int nutshell_note;
 } AiMessage;
 
@@ -169,13 +169,20 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src);
 void ai_prompt_set_alloc_for_test(void *(*alloc)(size_t));
 
 /* Freeze `text` (len bytes) as the conversation's snapshot, attached to the
- * LAST message when that is a USER turn the user typed: any older snapshot is
- * freed, then the new one is stored with snapshot_msg = msg_count - 1 and 0 is
- * returned. When the last message is not a user turn, or is one Nutshell wrote
- * (nutshell_note), or conv is NULL, nothing changes and 1 is returned. A NULL or empty text leaves no snapshot (0). An
- * allocation failure leaves none either and returns -1: a snapshot that
- * cannot be kept is recorded as absent, never half there. */
-int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len);
+ * LAST message when that is a USER turn: any older snapshot is freed, then the
+ * new one is stored with snapshot_msg = msg_count - 1 and 0 is returned. When
+ * the last message is not a user turn, or conv is NULL, nothing changes and 1
+ * is returned. `offers_runcmd` says whether the launch's request offers
+ * run_command (the same test the builder makes on its tools array): only then
+ * is a USER turn Nutshell wrote (nutshell_note) refused too (nothing changes,
+ * 1), because only such a request keeps the snapshot on its question (spec
+ * decision 22, R48); a request without run_command is built as before the
+ * tool existed, with a fresh snapshot on its last USER turn, marked note or
+ * not. A NULL or empty text leaves no snapshot (0). An allocation failure
+ * leaves none either and returns -1: a snapshot that cannot be kept is
+ * recorded as absent, never half there. */
+int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len,
+                            int offers_runcmd);
 
 /* 1 when the conversation has a frozen snapshot (snapshot != NULL), else 0.
  * NULL-safe. Keyed on the pointer, never on snapshot_msg: a zero-filled

@@ -609,7 +609,7 @@ int test_snapshot_frozen_question_bytes_same(void)
         ASSERT_EQ(c->snapshot_msg, -1);
         ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
         ai_conv_add(c, AI_ROLE_USER, "Q");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7, 1), 0);
         ASSERT_EQ(c->snapshot_msg, 1);
         ASSERT_EQ((int)c->snapshot_len, 7);
         ASSERT_STR_EQ(c->snapshot, "screen1");
@@ -620,7 +620,7 @@ int test_snapshot_frozen_question_bytes_same(void)
 
         add_runcmd_round(c, "r1");
         /* the last message is a results turn: a new freeze is refused */
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 1);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 1), 1);
         ASSERT_STR_EQ(c->snapshot, "screen1");
         ASSERT_EQ(c->snapshot_msg, 1);
 
@@ -659,11 +659,11 @@ int test_snapshot_new_user_turn_moves_it(void)
         ai_conv_init(c, "test-model");
         ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
         ai_conv_add(c, AI_ROLE_USER, "Q");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7, 1), 0);
         add_runcmd_round(c, "r1");
         ai_conv_add(c, AI_ROLE_ASSISTANT, "done");
         ai_conv_add(c, AI_ROLE_USER, "next question");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen3", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen3", 7, 1), 0);
         ASSERT_EQ(c->snapshot_msg, c->msg_count - 1);
         ASSERT_STR_EQ(c->snapshot, "screen3");
 
@@ -708,16 +708,16 @@ int test_snapshot_freeze_edges(void)
     ASSERT_NOT_NULL(c);
     if (c) {
         ai_conv_init(c, "m");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "x", 1), 1);   /* no message at all */
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "x", 1, 1), 1);   /* no message at all */
         ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "x", 1), 1);   /* last is the system prompt */
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "x", 1, 1), 1);   /* last is the system prompt */
         ASSERT_NULL(c->snapshot);
         ai_conv_add(c, AI_ROLE_USER, "Q");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "abc", 3), 0);
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, NULL, 0), 0);  /* freezes nothing, drops the old */
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "abc", 3, 1), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, NULL, 0, 1), 0);  /* freezes nothing, drops the old */
         ASSERT_NULL(c->snapshot);
         ASSERT_EQ(c->snapshot_msg, -1);
-        ASSERT_EQ(ai_conv_freeze_snapshot(NULL, "x", 1), 1);
+        ASSERT_EQ(ai_conv_freeze_snapshot(NULL, "x", 1, 1), 1);
         ASSERT_EQ((int)c->snapshot_len, 0);
     }
     free_conv(c);
@@ -743,7 +743,7 @@ int test_snapshot_copy_take_free(void)
         ai_conv_init(b, "m2");
         ai_conv_add(a, AI_ROLE_SYSTEM, "SYS");
         ai_conv_add(a, AI_ROLE_USER, "Q");
-        ASSERT_EQ(ai_conv_freeze_snapshot(a, "the screen", 10), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(a, "the screen", 10, 1), 0);
 
         /* copy duplicates */
         ASSERT_EQ(ai_conv_copy(b, a), 0);
@@ -760,7 +760,7 @@ int test_snapshot_copy_take_free(void)
         if (t) {
             ai_conv_init(t, "m3");
             ai_conv_add(t, AI_ROLE_USER, "old");
-            ai_conv_freeze_snapshot(t, "older", 5);
+            ai_conv_freeze_snapshot(t, "older", 5, 1);
             char *was = a->snapshot;
             ai_conv_take(t, a);
             ASSERT_TRUE(t->snapshot == was);
@@ -786,7 +786,7 @@ int test_snapshot_copy_take_free(void)
         ai_conv_reset(a);
         ai_conv_add(a, AI_ROLE_SYSTEM, "SYS");
         ai_conv_add(a, AI_ROLE_USER, "Q");
-        ai_conv_freeze_snapshot(a, "the screen", 10);
+        ai_conv_freeze_snapshot(a, "the screen", 10, 1);
         g_snap_alloc_calls = 0;
         ai_prompt_set_alloc_for_test(snap_failing_alloc);
         int rc = ai_conv_copy(b, a);
@@ -817,7 +817,7 @@ static AiConversation *frozen_after_round(void)
     ai_conv_init(c, "test-model");
     ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
     ai_conv_add(c, AI_ROLE_USER, "Q");
-    ai_conv_freeze_snapshot(c, "screen1", 7);
+    ai_conv_freeze_snapshot(c, "screen1", 7, 1);
     add_runcmd_round(c, "r1");
     return c;
 }
@@ -922,7 +922,7 @@ int test_snapshot_typed_turn_after_results_drops_it(void)
         ASSERT_EQ(count_of(buf, "screen1"), 0);
 
         /* a freeze on the typed turn attaches there, once */
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 1), 0);
         ASSERT_EQ(c->snapshot_msg, c->msg_count - 1);
         f = frozen_frame(c);
         ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
@@ -951,20 +951,107 @@ int test_snapshot_freeze_refused_on_note(void)
     if (c) {
         ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
         /* the last message is Nutshell's note: nothing changes */
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 1);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 1), 1);
         ASSERT_NOT_NULL(c->snapshot);
         if (c->snapshot) ASSERT_STR_EQ(c->snapshot, "screen1");
         ASSERT_EQ((int)c->snapshot_len, 7);
         ASSERT_EQ(c->snapshot_msg, 1);
         /* a NULL text is refused the same way, the old snapshot kept */
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, NULL, 0), 1);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, NULL, 0, 1), 1);
         ASSERT_NOT_NULL(c->snapshot);
         if (c->snapshot) ASSERT_STR_EQ(c->snapshot, "screen1");
         /* only a typed USER turn takes one */
         ai_conv_add(c, AI_ROLE_USER, "typed");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 1), 0);
         ASSERT_STR_EQ(c->snapshot, "screen2");
     }
+    free_conv(c);
+    TEST_END();
+}
+
+/* The switch, both sides (R48, review of the fix wave, 2026-11-11): the same
+ * conversation and frame built for a request that offers run_command keeps the
+ * snapshot on the question while a marked note follows; built for one that does
+ * not it is as it always was, the block on the last USER turn, note or not. */
+static int user_msg_has(const char *body, int nth, const char *needle)
+{
+    /* the nth {"role":"user" message of the body (0 = the first, the question;
+     * -1 = the last) holds needle before the next {"role" or the end */
+    const char *starts[16];
+    int ns = 0;
+    for (const char *p = strstr(body, "{\"role\":\"user\""); p && ns < 16;
+         p = strstr(p + 1, "{\"role\":\"user\""))
+        starts[ns++] = p;
+    if (nth >= ns || ns == 0) return 0;
+    const char *s = starts[nth < 0 ? ns - 1 : nth];
+    const char *e = strstr(s + 1, "{\"role\":");
+    const char *hit = strstr(s, needle);
+    return hit && (!e || hit < e);
+}
+
+int test_snapshot_switch_offers_runcmd(void)
+{
+    TEST_BEGIN();
+    static const char *const k_other_tools = "[{\"name\":\"web_fetch\"}]";
+    static const char *const k_provs[2] = { "openai", "anthropic" };
+    AiConversation *c = frozen_after_round();
+    char *buf = (char *)malloc(BODY_CAP);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
+    if (c && buf) {
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ASSERT_EQ(c->messages[c->msg_count - 1].nutshell_note, 1);
+        AiBodyFrame f = frozen_frame(c);          /* snapshot_at 2: the question */
+        for (int p = 0; p < 2; p++) {
+            /* offers run_command: the block stays on Q, the note carries none */
+            ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, k_provs[p]) > 0);
+            ASSERT_EQ(count_of(buf, "screen1"), 1);
+            ASSERT_EQ(user_msg_has(buf, -1, "policy raised"), 1);
+            ASSERT_EQ(user_msg_has(buf, -1, "screen1"), 0);
+            ASSERT_EQ(user_msg_has(buf, 0, "screen1"), 1);
+
+            /* no tools array, or tools without run_command: the block is on the
+             * last USER turn, the note, as it was before the tool existed */
+            const char *const other[2] = { NULL, k_other_tools };
+            for (int o = 0; o < 2; o++) {
+                ASSERT_TRUE(ai_build_request_body_frame(c, NULL, other[o], &f, buf, BODY_CAP, 1, k_provs[p]) > 0);
+                ASSERT_EQ(count_of(buf, "screen1"), 1);
+                ASSERT_EQ(user_msg_has(buf, -1, "policy raised"), 1);
+                ASSERT_EQ(user_msg_has(buf, -1, "screen1"), 1);
+                ASSERT_EQ(user_msg_has(buf, 0, "screen1"), 0);
+            }
+        }
+
+        /* the freeze: refused on a note only when the launch offers run_command */
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 1), 1);
+        ASSERT_STR_EQ(c->snapshot, "screen1");
+        ASSERT_EQ(c->snapshot_msg, 1);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 0), 0);
+        ASSERT_STR_EQ(c->snapshot, "screen2");
+        ASSERT_EQ(c->snapshot_msg, c->msg_count - 1);
+        f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, NULL, &f, buf, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(buf, "screen1"), 0);
+        ASSERT_EQ(count_of(buf, "screen2"), 1);
+        ASSERT_EQ(user_msg_has(buf, -1, "screen2"), 1);
+
+        /* a typed turn after the question: no run_command drops nothing of
+         * today's rule (the block goes on the last USER turn whatever
+         * snapshot_at says); with run_command the block is dropped, as before */
+        ai_conv_reset(c);
+        ai_conv_init(c, "test-model");
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "Q");
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7, 0), 0);
+        add_runcmd_round(c, "r1");
+        ai_conv_add(c, AI_ROLE_USER, "typed again");
+        f = frozen_frame(c);                      /* still points at Q */
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, NULL, &f, buf, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(user_msg_has(buf, -1, "screen1"), 1);
+        ASSERT_EQ(user_msg_has(buf, -1, "typed again"), 1);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(buf, "screen1"), 0);
+    }
+    free(buf);
     free_conv(c);
     TEST_END();
 }
@@ -1043,7 +1130,7 @@ int test_snapshot_has_and_trim(void)
         ASSERT_EQ(ai_conv_has_snapshot(c), 0);
         ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
         ai_conv_add(c, AI_ROLE_USER, "Q");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen1", 7, 1), 0);
         ASSERT_EQ(ai_conv_has_snapshot(c), 1);
 
         /* a valid snapshot is kept */
@@ -1063,7 +1150,7 @@ int test_snapshot_has_and_trim(void)
 
         /* a pop that left something else at the index clears it too */
         ai_conv_add(c, AI_ROLE_USER, "Q2");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 1), 0);
         ai_msg_free(&c->messages[--c->msg_count]);
         ai_conv_add(c, AI_ROLE_ASSISTANT, "reply");
         ai_conv_snapshot_trim(c);
@@ -1072,7 +1159,7 @@ int test_snapshot_has_and_trim(void)
 
         /* a snapshot with a negative index is not valid either */
         ai_conv_add(c, AI_ROLE_USER, "Q3");
-        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen3", 7), 0);
+        ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen3", 7, 1), 0);
         c->snapshot_msg = -1;
         ai_conv_snapshot_trim(c);
         ASSERT_EQ(ai_conv_has_snapshot(c), 0);
