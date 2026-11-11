@@ -240,14 +240,18 @@ it was.
   not, none. *(2026-11-11, maintainer, "off until tested": the rule applies
   only to a request whose tools array offers `run_command`, so a default
   DeepSeek user, Commands as tool calls on Automatic, sees no change from
-  `6432ca0`. A DeepSeek request with web tools only, or with no tools, is
-  built exactly as at `6432ca0` and is never refused for a cut reasoning.
+  `6432ca0` in this rule. A DeepSeek request with web tools only, or with no
+  tools, gets no `reasoning_content` and is never refused for a cut
+  reasoning, as at `6432ca0`; its other bytes can still differ from `6432ca0`
+  where decision 23's pinned conversations do not reach (see decision 23).
   This does not repair DeepSeek's existing web-tool rounds on a thinking
   model: that waits for the settling test below.)* **The settling test**, on each of
   `deepseek-chat`, `deepseek-coder` and `deepseek-reasoner` with the
   setting On: a run_command reply, Run, and the resumed request; and one
-  web_search round with the setting Off. Pass on all: the table row may
-  flip to 1. A 400 naming `reasoning_content` as forbidden on a model:
+  web_search round with the setting On too, so that run_command is offered
+  and the field is sent (with the setting Off a DeepSeek request sends no
+  `reasoning_content`, so a round with it exercises nothing). Pass on all:
+  the table row may flip to 1. A 400 naming `reasoning_content` as forbidden on a model:
   DeepSeek's rule reverts to today's (none sent) and the row stays 0;
   README says so.
 - **Gemini:** Off on Automatic, in with On *(critique 2)*. Nutshell calls Gemini's OpenAI-compatible endpoint,
@@ -1322,10 +1326,14 @@ applies only to a `deepseek` request whose tools array offers `run_command`
 (`tools_offer_runcmd`, the one switch the refusal and the body both read:
 `deepseek_reasoning_applies`). A DeepSeek request that does not offer it
 (web tools only, or no tools: Commands as tool calls Off, or Automatic, which
-is Off for DeepSeek) is built exactly as at `6432ca0`: no `reasoning_content`
-on any turn, never refused for a cut reasoning, whatever the stored turns
-hold. The row above can therefore show only on a request that offered
-`run_command`, so its advice is true: the same conversation builds once the
+is Off for DeepSeek) gets no `reasoning_content` on any turn and is never
+refused for a cut reasoning, whatever the stored turns hold: this rule is
+as at `6432ca0`. The whole body is byte-identical to `6432ca0` for the pinned
+conversations below (a plain exchange and a web-tool round, every call with
+an id), not for every web-only conversation: a tool turn left from another
+provider or model goes out as text (`turn_as_text`), and a call without an
+id is sent as `call_<n>`. The row above can therefore show only on a request
+that offered `run_command`, so its advice is true: the same conversation builds once the
 option is Off. Pinned by `test_body_deepseek_pinned_no_runcmd` (four bodies
 captured from `git archive 6432ca0`, two conversations on `deepseek-reasoner`
 and `deepseek-chat`, matched byte for byte at HEAD also when every stored turn
