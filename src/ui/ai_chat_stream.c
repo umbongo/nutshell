@@ -168,7 +168,8 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
         rc = ai_parse_stream_chunk_ex(json,
                                      content_delta, sizeof(content_delta),
                                      thinking_delta, sizeof(thinking_delta),
-                                     ctx->tool_stream, ctx->provider);
+                                     ctx->tool_stream, ctx->provider,
+                                     &chunk_input_tokens, &chunk_output_tokens);
         /* Tool-use stop: noted for the round's log line. The chunk's text
          * is still read below: it can ride with the finish_reason. */
         if (rc == 2) ctx->tool_stop = 1;

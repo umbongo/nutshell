@@ -278,17 +278,22 @@ void ai_chat_rebuild_display(AiChatData *d)
                     append_run_record_items(&d->msg_list, rlog->rec[ri],
                                             -(ri + 1));
         } else if (msg->role == AI_ROLE_TOOL) {
-            const char *content = ai_msg_content(msg);
-            size_t clen = content ? strlen(content) : 0;
-            char preview[256];
-            size_t plen = clen < 200 ? clen : 200;
-            memcpy(preview, content ? content : "", plen);
-            preview[plen] = '\0';
-            chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
-            if (clen > 200) {
-                char warn[256];
-                agentic_truncation_warning(msg->tool_name, 0, warn, sizeof(warn));
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
+            /* One results turn: a row per part (its first 200 bytes), and a
+             * truncation row for a part longer than that. */
+            for (int pi = 0; msg->parts && pi < msg->n_parts; pi++) {
+                const AiToolPart *part = &msg->parts[pi];
+                size_t clen = part->content ? part->content_len : 0;
+                char preview[256];
+                size_t plen = clen < 200 ? clen : 200;
+                memcpy(preview, part->content ? part->content : "", plen);
+                preview[plen] = '\0';
+                chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
+                if (clen > 200) {
+                    char warn[256];
+                    agentic_truncation_warning(part->tool_name, 0, warn,
+                                               sizeof(warn));
+                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
+                }
             }
         }
         /* Skip system messages injected mid-conversation */

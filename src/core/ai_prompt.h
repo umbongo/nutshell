@@ -41,6 +41,23 @@ typedef struct {
     int width, height;   /* original pixel dimensions */
 } AiAttachment;
 
+/* One tool call's answer inside a stored results turn (spec 2026-11-05
+ * run_command decision 11). An AI_ROLE_TOOL message holds all of one round's
+ * answers as parts, so a round costs one slot of AI_MAX_MESSAGES, not one per
+ * call. content is heap (NULL: a notes-only answer, nothing to send but the
+ * note) and omit_at / omitted_bytes record a cut (the output is the head
+ * content[0, omit_at) and the tail after it, omitted_bytes left out between;
+ * both 0: uncut). */
+typedef struct {
+    char tool_call_id[AI_TOOL_ID_MAX];
+    char tool_name[AI_TOOL_NAME_MAX];
+    int  is_error;
+    char tool_note[AI_TOOL_PART_NOTE_MAX]; /* Nutshell's own text, outside the data block */
+    char *content;
+    size_t content_len;
+    size_t omit_at, omitted_bytes;
+} AiToolPart;
+
 typedef struct {
     AiRole role;
     char content[AI_MSG_MAX];       /* inline buffer — fits most messages */
@@ -49,10 +66,24 @@ typedef struct {
     AiAttachment *attachment;       /* NULL for text-only messages */
 
     /* Tool fields — zero/empty when unused */
-    char tool_call_id[64];    /* set on ROLE_TOOL: the id this result is for */
-    char tool_name[64];       /* set on ROLE_TOOL: tool name (for display) */
-    int  is_tool_error;       /* set on ROLE_TOOL: 1 if this is an error result */
-    char tool_note[AI_TOOL_NOTE_MAX]; /* ROLE_TOOL: Nutshell's own text, outside the data block */
+
+    /* ROLE_TOOL: the answers of one tool round, one part per call, in the
+     * order of the calls. Heap array of n_parts, NULL and 0 when unused.
+     * Owned by the message: ai_msg_free() frees it and every part's content,
+     * ai_conv_copy() duplicates it, ai_conv_take() moves it. The only writer
+     * is agentic_add_tool_results(). */
+    AiToolPart *parts;
+    int n_parts;
+
+    /* ROLE_TOOL without parts: one answer in the message's own fields, the
+     * way a results message was stored before parts existed. Nothing in the
+     * product writes it any more; the body builder still reads it (with the
+     * message's content as the output), so such a conversation sends the
+     * bytes it always did. */
+    char tool_call_id[64];
+    char tool_name[64];
+    int  is_tool_error;
+    char tool_note[AI_TOOL_NOTE_MAX];
 
     /* For ROLE_ASSISTANT messages that contain tool_use blocks */
     AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */
@@ -87,7 +118,7 @@ void ai_conv_reset(AiConversation *conv);
 
 /* Move a conversation: free dst's messages, give dst every message of src
  * together with the heap buffers they own (overflow content, attachments,
- * tool calls), and leave src empty with its model kept. dst keeps its own
+ * tool calls, tool-result parts), and leave src empty with its model kept. dst keeps its own
  * model (the panel's setting is not reverted by a stale copy); only a dst
  * with an empty model takes src's. Afterwards exactly one conversation owns
  * each buffer, so both can be reset or taken again safely. dst == src, or
@@ -99,6 +130,11 @@ void ai_conv_take(AiConversation *dst, AiConversation *src);
  * untouched) or allocation failure (dst left empty with src's model, never
  * half-shared). dst == src is a no-op returning 0. */
 int ai_conv_copy(AiConversation *dst, const AiConversation *src);
+
+/* TEST ONLY. Replace the allocator ai_conv_copy() uses for a message's parts
+ * (the array and each part's content; default malloc, NULL restores it), so a
+ * test can fail one allocation. Not for product code. */
+void ai_prompt_set_alloc_for_test(void *(*alloc)(size_t));
 
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
@@ -181,9 +217,10 @@ typedef struct {
  * With a delimiter: the snapshot (if non-empty) goes in a data block
  * ("<lead>\n<delim>\n<escaped>\n<delim>") before the content of the LAST
  * AI_ROLE_USER message, in its text part when it has an attachment, and every
- * AI_ROLE_TOOL message is sent as a data block labelled with its tool name,
- * its tool_note after the closing delimiter (an empty result with a note sends
- * the note alone). conv is never modified. Anthropic's "system" is sent as an
+ * AI_ROLE_TOOL message part is sent as a data block labelled with its tool
+ * name, its tool_note after the closing delimiter (an empty result with a note
+ * sends the note alone). A results turn of K parts goes out as one user turn
+ * of K tool_result blocks (Anthropic) or K "tool" messages (the OpenAI form). conv is never modified. Anthropic's "system" is sent as an
  * array whose block carries cache_control ephemeral whenever a system message
  * is present, frame or not.
  * Returns bytes written (excluding NUL), or 0 on error (including a buffer
@@ -226,12 +263,18 @@ int ai_parse_stream_chunk(const char *json,
  * "tool_calls" -> 2) still fills content_out/thinking_out, and its
  * delta.tool_calls are accumulated: the caller reads the text, then acts on
  * the code. Whether the tool loop runs is ai_tool_round_should_run()'s
- * decision at the end of the round, not this code's. */
+ * decision at the end of the round, not this code's.
+ * input_tokens_out / output_tokens_out (either may be NULL) are set as
+ * ai_parse_stream_chunk() sets them, 0 when the chunk carries no count,
+ * including on the chunk that ends a tool round (Anthropic's message_delta
+ * with stop_reason tool_use, an OpenAI chunk with finish_reason tool_calls),
+ * so a reply that used tools reports its tokens. */
 int ai_parse_stream_chunk_ex(const char *json,
                              char *content_out, size_t content_size,
                              char *thinking_out, size_t thinking_size,
                              AiToolStreamState *tool_stream,
-                             const char *provider);
+                             const char *provider,
+                             int *input_tokens_out, int *output_tokens_out);
 
 /* The setting "Commands as tool calls" (Settings.ai_runcmd_mode). Automatic
  * resolves through ai_runcmd_auto_default(); On enables any provider; Off

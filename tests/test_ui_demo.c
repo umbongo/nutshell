@@ -235,7 +235,8 @@ int test_ui_demo_build_tool_counts(void)
     ASSERT_EQ(conv.messages[2].n_tool_calls, 1);
     ASSERT_STR_EQ(conv.messages[2].tool_calls[0].name, "web_search");
     ASSERT_EQ((int)conv.messages[3].role, (int)AI_ROLE_TOOL);
-    ASSERT_STR_EQ(conv.messages[3].tool_name, "web_search");
+    ASSERT_EQ(conv.messages[3].n_parts, 1);
+    ASSERT_STR_EQ(conv.messages[3].parts[0].tool_name, "web_search");
     ai_conv_reset(&conv);
     TEST_END();
 }

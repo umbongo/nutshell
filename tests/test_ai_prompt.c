@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "ai_prompt.h"
+#include "ai_agentic.h"
 #include "cmd_classify.h"
 #include <string.h>
 #include <stdlib.h>
@@ -3773,5 +3774,420 @@ int test_continue_text_skips_tool(void) {
     ASSERT_TRUE(n > 0);
     ASSERT_NULL(strstr(buf, "web_fetch"));
     ASSERT_NULL(strstr(buf, "Here is what actually happened"));
+    TEST_END();
+}
+
+/* ---- One results turn per round: the builder, the estimator, Save As ------ */
+
+#define PARTS_DELIM "----nutshell-data-00000000000000bb"
+
+/* system, user, an assistant turn with two calls, then their results either as
+ * one AI_ROLE_TOOL message of two parts (as_parts) or as two single-result
+ * messages the way a conversation looked before parts existed. */
+static void parts_round(AiConversation *c, int as_parts, const char *note_b)
+{
+    ai_conv_init(c, "test-model");
+    ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+
+    AiToolCall calls[2];
+    memset(calls, 0, sizeof(calls));
+    snprintf(calls[0].id, sizeof(calls[0].id), "call_a");
+    snprintf(calls[0].name, sizeof(calls[0].name), "web_fetch");
+    snprintf(calls[0].input_json, sizeof(calls[0].input_json), "{\"url\":\"x\"}");
+    snprintf(calls[1].id, sizeof(calls[1].id), "call_b");
+    snprintf(calls[1].name, sizeof(calls[1].name), "web_search");
+    snprintf(calls[1].input_json, sizeof(calls[1].input_json), "{\"query\":\"q\"}");
+    agentic_add_assistant_tool_msg(c, "checking", calls, 2);
+
+    char alpha[] = "alpha";
+    char beta[] = "beta";
+    if (as_parts) {
+        AiToolResult r[2];
+        memset(r, 0, sizeof(r));
+        snprintf(r[0].tool_use_id, sizeof(r[0].tool_use_id), "call_a");
+        r[0].content = alpha; r[0].content_len = 5;
+        snprintf(r[1].tool_use_id, sizeof(r[1].tool_use_id), "call_b");
+        r[1].content = beta; r[1].content_len = 4;
+        r[1].is_error = 1;
+        if (note_b) snprintf(r[1].tool_note, sizeof(r[1].tool_note), "%s", note_b);
+        agentic_add_tool_results(c, calls, r, 2);
+    } else {
+        ai_conv_add(c, AI_ROLE_TOOL, alpha);
+        AiMessage *t = &c->messages[c->msg_count - 1];
+        snprintf(t->tool_call_id, sizeof(t->tool_call_id), "call_a");
+        snprintf(t->tool_name, sizeof(t->tool_name), "web_fetch");
+        ai_conv_add(c, AI_ROLE_TOOL, beta);
+        t = &c->messages[c->msg_count - 1];
+        snprintf(t->tool_call_id, sizeof(t->tool_call_id), "call_b");
+        snprintf(t->tool_name, sizeof(t->tool_name), "web_search");
+        t->is_tool_error = 1;
+        if (note_b) snprintf(t->tool_note, sizeof(t->tool_note), "%s", note_b);
+    }
+}
+
+int test_body_parts_anthropic(void)
+{
+    TEST_BEGIN();
+    AiConversation *a = (AiConversation *)calloc(1, sizeof(*a));
+    AiConversation *b = (AiConversation *)calloc(1, sizeof(*b));
+    char *ba = (char *)malloc(32768), *bb = (char *)malloc(32768);
+    ASSERT_NOT_NULL(a); ASSERT_NOT_NULL(b);
+    ASSERT_NOT_NULL(ba); ASSERT_NOT_NULL(bb);
+    if (a && b && ba && bb) {
+        parts_round(a, 1, NULL);
+        parts_round(b, 0, NULL);
+        ASSERT_EQ(a->msg_count, 4);   /* system, user, assistant, ONE results turn */
+        ASSERT_EQ(b->msg_count, 5);
+        ASSERT_TRUE(ai_build_request_body_ex(a, NULL, ba, 32768, 0, "anthropic") > 0);
+        /* one user turn, a tool_result block per call, in order */
+        ASSERT_TRUE(strstr(ba,
+            "{\"role\":\"user\",\"content\":["
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"call_a\",\"content\":\"alpha\"},"
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"call_b\",\"content\":\"beta\","
+            "\"is_error\":true}]}") != NULL);
+        ASSERT_TRUE(strstr(ba, "\"role\":\"tool\"") == NULL);
+        /* the same bytes a conversation with one message per result produces */
+        ASSERT_TRUE(ai_build_request_body_ex(b, NULL, bb, 32768, 0, "anthropic") > 0);
+        ASSERT_STR_EQ(ba, bb);
+
+        /* framed, with a note: still the same bytes */
+        AiBodyFrame f = { "snap", PARTS_DELIM };
+        ai_conv_reset(a); ai_conv_reset(b);
+        parts_round(a, 1, "Nutshell says hi");
+        parts_round(b, 0, "Nutshell says hi");
+        ASSERT_TRUE(ai_build_request_body_frame(a, NULL, NULL, &f, ba, 32768, 0, "anthropic") > 0);
+        ASSERT_TRUE(ai_build_request_body_frame(b, NULL, NULL, &f, bb, 32768, 0, "anthropic") > 0);
+        ASSERT_STR_EQ(ba, bb);
+        ASSERT_TRUE(strstr(ba, "Nutshell says hi") != NULL);
+    }
+    if (a) ai_conv_reset(a);
+    if (b) ai_conv_reset(b);
+    free(a); free(b); free(ba); free(bb);
+    TEST_END();
+}
+
+int test_body_parts_openai(void)
+{
+    TEST_BEGIN();
+    AiConversation *a = (AiConversation *)calloc(1, sizeof(*a));
+    AiConversation *b = (AiConversation *)calloc(1, sizeof(*b));
+    char *ba = (char *)malloc(32768), *bb = (char *)malloc(32768);
+    ASSERT_NOT_NULL(a); ASSERT_NOT_NULL(b);
+    ASSERT_NOT_NULL(ba); ASSERT_NOT_NULL(bb);
+    static const char *const providers[] = { "openai", "moonshot", "deepseek", NULL };
+    if (a && b && ba && bb) {
+        parts_round(a, 1, NULL);
+        parts_round(b, 0, NULL);
+        ASSERT_TRUE(ai_build_request_body_ex(a, NULL, ba, 32768, 0, "openai") > 0);
+        /* K tool messages, one per call, in order */
+        ASSERT_TRUE(strstr(ba,
+            "{\"role\":\"tool\",\"tool_call_id\":\"call_a\",\"content\":\"alpha\"},"
+            "{\"role\":\"tool\",\"tool_call_id\":\"call_b\",\"content\":\"beta\"}") != NULL);
+        ASSERT_TRUE(strstr(ba, "tool_result") == NULL);
+        ai_conv_reset(a); ai_conv_reset(b);
+        parts_round(a, 1, "a note");
+        parts_round(b, 0, "a note");
+        for (int p = 0; providers[p]; p++) {
+            AiBodyFrame f = { "snap", PARTS_DELIM };
+            ASSERT_TRUE(ai_build_request_body_ex(a, NULL, ba, 32768, 1, providers[p]) > 0);
+            ASSERT_TRUE(ai_build_request_body_ex(b, NULL, bb, 32768, 1, providers[p]) > 0);
+            ASSERT_STR_EQ(ba, bb);
+            ASSERT_TRUE(ai_build_request_body_frame(a, NULL, NULL, &f, ba, 32768, 1, providers[p]) > 0);
+            ASSERT_TRUE(ai_build_request_body_frame(b, NULL, NULL, &f, bb, 32768, 1, providers[p]) > 0);
+            ASSERT_STR_EQ(ba, bb);
+        }
+    }
+    if (a) ai_conv_reset(a);
+    if (b) ai_conv_reset(b);
+    free(a); free(b); free(ba); free(bb);
+    TEST_END();
+}
+
+/* A notes-only part (no content) sends its note alone; a result with neither
+ * content nor note sends an empty string, as an empty message does today. */
+int test_body_parts_notes_only(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    char *buf = (char *)malloc(32768);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
+    if (c && buf) {
+        ai_conv_init(c, "m");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        AiToolCall call;
+        memset(&call, 0, sizeof(call));
+        snprintf(call.id, sizeof(call.id), "call_n");
+        snprintf(call.name, sizeof(call.name), "run_command");
+        snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
+        agentic_add_assistant_tool_msg(c, "", &call, 1);
+        AiToolResult r;
+        memset(&r, 0, sizeof(r));
+        snprintf(r.tool_use_id, sizeof(r.tool_use_id), "call_n");
+        snprintf(r.tool_note, sizeof(r.tool_note), "not run (denied)");
+        ASSERT_EQ(agentic_add_tool_results(c, &call, &r, 1), 0);
+        AiBodyFrame f = { NULL, PARTS_DELIM };
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, NULL, &f, buf, 32768, 0, "anthropic") > 0);
+        ASSERT_TRUE(strstr(buf, "\"tool_use_id\":\"call_n\",\"content\":\"not run (denied)\"") != NULL);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, NULL, NULL, buf, 32768, 0, "openai") > 0);
+        ASSERT_TRUE(strstr(buf, "\"tool_call_id\":\"call_n\",\"content\":\"not run (denied)\"") != NULL);
+
+        /* neither content nor note */
+        ai_conv_reset(c);
+        ai_conv_init(c, "m");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        agentic_add_assistant_tool_msg(c, "", &call, 1);
+        r.tool_note[0] = '\0';
+        ASSERT_EQ(agentic_add_tool_results(c, &call, &r, 1), 0);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, NULL, NULL, buf, 32768, 0, "openai") > 0);
+        ASSERT_TRUE(strstr(buf, "\"tool_call_id\":\"call_n\",\"content\":\"\"}") != NULL);
+    }
+    if (c) ai_conv_reset(c);
+    free(c); free(buf);
+    TEST_END();
+}
+
+int test_context_estimate_counts_parts(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ai_conv_init(c, "m");
+        ai_conv_add(c, AI_ROLE_USER, "0123456789012345678901234567890123456789"); /* 40 */
+        int before = ai_context_estimate_tokens(c);
+        ASSERT_EQ(before, 10);
+
+        char *big = (char *)malloc(401);
+        char *mid = (char *)malloc(201);
+        ASSERT_NOT_NULL(big); ASSERT_NOT_NULL(mid);
+        if (big && mid) {
+            memset(big, 'x', 400); big[400] = '\0';
+            memset(mid, 'y', 200); mid[200] = '\0';
+            AiToolResult r[3];
+            AiToolCall cs[3];
+            memset(r, 0, sizeof(r));
+            memset(cs, 0, sizeof(cs));
+            snprintf(cs[0].name, sizeof(cs[0].name), "web_fetch");
+            snprintf(cs[1].name, sizeof(cs[1].name), "web_search");
+            snprintf(cs[2].name, sizeof(cs[2].name), "web_fetch");
+            r[0].content = big; r[0].content_len = 400;
+            r[1].content = mid; r[1].content_len = 200;
+            snprintf(r[1].tool_note, sizeof(r[1].tool_note), "%0*d", 40, 7);  /* 40 */
+            /* r[2]: notes only, 80 bytes */
+            snprintf(r[2].tool_note, sizeof(r[2].tool_note), "%0*d", 80, 7);
+            ASSERT_EQ(agentic_add_tool_results(c, cs, r, 3), 0);
+            /* (40 + 400 + 200 + 40 + 80) / 4 */
+            ASSERT_EQ(ai_context_estimate_tokens(c), 190);
+            ASSERT_EQ(ai_context_estimate_tokens_ex(c, 40), 200);
+        }
+        free(big); free(mid);
+        ai_conv_reset(c);
+    }
+    free(c);
+    TEST_END();
+}
+
+/* Each result's tokens reach the meter on the tool path too. */
+int test_stream_chunk_ex_reports_tokens(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    char text[64], think[64];
+    int in_tok = -1, out_tok = -1;
+
+    /* Anthropic: message_start carries the input count, the tool_use stop's
+     * message_delta the output count. */
+    ai_tools_stream_init(&st);
+    int rc = ai_parse_stream_chunk_ex(
+        "{\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":321,"
+        "\"output_tokens\":1}}}",
+        text, sizeof(text), think, sizeof(think), &st, "anthropic",
+        &in_tok, &out_tok);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(in_tok, 321);
+    ASSERT_EQ(out_tok, 0);
+    rc = ai_parse_stream_chunk_ex(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},"
+        "\"usage\":{\"output_tokens\":45}}",
+        text, sizeof(text), think, sizeof(think), &st, "anthropic",
+        &in_tok, &out_tok);
+    ASSERT_EQ(rc, 2);
+    ASSERT_EQ(in_tok, 0);
+    ASSERT_EQ(out_tok, 45);
+    /* an end_turn delta too */
+    rc = ai_parse_stream_chunk_ex(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
+        "\"usage\":{\"output_tokens\":9}}",
+        text, sizeof(text), think, sizeof(think), &st, "anthropic",
+        &in_tok, &out_tok);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(out_tok, 9);
+    /* a chunk without usage reports zero */
+    rc = ai_parse_stream_chunk_ex(
+        "{\"type\":\"ping\"}", text, sizeof(text), think, sizeof(think), &st,
+        "anthropic", &in_tok, &out_tok);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(in_tok, 0);
+    ASSERT_EQ(out_tok, 0);
+
+    /* OpenAI format: the usage object on the last chunk */
+    ai_tools_stream_init(&st);
+    in_tok = out_tok = -1;
+    rc = ai_parse_stream_chunk_ex(
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],"
+        "\"usage\":{\"prompt_tokens\":210,\"completion_tokens\":17}}",
+        text, sizeof(text), think, sizeof(think), &st, "openai",
+        &in_tok, &out_tok);
+    ASSERT_EQ(rc, 2);
+    ASSERT_EQ(in_tok, 210);
+    ASSERT_EQ(out_tok, 17);
+    in_tok = out_tok = -1;
+    rc = ai_parse_stream_chunk_ex(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}",
+        text, sizeof(text), think, sizeof(think), &st, "openai",
+        &in_tok, &out_tok);
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(text, "hi");
+    ASSERT_EQ(in_tok, 0);
+    ASSERT_EQ(out_tok, 0);
+
+    /* NULL count pointers stay allowed; with no tool state the plain parser
+     * answers the same */
+    rc = ai_parse_stream_chunk_ex(
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],"
+        "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}",
+        text, sizeof(text), think, sizeof(think), &st, "openai", NULL, NULL);
+    ASSERT_EQ(rc, 1);
+    in_tok = out_tok = -1;
+    rc = ai_parse_stream_chunk_ex(
+        "{\"choices\":[{\"index\":0,\"delta\":{}}],"
+        "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":6}}",
+        text, sizeof(text), think, sizeof(think), NULL, "openai",
+        &in_tok, &out_tok);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(in_tok, 5);
+    ASSERT_EQ(out_tok, 6);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+static int g_pc_n, g_pc_fail_at;
+static void *prompt_counting_alloc(size_t n)
+{
+    g_pc_n++;
+    if (g_pc_n == g_pc_fail_at) return NULL;
+    return malloc(n);
+}
+
+/* ai_conv_copy duplicates the parts and their content; an allocation that
+ * fails at any point leaves the destination empty with nothing leaked. */
+int test_conv_copy_parts_oom(void)
+{
+    TEST_BEGIN();
+    AiConversation *src = (AiConversation *)calloc(1, sizeof(*src));
+    AiConversation *dst = (AiConversation *)calloc(1, sizeof(*dst));
+    ASSERT_NOT_NULL(src); ASSERT_NOT_NULL(dst);
+    if (src && dst) {
+        parts_round(src, 1, "a note");
+        /* the copy's hooked allocations: the parts array, then each part's
+         * content. Fail each in turn, then let one run through. */
+        int attempt;
+        for (attempt = 1; attempt <= 6; attempt++) {
+            g_pc_n = 0;
+            g_pc_fail_at = attempt;
+            ai_prompt_set_alloc_for_test(prompt_counting_alloc);
+            int rc = ai_conv_copy(dst, src);
+            ai_prompt_set_alloc_for_test(NULL);
+            if (rc == 0) {
+                ASSERT_EQ(dst->msg_count, src->msg_count);
+                ASSERT_EQ(dst->messages[3].n_parts, 2);
+                ASSERT_STR_EQ(dst->messages[3].parts[1].content, "beta");
+                ASSERT_TRUE(dst->messages[3].parts != src->messages[3].parts);
+                break;                    /* past the last allocation */
+            }
+            ASSERT_EQ(rc, -1);
+            ASSERT_EQ(dst->msg_count, 0);
+            ASSERT_STR_EQ(dst->model, "test-model");
+        }
+        ASSERT_TRUE(attempt > 2);         /* the parts did allocate */
+        ASSERT_TRUE(attempt <= 6);        /* and a copy did finish */
+        ai_conv_reset(dst);
+        ai_conv_reset(src);
+    }
+    free(src); free(dst);
+    TEST_END();
+}
+
+/* Save As keeps the record of a tool round: the calls after the assistant
+ * text, each part of the results turn as an output block. */
+int test_save_text_tool_round(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    char *buf = (char *)malloc(8192);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
+    if (c && buf) {
+        ai_conv_init(c, "m");
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "list it");
+        AiToolCall calls[3];
+        memset(calls, 0, sizeof(calls));
+        snprintf(calls[0].id, sizeof(calls[0].id), "c0");
+        snprintf(calls[0].name, sizeof(calls[0].name), "run_command");
+        snprintf(calls[0].input_json, sizeof(calls[0].input_json),
+                 "{\"command\":\"ls -la\"}");
+        snprintf(calls[1].id, sizeof(calls[1].id), "c1");
+        snprintf(calls[1].name, sizeof(calls[1].name), "web_fetch");
+        snprintf(calls[1].input_json, sizeof(calls[1].input_json), "{\"url\":\"x\"}");
+        snprintf(calls[2].id, sizeof(calls[2].id), "c2");
+        snprintf(calls[2].name, sizeof(calls[2].name), "run_command");
+        snprintf(calls[2].input_json, sizeof(calls[2].input_json), "{}");
+        agentic_add_assistant_tool_msg(c, "checking", calls, 3);
+
+        char head_tail[] = "HEADtail";
+        AiToolResult r[3];
+        memset(r, 0, sizeof(r));
+        snprintf(r[0].tool_use_id, sizeof(r[0].tool_use_id), "c0");
+        r[0].content = head_tail; r[0].content_len = 8;
+        r[0].omit_at = 4; r[0].omitted_bytes = 99;
+        snprintf(r[0].tool_note, sizeof(r[0].tool_note), "ran; output cut");
+        snprintf(r[1].tool_use_id, sizeof(r[1].tool_use_id), "c1");
+        snprintf(r[1].tool_note, sizeof(r[1].tool_note), "not run (denied)");
+        snprintf(r[2].tool_use_id, sizeof(r[2].tool_use_id), "c2");
+        ASSERT_EQ(agentic_add_tool_results(c, calls, r, 3), 0);
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "done");
+
+        size_t n = ai_build_save_text(c, NULL, 0, buf, 8192);
+        ASSERT_TRUE(n > 0);
+        const char *p_ai = strstr(buf, "--- AI ---\nchecking\n");
+        const char *p_cmd = strstr(buf, "$ ls -la\n");
+        const char *p_tool = strstr(buf, "[tool: web_fetch]\n");
+        const char *p_bad = strstr(buf, "[tool: run_command]\n");
+        const char *p_head = strstr(buf, "HEAD\n");
+        const char *p_mark = strstr(buf, "[\xE2\x80\xA6 99 bytes omitted \xE2\x80\xA6]\n");
+        const char *p_tail = strstr(buf, "tail\n");
+        const char *p_note = strstr(buf, "ran; output cut");
+        const char *p_den = strstr(buf, "not run (denied)");
+        const char *p_done = strstr(buf, "--- AI ---\ndone");
+        ASSERT_NOT_NULL(p_ai); ASSERT_NOT_NULL(p_cmd); ASSERT_NOT_NULL(p_tool);
+        ASSERT_NOT_NULL(p_bad);         /* a call with no usable command */
+        ASSERT_NOT_NULL(p_head); ASSERT_NOT_NULL(p_mark); ASSERT_NOT_NULL(p_tail);
+        ASSERT_NOT_NULL(p_note); ASSERT_NOT_NULL(p_den); ASSERT_NOT_NULL(p_done);
+        if (p_ai && p_cmd && p_tool && p_bad && p_head && p_mark && p_tail &&
+            p_note && p_den && p_done) {
+            ASSERT_TRUE(p_ai < p_cmd && p_cmd < p_tool && p_tool < p_bad);
+            ASSERT_TRUE(p_bad < p_head && p_head < p_mark && p_mark < p_tail);
+            ASSERT_TRUE(p_tail < p_note && p_note < p_den && p_den < p_done);
+        }
+
+        /* a buffer too small is cut, never overrun */
+        char small[48];
+        size_t m = ai_build_save_text(c, NULL, 0, small, sizeof(small));
+        ASSERT_TRUE(m < sizeof(small));
+        ASSERT_EQ(strlen(small), m);
+    }
+    if (c) ai_conv_reset(c);
+    free(c); free(buf);
     TEST_END();
 }

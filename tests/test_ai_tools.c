@@ -1015,7 +1015,7 @@ static int feed_ex(AiToolStreamState *st, const char *json,
     char think[64] = "";
     text[0] = '\0';
     return ai_parse_stream_chunk_ex(json, text, tsz, think, sizeof(think),
-                                    st, "moonshot");
+                                    st, "moonshot", NULL, NULL);
 }
 
 int test_ai_stream_openai_finish_stop_with_pending_call(void)

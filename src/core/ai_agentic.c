@@ -130,30 +130,90 @@ int agentic_cap_tool_result(AiToolResult *r)
     return 1;
 }
 
-/* Copy an AiToolResult note (up to AI_TOOL_PART_NOTE_MAX) into a stored
- * message's smaller buffer. A note that fits is copied whole. A longer one is
- * cut on a UTF-8 boundary; when it ends with the cap's "\n" truncation line,
- * that line is kept and the text before it shortened instead. */
-static void store_tool_note(char *dst, size_t dst_size, const char *note)
+/* Parts and their content come from here, not malloc directly, so a test can
+ * fail one allocation (agentic_set_alloc_for_test). */
+static void *(*g_alloc)(size_t) = malloc;
+
+void agentic_set_alloc_for_test(void *(*alloc)(size_t))
 {
-    size_t len = strlen(note);
-    if (len < dst_size) {
-        memcpy(dst, note, len + 1);
-        return;
+    g_alloc = alloc ? alloc : malloc;
+}
+
+/* Free a parts array and the content of the first n parts. */
+static void parts_free(AiToolPart *parts, int n)
+{
+    for (int i = 0; parts && i < n; i++)
+        free(parts[i].content);
+    free(parts);
+}
+
+/* The fixed fields of part i: ids and note, never content. */
+static void part_fill_head(AiToolPart *p, const AiToolCall *calls,
+                           const AiToolResult *r, int i)
+{
+    snprintf(p->tool_call_id, sizeof(p->tool_call_id), "%s", r->tool_use_id);
+    if (calls)
+        snprintf(p->tool_name, sizeof(p->tool_name), "%s", calls[i].name);
+}
+
+/* One part per result, content capped on a private copy (the caller keeps its
+ * results). NULL on an allocation failure, with everything freed. */
+static AiToolPart *parts_from_results(const AiToolCall *calls,
+                                      const AiToolResult *results, int n)
+{
+    AiToolPart *parts = (AiToolPart *)g_alloc((size_t)n * sizeof(AiToolPart));
+    if (!parts) return NULL;
+    memset(parts, 0, (size_t)n * sizeof(AiToolPart));
+
+    for (int i = 0; i < n; i++) {
+        AiToolPart *p = &parts[i];
+        part_fill_head(p, calls, &results[i], i);
+        p->is_error = results[i].is_error;
+        memcpy(p->tool_note, results[i].tool_note, sizeof(p->tool_note));
+        p->tool_note[sizeof(p->tool_note) - 1] = '\0';
+
+        p->omit_at = results[i].omit_at;
+        p->omitted_bytes = results[i].omitted_bytes;
+        if (!results[i].content) continue;
+        AiToolResult capped = results[i];
+        capped.content = (char *)g_alloc(results[i].content_len + 1);
+        if (!capped.content) { parts_free(parts, i); return NULL; }
+        memcpy(capped.content, results[i].content, results[i].content_len);
+        capped.content[results[i].content_len] = '\0';
+
+        /* run_command's output is bounded by its own executor (64 KiB
+         * escaped, with its own cut note): no second cap. */
+        int runcmd = calls && strcmp(calls[i].name, RUNCMD_TOOL_NAME) == 0;
+        if (!runcmd) {
+            (void)agentic_cap_tool_result(&capped);
+            memcpy(p->tool_note, capped.tool_note, sizeof(p->tool_note));
+        }
+        if (capped.content_len == 0) {
+            free(capped.content);            /* an empty result: no content */
+        } else {
+            p->content = capped.content;
+            p->content_len = capped.content_len;
+        }
     }
-    size_t marker = strlen(AI_TOOL_TRUNC_NOTE);
-    size_t head = dst_size - 1;
-    size_t tail = 0;
-    if (len > marker + 1 && note[len - marker - 1] == '\n' &&
-        strcmp(note + len - marker, AI_TOOL_TRUNC_NOTE) == 0 &&
-        marker + 1 < dst_size) {
-        tail = marker + 1;           /* "\n" + marker */
-        head = dst_size - 1 - tail;
+    return parts;
+}
+
+#define AGENTIC_OOM_NOTE "not run: Nutshell ran out of memory"
+
+/* The answer used when the results cannot be copied: one part per call, no
+ * content, the static note (spec decision 25). Only the array is allocated.
+ * NULL when even that cannot be had. */
+static AiToolPart *parts_notes_only(const AiToolCall *calls,
+                                    const AiToolResult *results, int n)
+{
+    AiToolPart *parts = (AiToolPart *)g_alloc((size_t)n * sizeof(AiToolPart));
+    if (!parts) return NULL;
+    memset(parts, 0, (size_t)n * sizeof(AiToolPart));
+    for (int i = 0; i < n; i++) {
+        part_fill_head(&parts[i], calls, &results[i], i);
+        memcpy(parts[i].tool_note, AGENTIC_OOM_NOTE, sizeof(AGENTIC_OOM_NOTE));
     }
-    while (head > 0 && ((unsigned char)note[head] & 0xC0) == 0x80) head--;
-    memcpy(dst, note, head);
-    if (tail) memcpy(dst + head, note + len - tail, tail);
-    dst[head + tail] = '\0';
+    return parts;
 }
 
 int agentic_add_tool_results(AiConversation *conv,
@@ -161,50 +221,25 @@ int agentic_add_tool_results(AiConversation *conv,
                               const AiToolResult *results, int n_results)
 {
     if (!conv || !results) return -1;
-    if (conv->msg_count + n_results > AI_MAX_MESSAGES) return -1;
+    if (n_results <= 0) return 0;
+    if (conv->msg_count + 1 > AI_MAX_MESSAGES) return -1;
 
-    for (int i = 0; i < n_results; i++) {
-        AiMessage *msg = &conv->messages[conv->msg_count];
-        memset(msg, 0, sizeof(*msg));
-        msg->role = AI_ROLE_TOOL;
-
-        /* Cap a private copy: the caller keeps ownership of results[i]. */
-        AiToolResult capped = results[i];
-        capped.content = NULL;
-        if (results[i].content) {
-            capped.content = (char *)malloc(results[i].content_len + 1);
-            if (!capped.content) return -1;
-            memcpy(capped.content, results[i].content, results[i].content_len);
-            capped.content[results[i].content_len] = '\0';
-        }
-        /* run_command's output is bounded by its own executor (64 KiB
-         * escaped, with its own cut note): no second cap. */
-        if (!(calls && strcmp(calls[i].name, RUNCMD_TOOL_NAME) == 0))
-            (void)agentic_cap_tool_result(&capped);
-
-        const char *content = capped.content ? capped.content : "";
-        size_t content_len = capped.content ? capped.content_len : 0;
-        int set_rc = ai_msg_set_content(msg, content, content_len);
-        free(capped.content);
-        if (set_rc != 0) return -1;
-
-        store_tool_note(msg->tool_note, sizeof(msg->tool_note),
-                        capped.tool_note);
-
-        strncpy(msg->tool_call_id, results[i].tool_use_id,
-                sizeof(msg->tool_call_id) - 1);
-        msg->tool_call_id[sizeof(msg->tool_call_id) - 1] = '\0';
-
-        if (calls) {
-            strncpy(msg->tool_name, calls[i].name,
-                    sizeof(msg->tool_name) - 1);
-            msg->tool_name[sizeof(msg->tool_name) - 1] = '\0';
-        }
-
-        msg->is_tool_error = results[i].is_error;
-
-        conv->msg_count++;
+    AiToolPart *parts = parts_from_results(calls, results, n_results);
+    if (!parts) {
+        /* Out of memory: answer every call from static text instead, so no
+         * tool_use is left without its result. If even that array cannot be
+         * had, nothing is stored and the caller must drop the open assistant
+         * turn (Task B4's ai_conv_drop_open_tool_turn wires it in here). */
+        parts = parts_notes_only(calls, results, n_results);
+        if (!parts) return -1;
     }
+
+    AiMessage *msg = &conv->messages[conv->msg_count];
+    memset(msg, 0, sizeof(*msg));
+    msg->role = AI_ROLE_TOOL;
+    msg->parts = parts;
+    msg->n_parts = n_results;
+    conv->msg_count++;
     return 0;
 }
 

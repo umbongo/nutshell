@@ -65,6 +65,10 @@ typedef struct {
      * truncation line), never tool output: sent after the data block, not
      * inside it. Inline, so there is nothing to free or copy. */
     char tool_note[AI_TOOL_PART_NOTE_MAX];
+    /* A cut result (run_command's excerpt): content is the head
+     * content[0, omit_at) then the tail, omitted_bytes left out between them.
+     * Both 0: uncut. Stored with the result's part (AiToolPart). */
+    size_t omit_at, omitted_bytes;
 } AiToolResult;
 
 typedef struct {

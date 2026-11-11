@@ -162,24 +162,22 @@ int test_agentic_add_tool_results(void)
 
     int rc = agentic_add_tool_results(&conv, calls, results, 2);
     ASSERT_EQ(rc, 0);
-    ASSERT_EQ(conv.msg_count, 2);
+    ASSERT_EQ(conv.msg_count, 1);   /* one results turn for the round */
 
     AiMessage *m0 = &conv.messages[0];
     ASSERT_EQ((int)m0->role, (int)AI_ROLE_TOOL);
-    ASSERT_STR_EQ(ai_msg_content(m0), "search results here");
-    ASSERT_STR_EQ(m0->tool_call_id, "toolu_01");
-    ASSERT_STR_EQ(m0->tool_name, "web_search");
-    ASSERT_EQ(m0->is_tool_error, 0);
+    ASSERT_EQ(m0->n_parts, 2);
+    ASSERT_STR_EQ(m0->parts[0].content, "search results here");
+    ASSERT_STR_EQ(m0->parts[0].tool_call_id, "toolu_01");
+    ASSERT_STR_EQ(m0->parts[0].tool_name, "web_search");
+    ASSERT_EQ(m0->parts[0].is_error, 0);
 
-    AiMessage *m1 = &conv.messages[1];
-    ASSERT_EQ((int)m1->role, (int)AI_ROLE_TOOL);
-    ASSERT_STR_EQ(ai_msg_content(m1), "fetched page content");
-    ASSERT_STR_EQ(m1->tool_call_id, "toolu_02");
-    ASSERT_STR_EQ(m1->tool_name, "web_fetch");
-    ASSERT_EQ(m1->is_tool_error, 1);
+    ASSERT_STR_EQ(m0->parts[1].content, "fetched page content");
+    ASSERT_STR_EQ(m0->parts[1].tool_call_id, "toolu_02");
+    ASSERT_STR_EQ(m0->parts[1].tool_name, "web_fetch");
+    ASSERT_EQ(m0->parts[1].is_error, 1);
 
     ai_msg_free(m0);
-    ai_msg_free(m1);
     TEST_END();
 }
 
@@ -393,20 +391,21 @@ int test_agentic_runcmd_result_not_capped(void)
     res[0].content = a; res[0].content_len = big;
     res[1].content = b; res[1].content_len = big;
     ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 2), 0);
-    ASSERT_EQ(conv.msg_count, 2);
-    ASSERT_EQ(conv.messages[0].content_len, big);
-    ASSERT_STR_EQ(conv.messages[0].tool_note, "");
-    ASSERT_TRUE(conv.messages[1].content_len < big);
-    ASSERT_STR_EQ(conv.messages[1].tool_note, AI_TOOL_TRUNC_NOTE);
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(conv.messages[0].n_parts, 2);
+    ASSERT_EQ(conv.messages[0].parts[0].content_len, big);
+    ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, "");
+    ASSERT_TRUE(conv.messages[0].parts[1].content_len < big);
+    ASSERT_STR_EQ(conv.messages[0].parts[1].tool_note, AI_TOOL_TRUNC_NOTE);
     ai_conv_reset(&conv);
     free(a);
     free(b);
     TEST_END();
 }
 
-/* A long note ending with the cap's "\n" truncation line: the stored note
- * keeps the line at its end and shortens the text before it, never cutting a
- * UTF-8 sequence (here the natural cut at byte 216 falls inside one). */
+/* A long note ending with the cap's "\n" truncation line: the stored part
+ * keeps the whole note, the line still at its end (a part carries
+ * AI_TOOL_PART_NOTE_MAX bytes, so nothing is cut or moved). */
 int test_agentic_note_copy_keeps_marker(void)
 {
     TEST_BEGIN();
@@ -427,31 +426,24 @@ int test_agentic_note_copy_keeps_marker(void)
     memcpy(r.tool_note + head_len + 1, AI_TOOL_TRUNC_NOTE, marker + 1);
     ASSERT_TRUE(head_len + 1 + marker < AI_TOOL_PART_NOTE_MAX);
     ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
-    const char *got = conv.messages[0].tool_note;
+    ASSERT_EQ(conv.messages[0].n_parts, 1);
+    const char *got = conv.messages[0].parts[0].tool_note;
+    ASSERT_STR_EQ(got, r.tool_note);
     size_t glen = strlen(got);
-    ASSERT_TRUE(glen <= AI_TOOL_NOTE_MAX - 1);
-    ASSERT_EQ(glen, 254);  /* the head gave up one byte to stay on a boundary */
+    ASSERT_EQ(glen, head_len + 1 + marker);
     ASSERT_STR_EQ(got + glen - marker - 1, "\n" AI_TOOL_TRUNC_NOTE);
-    size_t head = glen - marker - 1;
-    ASSERT_EQ(head, 215);
-    ASSERT_EQ(got[0], 'a');
-    for (size_t i = 1; i < head; i += 2) {
-        ASSERT_EQ((unsigned char)got[i], 0xC3);
-        ASSERT_EQ((unsigned char)got[i + 1], 0xA9);
-    }
     ai_conv_reset(&conv);
     TEST_END();
 }
 
-/* AiToolResult carries up to 512 bytes of note; a stored AiMessage keeps 256.
- * A longer note is cut on a UTF-8 boundary, never mid-sequence. */
+/* AiToolResult and AiToolPart both carry AI_TOOL_PART_NOTE_MAX bytes of note;
+ * a stored part keeps a 355-byte note, multi-byte character and all. */
 int test_agentic_long_note_copy_cut_safely(void)
 {
     TEST_BEGIN();
     ASSERT_EQ(sizeof(((AiToolResult *)0)->tool_note), AI_TOOL_PART_NOTE_MAX);
+    ASSERT_EQ(sizeof(((AiToolPart *)0)->tool_note), AI_TOOL_PART_NOTE_MAX);
     ASSERT_EQ(AI_TOOL_PART_NOTE_MAX, 512);
-    ASSERT_EQ(sizeof(((AiMessage *)0)->tool_note), AI_TOOL_NOTE_MAX);
-    ASSERT_EQ(AI_TOOL_NOTE_MAX, 256);
 
     AiConversation conv;
     ai_conv_init(&conv, "m");
@@ -465,7 +457,8 @@ int test_agentic_long_note_copy_cut_safely(void)
     memcpy(r.tool_note + 254, "\xC3\xA9", 2);
     memset(r.tool_note + 256, 'm', 100);
     ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
-    ASSERT_EQ(strlen(conv.messages[0].tool_note), 254);
+    ASSERT_EQ(strlen(conv.messages[0].parts[0].tool_note), 356);
+    ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, r.tool_note);
     ai_conv_reset(&conv);
     TEST_END();
 }
@@ -822,5 +815,244 @@ int test_ai_moonshot_output_limit_per_model(void)
         ASSERT_NULL(strstr(buf, "max_completion_tokens"));
         ai_conv_reset(&conv);
     }
+    TEST_END();
+}
+
+/* ---- One stored turn per tool round (spec decision 11, 25) ---------------- */
+
+/* Five calls, five results: each distinct, so an order or field mix-up shows. */
+static void five_calls(AiToolCall calls[5], AiToolResult res[5],
+                       char *bufs[5])
+{
+    static const char *names[5] = { "web_fetch", RUNCMD_TOOL_NAME, "web_search",
+                                    RUNCMD_TOOL_NAME, "read_debug_log" };
+    memset(calls, 0, 5 * sizeof(AiToolCall));
+    memset(res, 0, 5 * sizeof(AiToolResult));
+    for (int i = 0; i < 5; i++) {
+        snprintf(calls[i].id, sizeof(calls[i].id), "call_%d", i);
+        snprintf(calls[i].name, sizeof(calls[i].name), "%s", names[i]);
+        snprintf(res[i].tool_use_id, sizeof(res[i].tool_use_id), "call_%d", i);
+        char text[64];
+        snprintf(text, sizeof(text), "output number %d", i);
+        bufs[i] = (char *)malloc(strlen(text) + 1);
+        strcpy(bufs[i], text);
+        res[i].content = bufs[i];
+        res[i].content_len = strlen(text);
+        res[i].is_error = (i == 2);
+    }
+    /* result 1 is a cut run_command result with a full-length note */
+    memset(res[1].tool_note, 'n', AI_TOOL_PART_NOTE_MAX - 1);
+    res[1].omit_at = 7;
+    res[1].omitted_bytes = 41213;
+    snprintf(res[3].tool_note, sizeof(res[3].tool_note), "ran");
+    res[4].content_len = 0;         /* an empty result */
+    bufs[4][0] = '\0';
+}
+
+int test_agentic_results_one_turn(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+
+    AiToolCall calls[5];
+    AiToolResult res[5];
+    char *bufs[5];
+    five_calls(calls, res, bufs);
+
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 0);
+    ASSERT_EQ(conv.msg_count, 3);                 /* one message, not five */
+    AiMessage *m = &conv.messages[2];
+    ASSERT_EQ((int)m->role, (int)AI_ROLE_TOOL);
+    ASSERT_EQ(m->n_parts, 5);
+    ASSERT_NOT_NULL(m->parts);
+    if (m->parts && m->n_parts == 5) {
+        for (int i = 0; i < 5; i++) {
+            char want[16];
+            snprintf(want, sizeof(want), "call_%d", i);
+            ASSERT_STR_EQ(m->parts[i].tool_call_id, want);
+            ASSERT_STR_EQ(m->parts[i].tool_name, calls[i].name);
+            ASSERT_EQ(m->parts[i].is_error, i == 2);
+        }
+        ASSERT_STR_EQ(m->parts[0].content, "output number 0");
+        ASSERT_EQ(m->parts[0].content_len, 15);
+        ASSERT_TRUE(m->parts[0].content != bufs[0]);   /* its own copy */
+        /* the cut fields and the whole 511-byte note survive */
+        ASSERT_EQ(m->parts[1].omit_at, 7);
+        ASSERT_EQ(m->parts[1].omitted_bytes, 41213);
+        ASSERT_EQ(strlen(m->parts[1].tool_note), AI_TOOL_PART_NOTE_MAX - 1);
+        ASSERT_STR_EQ(m->parts[3].tool_note, "ran");
+        ASSERT_EQ(m->parts[0].omitted_bytes, 0);
+        ASSERT_EQ(m->parts[4].content_len, 0);
+    }
+
+    /* A deep copy and a take each own what they hold; reset frees all
+     * (SAN=1 reports a leak or a double free). */
+    AiConversation *copy = (AiConversation *)calloc(1, sizeof(*copy));
+    AiConversation *moved = (AiConversation *)calloc(1, sizeof(*moved));
+    ASSERT_NOT_NULL(copy);
+    ASSERT_NOT_NULL(moved);
+    if (copy && moved) {
+        ASSERT_EQ(ai_conv_copy(copy, &conv), 0);
+        AiMessage *c = &copy->messages[2];
+        ASSERT_EQ(c->n_parts, 5);
+        ASSERT_TRUE(c->parts != m->parts);
+        ASSERT_TRUE(c->parts && c->parts[0].content != m->parts[0].content);
+        ASSERT_STR_EQ(c->parts[0].content, "output number 0");
+        ASSERT_EQ(c->parts[1].omitted_bytes, 41213);
+        ASSERT_STR_EQ(c->parts[3].tool_note, "ran");
+
+        ai_conv_take(moved, &conv);
+        ASSERT_EQ(conv.msg_count, 0);
+        ASSERT_EQ(moved->messages[2].n_parts, 5);
+        ASSERT_STR_EQ(moved->messages[2].parts[2].tool_call_id, "call_2");
+        ASSERT_EQ(conv.messages[2].n_parts, 0);
+        ASSERT_NULL(conv.messages[2].parts);
+        ai_conv_reset(copy);
+        ai_conv_reset(moved);
+    }
+    ai_conv_reset(&conv);
+    free(copy);
+    free(moved);
+    for (int i = 0; i < 5; i++) free(bufs[i]);
+
+    /* Full: one slot is all a round needs, none left stores nothing. */
+    AiConversation full;
+    ai_conv_init(&full, "m");
+    for (int i = 0; i < AI_MAX_MESSAGES - 1; i++)
+        ai_conv_add(&full, AI_ROLE_USER, "x");
+    five_calls(calls, res, bufs);
+    ASSERT_EQ(agentic_add_tool_results(&full, calls, res, 5), 0);
+    ASSERT_EQ(full.msg_count, AI_MAX_MESSAGES);
+    ASSERT_EQ(agentic_add_tool_results(&full, calls, res, 5), -1);
+    ASSERT_EQ(full.msg_count, AI_MAX_MESSAGES);
+    ai_conv_reset(&full);
+    for (int i = 0; i < 5; i++) free(bufs[i]);
+
+    /* No results store no message. */
+    AiConversation none;
+    ai_conv_init(&none, "m");
+    ASSERT_EQ(agentic_add_tool_results(&none, calls, res, 0), 0);
+    ASSERT_EQ(none.msg_count, 0);
+    TEST_END();
+}
+
+/* An allocator that fails on the Nth call (fail_at) or on every call from the
+ * Nth on (fail_from). */
+static int g_alloc_n, g_alloc_fail_at, g_alloc_fail_from;
+
+static void *counting_alloc(size_t n)
+{
+    g_alloc_n++;
+    if (g_alloc_n == g_alloc_fail_at) return NULL;
+    if (g_alloc_fail_from && g_alloc_n >= g_alloc_fail_from) return NULL;
+    return malloc(n);
+}
+
+static void alloc_plan(int fail_at, int fail_from)
+{
+    g_alloc_n = 0;
+    g_alloc_fail_at = fail_at;
+    g_alloc_fail_from = fail_from;
+    agentic_set_alloc_for_test(counting_alloc);
+}
+
+/* A result's content that cannot be copied does not leave its call
+ * unanswered: the round is stored as one notes-only turn (spec 25). If even
+ * that array cannot be had, nothing is stored (Task B4 then drops the open
+ * assistant turn). */
+int test_agentic_results_oom_notes_only(void)
+{
+    TEST_BEGIN();
+    AiToolCall calls[5];
+    AiToolResult res[5];
+    char *bufs[5];
+
+    /* allocation 1 is the parts array, 2 the first content copy: fail it */
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    five_calls(calls, res, bufs);
+    alloc_plan(2, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 0);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 2);
+    AiMessage *m = &conv.messages[1];
+    ASSERT_EQ((int)m->role, (int)AI_ROLE_TOOL);
+    ASSERT_EQ(m->n_parts, 5);
+    if (m->parts && m->n_parts == 5) {
+        for (int i = 0; i < 5; i++) {
+            char want[16];
+            snprintf(want, sizeof(want), "call_%d", i);
+            ASSERT_STR_EQ(m->parts[i].tool_call_id, want);
+            ASSERT_STR_EQ(m->parts[i].tool_name, calls[i].name);
+            ASSERT_NULL(m->parts[i].content);
+            ASSERT_EQ(m->parts[i].content_len, 0);
+            ASSERT_EQ(m->parts[i].omitted_bytes, 0);
+            ASSERT_STR_EQ(m->parts[i].tool_note,
+                          "not run: Nutshell ran out of memory");
+        }
+    }
+    /* the caller still owns its results */
+    ASSERT_STR_EQ(res[0].content, "output number 0");
+
+    /* the turn answers every call: a well-formed Anthropic body */
+    char body[8192];
+    ASSERT_TRUE(ai_build_request_body_ex(&conv, NULL, body, sizeof(body), 0,
+                                         "anthropic") > 0);
+    ASSERT_TRUE(strstr(body, "\"tool_use_id\":\"call_4\"") != NULL);
+    ASSERT_TRUE(strstr(body, "not run: Nutshell ran out of memory") != NULL);
+    ai_conv_reset(&conv);
+
+    /* a failure at a later part falls back the same way */
+    ai_conv_init(&conv, "m");
+    alloc_plan(4, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 0);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(conv.messages[0].n_parts, 5);
+    ASSERT_NULL(conv.messages[0].parts[3].content);
+    ai_conv_reset(&conv);
+
+    /* nothing can be allocated: -1 and nothing stored */
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    alloc_plan(0, 1);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -1);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 1);
+
+    /* the parts array comes, the first content does not, and the notes-only
+     * array does not either: the partial first array is freed (SAN=1) */
+    alloc_plan(0, 2);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -1);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 1);
+    ai_conv_reset(&conv);
+    for (int i = 0; i < 5; i++) free(bufs[i]);
+    TEST_END();
+}
+
+/* A note a part carries is the full AiToolResult note, never the 256-byte cut
+ * of a stored message, and the cap's truncation line stays at its end. */
+int test_agentic_parts_keep_full_note(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    strcpy(call.name, "web_fetch");
+    AiToolResult r;
+    memset(&r, 0, sizeof(r));
+    memset(r.tool_note, 'n', 400);
+    memcpy(r.tool_note + 400, "\xC3\xA9", 2);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
+    ASSERT_EQ(conv.messages[0].n_parts, 1);
+    ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, r.tool_note);
+    ASSERT_NULL(conv.messages[0].parts[0].content);
+    ai_conv_reset(&conv);
     TEST_END();
 }

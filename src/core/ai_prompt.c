@@ -9,6 +9,8 @@
 #include "markdown.h"
 #include "md_table.h"
 #include "exec_scan.h"
+#include "run_command.h"
+#include <stdarg.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,9 +99,24 @@ int ai_msg_set_content(AiMessage *msg, const char *data, size_t len)
     return 0;
 }
 
+/* The allocator for ai_conv_copy()'s parts (see ai_prompt_set_alloc_for_test). */
+static void *(*g_alloc)(size_t) = malloc;
+
+void ai_prompt_set_alloc_for_test(void *(*alloc)(size_t))
+{
+    g_alloc = alloc ? alloc : malloc;
+}
+
 void ai_msg_free(AiMessage *msg)
 {
     if (!msg) return;
+    if (msg->parts) {
+        for (int i = 0; i < msg->n_parts; i++)
+            free(msg->parts[i].content);
+        free(msg->parts);
+        msg->parts = NULL;
+    }
+    msg->n_parts = 0;
     if (msg->content_overflow) {
         free(msg->content_overflow);
         msg->content_overflow = NULL;
@@ -200,6 +217,8 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
         m->tool_calls = NULL;
         m->n_tool_calls = 0;
         m->reasoning = NULL;
+        m->parts = NULL;
+        m->n_parts = 0;
         dst->msg_count = i + 1;   /* a failure below frees what we have */
 
         if (sm->content_overflow) {
@@ -224,6 +243,25 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
             m->reasoning = (char *)malloc(rl + 1);
             if (!m->reasoning) goto fail;
             memcpy(m->reasoning, sm->reasoning, rl + 1);
+        }
+        if (sm->parts && sm->n_parts > 0) {
+            size_t sz = (size_t)sm->n_parts * sizeof(AiToolPart);
+            m->parts = (AiToolPart *)g_alloc(sz);
+            if (!m->parts) goto fail;
+            memcpy(m->parts, sm->parts, sz);
+            /* the copy owns each content: n_parts counts only the parts
+             * whose content is settled, so a failure frees exactly those */
+            for (int k = 0; k < sm->n_parts; k++)
+                m->parts[k].content = NULL;
+            m->n_parts = sm->n_parts;
+            for (int k = 0; k < sm->n_parts; k++) {
+                const AiToolPart *sp = &sm->parts[k];
+                if (!sp->content) continue;
+                m->parts[k].content = (char *)g_alloc(sp->content_len + 1);
+                if (!m->parts[k].content) goto fail;
+                memcpy(m->parts[k].content, sp->content, sp->content_len);
+                m->parts[k].content[sp->content_len] = '\0';
+            }
         }
     }
     return 0;
@@ -250,6 +288,8 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->tool_calls = NULL;
     m->n_tool_calls = 0;
     m->reasoning = NULL;
+    m->parts = NULL;
+    m->n_parts = 0;
     conv->msg_count++;
     return 0;
 }
@@ -471,8 +511,14 @@ int ai_context_estimate_tokens(const AiConversation *conv)
 {
     if (!conv) return 0;
     int total_chars = 0;
-    for (int i = 0; i < conv->msg_count; i++)
-        total_chars += (int)strlen(ai_msg_content(&conv->messages[i]));
+    for (int i = 0; i < conv->msg_count; i++) {
+        const AiMessage *m = &conv->messages[i];
+        total_chars += (int)strlen(ai_msg_content(m));
+        /* a results turn: what each part sends, its output and its note */
+        for (int k = 0; m->parts && k < m->n_parts; k++)
+            total_chars += (int)m->parts[k].content_len +
+                           (int)strlen(m->parts[k].tool_note);
+    }
     return total_chars / 4;
 }
 
@@ -672,9 +718,96 @@ static const char *role_str(AiRole role)
     return "user";
 }
 
-/* The content a message is sent with. Returns msg's own text when nothing is
- * added (*owned stays NULL), else a malloc'd string the caller frees through
- * *owned. NULL on allocation failure. *out_len is the length. */
+/* One tool answer as the builder sees it: a part of a results turn, or the
+ * single answer a parts-less AI_ROLE_TOOL message carries in its own fields. */
+typedef struct {
+    const char *id, *name, *note;
+    const char *content;     /* never NULL */
+    size_t content_len;
+    int is_error;
+} ToolView;
+
+static int tool_view_count(const AiMessage *msg)
+{
+    return (msg->parts && msg->n_parts > 0) ? msg->n_parts : 1;
+}
+
+static ToolView tool_view_get(const AiMessage *msg, int k)
+{
+    ToolView v;
+    if (msg->parts && msg->n_parts > 0) {
+        const AiToolPart *p = &msg->parts[k];
+        v.id = p->tool_call_id;
+        v.name = p->tool_name;
+        v.note = p->tool_note;
+        v.content = p->content ? p->content : "";
+        v.content_len = p->content ? p->content_len : 0;
+        v.is_error = p->is_error;
+    } else {
+        v.id = msg->tool_call_id;
+        v.name = msg->tool_name;
+        v.note = msg->tool_note;
+        v.content = ai_msg_content(msg);
+        v.content_len = strlen(v.content);
+        v.is_error = msg->is_tool_error;
+    }
+    return v;
+}
+
+/* The text a tool answer is sent with. Returns its own content when nothing
+ * is added (*owned stays NULL), else a malloc'd string the caller frees
+ * through *owned. NULL on allocation failure. *out_len is the length. A cut
+ * part (omit_at, omitted_bytes) is sent as stored: head and tail run
+ * together; framing the two halves is the run_command result builder's job
+ * (spec decision 12). */
+static const char *frame_tool_text(const ToolView *v, const AiBodyFrame *frame,
+                                   char **owned, size_t *out_len)
+{
+    const char *delim = frame ? frame->delim : NULL;
+    const char *content = v->content;
+    size_t clen = v->content_len;
+    size_t nlen = strlen(v->note);
+    *owned = NULL;
+    *out_len = clen;
+
+    if (nlen == 0) {
+        if (!delim || clen == 0) return content;
+    } else if (clen == 0) {
+        /* the note alone: no lead, no block */
+        if (delim) {
+            *owned = ai_data_block_dup(NULL, delim, NULL, 0, v->note, out_len);
+        } else {
+            *owned = (char *)malloc(nlen + 1);
+            if (*owned) {
+                memcpy(*owned, v->note, nlen + 1);
+                *out_len = nlen;
+            }
+        }
+        return *owned;
+    }
+    if (!delim) {
+        /* content, then "\n" + note */
+        char *out = (char *)malloc(clen + 1 + nlen + 1);
+        if (!out) return NULL;
+        memcpy(out, content, clen);
+        out[clen] = '\n';
+        memcpy(out + clen + 1, v->note, nlen + 1);
+        *owned = out;
+        *out_len = clen + 1 + nlen;
+        return out;
+    }
+    size_t need = ai_data_lead_tool(v->name, NULL, 0);
+    char *lead = (char *)malloc(need + 1);
+    if (!lead) return NULL;
+    (void)ai_data_lead_tool(v->name, lead, need + 1);
+    *owned = ai_data_block_dup(lead, delim, content, clen, v->note, out_len);
+    free(lead);
+    return *owned;
+}
+
+/* The content a non-tool message is sent with. Returns msg's own text when
+ * nothing is added (*owned stays NULL), else a malloc'd string the caller
+ * frees through *owned. NULL on allocation failure. *out_len is the length. */
 static const char *frame_content(const AiMessage *msg, const AiBodyFrame *frame,
                                  int block_here, char **owned, size_t *out_len)
 {
@@ -683,45 +816,6 @@ static const char *frame_content(const AiMessage *msg, const AiBodyFrame *frame,
     const char *delim = frame ? frame->delim : NULL;
     *owned = NULL;
     *out_len = clen;
-
-    if (msg->role == AI_ROLE_TOOL) {
-        size_t nlen = strlen(msg->tool_note);
-        if (nlen == 0) {
-            if (!delim || clen == 0) return content;
-        } else if (clen == 0) {
-            /* the note alone: no lead, no block */
-            if (delim) {
-                *owned = ai_data_block_dup(NULL, delim, NULL, 0,
-                                           msg->tool_note, out_len);
-            } else {
-                *owned = (char *)malloc(nlen + 1);
-                if (*owned) {
-                    memcpy(*owned, msg->tool_note, nlen + 1);
-                    *out_len = nlen;
-                }
-            }
-            return *owned;
-        }
-        if (!delim) {
-            /* content, then "\n" + note */
-            char *out = (char *)malloc(clen + 1 + nlen + 1);
-            if (!out) return NULL;
-            memcpy(out, content, clen);
-            out[clen] = '\n';
-            memcpy(out + clen + 1, msg->tool_note, nlen + 1);
-            *owned = out;
-            *out_len = clen + 1 + nlen;
-            return out;
-        }
-        size_t need = ai_data_lead_tool(msg->tool_name, NULL, 0);
-        char *lead = (char *)malloc(need + 1);
-        if (!lead) return NULL;
-        (void)ai_data_lead_tool(msg->tool_name, lead, need + 1);
-        *owned = ai_data_block_dup(lead, delim, content, clen, msg->tool_note,
-                                   out_len);
-        free(lead);
-        return *owned;
-    }
 
     if (block_here) {
         const char *snap = frame->snapshot;
@@ -756,6 +850,19 @@ static size_t emit_msg_content(const AiMessage *msg, const AiBodyFrame *frame,
     char *owned = NULL;
     size_t len = 0;
     const char *text = frame_content(msg, frame, block_here, &owned, &len);
+    if (!text) return 0;
+    pos = json_escape_string(text, len, buf, buf_size, pos, 1);
+    free(owned);
+    return pos;
+}
+
+/* Escape one tool answer as the content string of its block or message. */
+static size_t emit_tool_view(const ToolView *v, const AiBodyFrame *frame,
+                             char *buf, size_t buf_size, size_t pos)
+{
+    char *owned = NULL;
+    size_t len = 0;
+    const char *text = frame_tool_text(v, frame, &owned, &len);
     if (!text) return 0;
     pos = json_escape_string(text, len, buf, buf_size, pos, 1);
     free(owned);
@@ -845,7 +952,9 @@ static size_t build_body_core(const AiConversation *conv,
     for (int i = msg_start; i < conv->msg_count; i++) {
         const AiMessage *msg = &conv->messages[i];
 
-        /* ---- Anthropic: coalesce consecutive AI_ROLE_TOOL messages ---- */
+        /* ---- Anthropic: one user turn of tool_result blocks. A results turn
+         * is one message of K parts; a run of consecutive parts-less tool
+         * messages (the older form) is joined the same way. ---- */
         if (is_anthropic && msg->role == AI_ROLE_TOOL) {
             /* Find the end of this run of tool-result messages */
             int run_end = i;
@@ -866,40 +975,45 @@ static size_t build_body_core(const AiConversation *conv,
             memcpy(buf + pos, tool_user_open, tuo_len);
             pos += tuo_len;
 
+            int first_block = 1;
             for (int j = i; j <= run_end; j++) {
                 const AiMessage *tm = &conv->messages[j];
-                if (j > i) {
+                for (int k = 0; k < tool_view_count(tm); k++) {
+                    ToolView tv = tool_view_get(tm, k);
+                    if (!first_block) {
+                        if (pos + 1 >= buf_size) return 0;
+                        buf[pos++] = ',';
+                    }
+                    first_block = 0;
+                    /* {"type":"tool_result","tool_use_id":"...","content":"..."} */
+                    int rn = snprintf(buf + pos, buf_size - pos,
+                                      "{\"type\":\"tool_result\",\"tool_use_id\":");
+                    if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+                    pos += (size_t)rn;
+
+                    pos = json_escape_string(tv.id, strlen(tv.id), buf, buf_size, pos, 1);
+                    if (pos == 0) return 0;
+
+                    const char *content_key = ",\"content\":";
+                    size_t ck_len = strlen(content_key);
+                    if (pos + ck_len >= buf_size) return 0;
+                    memcpy(buf + pos, content_key, ck_len);
+                    pos += ck_len;
+
+                    pos = emit_tool_view(&tv, frame, buf, buf_size, pos);
+                    if (pos == 0) return 0;
+
+                    if (tv.is_error) {
+                        const char *err_flag = ",\"is_error\":true";
+                        size_t ef_len = strlen(err_flag);
+                        if (pos + ef_len >= buf_size) return 0;
+                        memcpy(buf + pos, err_flag, ef_len);
+                        pos += ef_len;
+                    }
+
                     if (pos + 1 >= buf_size) return 0;
-                    buf[pos++] = ',';
+                    buf[pos++] = '}';
                 }
-                /* {"type":"tool_result","tool_use_id":"...","content":"..."} */
-                int rn = snprintf(buf + pos, buf_size - pos,
-                                  "{\"type\":\"tool_result\",\"tool_use_id\":");
-                if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
-                pos += (size_t)rn;
-
-                pos = json_escape_string(tm->tool_call_id, strlen(tm->tool_call_id), buf, buf_size, pos, 1);
-                if (pos == 0) return 0;
-
-                const char *content_key = ",\"content\":";
-                size_t ck_len = strlen(content_key);
-                if (pos + ck_len >= buf_size) return 0;
-                memcpy(buf + pos, content_key, ck_len);
-                pos += ck_len;
-
-                pos = emit_msg_content(tm, frame, 0, buf, buf_size, pos);
-                if (pos == 0) return 0;
-
-                if (tm->is_tool_error) {
-                    const char *err_flag = ",\"is_error\":true";
-                    size_t ef_len = strlen(err_flag);
-                    if (pos + ef_len >= buf_size) return 0;
-                    memcpy(buf + pos, err_flag, ef_len);
-                    pos += ef_len;
-                }
-
-                if (pos + 1 >= buf_size) return 0;
-                buf[pos++] = '}';
             }
 
             /* Close content array and user wrapper */
@@ -914,33 +1028,36 @@ static size_t build_body_core(const AiConversation *conv,
             continue;
         }
 
-        /* ---- OpenAI: tool result message ---- */
+        /* ---- OpenAI: one "tool" message per answer ---- */
         if (!is_anthropic && msg->role == AI_ROLE_TOOL) {
-            if (emitted) {
+            for (int k = 0; k < tool_view_count(msg); k++) {
+                ToolView tv = tool_view_get(msg, k);
+                if (emitted) {
+                    if (pos + 1 >= buf_size) return 0;
+                    buf[pos++] = ',';
+                }
+                emitted = 1;
+
+                int rn = snprintf(buf + pos, buf_size - pos,
+                                  "{\"role\":\"tool\",\"tool_call_id\":");
+                if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+                pos += (size_t)rn;
+
+                pos = json_escape_string(tv.id, strlen(tv.id), buf, buf_size, pos, 1);
+                if (pos == 0) return 0;
+
+                const char *tc_content = ",\"content\":";
+                size_t tcc_len = strlen(tc_content);
+                if (pos + tcc_len >= buf_size) return 0;
+                memcpy(buf + pos, tc_content, tcc_len);
+                pos += tcc_len;
+
+                pos = emit_tool_view(&tv, frame, buf, buf_size, pos);
+                if (pos == 0) return 0;
+
                 if (pos + 1 >= buf_size) return 0;
-                buf[pos++] = ',';
+                buf[pos++] = '}';
             }
-            emitted = 1;
-
-            int rn = snprintf(buf + pos, buf_size - pos,
-                              "{\"role\":\"tool\",\"tool_call_id\":");
-            if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
-            pos += (size_t)rn;
-
-            pos = json_escape_string(msg->tool_call_id, strlen(msg->tool_call_id), buf, buf_size, pos, 1);
-            if (pos == 0) return 0;
-
-            const char *tc_content = ",\"content\":";
-            size_t tcc_len = strlen(tc_content);
-            if (pos + tcc_len >= buf_size) return 0;
-            memcpy(buf + pos, tc_content, tcc_len);
-            pos += tcc_len;
-
-            pos = emit_msg_content(msg, frame, 0, buf, buf_size, pos);
-            if (pos == 0) return 0;
-
-            if (pos + 1 >= buf_size) return 0;
-            buf[pos++] = '}';
             continue;
         }
 
@@ -1492,26 +1609,42 @@ int ai_provider_runcmd(const char *provider, int mode)
     return ai_runcmd_auto_default(provider);
 }
 
+/* The token counts of a chunk the tool parser consumed without handing it to
+ * ai_parse_stream_chunk (Anthropic's message_delta that ends a round carries
+ * the output count). Only a chunk that mentions "usage" can hold one. */
+static void chunk_token_counts(const char *json, int *in_out, int *out_out)
+{
+    if (!json || (!in_out && !out_out) || !strstr(json, "\"usage\"")) return;
+    (void)ai_parse_stream_chunk(json, NULL, 0, NULL, 0, in_out, out_out);
+}
+
 int ai_parse_stream_chunk_ex(const char *json,
                              char *content_out, size_t content_size,
                              char *thinking_out, size_t thinking_size,
                              AiToolStreamState *tool_stream,
-                             const char *provider)
+                             const char *provider,
+                             int *input_tokens_out, int *output_tokens_out)
 {
     if (!tool_stream)
         return ai_parse_stream_chunk(json, content_out, content_size,
                                      thinking_out, thinking_size,
-                                     NULL, NULL);
+                                     input_tokens_out, output_tokens_out);
+
+    if (input_tokens_out) *input_tokens_out = 0;
+    if (output_tokens_out) *output_tokens_out = 0;
 
     if (provider && strcmp(provider, "anthropic") == 0) {
         int trc = ai_parse_tool_stream_anthropic(json, tool_stream);
-        if (trc == 1) return 2;   /* tool_use stop */
-        if (trc == 2) return 1;   /* end_turn / message_stop */
+        if (trc == 1 || trc == 2) {
+            /* the round's last chunk: tool_use stop, or end_turn */
+            chunk_token_counts(json, input_tokens_out, output_tokens_out);
+            return trc == 1 ? 2 : 1;
+        }
         if (trc == -1) return -1; /* error */
         /* trc == 0: normal chunk — also extract any text/thinking deltas */
         return ai_parse_stream_chunk(json, content_out, content_size,
                                      thinking_out, thinking_size,
-                                     NULL, NULL);
+                                     input_tokens_out, output_tokens_out);
     } else {
         /* OpenAI-compatible. The tool parser has already accumulated this
          * chunk's tool_calls; the text of a chunk that also carries a
@@ -1521,7 +1654,7 @@ int ai_parse_stream_chunk_ex(const char *json,
         if (trc == -1) return -1; /* error */
         int src = ai_parse_stream_chunk(json, content_out, content_size,
                                         thinking_out, thinking_size,
-                                        NULL, NULL);
+                                        input_tokens_out, output_tokens_out);
         if (trc == 1) return 2;   /* finish_reason tool_calls */
         if (trc == 2) return 1;   /* finish_reason stop */
         return src;
@@ -2124,6 +2257,60 @@ int ai_cmd_waiting_text(char *buf, size_t buf_size)
     return snprintf(buf, buf_size, "(waiting for output.)");
 }
 
+/* Append formatted text to the save buffer, never past its end: pos stops at
+ * buf_size - 1 once the text no longer fits. */
+static void save_put(char *buf, size_t buf_size, size_t *pos,
+                     const char *fmt, ...)
+{
+    if (*pos + 1 >= buf_size) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *pos, buf_size - *pos, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    size_t room = buf_size - *pos - 1;
+    *pos += (size_t)n < room ? (size_t)n : room;
+}
+
+/* The calls of an assistant turn, one line each: "$ <command>" for a
+ * run_command call whose input reads, "[tool: <name>]" for anything else. */
+static void save_put_calls(char *buf, size_t buf_size, size_t *pos,
+                           const AiMessage *msg)
+{
+    for (int t = 0; msg->tool_calls && t < msg->n_tool_calls; t++) {
+        const AiToolCall *tc = &msg->tool_calls[t];
+        char cmd[RUNCMD_COMMAND_MAX + 1], note[RUNCMD_NOTE_MAX];
+        if (strcmp(tc->name, RUNCMD_TOOL_NAME) == 0 &&
+            runcmd_parse_input(tc->input_json, cmd, note) == RUNCMD_PARSE_OK)
+            save_put(buf, buf_size, pos, "$ %s\n", cmd);
+        else
+            save_put(buf, buf_size, pos, "[tool: %s]\n", tc->name);
+    }
+}
+
+/* One part of a results turn as an output block: head, the omission marker
+ * when the output was cut, tail, then Nutshell's note. */
+static void save_put_part(char *buf, size_t buf_size, size_t *pos,
+                          const ToolView *v, size_t omit_at, size_t omitted)
+{
+    save_put(buf, buf_size, pos, "--- Output: %s ---\n", v->name);
+    if (v->content_len > 0) {
+        if (omitted > 0 && omit_at <= v->content_len) {
+            save_put(buf, buf_size, pos, "%.*s\n", (int)omit_at, v->content);
+            save_put(buf, buf_size, pos,
+                     "[\xE2\x80\xA6 %zu bytes omitted \xE2\x80\xA6]\n", omitted);
+            save_put(buf, buf_size, pos, "%.*s\n",
+                     (int)(v->content_len - omit_at), v->content + omit_at);
+        } else {
+            save_put(buf, buf_size, pos, "%.*s\n", (int)v->content_len,
+                     v->content);
+        }
+    }
+    if (v->note[0])
+        save_put(buf, buf_size, pos, "%s\n", v->note);
+    save_put(buf, buf_size, pos, "\n");
+}
+
 size_t ai_build_save_text(const AiConversation *conv,
                            char *const *thinking, int show_thinking,
                            char *buf, size_t buf_size)
@@ -2131,37 +2318,41 @@ size_t ai_build_save_text(const AiConversation *conv,
     if (!conv || !buf || buf_size == 0) return 0;
 
     size_t pos = 0;
-    int n;
+    buf[0] = '\0';
 
-    n = snprintf(buf + pos, buf_size - pos, "AI Assist Conversation\n"
-                 "Model: %s\n"
-                 "========================================\n\n",
-                 conv->model);
-    if (n > 0) pos += (size_t)n;
+    save_put(buf, buf_size, &pos, "AI Assist Conversation\n"
+             "Model: %s\n"
+             "========================================\n\n",
+             conv->model);
 
-    for (int i = 1; i < conv->msg_count && pos < buf_size; i++) {
+    for (int i = 1; i < conv->msg_count && pos + 1 < buf_size; i++) {
         const AiMessage *msg = &conv->messages[i];
 
         if (msg->role == AI_ROLE_USER) {
-            n = snprintf(buf + pos, buf_size - pos,
-                         "--- You ---\n%s\n\n", ai_msg_content(msg));
-            if (n > 0) pos += (size_t)n;
+            save_put(buf, buf_size, &pos, "--- You ---\n%s\n\n",
+                     ai_msg_content(msg));
         } else if (msg->role == AI_ROLE_ASSISTANT) {
             if (show_thinking && thinking && thinking[i] &&
                 thinking[i][0]) {
-                n = snprintf(buf + pos, buf_size - pos,
-                             "--- Thinking ---\n%s\n\n", thinking[i]);
-                if (n > 0) pos += (size_t)n;
+                save_put(buf, buf_size, &pos, "--- Thinking ---\n%s\n\n",
+                         thinking[i]);
             }
-            n = snprintf(buf + pos, buf_size - pos,
-                         "--- AI ---\n%s\n\n", ai_msg_content(msg));
-            if (n > 0) pos += (size_t)n;
+            save_put(buf, buf_size, &pos, "--- AI ---\n%s\n",
+                     ai_msg_content(msg));
+            save_put_calls(buf, buf_size, &pos, msg);
+            save_put(buf, buf_size, &pos, "\n");
+        } else if (msg->role == AI_ROLE_TOOL && msg->parts &&
+                   msg->n_parts > 0) {
+            for (int k = 0; k < msg->n_parts; k++) {
+                ToolView tv = tool_view_get(msg, k);
+                save_put_part(buf, buf_size, &pos, &tv, msg->parts[k].omit_at,
+                              msg->parts[k].omitted_bytes);
+            }
         }
     }
 
-    if (pos >= buf_size) pos = buf_size - 1;
-    buf[pos] = '\0';
-    return pos;
+    buf[pos < buf_size ? pos : buf_size - 1] = '\0';
+    return pos < buf_size ? pos : buf_size - 1;
 }
 
 void ai_build_auth_headers(const char *provider, const char *api_key,

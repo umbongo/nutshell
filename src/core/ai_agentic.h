@@ -57,20 +57,32 @@ int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
  * 0 otherwise (also for a NULL result or NULL content). */
 int agentic_cap_tool_result(AiToolResult *r);
 
-/* Add tool result messages to the conversation.
- * Each result is capped (agentic_cap_tool_result) on a private copy before it
- * is stored, so the caller's results are never modified and still own their
- * content; except a run_command result, whose executor has already bounded
- * it. tool_note is copied into the stored message, cut on a UTF-8 boundary
- * to AI_TOOL_NOTE_MAX - 1 bytes (the truncation line, when the cap added
- * one, is kept and the note before it shortened).
- * calls: array of tool calls (used to copy tool names).
+/* Add one round's results to the conversation as ONE AI_ROLE_TOOL message
+ * whose parts are the results, in order (spec decision 11: a round costs one
+ * slot, not one per call).
+ * Each result's content is capped (agentic_cap_tool_result) on a private copy
+ * before it is stored, so the caller's results are never modified and still
+ * own their content; except a run_command result, whose executor has already
+ * bounded it. A part keeps the result's whole tool_note (AI_TOOL_PART_NOTE_MAX;
+ * the truncation line, when the cap added one, ends it) and its omit_at and
+ * omitted_bytes. An empty result stores no content.
+ * calls: array of tool calls (used to copy tool names), or NULL.
  * results: array of tool results.
- * n_results: number of results.
- * Returns 0 on success, -1 if conversation is full. */
+ * n_results: number of results; 0 stores nothing and returns 0.
+ * Out of memory: the round is stored as a notes-only turn instead, one part
+ * per call with no content and the note "not run: Nutshell ran out of
+ * memory", so no call is left unanswered (spec decision 25).
+ * Returns 0 on success, -1 storing nothing when the conversation is full or
+ * when even the notes-only array cannot be allocated (the open assistant turn
+ * is then the caller's to drop). */
 int agentic_add_tool_results(AiConversation *conv,
                              const AiToolCall *calls,
                              const AiToolResult *results, int n_results);
+
+/* TEST ONLY. Replace the allocator agentic_add_tool_results() uses for the
+ * parts array and each part's content (default malloc; NULL restores it), so a
+ * test can fail one allocation. Not for product code. */
+void agentic_set_alloc_for_test(void *(*alloc)(size_t));
 
 /* Generate a truncation warning message.
  * tool_name: name of the tool whose output was cut.
