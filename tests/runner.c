@@ -3244,6 +3244,18 @@ int test_settings_entry_or_keep_range(void);
 int test_settings_entry_or_keep_zero_ok(void);
 int test_settings_entry_or_keep_huge_unsigned(void);
 
+/* test_settings_help.c */
+int test_settings_help_table_matches_enum(void);
+int test_settings_help_get_out_of_range(void);
+int test_settings_help_labels_and_pages(void);
+int test_settings_help_text_shape(void);
+int test_settings_help_defaults_match_config(void);
+int test_settings_help_model_names_default(void);
+int test_settings_help_ranges_in_text(void);
+int test_settings_help_keep_entries(void);
+int test_settings_help_font_sizes_and_notes(void);
+int test_settings_help_labels_match_sources(void);
+
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
 int test_sl_scale_144_is_one_and_half(void);
@@ -7145,6 +7157,16 @@ int main(void) {
     failed += test_settings_entry_or_keep_range();
     failed += test_settings_entry_or_keep_zero_ok();
     failed += test_settings_entry_or_keep_huge_unsigned();
+    failed += test_settings_help_table_matches_enum();
+    failed += test_settings_help_get_out_of_range();
+    failed += test_settings_help_labels_and_pages();
+    failed += test_settings_help_text_shape();
+    failed += test_settings_help_defaults_match_config();
+    failed += test_settings_help_model_names_default();
+    failed += test_settings_help_ranges_in_text();
+    failed += test_settings_help_keep_entries();
+    failed += test_settings_help_font_sizes_and_notes();
+    failed += test_settings_help_labels_match_sources();
 
     printf("\n--- Design System: scale & type ---\n");
     failed += test_ns_scale_identity_at_96();
