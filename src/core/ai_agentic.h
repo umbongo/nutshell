@@ -144,6 +144,13 @@ int agentic_sanitize_tool_inputs(AiToolCall *calls, int n);
 int agentic_room_for_tool_round(const AiConversation *conv,
                                 const AiNoteQueue *q);
 
+/* 1 when, with the assistant tool turn ALREADY stored, the conversation has
+ * room for the results turn, the reply that follows and the notes queued in
+ * `q` (NULL counts 0): msg_count + 2 + q->count <= AI_MAX_MESSAGES. 0 for a
+ * NULL conversation. The run_command finish's relaunch check; it must not use
+ * agentic_room_for_tool_round, which counts the stored turn a second time. */
+int agentic_room_for_finish(const AiConversation *conv, const AiNoteQueue *q);
+
 /* What the stream thread does after the conversation took (or refused) a tool
  * turn or a round's results (Task B13; spec decision 25, R37). */
 typedef enum {

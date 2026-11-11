@@ -454,6 +454,15 @@ checks below move ahead of that store, for every tool stop:
   So a conversation at 61 messages whose results turn (62) is followed by two
   queued notes stores the first (63), keeps the second queued, and stores the
   reply (64).
+  *(fix round 3, 2026-11-11)* The finish's relaunch check runs with the
+  assistant tool turn already stored, so it needs room only for the results
+  turn, the reply and the queued notes: `agentic_room_for_finish(conv, q)`
+  requires `msg_count + 2 + notes.count <= AI_MAX_MESSAGES` (a NULL queue
+  counts 0). The stream thread's `agentic_room_for_tool_round`, which counts
+  the turn as well (`+ 3`), is only for the check before the turn is stored.
+  A conversation at 61 messages when a reply with a call arrives passes the
+  thread's check (61 + 3 = 64), stores the turn (62), the results (63), and
+  relaunches; the reply is stored (64).
 - Otherwise it stores the assistant turn
   (`agentic_add_assistant_tool_msg_ex`: text, the reasoning, every
   `tool_use` block), executes no call, asks no tool card, posts no "using
@@ -537,6 +546,14 @@ displayed and idle, the continue path in a tool-results form, which starts with
 its own, `ai_rounds_continue(owner, !batch->user_acted)` as today, and no
 fresh snapshot (decision 22). Nothing is
 ever stored between an assistant turn and its results (decision 19).
+
+*(fix round 3, 2026-11-11)* The relaunch is only as good as its launch: when
+`ai_chat_send_tool_results` returns 0 (nothing launched: out of memory, a
+refused body, no thread; it has already said why in a status row), the finish
+takes the no-relaunch tail, so a batch approved behind this one starts
+(`ai_chat_maybe_start_next_batch`, for a cause that asks for it) and the
+activity line stops reading "Executing". `[EXEC]`'s continue path keeps its
+own tail (a follow-up).
 
 **8. Removal paths.** Each calls decision 7's function.
 

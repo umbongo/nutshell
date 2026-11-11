@@ -629,8 +629,11 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
 /* Relaunch from a conversation that now ends on a run_command results turn: no
  * USER turn. Same guard as the continue message; counts as a round
  * (ai_rounds_continue), flushes the displayed session's queued notes leaving
- * the reply's slot free, and launches the stream. */
-void ai_chat_send_tool_results(AiChatData *d, int unattended);
+ * the reply's slot free, and launches the stream. Returns 1 when a stream is
+ * in flight, 0 when nothing launched (the guard, or a launch that failed and
+ * said so in a status row): the run_command finish then takes its no-relaunch
+ * tail. */
+int ai_chat_send_tool_results(AiChatData *d, int unattended);
 
 /* ai_chat_status.c */
 void ai_chat_invalidate_status_line(AiChatData *d);

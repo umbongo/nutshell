@@ -1884,6 +1884,15 @@ next_coalesce:;
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
             }
             ai_response_msg_free(rmsg);
+            /* The stream ended in an error, so no reply follows to flush the
+             * notes queued while it ran: they go out now, before the next
+             * typed message, as they did when they sat in the conversation.
+             * keep_free 0: no launch follows. The owner's own queue, a
+             * background one included. A note that does not fit, or an open
+             * tool call, keeps them queued. */
+            if (src)
+                (void)ai_conv_flush_notes(ai_chat_owner_conv(d, src),
+                                          &src->notes, 0);
         }
 
         if (src) src->busy = 0;

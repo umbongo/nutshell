@@ -431,6 +431,13 @@ int agentic_room_for_tool_round(const AiConversation *conv,
     return conv->msg_count + 3 + notes <= AI_MAX_MESSAGES;
 }
 
+int agentic_room_for_finish(const AiConversation *conv, const AiNoteQueue *q)
+{
+    if (!conv) return 0;
+    int notes = q && q->count > 0 ? q->count : 0;
+    return conv->msg_count + 2 + notes <= AI_MAX_MESSAGES;
+}
+
 AgenticStep agentic_results_step(int rc)
 {
     if (rc == 0) return AGENTIC_STEP_GO;

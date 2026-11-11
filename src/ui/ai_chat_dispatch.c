@@ -309,8 +309,10 @@ void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch
     if (r && runcmd_cause_appends(cause)) {
         AiConversation *conv = ai_chat_owner_conv(d, owner);
         /* R45: the owner's queue, read here on the UI thread. Taken before the
-         * append, as the budget below is. */
-        room = agentic_room_for_tool_round(conv, &owner->notes);
+         * append, as the budget below is. The assistant tool turn is already
+         * stored, so only the results and the reply are still to come (not the
+         * stream thread's pre-store check, which counts the turn as well). */
+        room = agentic_room_for_finish(conv, &owner->notes);
         const int n = r->n_calls;
         /* 64 results are about 40 KB: on the heap. */
         AiToolResult *res = (AiToolResult *)calloc((size_t)(n > 0 ? n : 1),
@@ -334,9 +336,14 @@ void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch
     }
     ai_chat_batch_remove_recorded(d, owner, batch, 1);   /* frees batch */
 
-    if (runcmd_finish_relaunches(cause, displayed, owner->busy, stored, room)) {
-        ai_chat_send_tool_results(d, !user_acted);
-    } else {
+    /* A relaunch that fails to launch (out of memory, a refused body, no
+     * thread) leaves no request in flight: it takes the same tail as no
+     * relaunch, so a batch waiting behind this one is not stranded and the
+     * activity line does not keep reading "Executing". */
+    int launched = 0;
+    if (runcmd_finish_relaunches(cause, displayed, owner->busy, stored, room))
+        launched = ai_chat_send_tool_results(d, !user_acted);
+    if (!launched) {
         if (runcmd_cause_relaunches(cause) && displayed && stored && !room)
             chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, RUNCMD_NO_ROOM_ROW);
         /* No request follows: the activity line must not keep reading

@@ -410,6 +410,83 @@ int test_agentic_room_for_tool_round(void)
     TEST_END();
 }
 
+/* The finish's room (review M1): the assistant tool turn is already stored, so
+ * only the results and the reply are still to come. */
+int test_agentic_room_for_finish(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    memset(&conv, 0, sizeof(conv));
+    conv.msg_count = 62;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 1);
+    conv.msg_count = 63;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 0);
+    conv.msg_count = 0;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 1);
+    conv.msg_count = AI_MAX_MESSAGES;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 0);
+    ASSERT_EQ(agentic_room_for_finish(NULL, NULL), 0);
+
+    /* queued notes count one slot each; an empty queue counts nothing */
+    AiNoteQueue q;
+    memset(&q, 0, sizeof(q));
+    conv.msg_count = 60;
+    q.count = 2;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 1);   /* 60 + 2 + 2 = 64 */
+    conv.msg_count = 61;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 0);   /* 61 + 2 + 2 = 65 */
+    q.count = 1;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 1);   /* 61 + 2 + 1 = 64 */
+    q.count = 0;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 1);
+    TEST_END();
+}
+
+/* The sequence the review ran at 61 messages: the thread's check passes, the
+ * turn is stored (62), the finish stores the results (63), relaunches, and the
+ * reply is stored (64). The thread's function counts the turn a second time
+ * once it is stored, so it said "no room" here and the commands' results were
+ * never sent. */
+int test_agentic_finish_sequence_at_61(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    for (int i = 0; i < 61; i++)
+        ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_USER, "x"), 0);
+    ASSERT_EQ(conv.msg_count, 61);
+
+    /* the stream thread's check, before the turn is stored */
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 1);
+
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    snprintf(call.id, sizeof(call.id), "toolu_1");
+    snprintf(call.name, sizeof(call.name), "run_command");
+    snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(&conv, "", NULL, NULL, NULL,
+                                                &call, 1, NULL), 0);
+    ASSERT_EQ(conv.msg_count, 62);
+
+    /* the finish's check, with the turn stored */
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 0);   /* the old test */
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 1);
+
+    static const char out[] = "files";
+    AiToolResult res;
+    memset(&res, 0, sizeof(res));
+    snprintf(res.tool_use_id, sizeof(res.tool_use_id), "toolu_1");
+    res.content = (char *)(uintptr_t)out;
+    res.content_len = strlen(out);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &res, 1), 0);
+    ASSERT_EQ(conv.msg_count, 63);
+    ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_ASSISTANT, "done"), 0);
+    ASSERT_EQ(conv.msg_count, 64);
+    ASSERT_EQ(ai_conv_tool_pairs_well_formed(&conv), 1);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
 /* A run_command result is bounded by its executor (64 KiB, escaped): the
  * generic cap must not cut or strip it a second time. Another tool's result
  * of the same size is still capped. */

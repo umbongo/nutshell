@@ -3336,6 +3336,8 @@ int test_agentic_sanitize_json_validate(void);
 int test_agentic_notes_only_drops_cut_note(void);
 int test_agentic_note_copy_keeps_marker(void);
 int test_agentic_room_for_tool_round(void);
+int test_agentic_room_for_finish(void);
+int test_agentic_finish_sequence_at_61(void);
 int test_agentic_runcmd_result_not_capped(void);
 int test_agentic_long_note_copy_cut_safely(void);
 int test_agentic_results_one_turn(void);
@@ -7533,6 +7535,8 @@ int main(void) {
     failed += test_agentic_notes_only_drops_cut_note();
     failed += test_agentic_note_copy_keeps_marker();
     failed += test_agentic_room_for_tool_round();
+    failed += test_agentic_room_for_finish();
+    failed += test_agentic_finish_sequence_at_61();
     failed += test_agentic_runcmd_result_not_capped();
     failed += test_agentic_long_note_copy_cut_safely();
     failed += test_agentic_results_one_turn();

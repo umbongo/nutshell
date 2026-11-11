@@ -694,9 +694,9 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
     ai_chat_launch_stream_thread(d, "continue");
 }
 
-void ai_chat_send_tool_results(AiChatData *d, int unattended)
+int ai_chat_send_tool_results(AiChatData *d, int unattended)
 {
-    if (!d || !d->active_state || d->active_state->busy) return;
+    if (!d || !d->active_state || d->active_state->busy) return 0;
 
     ai_rounds_continue(d->active_state, unattended);
 
@@ -707,6 +707,9 @@ void ai_chat_send_tool_results(AiChatData *d, int unattended)
     ai_chat_start_indicator(d, "continuing");
 
     ai_chat_launch_stream_thread(d, "continue");
+    /* The launch sets busy only when a stream really started; a failure has
+     * said so in a status row (launch_failed). */
+    return d->active_state->busy ? 1 : 0;
 }
 
 #endif /* _WIN32 */
