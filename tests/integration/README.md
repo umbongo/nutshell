@@ -43,6 +43,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\50-window.ps1` | `help_shortcuts_sheet_opens_and_closes`: Help > Keyboard Shortcuts opens the modal sheet (captured by its own handle, main window disabled under it), a second open is ignored, Esc closes it and re-enables the main window |
 | `cases\50-window.ps1` | `help_shortcuts_sheet_fits_the_screen`: the sheet lies inside the work area at the current DPI; at 96 DPI on a 1920x1040 or larger work area it must be one page, with no scrollbar |
 | `cases\50-window.ps1` | `help_shortcuts_sheet_gallery`: `--ui-demo=shortcuts` on all four themes, the sheet captured by handle into `artifacts\gallery\<Theme>-shortcuts.png` |
+| `cases\50-window.ps1` | `settings_help_tool_count`: after Edit > Settings, the Settings dialog's hidden `tooltips_class32` windows (found by walking every top-level window, since `Get-NutshellWindows` lists visible ones only) hold exactly 82 and 1 tools by `TTM_GETTOOLCOUNT` (the controls' tips and the API key eye's); a second Edit > Settings leaves one Settings window, the same one |
 | `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
 | `cases\80-local-shell.ps1` | `local_shell` (`--local`: echo, exit, silent reconnect) and `local_shell_powershell` (a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit) |

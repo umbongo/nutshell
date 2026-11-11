@@ -175,6 +175,7 @@ static bool sel_trim(Selection *s, const Terminal *t)
 
 static bool sel_row_blank(const Terminal *t, const TermRow *r)
 {
+    if (!r) return true;      /* no row: nothing in it (unreachable while the live part covers it) */
     for (int c = 0; c < t->cols; c++)
         if (cell_text_codepoint(r->cells[c].codepoint) != (uint32_t)' ') return false;
     return true;

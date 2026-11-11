@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.74 \
+**Version**: v1.2.75 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -147,9 +147,10 @@ scrolls if you shrink it below the content.
 
 | Group | Pages |
 |-------|-------|
-| **General** | Appearance, Terminal, Logging, Debugging |
+| **General** | Appearance, Terminal, Logging |
 | **Connection** | SSH, Startup |
 | **AI Assistant** | Provider, Behaviour, Web Access |
+| | Debugging |
 | | About |
 
 #### General > Appearance
@@ -160,19 +161,21 @@ scrolls if you shrink it below the content.
   - **Moss & Mist** — light pastel colours
 - **Terminal font** — curated list of monospace fonts: Consolas (default), Cascadia Code, Cascadia Mono, Courier New, Inter, Lucida Console, Lucida Sans Typewriter, Fira Code, JetBrains Mono, Source Code Pro, Hack. Only fonts actually installed are offered.
 - **Font size** — discrete sizes from 6 to 20 pt
-- **AI assist font** — font for the AI chat panel; does not affect the terminal
+- **AI assist font** — font for code blocks and commands in the AI chat panel (replies and your messages stay in the interface font); does not affect the terminal. The panel reads it when it is created: if it has been opened since Nutshell started, the change shows after Undock or Dock, or after a restart
 
 #### General > Terminal
-- **Scrollback lines** — 100 to 50,000 (default: 10,000)
-- **Paste delay** — inter-line delay in milliseconds (0 to 5000)
+- **Scrollback lines** — lines kept above the screen once they scroll off, 100 to 50,000 (default: 10,000). A change applies to tabs opened after Save; tabs already open keep their size. Memory is used only as lines are kept: a new tab costs little, and a full buffer on a 200-column tab takes about 40 MB at 10,000 lines and 200 MB at 50,000, and briefly about as much again while the tab is resized. The assistant can read no more than the tab keeps, whatever Max terminal lines says
+- **Paste delay** — inter-line delay in milliseconds (0 to 5000; default: 350)
 - **Confirm before pasting** — show a preview dialog before every paste (default: on)
 
 #### General > Logging
 - **Log directory** — where log files are saved (default: same directory as the executable)
 - **Log name format** — strftime format string for log filenames (e.g. `%Y-%m-%d_%H-%M-%S`)
-- **Debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, its per-category levels, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log)
 
 Logging itself is started and stopped from **File > Start/Stop Logging**, not here.
+
+#### Debugging
+- **Debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, its per-category levels, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log)
 
 #### Connection > SSH
 - **Idle timeout** — disconnect after this many minutes with no user activity; 0 never disconnects. Keystrokes, mouse-wheel scrolling, tab switches and AI chat input all count as activity.
@@ -189,17 +192,17 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
 
 #### AI Assistant > Behaviour
-- **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens.
+- **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens. It can read no more than the tab keeps, which is Scrollback lines plus the rows on screen.
 - **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
 - **Render AI markdown** — format AI replies as markdown; turn off to see raw text. Headings, list/blockquote markers, and table header text pick up the theme's link hue, and code (inline and fenced) picks up the theme's info hue, so the structure of a reply reads at a glance
 - **Allowed** — the highest level a new session may run: Read / Unknown / Write / Critical (default: Read). Commands above it are blocked outright and show as held; commands at or below it ask first unless Auto-approve is on.
 - **Auto-approve by default** — start new sessions with Auto-approve on, so commands up to **Allowed** run without asking (default: off). With **Allowed** at Critical, Save asks you to confirm. The AI panel's status line changes both per session.
 
 #### AI Assistant > Web Access
+- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call. Whether a fetch asks first depends on Auto-approve (see [Tool Calls](#tool-calls)). With it off the AI is not offered the tool; if it calls `web_fetch` anyway, no card appears, a status row under the reply says "web_fetch is off: turn on Permit Web Fetch in Settings > AI Assistant > Web Access to allow it", and the AI is told the call was not run
 - **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
 - **Search URL** — shown only for the Custom search engine
 - **Max results** — search results returned to the AI per query (1 to 20)
-- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call. Whether a fetch asks first depends on Auto-approve (see [Tool Calls](#tool-calls)). With it off the AI is not offered the tool; if it calls `web_fetch` anyway, no card appears, a status row under the reply says "web_fetch is off: turn on Permit Web Fetch in Settings > AI Assistant > Web Access to allow it", and the AI is told the call was not run
 
 ### AI Chat Assistant
 

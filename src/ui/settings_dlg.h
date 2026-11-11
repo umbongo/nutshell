@@ -11,9 +11,13 @@
  *   e.g. after a GetOpenFileName browse dialog).
  * initial_page - a SETTINGS_PAGE_* (src/core/settings_layout.h) to open on,
  *   or -1 for the default (first selectable nav entry). An unrecognised
- *   page id falls back to the default too. */
-void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
-                        int initial_page);
+ *   page id falls back to the default too.
+ * Returns 1 when it ran a dialog (shown and closed), 0 when it ran none:
+ *   one is already open (it is brought to the front), cfg is NULL, or the
+ *   window could not be created. The caller must not refresh anything the
+ *   dialog could have changed on 0. */
+int settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
+                      int initial_page);
 
 /* --ui-demo=settings-debug: Settings opened on the Debugging page with
  * "Enable debugging" ticked in memory only. Save and Cancel both just close;

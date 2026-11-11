@@ -19,6 +19,7 @@
 #include "resource.h"
 #include "session_manager.h"
 #include "settings_dlg.h"
+#include "settings_entry.h"
 #include "help_guide.h"
 #include "cheatsheet_dlg.h"
 #include "shortcuts.h"
@@ -715,10 +716,14 @@ static void sync_session_grid(HWND hwnd, Session *s)
         DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "grid.sync",
              "rows_before=%d rows=%d cols_before=%d cols=%d client_w=%ld client_h=%ld",
              s->term->rows, rows, s->term->cols, cols, (long)rc.right, (long)rc.bottom);
-        term_resize(s->term, rows, cols);
-        term_mark_all_dirty(s->term);
-        dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-        if (s->io.ctx) s->io.resize(s->io.ctx, cols, rows);
+        /* A resize that could not allocate leaves the terminal at its old
+         * size: the display buffer and the remote end keep it too, and the
+         * next grid sync tries again. */
+        if (term_resize(s->term, rows, cols)) {
+            term_mark_all_dirty(s->term);
+            dispbuf_resize(&g_renderer.dispbuf, rows, cols);
+            if (s->io.ctx) s->io.resize(s->io.ctx, cols, rows);
+        }
     }
 }
 
@@ -1007,7 +1012,8 @@ static void selection_tick(HWND hwnd)
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
-    s->term = term_init(rows, cols, 3000);
+    s->term = term_init(rows, cols,
+                        settings_scrollback_for_new_tab(g_config ? &g_config->settings : NULL));
     s->log_id = ++g_next_log_id;
     s->term->log_id = s->log_id;
     render_stuck_init(&s->poll_stuck);
@@ -2330,7 +2336,8 @@ static void apply_config_colors(void)
  * no-key state's "Open Settings" button land on Provider. */
 static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
-    settings_dlg_show(parent, g_config, active_config_path(), initial_page);
+    if (!settings_dlg_show(parent, g_config, active_config_path(), initial_page))
+        return;   /* already open (brought forward) or never shown: nothing changed */
     dlog_configure(&g_config->settings);
 
     /* Reload theme from config (colour scheme may have changed) */
@@ -5633,11 +5640,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                       g_renderer.charWidth, g_renderer.charHeight,
                                       &rows, &cols)) {
                 if (cols != g_active_session->term->cols || rows != g_active_session->term->rows) {
-                    term_resize(g_active_session->term, rows, cols);
-                    term_mark_all_dirty(g_active_session->term);
-                    dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-                    if (g_active_session->io.ctx)
-                        g_active_session->io.resize(g_active_session->io.ctx, cols, rows);
+                    /* False: the terminal kept its old size (see the grid
+                     * sync above); the next WM_SIZE tries again. */
+                    if (term_resize(g_active_session->term, rows, cols)) {
+                        term_mark_all_dirty(g_active_session->term);
+                        dispbuf_resize(&g_renderer.dispbuf, rows, cols);
+                        if (g_active_session->io.ctx)
+                            g_active_session->io.resize(g_active_session->io.ctx, cols, rows);
+                    }
                 }
             }
             /* Always repaint the full window on resize so gutter areas

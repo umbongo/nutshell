@@ -6,6 +6,17 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* The allocator behind every allocation that may fail without ending the
+ * process: a scrollback row, a reflow, the alternate screen. term.h explains
+ * the hook. term_init() and the first screen of rows stay on xmalloc/xcalloc,
+ * which end the process when memory runs out, as every allocation made when a
+ * tab opens does. */
+static TermCallocFn s_calloc;
+
+void term_set_calloc(TermCallocFn fn) {
+    s_calloc = fn;
+}
+
 static TermRow *term_row_alloc(int cols) {
     TermRow *row = xmalloc(sizeof(TermRow));
     row->cells = xcalloc((size_t)cols, sizeof(TermCell));
@@ -31,6 +42,30 @@ static void term_row_fill(TermRow *row, int cols, TermAttr attr) {
     row->len = 0;
     row->dirty = true;
     row->wrapped = false;
+}
+
+/* A new row, filled as term_row_fill() fills one, through the replaceable
+ * allocator: the TermRow, then its cells. NULL when either fails; the first
+ * is freed when the second does, so a failure leaks nothing. */
+static TermRow *term_row_try_alloc(int cols, TermAttr attr) {
+    TermRow *row = (s_calloc ? s_calloc : calloc)(1, sizeof(TermRow));
+    if (!row) return NULL;
+    row->cells = (s_calloc ? s_calloc : calloc)((size_t)cols, sizeof(TermCell));
+    if (!row->cells) {
+        free(row);
+        return NULL;
+    }
+    term_row_fill(row, cols, attr);
+    return row;
+}
+
+/* Free every non-NULL slot of a whole ring array, then the array: a test may
+ * have left rows outside the live part, so the live part is not assumed. */
+static void term_ring_free(TermRow **lines, int capacity) {
+    if (!lines) return;
+    for (int i = 0; i < capacity; i++)
+        term_row_free(lines[i]);
+    free(lines);
 }
 
 Terminal *term_init(int rows, int cols, int max_scrollback) {
@@ -82,11 +117,13 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->primary_lines_recycled = 0;
     term->epoch                  = 0;
     term->write_gen              = 0;
+    term->grow_failing           = false;
+    term->resize_failing         = false;
 
+    /* The slot array starts all NULL. Only the live part holds rows: the
+     * screen's, here; term_scroll() adds one per line kept. */
     term->lines = xcalloc((size_t)term->lines_capacity, sizeof(TermRow *));
-    
-    // Pre-allocate all rows to avoid allocation during runtime
-    for (int i = 0; i < term->lines_capacity; i++) {
+    for (int i = 0; i < rows; i++) {
         term->lines[i] = term_row_alloc(cols);
         term_row_fill(term->lines[i], cols, term->current_attr);
     }
@@ -97,31 +134,31 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
 void term_free(Terminal *term) {
     if (!term) return;
 
-    if (term->lines) {
-        for (int i = 0; i < term->lines_capacity; i++)
-            term_row_free(term->lines[i]);
-        free(term->lines);
-    }
+    term_ring_free(term->lines, term->lines_capacity);
     /* When alt screen is active, primary_lines holds the saved primary buffer */
-    if (term->primary_lines) {
-        for (int i = 0; i < term->primary_lines_capacity; i++)
-            term_row_free(term->primary_lines[i]);
-        free(term->primary_lines);
-    }
+    term_ring_free(term->primary_lines, term->primary_lines_capacity);
     free(term);
 }
 
 /* Reflow old_lines (circular buffer, old_cols wide) into a newly-allocated
- * linear buffer at new_rows × new_cols.  Frees old_lines.
+ * buffer at new_rows × new_cols.  Reads old_lines and never frees or changes
+ * it: term_resize() frees it once every ring involved has been reflowed.
  * Cursor position is passed as screen-relative (row from top of visible area)
  * and returned as screen-relative in the new geometry.
+ *
+ * All or nothing. The counting pass knows how many rows the text needs; the
+ * slot array and exactly max(needed, new_rows) rows are then allocated, before
+ * the writing pass, through the replaceable allocator. On a failure whatever
+ * was obtained is freed, false is returned and no out parameter is written.
+ * On success the live part [out_start, out_start + out_count) holds rows and
+ * every other slot is NULL (term.h, term_logical_rows()).
  *
  * When the reflowed text needs more rows than the new buffer holds (narrowing
  * wraps lines into more rows), the OLDEST rows are dropped, as scrolling does,
  * never the newest: a first pass counts the output rows, the second writes
  * only those that fit. *out_dropped is how many were dropped; the caller adds
  * it to the ring's recycled counter so absolute line numbers stay monotonic. */
-static void term_reflow_buffer(
+static bool term_reflow_buffer(
     TermRow **old_lines, int old_capacity, int old_start, int old_count,
     int old_cols, int old_rows,
     int cur_row, int cur_col,        /* screen-relative cursor in */
@@ -139,6 +176,8 @@ static void term_reflow_buffer(
     int new_cursor_col = 0;
     bool cursor_after_full_row = false;
     int dropped = 0;
+    int needed = 0;      /* output rows the text needs, after the dropped ones */
+    int allocated = 0;   /* rows allocated: slots 0 .. allocated - 1 */
 
     /* Convert screen-relative cursor to buffer-absolute logical index */
     int old_screen_top = (old_count >= old_rows) ? (old_count - old_rows) : 0;
@@ -158,10 +197,15 @@ static void term_reflow_buffer(
         cursor_after_full_row = false;
 
         if (write) {
-            new_lines = xcalloc((size_t)new_capacity, sizeof(TermRow *));
-            for (int i = 0; i < new_capacity; i++) {
-                new_lines[i] = term_row_alloc(new_cols);
-                term_row_fill(new_lines[i], new_cols, fill_attr);
+            allocated = needed > new_rows ? needed : new_rows;
+            new_lines = (s_calloc ? s_calloc : calloc)((size_t)new_capacity, sizeof(TermRow *));
+            if (!new_lines) return false;
+            for (int i = 0; i < allocated; i++) {
+                new_lines[i] = term_row_try_alloc(new_cols, fill_attr);
+                if (!new_lines[i]) {
+                    term_ring_free(new_lines, new_capacity);
+                    return false;
+                }
             }
         }
 
@@ -238,6 +282,7 @@ static void term_reflow_buffer(
             if (new_cursor_row + 1 > total) total = new_cursor_row + 1;
             if (total < 1) total = 1;
             dropped = total > new_capacity ? total - new_capacity : 0;
+            needed = total - dropped;
         }
     }
 
@@ -249,27 +294,38 @@ static void term_reflow_buffer(
     int new_count = cur_new_row + 1;
     if (new_count > new_capacity) new_count = new_capacity;
 
-    /* Strip trailing empty rows, keeping at least the cursor row */
+    /* Strip trailing empty rows, keeping at least the cursor row. Slots in
+     * [needed, allocated) hold allocated blank rows (empty); only slots at or
+     * past `allocated` are NULL. */
     {
         int min_count = new_cursor_row + 1;
         if (min_count < 1) min_count = 1;
-        while (new_count > min_count && new_lines[new_count - 1]->len == 0)
+        while (new_count > min_count &&
+               (!new_lines[new_count - 1] || new_lines[new_count - 1]->len == 0))
             new_count--;
     }
 
-    /* Free old buffer */
-    for (int i = 0; i < old_capacity; i++)
-        term_row_free(old_lines[i]);
-    free(old_lines);
-
     /* Push content to bottom on expansion: prepend empty rows so the cursor
-     * stays near the bottom rather than floating mid-screen. */
+     * stays near the bottom rather than floating mid-screen. The padding
+     * slots lie at the end of the array, past the content in slots
+     * [0, new_count). A padding slot with no row takes a spare: a row from
+     * [new_count, allocated) that is not itself a padding slot (with a small
+     * max_scrollback the two ranges overlap). There are always enough:
+     * allocated >= new_rows, and the segment needs exactly new_rows. */
     int new_start = 0;
     if (new_rows > old_rows && old_count >= old_rows && new_count < new_rows) {
         int pad = new_rows - new_count;
         new_start = (new_capacity - pad) % new_capacity;
+        int spare = new_count;
         for (int i = 0; i < pad; i++) {
             int idx = (new_start + i) % new_capacity;
+            if (!new_lines[idx]) {
+                while (!new_lines[spare] ||
+                       ((spare - new_start + new_capacity) % new_capacity) < pad)
+                    spare++;
+                new_lines[idx] = new_lines[spare];
+                new_lines[spare] = NULL;
+            }
             term_row_fill(new_lines[idx], new_cols, fill_attr);
         }
         new_cursor_row += pad;
@@ -284,6 +340,22 @@ static void term_reflow_buffer(
      * (wiping it mid-screen instead of scrolling), and a later reflow
      * drops rows and the cursor that live beyond lines_count. */
     if (new_count < new_rows) new_count = new_rows;
+
+    /* Free every row outside the new segment, so that only the live part
+     * holds rows. After the strip new_count equals `needed`, and the padding
+     * above consumes exactly the spares in [needed, allocated), so as the
+     * code stands nothing is left to free here: this loop is unreachable
+     * defensive code, kept so the invariant holds whatever the counting pass
+     * decided. A slot at or past `allocated` is NULL or a padding slot, which
+     * is inside the segment. On the alternate screen (max_scrollback 0) the
+     * padding slots are already allocated, so nothing moves either. */
+    for (int i = 0; i < allocated; i++) {
+        if (new_lines[i] &&
+            ((i - new_start + new_capacity) % new_capacity) >= new_count) {
+            term_row_free(new_lines[i]);
+            new_lines[i] = NULL;
+        }
+    }
 
     /* Convert cursor back to screen-relative */
     int screen_top = (new_count >= new_rows) ? (new_count - new_rows) : 0;
@@ -309,45 +381,80 @@ static void term_reflow_buffer(
     *out_cursor_row = new_cursor_row;
     *out_cursor_col = new_cursor_col;
     *out_dropped    = (uint64_t)dropped;
+    return true;
 }
 
-void term_resize(Terminal *term, int rows, int cols) {
-    if (!term || rows <= 0 || cols <= 0) return;
-    if (term->rows == rows && term->cols == cols) return;
+bool term_resize(Terminal *term, int rows, int cols) {
+    if (!term || rows <= 0 || cols <= 0) return true;
+    if (term->rows == rows && term->cols == cols) return true;
 
     int old_rows = term->rows;
     int old_cols = term->cols;
     int old_lines = term->lines_count;
-    uint64_t dropped = 0;
 
-    /* Reflow the active buffer (alt-screen or primary).
-     * Alt-screen has no scrollback — allocate rows only. */
-    term_reflow_buffer(
+    /* Reflow into locals first, committing nothing: the active buffer
+     * (alt-screen or primary; the alt screen has no scrollback, so it
+     * allocates rows only) and, on the alt screen, the saved primary too, so
+     * term_alt_screen_exit() restores it at the correct dimensions. Either
+     * failing leaves the Terminal exactly as it was. */
+    TermRow **new_lines = NULL, **new_primary = NULL;
+    int new_cap = 0, new_count = 0, new_start = 0;
+    int new_pcap = 0, new_pcount = 0, new_pstart = 0;
+    TermCursor new_cursor = term->cursor;
+    TermCursor new_pcursor = term->primary_cursor;
+    uint64_t dropped = 0, pdropped = 0;
+
+    bool ok = term_reflow_buffer(
         term->lines, term->lines_capacity, term->lines_start, term->lines_count,
         old_cols, old_rows,
         term->cursor.row, term->cursor.col,
         rows, cols,
         term->alt_screen_active ? 0 : term->max_scrollback,
         term->current_attr,
-        &term->lines, &term->lines_capacity, &term->lines_count, &term->lines_start,
-        &term->cursor.row, &term->cursor.col, &dropped);
-    term->lines_recycled += dropped;
-
-    /* When on the alt screen, also reflow the saved primary buffer so that
-     * term_alt_screen_exit() restores it at the correct dimensions. */
-    if (term->alt_screen_active) {
-        term_reflow_buffer(
+        &new_lines, &new_cap, &new_count, &new_start,
+        &new_cursor.row, &new_cursor.col, &dropped);
+    if (ok && term->alt_screen_active) {
+        ok = term_reflow_buffer(
             term->primary_lines, term->primary_lines_capacity,
             term->primary_lines_start, term->primary_lines_count,
             old_cols, old_rows,
             term->primary_cursor.row, term->primary_cursor.col,
             rows, cols, term->max_scrollback,
             term->current_attr,
-            &term->primary_lines, &term->primary_lines_capacity,
-            &term->primary_lines_count, &term->primary_lines_start,
-            &term->primary_cursor.row, &term->primary_cursor.col, &dropped);
-        term->primary_lines_recycled += dropped;
+            &new_primary, &new_pcap, &new_pcount, &new_pstart,
+            &new_pcursor.row, &new_pcursor.col, &pdropped);
+        if (!ok) term_ring_free(new_lines, new_cap);
     }
+    if (!ok) {
+        /* One log line per failing streak, not one per WM_SIZE of a drag. */
+        if (!term->resize_failing) {
+            term->resize_failing = true;
+            DLOG(DLOG_TERM, DLOG_WARN, term->log_id, "term.resize.alloc_failed",
+                 "rows=%d cols=%d alt=%d", rows, cols,
+                 term->alt_screen_active ? 1 : 0);
+        }
+        return false;
+    }
+
+    /* Commit. Free the old rings slot by slot over the whole array. */
+    term_ring_free(term->lines, term->lines_capacity);
+    term->lines          = new_lines;
+    term->lines_capacity = new_cap;
+    term->lines_count    = new_count;
+    term->lines_start    = new_start;
+    term->cursor         = new_cursor;
+    term->lines_recycled += dropped;
+    if (term->alt_screen_active) {
+        term_ring_free(term->primary_lines, term->primary_lines_capacity);
+        term->primary_lines          = new_primary;
+        term->primary_lines_capacity = new_pcap;
+        term->primary_lines_count    = new_pcount;
+        term->primary_lines_start    = new_pstart;
+        term->primary_cursor         = new_pcursor;
+        term->primary_lines_recycled += pdropped;
+    }
+    term->resize_failing = false;
+    term->grow_failing = false;
 
     /* Reflow renumbered every row: a selection's line numbers no longer apply. */
     term->epoch++;
@@ -369,15 +476,52 @@ void term_resize(Terminal *term, int rows, int cols) {
          "rows_before=%d rows=%d cols_before=%d cols=%d lines_before=%d lines=%d alt=%d",
          old_rows, rows, old_cols, cols, old_lines, term->lines_count,
          term->alt_screen_active ? 1 : 0);
+    return true;
 }
 
 void term_scroll(Terminal *term) {
     if (term->lines_count < term->lines_capacity) {
-        /* Buffer not full: append new line */
+        /* Buffer not full: append new line. The slot past the live part is
+         * NULL, and a row is allocated into it -- the one place a scrollback
+         * row gets its cells. A slot that already holds a row (only a sparse
+         * state a test forced) is reused as it always was, allocating
+         * nothing. */
         int new_idx = (term->lines_start + term->lines_count) % term->lines_capacity;
-        term_row_fill(term->lines[new_idx], term->cols, term->current_attr);
-        term->lines_count++;
-        term_row_stamp(term, term->lines[new_idx]);
+        TermRow *row = term->lines[new_idx];
+        if (row) {
+            term_row_fill(row, term->cols, term->current_attr);
+            term->lines_count++;
+            term_row_stamp(term, row);
+        } else {
+            row = term_row_try_alloc(term->cols, term->current_attr);
+            if (row) {
+                term->lines[new_idx] = row;
+                term->lines_count++;
+                term->grow_failing = false;
+                term_row_stamp(term, row);
+            } else {
+                /* No memory: do what a full ring does, plus one pointer move.
+                 * The oldest row (the live part holds at least `rows` rows,
+                 * so lines_start is one) is cleared and moved into the slot
+                 * past the live part, its own slot left NULL. lines_count
+                 * stays; the tab keeps the history it already holds. The next
+                 * line tries again. */
+                int recycle_idx = term->lines_start;
+                row = term->lines[recycle_idx];
+                term_row_fill(row, term->cols, term->current_attr);
+                term->lines[new_idx] = row;
+                term->lines[recycle_idx] = NULL;
+                term->lines_start = (term->lines_start + 1) % term->lines_capacity;
+                term->lines_recycled++;
+                term_row_stamp(term, row);
+                if (!term->grow_failing) {
+                    term->grow_failing = true;
+                    DLOG(DLOG_TERM, DLOG_WARN, term->log_id, "term.scrollback.alloc_failed",
+                         "lines=%d capacity=%d", term->lines_count,
+                         term->lines_capacity);
+                }
+            }
+        }
     } else {
         /* Buffer full: recycle oldest line. Count it first, so the stamp
          * belongs to the row's new number, not the one it held. */
@@ -401,16 +545,16 @@ void term_scroll(Terminal *term) {
 
     /* Mark all visible rows dirty: each screen position now maps to a
      * different logical row, so the renderer must repaint every row.
-     * When lines_count < rows (sparse content after resize), we must
-     * also mark the pre-allocated rows beyond lines_count that are
-     * still visible on screen; otherwise they never get repainted. */
+     * Only the live part of the ring holds rows (term.h, term_logical_rows())
+     * and lines_count >= rows, so the visible rows all lie inside it; a slot
+     * outside it is NULL and the guard below skips it. */
     int vis_start = term->lines_count - term->rows;
     if (vis_start < 0) vis_start = 0;
     int vis_end = vis_start + term->rows;
     if (vis_end > term->lines_capacity) vis_end = term->lines_capacity;
     for (int i = vis_start; i < vis_end; i++) {
         int idx = (term->lines_start + i) % term->lines_capacity;
-        term->lines[idx]->dirty = true;
+        if (term->lines[idx]) term->lines[idx]->dirty = true;
     }
 }
 
@@ -485,15 +629,18 @@ void term_scroll_up(Terminal *term, int top, int bot, int n) {
         for (int i = 0; i < chunk; i++) {
             int idx = term_screen_to_phys(term, bot - chunk + 1 + i);
             term->lines[idx] = saved[i];
-            term_row_fill(saved[i], term->cols, term->current_attr);
+            if (saved[i]) term_row_fill(saved[i], term->cols, term->current_attr);
         }
 
         remaining -= chunk;
     }
 
-    /* Every row in the region moved or was cleared: dirty and stamped. */
+    /* Every row in the region moved or was cleared: dirty and stamped. A NULL
+     * row (unreachable while the live part covers the screen) was moved like
+     * any other pointer, but is not refilled, marked or stamped. */
     for (int i = top; i <= bot; i++) {
         TermRow *moved = term->lines[term_screen_to_phys(term, i)];
+        if (!moved) continue;
         moved->dirty = true;
         term_row_stamp(term, moved);
     }
@@ -527,15 +674,18 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
         for (int i = 0; i < chunk; i++) {
             int idx = term_screen_to_phys(term, top + i);
             term->lines[idx] = saved[i];
-            term_row_fill(saved[i], term->cols, term->current_attr);
+            if (saved[i]) term_row_fill(saved[i], term->cols, term->current_attr);
         }
 
         remaining -= chunk;
     }
 
-    /* Every row in the region moved or was cleared: dirty and stamped. */
+    /* Every row in the region moved or was cleared: dirty and stamped. A NULL
+     * row (unreachable while the live part covers the screen) was moved like
+     * any other pointer, but is not refilled, marked or stamped. */
     for (int i = top; i <= bot; i++) {
         TermRow *moved = term->lines[term_screen_to_phys(term, i)];
+        if (!moved) continue;
         moved->dirty = true;
         term_row_stamp(term, moved);
     }
@@ -591,6 +741,23 @@ void term_alt_screen_enter(Terminal *term)
 {
     if (!term || term->alt_screen_active) return;
 
+    /* Allocate a fresh alt-screen buffer (rows only, no scrollback) before
+     * saving anything: on a failure the terminal stays on the primary screen,
+     * every field unchanged, and the matching ?1049l does nothing. */
+    int cap = term->rows;
+    TermRow **alt = (s_calloc ? s_calloc : calloc)((size_t)cap, sizeof(TermRow *));
+    bool alt_ok = alt != NULL;
+    for (int i = 0; alt_ok && i < cap; i++) {
+        alt[i] = term_row_try_alloc(term->cols, term->current_attr);
+        if (!alt[i]) alt_ok = false;
+    }
+    if (!alt_ok) {
+        term_ring_free(alt, cap);
+        DLOG(DLOG_TERM, DLOG_WARN, term->log_id, "term.alt_screen.alloc_failed",
+             "rows=%d cols=%d", term->rows, term->cols);
+        return;
+    }
+
     /* Save primary buffer state */
     term->primary_lines           = term->lines;
     term->primary_lines_capacity  = term->lines_capacity;
@@ -601,13 +768,7 @@ void term_alt_screen_enter(Terminal *term)
     term->lines_recycled          = 0;
     term->epoch++;
 
-    /* Allocate a fresh alt-screen buffer (rows only, no scrollback) */
-    int cap = term->rows;
-    term->lines = xcalloc((size_t)cap, sizeof(TermRow *));
-    for (int i = 0; i < cap; i++) {
-        term->lines[i] = term_row_alloc(term->cols);
-        term_row_fill(term->lines[i], term->cols, term->current_attr);
-    }
+    term->lines           = alt;
     term->lines_capacity  = cap;
     term->lines_count     = cap;
     term->lines_start     = 0;
@@ -637,9 +798,7 @@ void term_alt_screen_exit(Terminal *term)
     if (!term || !term->alt_screen_active) return;
 
     /* Free the alt-screen lines */
-    for (int i = 0; i < term->lines_capacity; i++)
-        term_row_free(term->lines[i]);
-    free(term->lines);
+    term_ring_free(term->lines, term->lines_capacity);
 
     /* Restore primary buffer */
     term->lines           = term->primary_lines;
@@ -695,8 +854,9 @@ static int term_cursor_row_text(const Terminal *term, char *buf, size_t buf_size
      * consumer in this file uses -- not a second copy of it. No
      * `logical < lines_count` check: the row's slot is guaranteed
      * allocated and non-NULL for the whole visible screen regardless of
-     * lines_count (term_init()/term_reflow_buffer() fill every slot up to
-     * lines_capacity up front), so requiring it was always wrong, not
+     * lines_count (the live part of the ring always covers the screen:
+     * term_init() allocates the screen's rows and term_reflow_buffer()
+     * restores lines_count >= rows), so requiring it was always wrong, not
      * just incomplete -- see term_screen_to_phys()'s own comment. */
     int physical = term_screen_to_phys(term, term->cursor.row);
     if (physical < 0 || physical >= term->lines_capacity) return 0;

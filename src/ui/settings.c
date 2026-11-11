@@ -21,6 +21,10 @@
 #include "net_guard.h"
 #include "ns_tokens.h"
 #include "ns_draw.h"
+#include "ns_tip.h"
+#include "settings_help.h"
+#include "search_providers.h"
+#include "settings_entry.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,22 +94,6 @@ static const char * const k_ai_providers[] = {
 };
 #define NUM_AI_PROVIDERS ((int)(sizeof(k_ai_providers) / sizeof(k_ai_providers[0])))
 
-/* ---- AI search provider list -------------------------------------------- */
-
-typedef struct {
-    const char *label;
-    const char *value;
-} SearchProviderEntry;
-
-static const SearchProviderEntry k_search_providers[] = {
-    { "None",                 "none"           },
-    { "DuckDuckGo (API)",     "duckduckgo-api" },
-    { "DuckDuckGo (HTML)",    "duckduckgo-html"},
-    { "Custom",               "custom"         },
-};
-#define NUM_SEARCH_PROVIDERS \
-    ((int)(sizeof(k_search_providers) / sizeof(k_search_providers[0])))
-
 /* ---- Font availability check -------------------------------------------- */
 
 /* EnumFontFamiliesExA callback: sets *(int*)lParam = 1 if the font exists. */
@@ -158,12 +146,20 @@ typedef struct {
 
 /* ---- Dialog state ------------------------------------------------------- */
 
+/* A control and the help id whose tip it shows (recorded by page_track()). */
+typedef struct {
+    HWND           hwnd;
+    SettingsHelpId help;
+} SettingsTip;
+
 typedef struct {
     Config  *cfg;
     const char *config_path; /* M-8/H6: absolute path resolved at startup --
                                * never the bare CONFIG_FILENAME, which would
                                * save into whatever the CWD has become. */
-    HWND     hTooltip;
+    HWND     hTip;       /* the help tip (ns_tip), themed from `theme` */
+    SettingsTip tips[96]; /* every control with a help id, in creation order */
+    int      n_tips;
     HFONT    hDlgFont;   /* MS Shell Dlg 8pt — applied to all child controls */
     HFONT    hBoldFont;  /* same face, bold — nav headers + breadcrumb title */
     const ThemeColors *theme;
@@ -213,42 +209,79 @@ static void sys_notes_sync_scroll(SettingsDlgData *d);
 /* Controls are created with placeholder geometry; relayout() positions them
  * for real once every control on every page exists. */
 
-static HWND make_label2(HWND parent, const char *text)
+/* Record a control for the help tip: the attach loop in WM_CREATE adds one
+ * tool per record. SH_NONE (a hint, a title) records nothing. */
+static void page_track(SettingsDlgData *d, HWND h, SettingsHelpId help)
 {
-    return CreateWindow("STATIC", text,
-        WS_CHILD | WS_VISIBLE | SS_RIGHT,
-        0, 0, 10, 10, parent, NULL, NULL, NULL);
+    if (!h || help == SH_NONE) return;
+    if (d->n_tips >= (int)(sizeof(d->tips) / sizeof(d->tips[0]))) return;
+    d->tips[d->n_tips].hwnd = h;
+    d->tips[d->n_tips].help = help;
+    d->n_tips++;
 }
 
-static HWND make_static2(HWND parent, const char *text)
+/* The one way to create a control on a page: a child of the page host, with
+ * its help id (SH_NONE for the few with none). A static gets SS_NOTIFY so it
+ * answers the mouse and its tip can show. A combo is created tall: that rect
+ * also defines the drop-down. relayout() positions everything for real. */
+static HWND page_ctrl(SettingsDlgData *d, const char *cls, const char *text,
+                      DWORD style, int ctrl_id, SettingsHelpId help)
 {
-    return CreateWindow("STATIC", text,
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0, 0, 10, 10, parent, NULL, NULL, NULL);
+    DWORD st = WS_CHILD | WS_VISIBLE | style;
+    if (_stricmp(cls, "STATIC") == 0) st |= SS_NOTIFY;
+    int h = (_stricmp(cls, "COMBOBOX") == 0) ? 200 : 10;
+    HWND w = CreateWindow(cls, text, st, 0, 0, 10, h, d->hPage,
+                          (HMENU)(UINT_PTR)ctrl_id, NULL, NULL);
+    page_track(d, w, help);
+    return w;
 }
 
-static HWND make_edit2(HWND parent, const char *text, HMENU id, DWORD extra_style)
+/* The same with a wide class and text, for the refresh glyph. */
+static HWND page_ctrl_w(SettingsDlgData *d, const WCHAR *cls, const WCHAR *text,
+                        DWORD style, int ctrl_id, SettingsHelpId help)
 {
-    HWND h = CreateWindow("EDIT", text,
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | extra_style,
-        0, 0, 10, 10, parent, id, NULL, NULL);
+    HWND w = CreateWindowW(cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 10, 10,
+                           d->hPage, (HMENU)(UINT_PTR)ctrl_id, NULL, NULL);
+    page_track(d, w, help);
+    return w;
+}
+
+/* A static with no help id: the page title, the dim hints and notes, the
+ * warning line and the About text. */
+static HWND make_hint(SettingsDlgData *d, const char *text)
+{
+    return page_ctrl(d, "STATIC", text, SS_LEFT, 0, SH_NONE);
+}
+
+/* A label takes its text from the help table, so the tip's heading and the
+ * label on screen are one string. */
+static HWND make_label2(SettingsDlgData *d, SettingsHelpId help)
+{
+    return page_ctrl(d, "STATIC", settings_help_get((int)help)->label, SS_RIGHT,
+                     0, help);
+}
+
+static HWND make_edit2(SettingsDlgData *d, const char *text, int id,
+                       DWORD extra_style, SettingsHelpId help)
+{
+    HWND h = page_ctrl(d, "EDIT", text,
+                       WS_BORDER | ES_AUTOHSCROLL | extra_style, id, help);
     SendMessage(h, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                 MAKELPARAM(3, 3));
     return h;
 }
 
-static HWND make_combo2(HWND parent, HMENU id, DWORD type_style)
+static HWND make_combo2(SettingsDlgData *d, int id, DWORD type_style,
+                        SettingsHelpId help)
 {
-    return CreateWindow("COMBOBOX", "",
-        WS_CHILD | WS_VISIBLE | CBS_HASSTRINGS | WS_VSCROLL | type_style,
-        0, 0, 10, 200, parent, id, NULL, NULL);
+    return page_ctrl(d, "COMBOBOX", "", CBS_HASSTRINGS | WS_VSCROLL | type_style,
+                     id, help);
 }
 
-static HWND make_check2(HWND parent, const char *text, HMENU id)
+static HWND make_check2(SettingsDlgData *d, int id, SettingsHelpId help)
 {
-    HWND chk = CreateWindow("BUTTON", text,
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        0, 0, 10, 10, parent, id, NULL, NULL);
+    HWND chk = page_ctrl(d, "BUTTON", settings_help_get((int)help)->label,
+                         BS_AUTOCHECKBOX, id, help);
     /* Classic rendering, or comctl32 v6 ignores the WM_CTLCOLORSTATIC text
      * colour and the label draws black on the dark themes. */
     ns_control_classic(chk);
@@ -382,136 +415,6 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
     PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
     return 0;
 }
-
-/* ---- Tooltip helpers ---------------------------------------------------- */
-
-/* Add a tooltip to a single child control inside the dialog.
- * Reuses one shared tooltip window per dialog (TTM_ADDTOOL). */
-static void add_tooltip(HWND tooltip_host, HWND tool, const char *text)
-{
-    if (!tooltip_host || !tool || !text) return;
-    TOOLINFO ti;
-    memset(&ti, 0, sizeof(ti));
-    ti.cbSize   = sizeof(TOOLINFO);
-    ti.uFlags   = TTF_IDISHWND | TTF_SUBCLASS;
-    ti.hwnd     = GetParent(tool);
-    ti.uId      = (UINT_PTR)tool;
-    ti.lpszText = (LPSTR)text;
-    SendMessage(tooltip_host, TTM_ADDTOOL, 0, (LPARAM)&ti);
-}
-
-typedef struct { int id; const char *text; } TooltipEntry;
-
-static const TooltipEntry k_tooltips[] = {
-    { IDC_FONT_COMBO,
-      "Monospaced font used by the terminal display." },
-    { IDC_AI_FONT_COMBO,
-      "Font used by the AI chat panel (does not affect the terminal)." },
-    { IDC_FONTSIZE_COMBO,
-      "Terminal font size in points." },
-    { IDC_SCROLLBACK_EDIT,
-      "Number of lines kept in the scrollback buffer (100 - 50 000)." },
-    { IDC_PASTEDELAY_EDIT,
-      "Pause in ms between characters when pasting into the terminal "
-      "(0 - 5 000). Higher values help slow remote shells keep up." },
-    { IDC_PASTE_CONFIRM,
-      "Show a preview and require confirmation before pasting into the "
-      "terminal." },
-    { IDC_SCHEME_COMBO,
-      "Predefined colour scheme for the terminal. Foreground and "
-      "background overrides apply on top of the scheme." },
-    { IDC_LOG_DIR_EDIT,
-      "Directory where session logs are written when logging is enabled." },
-    { IDC_LOG_FMT_EDIT,
-      "%Y  4-digit year (e.g. 2026)\r\n"
-      "%m  month (01-12)\r\n"
-      "%d  day   (01-31)\r\n"
-      "%H  hour  (00-23)\r\n"
-      "%M  minute (00-59)\r\n"
-      "%S  second (00-59)\r\n"
-      "Example: session-%Y%m%d_%H%M%S" },
-    { IDC_DBG_ENABLE,
-      "Record what Nutshell does in a log folder an AI can read. Errors and "
-      "warnings are written even when this is off. When AI Assist reads the "
-      "log, the text it reads is sent to your AI provider." },
-    { IDC_DBG_RECORDER,
-      "Keep the last few minutes of detail in memory (4 MB) so Mark Issue "
-      "can write them out even when the log itself is set to a lower level." },
-    { IDC_DBG_SCREENSHOT,
-      "Save a PNG of the Nutshell window next to the log when you mark an "
-      "issue. It can show anything on screen." },
-    { IDC_DBG_CONTENT,
-      "Also log terminal text, AI commands, chat text and host names. "
-      "The shell's echo of what you type is terminal text, so it is logged. "
-      "Passwords, passphrases and keys, and the keystrokes and pastes "
-      "themselves, are never logged." },
-    { IDC_DBG_FOLDER,
-      "Where the logs go. A relative folder is relative to nutshell.exe; "
-      "%NAME% environment variables are expanded." },
-    { IDC_DBG_MAX_FILE,
-      "A log file is closed and a new one started at this size (1 - 100 MB)." },
-    { IDC_DBG_MAX_TOTAL,
-      "The oldest log files are deleted to keep the folder under this size "
-      "(5 - 5000 MB)." },
-    { IDC_AI_KEY_EDIT,
-      "API key for the chosen AI provider. Stored encrypted in "
-      "nutshell.config." },
-    { IDC_AI_PROVIDER_COMBO,
-      "AI provider used by the chat panel." },
-    { IDC_AI_CUSTOM_URL,
-      "Custom AI API endpoint URL. Only used when provider is 'custom'." },
-    { IDC_AI_CUSTOM_MODEL,
-      "Custom model identifier. Only used when provider is 'custom'." },
-    { IDC_AI_SYSTEM_NOTES,
-      "Default system instructions for the AI. Profile-specific notes, "
-      "if set, take precedence." },
-    { IDC_AI_CONTEXT_LINES,
-      "How many lines of terminal output are sent to the AI as context "
-      "(1 - 50 000). Larger values give better context but cost more "
-      "tokens per message." },
-    { IDC_AI_SEARCH_COMBO,
-      "Search backend used by AI tool calls. 'None' disables web search." },
-    { IDC_AI_SEARCH_URL,
-      "Custom search endpoint. Only used when search provider is 'custom'." },
-    { IDC_AI_MAX_RESULTS,
-      "Maximum number of search results returned to the AI per query "
-      "(1 - 20)." },
-    { IDC_AI_WEB_FETCH,
-      "Allow the AI to fetch web pages as a tool call. The assistant can then "
-      "send text from this session to any web address." },
-    { IDC_AI_MD_RENDER,
-      "Render AI replies as formatted markdown. Turn off to see raw text." },
-    { IDC_AI_POLICY_ALLOWED,
-      "The highest level a new session may run: Read, Unknown, Write or "
-      "Critical. Commands above it are blocked outright and show as held; "
-      "commands at or below it ask first unless Auto-approve is on." },
-    { IDC_AI_POLICY_AUTO,
-      "Start new sessions with Auto-approve on: commands up to 'Allowed' "
-      "run without asking. With 'Allowed' at Critical, Save asks you to "
-      "confirm. The AI panel's status line changes both per session." },
-    { IDC_AI_TOOL_TIMEOUT,
-      "How long a tool approval card waits for your answer before it "
-      "expires and the tool call is not run (15 - 3600 seconds, default 60; "
-      "0 = never expire, the card waits until you answer or stop). "
-      "A change applies to cards shown after you save; a card already "
-      "waiting keeps its timeout." },
-    { IDC_SSH_IDLE_EDIT,
-      "Disconnect SSH sessions after this many minutes of no user "
-      "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
-      "scrolling, tab switches, and AI chat input all count as activity." },
-    { IDC_AI_REFRESH,
-      "Fetch the model list from the selected AI provider." },
-    { IDC_SESSION_MGR_STARTUP,
-      "Show the Session Manager when Nutshell starts, unless auto-connect "
-      "fires or -nc is used." },
-    { IDC_AUTOCONNECT_CHECK,
-      "Automatically connect to the selected session when Nutshell "
-      "starts. Command-line options override this; start with -nc to "
-      "skip auto-connect once." },
-    { IDC_AUTOCONNECT_COMBO,
-      "The saved session to auto-connect to at startup." },
-};
-#define NUM_TOOLTIPS ((int)(sizeof(k_tooltips) / sizeof(k_tooltips[0])))
 
 /* Sync AI instructions edit scroll state to custom scrollbar.
  * csb_sync_edit re-shows the scrollbar whenever the text overflows, so this
@@ -722,6 +625,24 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
         ShowWindow(c->hCtrl, SW_SHOW);
 
         row += eff_rows;
+    }
+
+    /* Move the two rect tools (the controls that can be disabled) to their
+     * rows; an empty rect while the row is hidden. */
+    if (d->hTip) {
+        static const int k_rect_tools[] = { IDC_AUTOCONNECT_COMBO,
+                                            IDC_DBG_RECORDER_LEVEL };
+        for (size_t i = 0; i < sizeof(k_rect_tools) / sizeof(k_rect_tools[0]); i++) {
+            HWND hc = GetDlgItem(d->hPage, k_rect_tools[i]);
+            if (hc && (GetWindowLongA(hc, GWL_STYLE) & WS_VISIBLE) != 0) {
+                RECT rc;
+                GetWindowRect(hc, &rc);
+                MapWindowPoints(NULL, d->hPage, (POINT *)&rc, 2);
+                ns_tip_move_rect(d->hTip, d->hPage, (UINT_PTR)k_rect_tools[i], &rc);
+            } else {
+                ns_tip_move_rect(d->hTip, d->hPage, (UINT_PTR)k_rect_tools[i], NULL);
+            }
+        }
     }
 
     /* Reposition the AI notes scrollbar flush against the notes edit. */
@@ -993,11 +914,17 @@ static SettingsCtrl *dbg_add(SettingsDlgData *d, int slot, HWND lbl, HWND ctrl,
 /* A wrapped static in the dim text colour (WM_CTLCOLORSTATIC checks hDbgDim). */
 static HWND dbg_dim_static(SettingsDlgData *d, const char *text)
 {
-    HWND h = make_static2(d->hPage, text);
+    HWND h = make_hint(d, text);
     if (d->n_dbg_dim < (int)(sizeof(d->hDbgDim) / sizeof(d->hDbgDim[0])))
         d->hDbgDim[d->n_dbg_dim++] = h;
     return h;
 }
+
+/* The help id of each category's level row, in DlogCat order. */
+static const SettingsHelpId k_dbg_level_help[DLOG_CAT_COUNT] = {
+    SH_DBG_LEVEL_RENDER, SH_DBG_LEVEL_TERM, SH_DBG_LEVEL_AI,
+    SH_DBG_LEVEL_SSH, SH_DBG_LEVEL_SHELL, SH_DBG_LEVEL_GENERAL
+};
 
 static void dbg_fill_level_combo(HWND cmb, int level)
 {
@@ -1089,7 +1016,7 @@ static void debug_build_page(SettingsDlgData *nd)
     dlog_folder_usage(&used_bytes, &used_files);
 
     {
-        HWND chk = make_check2(nd->hPage, "Enable debugging", (HMENU)IDC_DBG_ENABLE);
+        HWND chk = make_check2(nd, IDC_DBG_ENABLE, SH_DBG_ENABLE);
         SendMessage(chk, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
         dbg_add(nd, SDBG_ENABLE, NULL, chk, NULL, 0, 0, 1);
     }
@@ -1101,33 +1028,30 @@ static void debug_build_page(SettingsDlgData *nd)
             NULL, 0, 0, 1);
 
     for (int cat = 0; cat < DLOG_CAT_COUNT; cat++) {
-        char lab[48];
-        (void)snprintf(lab, sizeof(lab), "%s:", settings_debug_cat_label(cat));
-        HWND lbl = make_label2(nd->hPage, lab);
-        HWND cmb = make_combo2(nd->hPage, (HMENU)(UINT_PTR)(IDC_DBG_LEVEL_BASE + cat),
-                               CBS_DROPDOWNLIST);
+        HWND lbl = make_label2(nd, k_dbg_level_help[cat]);
+        HWND cmb = make_combo2(nd, IDC_DBG_LEVEL_BASE + cat, CBS_DROPDOWNLIST,
+                               k_dbg_level_help[cat]);
         dbg_fill_level_combo(cmb, st->debug_levels[cat]);
         dbg_add(nd, SDBG_LEVEL_RENDER + cat, lbl, cmb, NULL, 120, 0, 0);
     }
 
     {
         /* A tickbox with its level combo beside it: ctrl_w covers both. */
-        HWND chk = make_check2(nd->hPage, "Keep recent detail for issue marks, at",
-                               (HMENU)IDC_DBG_RECORDER);
+        HWND chk = make_check2(nd, IDC_DBG_RECORDER, SH_DBG_RECORDER);
         SendMessage(chk, BM_SETCHECK, st->debug_recorder ? BST_CHECKED : BST_UNCHECKED, 0);
-        HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_DBG_RECORDER_LEVEL, CBS_DROPDOWNLIST);
+        HWND cmb = make_combo2(nd, IDC_DBG_RECORDER_LEVEL, CBS_DROPDOWNLIST,
+                               SH_DBG_RECORDER);
         dbg_fill_level_combo(cmb, st->debug_recorder_level);
         EnableWindow(cmb, st->debug_recorder ? TRUE : FALSE);
         dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb, 250 + 10 + 90, 90, 1);
     }
     {
-        HWND chk = make_check2(nd->hPage, "Save a screenshot with each issue mark",
-                               (HMENU)IDC_DBG_SCREENSHOT);
+        HWND chk = make_check2(nd, IDC_DBG_SCREENSHOT, SH_DBG_SCREENSHOT);
         SendMessage(chk, BM_SETCHECK, st->debug_screenshot ? BST_CHECKED : BST_UNCHECKED, 0);
         dbg_add(nd, SDBG_SCREENSHOT, NULL, chk, NULL, 0, 0, 1);
     }
     {
-        HWND chk = make_check2(nd->hPage, "Include terminal content", (HMENU)IDC_DBG_CONTENT);
+        HWND chk = make_check2(nd, IDC_DBG_CONTENT, SH_DBG_CONTENT);
         SendMessage(chk, BM_SETCHECK, st->debug_include_content ? BST_CHECKED : BST_UNCHECKED, 0);
         dbg_add(nd, SDBG_CONTENT, NULL, chk, NULL, 0, 0, 1);
     }
@@ -1138,42 +1062,39 @@ static void debug_build_page(SettingsDlgData *nd)
             NULL, 0, 0, 1);
 
     {
-        HWND lbl = make_label2(nd->hPage, "Log folder:");
-        HWND ed  = make_edit2(nd->hPage, st->debug_log_dir, (HMENU)IDC_DBG_FOLDER, 0);
+        HWND lbl = make_label2(nd, SH_DBG_FOLDER);
+        HWND ed  = make_edit2(nd, st->debug_log_dir, IDC_DBG_FOLDER, 0, SH_DBG_FOLDER);
         SendMessage(ed, EM_SETLIMITTEXT, (WPARAM)(sizeof(st->debug_log_dir) - 1u), 0);
-        HWND browse = CreateWindow("BUTTON", "Browse...",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 10, 10,
-            nd->hPage, (HMENU)IDC_DBG_BROWSE, NULL, NULL);
-        HWND open = CreateWindow("BUTTON", "Open",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 10, 10,
-            nd->hPage, (HMENU)IDC_DBG_OPEN, NULL, NULL);
+        HWND browse = page_ctrl(nd, "BUTTON", "Browse...", BS_OWNERDRAW,
+                                IDC_DBG_BROWSE, SH_DBG_BROWSE);
+        HWND open = page_ctrl(nd, "BUTTON", "Open", BS_OWNERDRAW,
+                              IDC_DBG_OPEN, SH_DBG_OPEN);
         SettingsCtrl *c = dbg_add(nd, SDBG_FOLDER, lbl, ed, browse, 0, 84, 0);
         if (c) { c->hExtra2 = open; c->extra2_w = 56; }
     }
     {
         char buf[16];
         (void)snprintf(buf, sizeof(buf), "%d", st->debug_max_file_mb);
-        HWND lbl = make_label2(nd->hPage, "Max file size (MB):");
-        HWND ed  = make_edit2(nd->hPage, buf, (HMENU)IDC_DBG_MAX_FILE, ES_NUMBER);
+        HWND lbl = make_label2(nd, SH_DBG_MAX_FILE);
+        HWND ed  = make_edit2(nd, buf, IDC_DBG_MAX_FILE, ES_NUMBER, SH_DBG_MAX_FILE);
         dbg_add(nd, SDBG_MAX_FILE, lbl, ed, NULL, 70, 0, 0);
     }
     {
         char buf[16];
         (void)snprintf(buf, sizeof(buf), "%d", st->debug_max_total_mb);
-        HWND lbl = make_label2(nd->hPage, "Keep at most (MB):");
-        HWND ed  = make_edit2(nd->hPage, buf, (HMENU)IDC_DBG_MAX_TOTAL, ES_NUMBER);
+        HWND lbl = make_label2(nd, SH_DBG_MAX_TOTAL);
+        HWND ed  = make_edit2(nd, buf, IDC_DBG_MAX_TOTAL, ES_NUMBER, SH_DBG_MAX_TOTAL);
         (void)settings_debug_usage_text(line, sizeof(line), used_bytes, used_files);
-        HWND use = CreateWindow("STATIC", line,
-            WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX,
-            0, 0, 10, 10, nd->hPage, NULL, NULL, NULL);
+        HWND use = page_ctrl(nd, "STATIC", line,
+                             SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, 0, SH_DBG_USAGE);
         if (nd->n_dbg_dim < (int)(sizeof(nd->hDbgDim) / sizeof(nd->hDbgDim[0])))
             nd->hDbgDim[nd->n_dbg_dim++] = use;
         dbg_add(nd, SDBG_MAX_TOTAL, lbl, ed, use, 70 + 10 + 260, 260, 0);
     }
     {
-        HWND lbl = make_label2(nd->hPage, "Current log file:");
+        HWND lbl = make_label2(nd, SH_DBG_CURRENT);
         (void)settings_debug_current_text(line, sizeof(line), &dst);
-        HWND ed = make_edit2(nd->hPage, line, (HMENU)IDC_DBG_CURRENT, ES_READONLY);
+        HWND ed = make_edit2(nd, line, IDC_DBG_CURRENT, ES_READONLY, SH_DBG_CURRENT);
         dbg_add(nd, SDBG_CURRENT, lbl, ed, NULL, 0, 0, 0);
     }
     dbg_add(nd, SDBG_NOTE, NULL,
@@ -1225,6 +1146,16 @@ static void debug_read_page(SettingsDlgData *d, Settings *s)
     }
 }
 
+/* A number box read at Save: the parsed value when it lies in the entry's
+ * range in the help table (0 too, where 0 means "never"), else `current`. */
+static int keep_entry(SettingsHelpId id, BOOL parsed_ok, UINT v, int current)
+{
+    const SettingsHelp *h = settings_help_get((int)id);
+    if (!h) return current;
+    return settings_entry_or_keep(parsed_ok ? 1 : 0, v, h->min, h->max,
+                                  (h->flags & SH_F_ZERO_MEANS_NEVER) != 0, current);
+}
+
 /* ---- Main window procedure ------------------------------------------------ */
 
 static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
@@ -1263,14 +1194,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
             0, 0, 10, 10, hwnd, NULL, GetModuleHandle(NULL), nd);
 
-        nd->hPageTitle = make_static2(nd->hPage, "");
+        nd->hPageTitle = make_hint(nd, "");
 
         nd->n_ctrls = 0;
 
         /* ==== APPEARANCE ==== */
         {
-            HWND lbl = make_label2(nd->hPage, "Colour Scheme:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_SCHEME_COMBO, CBS_DROPDOWNLIST);
+            HWND lbl = make_label2(nd, SH_COLOUR_SCHEME);
+            HWND cmb = make_combo2(nd, IDC_SCHEME_COMBO, CBS_DROPDOWNLIST,
+                                   SH_COLOUR_SCHEME);
             int sel = 0;
             for (int i = 0; i < NUM_UI_THEMES; i++) {
                 SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)ui_theme_name(i));
@@ -1281,8 +1213,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_APPEARANCE, 0, 0, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Terminal Font:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_FONT_COMBO, CBS_DROPDOWNLIST);
+            HWND lbl = make_label2(nd, SH_TERMINAL_FONT);
+            HWND cmb = make_combo2(nd, IDC_FONT_COMBO, CBS_DROPDOWNLIST,
+                                   SH_TERMINAL_FONT);
             int sel = 0, idx = 0;
             for (int i = 0; i < NUM_FONTS; i++) {
                 if (!font_is_installed(k_fonts[i])) continue;
@@ -1294,8 +1227,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_APPEARANCE, 0, 0, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Font Size:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_FONTSIZE_COMBO, CBS_DROPDOWNLIST);
+            HWND lbl = make_label2(nd, SH_FONT_SIZE);
+            HWND cmb = make_combo2(nd, IDC_FONTSIZE_COMBO, CBS_DROPDOWNLIST,
+                                   SH_FONT_SIZE);
             int sel = 0;
             for (int i = 0; i < NUM_FONT_SIZES; i++) {
                 char buf[8];
@@ -1307,8 +1241,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_APPEARANCE, 80, 0, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "AI Assist Font:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_FONT_COMBO, CBS_DROPDOWNLIST);
+            HWND lbl = make_label2(nd, SH_AI_FONT);
+            HWND cmb = make_combo2(nd, IDC_AI_FONT_COMBO, CBS_DROPDOWNLIST,
+                                   SH_AI_FONT);
             int sel = 0, idx = 0;
             for (int i = 0; i < NUM_FONTS; i++) {
                 if (!font_is_installed(k_fonts[i])) continue;
@@ -1324,20 +1259,19 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         {
             char buf[16];
             (void)snprintf(buf, sizeof(buf), "%d", nd->cfg->settings.scrollback_lines);
-            HWND lbl = make_label2(nd->hPage, "Scrollback Lines:");
-            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_SCROLLBACK_EDIT, 0);
+            HWND lbl = make_label2(nd, SH_SCROLLBACK);
+            HWND ed = make_edit2(nd, buf, IDC_SCROLLBACK_EDIT, 0, SH_SCROLLBACK);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_TERMINAL, 100, 0, 1, 0, 1, 0);
         }
         {
             char buf[16];
             (void)snprintf(buf, sizeof(buf), "%d", nd->cfg->settings.paste_delay_ms);
-            HWND lbl = make_label2(nd->hPage, "Paste Delay (ms):");
-            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_PASTEDELAY_EDIT, 0);
+            HWND lbl = make_label2(nd, SH_PASTE_DELAY);
+            HWND ed = make_edit2(nd, buf, IDC_PASTEDELAY_EDIT, 0, SH_PASTE_DELAY);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_TERMINAL, 100, 0, 1, 0, 1, 0);
         }
         {
-            HWND chk = make_check2(nd->hPage, "Confirm before pasting",
-                                   (HMENU)IDC_PASTE_CONFIRM);
+            HWND chk = make_check2(nd, IDC_PASTE_CONFIRM, SH_PASTE_CONFIRM);
             SendMessage(chk, BM_SETCHECK,
                         nd->cfg->settings.paste_confirm ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_TERMINAL, 0, 0, 1, 0, 1, 1);
@@ -1345,15 +1279,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         /* ==== LOGGING ==== */
         {
-            HWND lbl = make_label2(nd->hPage, "Log Directory:");
-            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.log_dir,
-                                 (HMENU)IDC_LOG_DIR_EDIT, 0);
+            HWND lbl = make_label2(nd, SH_LOG_DIR);
+            HWND ed = make_edit2(nd, nd->cfg->settings.log_dir,
+                                 IDC_LOG_DIR_EDIT, 0, SH_LOG_DIR);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_LOGGING, 0, 0, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Log Name Format:");
-            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.log_format,
-                                 (HMENU)IDC_LOG_FMT_EDIT, 0);
+            HWND lbl = make_label2(nd, SH_LOG_FORMAT);
+            HWND ed = make_edit2(nd, nd->cfg->settings.log_format,
+                                 IDC_LOG_FMT_EDIT, 0, SH_LOG_FORMAT);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_LOGGING, 0, 0, 1, 0, 1, 0);
         }
 
@@ -1362,12 +1296,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             char buf[32];
             (void)snprintf(buf, sizeof(buf), "%d",
                            nd->cfg->settings.ssh_user_idle_timeout_mins);
-            HWND lbl = make_label2(nd->hPage, "Idle Timeout (mins):");
-            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_SSH_IDLE_EDIT, 0);
+            HWND lbl = make_label2(nd, SH_SSH_IDLE);
+            HWND ed = make_edit2(nd, buf, IDC_SSH_IDLE_EDIT, 0, SH_SSH_IDLE);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_SSH, 100, 0, 1, 0, 1, 0);
         }
         {
-            nd->hSshHint = make_static2(nd->hPage,
+            nd->hSshHint = make_hint(nd,
                 "0 disables the idle timeout. Keystrokes, scrolling, tab "
                 "switches and AI chat all count as activity.");
             add_ctrl(nd, NULL, nd->hSshHint, NULL, SETTINGS_PAGE_SSH, 0, 0, 2, 0, 1, 1);
@@ -1375,23 +1309,22 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         /* ==== STARTUP ==== */
         {
-            HWND chk = make_check2(nd->hPage, "Open Session Manager at startup",
-                                   (HMENU)IDC_SESSION_MGR_STARTUP);
+            HWND chk = make_check2(nd, IDC_SESSION_MGR_STARTUP, SH_SESSION_MGR_STARTUP);
             SendMessage(chk, BM_SETCHECK,
                         nd->cfg->settings.open_session_manager_at_start
                             ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_STARTUP, 0, 0, 1, 0, 1, 1);
         }
         {
-            HWND chk = make_check2(nd->hPage, "Auto-connect at startup",
-                                   (HMENU)IDC_AUTOCONNECT_CHECK);
+            HWND chk = make_check2(nd, IDC_AUTOCONNECT_CHECK, SH_AUTOCONNECT);
             SendMessage(chk, BM_SETCHECK,
                         nd->cfg->settings.auto_connect ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_STARTUP, 0, 0, 1, 0, 1, 1);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Session:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AUTOCONNECT_COMBO, CBS_DROPDOWNLIST);
+            HWND lbl = make_label2(nd, SH_AUTOCONNECT_SESSION);
+            HWND cmb = make_combo2(nd, IDC_AUTOCONNECT_COMBO, CBS_DROPDOWNLIST,
+                                   SH_AUTOCONNECT_SESSION);
             const char *cur = nd->cfg->settings.auto_connect_session;
             int sel = -1;
             size_t np = vec_size(&nd->cfg->profiles);
@@ -1416,8 +1349,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         {
         int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
         {
-            HWND lbl = make_label2(nd->hPage, "Provider:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_PROVIDER_COMBO, CBS_DROPDOWNLIST);
+            HWND lbl = make_label2(nd, SH_AI_PROVIDER);
+            HWND cmb = make_combo2(nd, IDC_AI_PROVIDER_COMBO, CBS_DROPDOWNLIST,
+                                   SH_AI_PROVIDER);
             int sel = 0;
             for (int i = 0; i < NUM_AI_PROVIDERS; i++) {
                 SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_ai_providers[i]);
@@ -1428,9 +1362,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "API Key:");
-            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.ai_api_key,
-                                 (HMENU)IDC_AI_KEY_EDIT, ES_PASSWORD);
+            HWND lbl = make_label2(nd, SH_AI_KEY);
+            HWND ed = make_edit2(nd, nd->cfg->settings.ai_api_key,
+                                 IDC_AI_KEY_EDIT, ES_PASSWORD, SH_AI_KEY);
             /* Match the edit box's limit to Settings.ai_api_key's buffer
              * size -- the IDOK handler's GetDlgItemText() already
              * truncates safely at that size, but without this the box
@@ -1442,19 +1376,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Model:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_CUSTOM_MODEL, CBS_DROPDOWN);
+            HWND lbl = make_label2(nd, SH_AI_MODEL);
+            HWND cmb = make_combo2(nd, IDC_AI_CUSTOM_MODEL, CBS_DROPDOWN, SH_AI_MODEL);
             const char *cur_model = nd->cfg->settings.ai_custom_model;
             if (cur_model && cur_model[0]) SetWindowText(cmb, cur_model);
-            HWND refresh = CreateWindowW(L"BUTTON", L"\x21BB",
-                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                0, 0, 10, 10, nd->hPage, (HMENU)IDC_AI_REFRESH, NULL, NULL);
+            HWND refresh = page_ctrl_w(nd, L"BUTTON", L"\x21BB", BS_OWNERDRAW,
+                                       IDC_AI_REFRESH, SH_AI_REFRESH);
             add_ctrl(nd, lbl, cmb, refresh, SETTINGS_PAGE_AI_PROVIDER, 0, 26, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Base URL:");
-            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.ai_custom_url,
-                                 (HMENU)IDC_AI_CUSTOM_URL, 0);
+            HWND lbl = make_label2(nd, SH_AI_BASE_URL);
+            HWND ed = make_edit2(nd, nd->cfg->settings.ai_custom_url,
+                                 IDC_AI_CUSTOM_URL, 0, SH_AI_BASE_URL);
             nd->ctrl_ai_base_url = add_ctrl(nd, lbl, ed, NULL,
                 SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, is_custom, 0);
         }
@@ -1462,7 +1395,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* Shown only for a custom provider with a clear-text, non-loopback
              * URL (ai_url_warn_sync); a hidden row takes no space. Two rows
              * so the sentence wraps rather than clips on a narrow pane. */
-            nd->hUrlWarn = make_static2(nd->hPage,
+            nd->hUrlWarn = make_hint(nd,
                 "Not encrypted: your API key and terminal text cross the "
                 "network in plain text.");
             nd->ctrl_ai_url_warn = add_ctrl(nd, NULL, nd->hUrlWarn, NULL,
@@ -1476,12 +1409,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             int lines = nd->cfg->settings.ai_max_context_lines;
             if (lines < 1) lines = AI_CONTEXT_LINES_DEFAULT;
             (void)snprintf(buf, sizeof(buf), "%d", lines);
-            HWND lbl = make_label2(nd->hPage, "Max Terminal Lines:");
-            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_CONTEXT_LINES, ES_NUMBER);
+            HWND lbl = make_label2(nd, SH_AI_CONTEXT_LINES);
+            HWND ed = make_edit2(nd, buf, IDC_AI_CONTEXT_LINES, ES_NUMBER,
+                                 SH_AI_CONTEXT_LINES);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 100, 0, 1, 0, 1, 0);
         }
         {
-            nd->hCtxHint = make_static2(nd->hPage,
+            nd->hCtxHint = make_hint(nd,
                 "Each line becomes part of the context sent with every "
                 "message. A larger window gives the assistant more of your "
                 "session to reason about, at a proportionate cost in tokens. "
@@ -1490,10 +1424,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                      0, 0, 4, 0, 1, 1);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "System Instructions:");
-            HWND ed = CreateWindow("EDIT", nd->cfg->settings.ai_system_notes,
-                WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL,
-                0, 0, 10, 10, nd->hPage, (HMENU)IDC_AI_SYSTEM_NOTES, NULL, NULL);
+            HWND lbl = make_label2(nd, SH_AI_SYSTEM_NOTES);
+            HWND ed = page_ctrl(nd, "EDIT", nd->cfg->settings.ai_system_notes,
+                WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL,
+                IDC_AI_SYSTEM_NOTES, SH_AI_SYSTEM_NOTES);
             SendMessage(ed, EM_SETLIMITTEXT, (WPARAM)2559, 0);
             SendMessage(ed, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                         MAKELPARAM(3, 3));
@@ -1503,7 +1437,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                      0, CSB_WIDTH, 6, 1, 1, 0);
         }
         {
-            HWND chk = make_check2(nd->hPage, "Render AI markdown", (HMENU)IDC_AI_MD_RENDER);
+            HWND chk = make_check2(nd, IDC_AI_MD_RENDER, SH_AI_MARKDOWN);
             SendMessage(chk, BM_SETCHECK,
                         nd->cfg->settings.markdown_render_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
@@ -1515,9 +1449,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             CmdPolicy pol = nd->cfg->settings.ai_policy_default;
             cmd_policy_clamp(&pol);
             {
-                HWND lbl = make_label2(nd->hPage, "Allowed:");
-                HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_POLICY_ALLOWED,
-                                       CBS_DROPDOWNLIST);
+                HWND lbl = make_label2(nd, SH_AI_POLICY_ALLOWED);
+                HWND cmb = make_combo2(nd, IDC_AI_POLICY_ALLOWED,
+                                       CBS_DROPDOWNLIST, SH_AI_POLICY_ALLOWED);
                 for (int i = 0; i < POLICY_STOP_COUNT; i++)
                     SendMessage(cmb, CB_ADDSTRING, 0,
                                 (LPARAM)cmd_policy_stop_label(i));
@@ -1525,8 +1459,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
             }
             {
-                HWND chk = make_check2(nd->hPage, "Auto-approve by default",
-                                       (HMENU)IDC_AI_POLICY_AUTO);
+                HWND chk = make_check2(nd, IDC_AI_POLICY_AUTO, SH_AI_POLICY_AUTO);
                 SendMessage(chk, BM_SETCHECK,
                             cmd_policy_auto_on(pol) ? BST_CHECKED : BST_UNCHECKED, 0);
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
@@ -1544,12 +1477,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 (sec < AI_TOOL_TIMEOUT_SEC_MIN || sec > AI_TOOL_TIMEOUT_SEC_MAX))
                 sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
             (void)snprintf(buf, sizeof(buf), "%d", sec);
-            HWND lbl = make_static2(nd->hPage, "Tool approval timeout (seconds):");
-            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_TIMEOUT, ES_NUMBER);
+            HWND lbl = page_ctrl(nd, "STATIC", settings_help_get((int)SH_AI_TOOL_TIMEOUT)->label,
+                                SS_LEFT, 0, SH_AI_TOOL_TIMEOUT);
+            HWND ed = make_edit2(nd, buf, IDC_AI_TOOL_TIMEOUT, ES_NUMBER,
+                                 SH_AI_TOOL_TIMEOUT);
             add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
         }
         {
-            nd->hToolTimeoutNote = make_static2(nd->hPage,
+            nd->hToolTimeoutNote = make_hint(nd,
                 "0 means never: the card waits until you answer it or stop "
                 "the reply.");
             add_ctrl(nd, NULL, nd->hToolTimeoutNote, NULL,
@@ -1562,12 +1497,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             if (rounds < AI_TOOL_ROUNDS_MIN || rounds > AI_TOOL_ROUNDS_MAX)
                 rounds = AI_TOOL_ROUNDS_DEFAULT;
             (void)snprintf(buf, sizeof(buf), "%d", rounds);
-            HWND lbl = make_static2(nd->hPage, "Automatic tool rounds:");
-            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_ROUNDS, ES_NUMBER);
+            HWND lbl = page_ctrl(nd, "STATIC", settings_help_get((int)SH_AI_TOOL_ROUNDS)->label,
+                                SS_LEFT, 0, SH_AI_TOOL_ROUNDS);
+            HWND ed = make_edit2(nd, buf, IDC_AI_TOOL_ROUNDS, ES_NUMBER,
+                                 SH_AI_TOOL_ROUNDS);
             add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
         }
         {
-            nd->hToolRoundsNote = make_static2(nd->hPage,
+            nd->hToolRoundsNote = make_hint(nd,
                 "Fetches the assistant may run on its own after one prompt "
                 "before it asks; your next prompt resets the count.");
             add_ctrl(nd, NULL, nd->hToolRoundsNote, NULL,
@@ -1576,25 +1513,31 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         /* ==== AI_WEB ==== */
         {
+            HWND chk = make_check2(nd, IDC_AI_WEB_FETCH, SH_AI_WEB_FETCH);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.ai_web_fetch_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 1);
+        }
+        {
         int is_custom_search =
             (_stricmp(nd->cfg->settings.ai_search_provider, "custom") == 0);
         {
-            HWND lbl = make_label2(nd->hPage, "Search Engine:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_SEARCH_COMBO, CBS_DROPDOWNLIST);
+            HWND lbl = make_label2(nd, SH_AI_SEARCH);
+            HWND cmb = make_combo2(nd, IDC_AI_SEARCH_COMBO, CBS_DROPDOWNLIST,
+                                   SH_AI_SEARCH);
             int sel = 0;
-            for (int i = 0; i < NUM_SEARCH_PROVIDERS; i++) {
-                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_search_providers[i].label);
-                if (_stricmp(nd->cfg->settings.ai_search_provider,
-                             k_search_providers[i].value) == 0)
-                    sel = i;
-            }
+            for (int i = 0; i < search_provider_count(); i++)
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)search_provider_label(i));
+            /* An unknown stored value (-1) shows the first entry. */
+            sel = search_provider_index(nd->cfg->settings.ai_search_provider);
+            if (sel < 0) sel = 0;
             SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 0);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Search URL:");
-            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.ai_search_url,
-                                 (HMENU)IDC_AI_SEARCH_URL, 0);
+            HWND lbl = make_label2(nd, SH_AI_SEARCH_URL);
+            HWND ed = make_edit2(nd, nd->cfg->settings.ai_search_url,
+                                 IDC_AI_SEARCH_URL, 0, SH_AI_SEARCH_URL);
             nd->ctrl_ai_search_url = add_ctrl(nd, lbl, ed, NULL,
                 SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, is_custom_search, 0);
         }
@@ -1604,15 +1547,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             int max_r = nd->cfg->settings.ai_max_search_results;
             if (max_r <= 0) max_r = 7;
             (void)snprintf(buf, sizeof(buf), "%d", max_r);
-            HWND lbl = make_label2(nd->hPage, "Max Results:");
-            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_MAX_RESULTS, ES_NUMBER);
+            HWND lbl = make_label2(nd, SH_AI_MAX_RESULTS);
+            HWND ed = make_edit2(nd, buf, IDC_AI_MAX_RESULTS, ES_NUMBER,
+                                 SH_AI_MAX_RESULTS);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_WEB, 70, 0, 1, 0, 1, 0);
-        }
-        {
-            HWND chk = make_check2(nd->hPage, "Permit Web Fetch", (HMENU)IDC_AI_WEB_FETCH);
-            SendMessage(chk, BM_SETCHECK,
-                        nd->cfg->settings.ai_web_fetch_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 1);
         }
 
         /* ==== DEBUGGING ==== */
@@ -1620,15 +1558,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         /* ==== ABOUT ==== */
         {
-            HWND s1 = make_static2(nd->hPage, "Nutshell v" APP_VERSION);
+            HWND s1 = make_hint(nd, "Nutshell v" APP_VERSION);
             add_ctrl(nd, NULL, s1, NULL, SETTINGS_PAGE_ABOUT, 0, 0, 2, 0, 1, 1);
         }
         {
-            HWND s2 = make_static2(nd->hPage, "Copyright (C) 2026 Thomas Sulkiewicz");
+            HWND s2 = make_hint(nd, "Copyright (C) 2026 Thomas Sulkiewicz");
             add_ctrl(nd, NULL, s2, NULL, SETTINGS_PAGE_ABOUT, 0, 0, 1, 0, 1, 1);
         }
         {
-            nd->hAboutBlurb = make_static2(nd->hPage,
+            nd->hAboutBlurb = make_hint(nd,
                 "Windows SSH terminal with built-in AI assistance.");
             add_ctrl(nd, NULL, nd->hAboutBlurb, NULL, SETTINGS_PAGE_ABOUT, 0, 0, 1, 0, 1, 1);
         }
@@ -1643,13 +1581,6 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         nd->hFooter = CreateWindow("STATIC", "Nutshell v" APP_VERSION,
             WS_CHILD | WS_VISIBLE | SS_LEFT,
             0, 0, 10, 10, hwnd, NULL, NULL, NULL);
-
-        /* ---- Tooltip window ---- */
-        nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
-            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP | TTS_BALLOON,
-            0, 0, 0, 0, hwnd, NULL, NULL, NULL);
-        if (nd->hTooltip)
-            SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
 
         /* ---- Fonts ---- */
         {
@@ -1694,12 +1625,35 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
         }
 
-        /* ---- Tooltips ---- */
-        if (nd->hTooltip) {
-            for (int i = 0; i < NUM_TOOLTIPS; i++) {
-                HWND tool = GetDlgItem(nd->hPage, k_tooltips[i].id);
-                if (tool)
-                    add_tooltip(nd->hTooltip, tool, k_tooltips[i].text);
+        /* ---- Help tip: one tool per control, from the help table. Created
+         * after the fonts and the theme block: its colours come from the
+         * dialog's own theme (nd->theme), not the main window's. ---- */
+        {
+            ThemeTokens tok;
+            ui_theme_resolve(nd->theme, &tok);
+            nd->hTip = ns_tip_create(hwnd, nd->dpi, nd->hDlgFont, &tok);
+            if (nd->hTip) {
+                HWND hModel = GetDlgItem(nd->hPage, IDC_AI_CUSTOM_MODEL);
+                for (int i = 0; i < nd->n_tips; i++) {
+                    const SettingsHelp *e = settings_help_get((int)nd->tips[i].help);
+                    if (!e) continue;
+                    (void)ns_tip_add(nd->hTip, nd->tips[i].hwnd, e->text);
+                    /* The editable combo's own window covers only its button:
+                     * its edit gets a second tool with the same text. */
+                    if (nd->tips[i].hwnd == hModel)
+                        (void)ns_tip_add_combo(nd->hTip, hModel, e->text);
+                }
+                /* A disabled child takes no mouse input; the page host sees it
+                 * instead, so Session and the recorder level also get a rect
+                 * tool, placed by relayout_page(). */
+                const SettingsHelp *es = settings_help_get((int)SH_AUTOCONNECT_SESSION);
+                const SettingsHelp *er = settings_help_get((int)SH_DBG_RECORDER);
+                if (es)
+                    (void)ns_tip_add_rect(nd->hTip, nd->hPage, IDC_AUTOCONNECT_COMBO,
+                                          NULL, es->text);
+                if (er)
+                    (void)ns_tip_add_rect(nd->hTip, nd->hPage, IDC_DBG_RECORDER_LEVEL,
+                                          NULL, er->text);
             }
         }
 
@@ -1878,9 +1832,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             if (HIWORD(wParam) == CBN_SELCHANGE && d) {
                 int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_SEARCH_COMBO,
                                                   CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < NUM_SEARCH_PROVIDERS && d->ctrl_ai_search_url) {
+                if (sel >= 0 && sel < search_provider_count() && d->ctrl_ai_search_url) {
                     d->ctrl_ai_search_url->visible =
-                        (_stricmp(k_search_providers[sel].value, "custom") == 0);
+                        (_stricmp(search_provider_value(sel), "custom") == 0);
                     relayout(hwnd, d);
                     InvalidateRect(d->hPage, NULL, TRUE);
                 }
@@ -2127,9 +2081,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             {
                 int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_SEARCH_COMBO,
                                                   CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < NUM_SEARCH_PROVIDERS) {
+                if (sel >= 0 && sel < search_provider_count()) {
                     strncpy(s->ai_search_provider,
-                            k_search_providers[sel].value,
+                            search_provider_value(sel),
                             sizeof(s->ai_search_provider) - 1);
                     s->ai_search_provider[sizeof(s->ai_search_provider) - 1] = '\0';
                 }
@@ -2141,23 +2095,21 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
             /* Max search results */
             v = GetDlgItemInt(d->hPage, IDC_AI_MAX_RESULTS, &ok, FALSE);
-            if (ok && v >= 1 && v <= 20)
-                s->ai_max_search_results = (int)v;
+            s->ai_max_search_results =
+                keep_entry(SH_AI_MAX_RESULTS, ok, v, s->ai_max_search_results);
 
             /* Tool approval timeout: 0 (never) or 15..3600 s; keep the stored
              * value on a parse failure or any other entry, as the idle
              * timeout does */
             v = GetDlgItemInt(d->hPage, IDC_AI_TOOL_TIMEOUT, &ok, FALSE);
-            if (ok && (v == (UINT)AI_TOOL_TIMEOUT_SEC_NEVER ||
-                       (v >= (UINT)AI_TOOL_TIMEOUT_SEC_MIN &&
-                        v <= (UINT)AI_TOOL_TIMEOUT_SEC_MAX)))
-                s->ai_tool_timeout_sec = (int)v;
+            s->ai_tool_timeout_sec =
+                keep_entry(SH_AI_TOOL_TIMEOUT, ok, v, s->ai_tool_timeout_sec);
 
             /* Automatic tool rounds: 1..20; keep the stored value on a parse
              * failure or any other entry (0 is not allowed) */
             v = GetDlgItemInt(d->hPage, IDC_AI_TOOL_ROUNDS, &ok, FALSE);
-            if (ok && v >= (UINT)AI_TOOL_ROUNDS_MIN && v <= (UINT)AI_TOOL_ROUNDS_MAX)
-                s->ai_tool_auto_rounds = (int)v;
+            s->ai_tool_auto_rounds =
+                keep_entry(SH_AI_TOOL_ROUNDS, ok, v, s->ai_tool_auto_rounds);
 
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)
@@ -2206,8 +2158,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
             /* SSH user idle timeout */
             v = GetDlgItemInt(d->hPage, IDC_SSH_IDLE_EDIT, &ok, FALSE);
-            if (ok && v <= 10080u)
-                s->ssh_user_idle_timeout_mins = (int)v;
+            s->ssh_user_idle_timeout_mins =
+                keep_entry(SH_SSH_IDLE, ok, v, s->ssh_user_idle_timeout_mins);
             /* on parse failure or out-of-range: retain previous value */
 
             /* Open Session Manager at startup */
@@ -2253,7 +2205,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
     case WM_DESTROY:
         if (d) {
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
-            if (d->hTooltip) DestroyWindow(d->hTooltip);
+            if (d->hTip) DestroyWindow(d->hTip);
             /* d->hDlgFont / d->hBoldFont come from the ns_font cache. */
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
@@ -2281,14 +2233,24 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
 /* ---- Public API --------------------------------------------------------- */
 
-static void settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
-                             int initial_page, int demo)
+/* The one open Settings dialog, or NULL. A second request while it is open
+ * brings it to the front instead of creating another. */
+static HWND s_open = NULL;
+
+/* Returns 1 when it ran a dialog (opened and closed), 0 when it ran none:
+ * one is already open, cfg is NULL, or the window could not be created. */
+static int settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
+                            int initial_page, int demo)
 {
-    if (!cfg) return;
+    if (s_open && IsWindow(s_open)) {
+        SetForegroundWindow(s_open);
+        return 0;
+    }
+    if (!cfg) return 0;
 
     /* Allocate dialog state — freed in WM_DESTROY */
     SettingsDlgData *d = (SettingsDlgData *)calloc(1u, sizeof(SettingsDlgData));
-    if (!d) return;
+    if (!d) return 0;
     d->cfg = cfg;
     d->config_path = config_path;
     d->initial_page = initial_page;
@@ -2316,8 +2278,10 @@ static void settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
     wcPage.lpszClassName = PAGE_CLASS;
     RegisterClassEx(&wcPage);
 
-    /* Default client size, DPI-scaled; AdjustWindowRect turns that into the
-     * window size the non-client area (title bar, borders) needs. */
+    /* The window is created hidden at the owner monitor's work-area top-left
+     * at a provisional size, so it lands on that monitor and WM_CREATE reads
+     * that monitor's DPI. Once the pages are built it is sized and placed by
+     * settings_initial_placement() and only then shown. */
     int pdpi = get_window_dpi(parent);
     int client_w = ns_scale(760, pdpi);
     int client_h = ns_scale(560, pdpi);
@@ -2326,36 +2290,81 @@ static void settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
     RECT wr = {0, 0, client_w, client_h};
     AdjustWindowRect(&wr, style, FALSE);
 
+    MONITORINFO mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    HMONITOR mon = MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST);
+    if (!mon || !GetMonitorInfo(mon, &mi)) {
+        mi.rcWork.left = 0;
+        mi.rcWork.top = 0;
+        mi.rcWork.right = GetSystemMetrics(SM_CXSCREEN);
+        mi.rcWork.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",
-        style | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT,
+        style,
+        mi.rcWork.left, mi.rcWork.top,
         wr.right - wr.left, wr.bottom - wr.top,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {
+        s_open = hwnd;
         EnableWindow(parent, FALSE);
+
+        /* Behaviour's rows (title included) set the opening height. Read
+         * everything from d now: WM_DESTROY frees it. */
+        int target_rows = 1;
+        for (int i = 0; i < d->n_ctrls; i++) {
+            if (d->ctrls[i].page == SETTINGS_PAGE_AI_BEHAVIOUR)
+                target_rows += d->ctrls[i].rows;
+        }
+        SettingsMetrics pm;
+        settings_metrics_init(&pm, d->dpi);
+        /* AdjustWindowRect gives the frame at the system DPI, but the
+         * client is laid out at d->dpi (the owner monitor's). The window
+         * exists, hidden, on that monitor: measure its real frame, and keep
+         * the AdjustWindowRect size only if a call fails. */
+        int ncw = (int)(wr.right - wr.left) - client_w;
+        int nch = (int)(wr.bottom - wr.top) - client_h;
+        RECT fw, fc;
+        if (GetWindowRect(hwnd, &fw) && GetClientRect(hwnd, &fc)) {
+            ncw = (int)((fw.right - fw.left) - (fc.right - fc.left));
+            nch = (int)((fw.bottom - fw.top) - (fc.bottom - fc.top));
+        }
+        int cw = 0, ch = 0, wx = 0, wy = 0;
+        settings_initial_placement(&pm, target_rows,
+                                   (int)mi.rcWork.left, (int)mi.rcWork.top,
+                                   (int)(mi.rcWork.right - mi.rcWork.left),
+                                   (int)(mi.rcWork.bottom - mi.rcWork.top),
+                                   ncw, nch, &cw, &ch, &wx, &wy);
+        SetWindowPos(hwnd, NULL, wx, wy, cw + ncw, ch + nch,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(hwnd, SW_SHOW);
+
         MSG msg;
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+        s_open = NULL;
         EnableWindow(parent, TRUE);
         SetFocus(parent);
-    } else {
-        free(d);
+        return 1;
     }
+    free(d);
+    return 0;
 }
 
-void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
-                        int initial_page)
+int settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
+                      int initial_page)
 {
-    settings_dlg_run(parent, cfg, config_path, initial_page, 0);
+    return settings_dlg_run(parent, cfg, config_path, initial_page, 0);
 }
 
 void settings_dlg_show_demo_debug(HWND parent, Config *cfg)
 {
-    settings_dlg_run(parent, cfg, "", SETTINGS_PAGE_DEBUG, 1);
+    (void)settings_dlg_run(parent, cfg, "", SETTINGS_PAGE_DEBUG, 1);
 }
 
 #endif

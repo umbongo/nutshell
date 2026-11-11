@@ -64,7 +64,10 @@ typedef struct {
     int rows;
     int cols;
 
-    TermRow **lines; /* Ring buffer of TermRow* */
+    /* Ring buffer of TermRow*. lines_capacity slots, indexed modulo that; but
+     * only the live part, the term_logical_rows() slots from lines_start,
+     * holds rows -- every other slot is NULL (see buffer.c). */
+    TermRow **lines;
     int lines_capacity;
     int lines_count;
     int lines_start;
@@ -122,6 +125,14 @@ typedef struct {
      * the display buffer shadow is stale and must be fully invalidated. */
     bool full_redraw_needed;
 
+    /* Allocation failures that left the terminal working (buffer.c). grow_failing:
+     * the last attempt to add a row of scrollback failed, so the oldest row was
+     * recycled instead; cleared by the next success. resize_failing: the last
+     * term_resize() could not allocate; cleared by the next success. Each only
+     * gates a once-per-streak log line. */
+    bool grow_failing;
+    bool resize_failing;
+
     /* Bracketed paste mode (?2004h/l): when true, wrap paste with \033[200~/201~ */
     bool bracketed_paste_mode;
 
@@ -154,11 +165,18 @@ typedef struct {
 
 Terminal *term_init(int rows, int cols, int max_scrollback);
 void term_free(Terminal *term);
-void term_resize(Terminal *term, int rows, int cols);
+/* Resize to rows x cols, reflowing the text. Returns false only when an
+ * allocation failed, and then the Terminal is exactly as it was (callers keep
+ * their display buffer and the remote end at the old size too). A NULL term, a
+ * size of 0 or less, and the size it already has return true: nothing to do. */
+bool term_resize(Terminal *term, int rows, int cols);
 void term_process(Terminal *term, const char *data, size_t len);
 void term_scroll(Terminal *term);
 void term_scroll_up(Terminal *term, int top, int bot, int n);
 void term_scroll_down(Terminal *term, int top, int bot, int n);
+/* Switch to the alternate screen. Fallible: when its rows cannot be allocated
+ * the terminal stays on the primary screen, unchanged, and the matching
+ * term_alt_screen_exit() does nothing. */
 void term_alt_screen_enter(Terminal *term);
 void term_alt_screen_exit(Terminal *term);
 
@@ -168,6 +186,15 @@ void term_alt_screen_exit(Terminal *term);
  * Indices 232-255: 24-step greyscale ramp.
  */
 uint32_t color256_to_rgb(uint8_t index);
+
+/* The allocator behind every allocation buffer.c lets fail without ending the
+ * process: a scrollback row, a reflow, the alternate screen. Tests only (a
+ * fake that counts calls and fails the n-th, as tests/fake_dpapi.c does for
+ * DPAPI): no product code calls it. NULL restores calloc. The function must
+ * return zeroed memory, like calloc, that free() can release: buffer.c relies
+ * on a zeroed slot array being all NULL. */
+typedef void *(*TermCallocFn)(size_t nmemb, size_t size);
+void term_set_calloc(TermCallocFn fn);
 
 /* Clear the dirty flag on all visible rows.  Call after painting. */
 void term_clear_dirty(Terminal *term);
@@ -232,7 +259,9 @@ int term_cursor_row_is_windows_prompt(const Terminal *term);
  * disagree with it (see the "sparse state" note on
  * term_logical_rows() below). Does not itself bound-check the result
  * against anything but lines_capacity (the modulo); screen_row must
- * already be known valid (0 <= screen_row < term->rows). */
+ * already be known valid (0 <= screen_row < term->rows). The live part of the
+ * ring (term_logical_rows() below) always covers the visible screen, so the
+ * slot it names holds a row. */
 int term_screen_to_phys(const Terminal *term, int screen_row);
 
 /* Logical index of the row shown at screen_row in the view as scrolled
@@ -253,9 +282,14 @@ int term_max_scroll_offset(const Terminal *t);
  * in the sparse state right after a resize (lines_count < rows --
  * term_resize()/term_reflow_buffer() can leave a freshly resized,
  * not-yet-scrolled window with fewer committed rows than the screen has,
- * even though every row of the new screen is pre-allocated, filled and
+ * even though every row of the new screen is allocated, filled and
  * written to -- see term_screen_to_phys()'s comment above), every row of
  * the current screen instead, since those are real too.
+ *
+ * This is also the live part of the ring: the slots from lines_start, modulo
+ * lines_capacity, that hold rows. Every slot in it holds a row, term->cols
+ * cells wide, so the visible screen always lies inside it; every slot outside
+ * it is NULL (the rows are allocated as lines are kept, not up front).
  *
  * A logical index at or past this bound has never been written, or wraps
  * (via the ring buffer's modulo) into a slot that belongs to something
@@ -267,7 +301,8 @@ int term_max_scroll_offset(const Terminal *t);
  * "nothing here" forever, which is what made term_at_prompt() false
  * forever after a resize until enough output happened to scroll the
  * buffer full. (A *screen-row* consumer doesn't need this at all --
- * term_screen_to_phys() above has no such bound because it needs none.) */
+ * term_screen_to_phys() above has no such bound because it needs none: the
+ * live part always covers the screen, so the slot it names holds a row.) */
 static inline int term_logical_rows(const Terminal *term) {
     return term->lines_count > term->rows ? term->lines_count : term->rows;
 }

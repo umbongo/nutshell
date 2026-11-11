@@ -560,3 +560,98 @@ int test_sl_scroll_clamp_zero_max(void) {
     ASSERT_EQ(settings_scroll_clamp(-50, 0), 0);
     TEST_END();
 }
+
+/* ---- settings_initial_placement ---- */
+
+int test_sl_initial_1080p_fits_behaviour(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 22, 0, 0, 1920, 1032, 16, 39, &cw, &ch, &wx, &wy);
+    ASSERT_EQ(cw, 760);
+    ASSERT_EQ(ch, 744);
+    ASSERT_EQ(wx, (1920 - 776) / 2);
+    ASSERT_EQ(wy, (1032 - 783) / 2);
+    TEST_END();
+}
+
+int test_sl_initial_scroll_expectations(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 22, 0, 0, 1920, 1032, 16, 39, &cw, &ch, &wx, &wy);
+    ASSERT_EQ(settings_page_height(22, &m), 688);
+    ASSERT_EQ(settings_page_height(21, &m), 658);
+    ASSERT_EQ(settings_scroll_max(ch - m.btnbar_h, settings_page_height(22, &m)), 0);
+    ASSERT_EQ(settings_scroll_max(688, settings_page_height(21, &m)), 0);
+    TEST_END();
+}
+
+int test_sl_initial_follows_row_count(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 17, 0, 0, 1920, 1032, 16, 39, &cw, &ch, &wx, &wy);
+    ASSERT_EQ(ch, 594);
+    TEST_END();
+}
+
+int test_sl_initial_laptop_height(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 22, 0, 0, 1366, 728, 16, 39, &cw, &ch, &wx, &wy);
+    ASSERT_EQ(ch, 641);
+    ASSERT_EQ(settings_scroll_max(641 - m.btnbar_h, 688), 103);
+    TEST_END();
+}
+
+int test_sl_initial_tiny_work_area(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 22, 0, 0, 640, 400, 16, 39, &cw, &ch, &wx, &wy);
+    ASSERT_EQ(cw, m.min_w);
+    ASSERT_EQ(cw, 620);
+    ASSERT_EQ(ch, m.min_h);
+    ASSERT_EQ(m.min_h, 420);
+    ASSERT_EQ(wx, (640 - (m.min_w + 16)) / 2);
+    ASSERT_EQ(wy, 0);
+    TEST_END();
+}
+
+int test_sl_initial_narrow_clamps_width(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 22, 0, 0, 700, 1032, 16, 39, &cw, &ch, &wx, &wy);
+    ASSERT_EQ(cw, 700 - 16 - 48);
+    TEST_END();
+}
+
+int test_sl_initial_144dpi_capped(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 144);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 22, 0, 0, 1920, 1008, 24, 57, &cw, &ch, &wx, &wy);
+    ASSERT_EQ(ch, 879);
+    ASSERT_TRUE(wx >= 0);
+    ASSERT_TRUE(wy >= 0);
+    ASSERT_TRUE(wx + cw + 24 <= 1920);
+    ASSERT_TRUE(wy + ch + 57 <= 1008);
+    TEST_END();
+}
+
+int test_sl_initial_negative_origin(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    int cw = 0, ch = 0, wx = 0, wy = 0;
+    settings_initial_placement(&m, 22, -1920, -200, 1920, 1032, 16, 39, &cw, &ch, &wx, &wy);
+    ASSERT_TRUE(wx >= -1920);
+    ASSERT_TRUE(wx + cw + 16 <= 0);
+    ASSERT_TRUE(wy >= -200);
+    ASSERT_TRUE(wy + ch + 39 <= 832);
+    ASSERT_EQ(wx, -1348);
+    ASSERT_EQ(wy, -76);
+    TEST_END();
+}

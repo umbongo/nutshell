@@ -94,6 +94,24 @@ void settings_row_rects(int row, int content_w, int ctrl_w, int y_offset,
 /* Total pixel height a page of `rows` rows occupies (including top/bottom pad). */
 int settings_page_height(int rows, const SettingsMetrics *m);
 
+/* Initial client size and window position for the Settings dialog. The window
+ * opens just tall enough that the page of target_rows rows (title included;
+ * AI Assistant > Behaviour) needs no scrolling, with its button bar:
+ *   target_h = settings_page_height(target_rows) + btnbar_h
+ *   client_h = max(min_h, min(target_h, work_h - nc_h - 2 * margin))
+ *   client_w = max(min_w, min(760 scaled, work_w - nc_w - 2 * margin))
+ * where margin is SP_XL scaled to the dpi. work_* is the monitor work area,
+ * nc_* the window's non-client size at its own monitor's DPI (measured from
+ * the hidden window, not AdjustWindowRect). The window (client plus nc)
+ * is centred in the work area, then moved so its far edge is inside it, then
+ * so its near edge is inside it: top-left wins when it cannot fit. Writes the
+ * client size and the window's top-left, in the work area's coordinates. */
+void settings_initial_placement(const SettingsMetrics *m, int target_rows,
+                                int work_x, int work_y, int work_w, int work_h,
+                                int nc_w, int nc_h,
+                                int *client_w, int *client_h,
+                                int *win_x, int *win_y);
+
 /* Maximum scroll offset. 0 when the content fits. Never negative. */
 int settings_scroll_max(int view_h, int content_h);
 
