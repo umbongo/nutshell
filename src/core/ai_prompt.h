@@ -108,9 +108,11 @@ typedef struct {
     char tool_provider[16];
     char tool_model[64];
 
-    /* 1 on a USER turn that Nutshell wrote (a policy note, an [EXEC] continue
-     * text, the policy-blocked and quoted NOTEs), 0 on one the user typed and
-     * on every other role. Set only by the note door (ai_conv_add_user_note's
+    /* 1 on a USER turn that Nutshell wrote (a policy note, the policy-blocked
+     * and quoted NOTEs, an [EXEC] continue text the door queued behind an open
+     * run_command turn), 0 on one the user typed, on a continue text that
+     * launched its own request (spec decision 22, R44) and on every other role.
+     * Set only by the note door (ai_conv_add_user_note's
      * direct append and ai_conv_flush_notes, ai_conv_guard.c); ai_conv_add
      * clears it; a struct copy (ai_conv_copy, ai_conv_take) carries it. The
      * frozen snapshot stays on its question while only such turns follow it,
