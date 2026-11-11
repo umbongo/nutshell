@@ -131,16 +131,6 @@ int chat_approval_approve_all(ApprovalQueue *q);
 /* Check if all commands have been decided (no PENDING). */
 int chat_approval_all_decided(const ApprovalQueue *q);
 
-/* Have this queue's rows left the card? 1 when no entry is PENDING and at
- * least one is not BLOCKED; else 0 (also for an empty queue and NULL). It is
- * the state the live view reaches by settling a batch: that happens only once
- * every row is decided, and a card of nothing but held rows stays up for the
- * user to raise the ceiling (chat_approval_needs_user). A display rebuilt
- * from the queue marks its rows settled by this, so a batch with a row still
- * PENDING comes back as the whole card, not as some rows settled (which would
- * also draw a summary line the live view never had). */
-int chat_approval_rows_settled(const ApprovalQueue *q);
-
 /* Does the approval card need to stay up for the user to act on?
  * Returns 1 when any entry is still PENDING, or when at least one entry
  * is BLOCKED and nothing in the queue is APPROVED (so nothing would run

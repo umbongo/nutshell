@@ -2,6 +2,7 @@
 #include "test_framework.h"
 #include "cmd_run_log.h"
 #include "chat_msg.h"
+#include "ai_prompt.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -339,40 +340,28 @@ int test_cmd_run_log_oom_records_nothing(void)
 
 /* ---- Review fixes: the reply's index, forgetting a popped turn, the note ---- */
 
-/* The index a batch is keyed to: only a reply that is stored, is the last
- * message and is an assistant turn with the reply's own text. */
+/* The index a batch is keyed to: only a reply that is stored, with an
+ * assistant turn last. (Its text is not compared: a reply that went through a
+ * tool round is posted joined, the conversation holds the last iteration.) */
 int test_cmd_run_reply_index_rule(void)
 {
     TEST_BEGIN();
-    const char *reply = "run this\n[EXEC] ls";
-    size_t rl = strlen(reply);
+    /* Stored, last message an assistant turn: its index. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 1), 4);
+    ASSERT_EQ(cmd_run_reply_index(1, 1, 1), 0);
+    ASSERT_EQ(cmd_run_reply_index(1, AI_MAX_MESSAGES, 1), AI_MAX_MESSAGES - 1);
 
-    /* Stored, last message is that assistant turn: its index. */
-    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, reply, rl, reply, rl), 4);
-    ASSERT_EQ(cmd_run_reply_index(1, 1, 1, reply, rl, reply, rl), 0);
-
-    /* The add failed (a full conversation): the last message is an OLDER
-     * turn, here even one with the same text -- the reply was never stored. */
-    ASSERT_EQ(cmd_run_reply_index(0, 5, 1, reply, rl, reply, rl), -1);
-
-    /* Last message is an older assistant turn with different text. */
-    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, "older answer", 12, reply, rl), -1);
-    /* Same length, one byte different. */
-    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, "run this\n[EXEC] lx", rl, reply, rl),
-              -1);
-    /* A prefix of the reply is not the reply. */
-    ASSERT_EQ(cmd_run_reply_index(1, 5, 1, "run this", 8, reply, rl), -1);
+    /* The add failed (a full conversation): the last message is an older
+     * turn, never the reply. */
+    ASSERT_EQ(cmd_run_reply_index(0, 5, 1), -1);
+    ASSERT_EQ(cmd_run_reply_index(0, AI_MAX_MESSAGES, 1), -1);
 
     /* Last message is a user turn. */
-    ASSERT_EQ(cmd_run_reply_index(1, 5, 0, reply, rl, reply, rl), -1);
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 0), -1);
 
     /* Empty conversation. */
-    ASSERT_EQ(cmd_run_reply_index(1, 0, 1, reply, rl, reply, rl), -1);
-    ASSERT_EQ(cmd_run_reply_index(1, -1, 1, reply, rl, reply, rl), -1);
-
-    /* NULL texts are the empty string: two empty replies match. */
-    ASSERT_EQ(cmd_run_reply_index(1, 3, 1, NULL, 0, "", 0), 2);
-    ASSERT_EQ(cmd_run_reply_index(1, 3, 1, NULL, 0, reply, rl), -1);
+    ASSERT_EQ(cmd_run_reply_index(1, 0, 1), -1);
+    ASSERT_EQ(cmd_run_reply_index(1, -1, 1), -1);
     TEST_END();
 }
 
@@ -476,6 +465,51 @@ int test_cmd_run_row_keeps_note(void)
     ASSERT_STR_EQ(log.rec[0]->rows[0].note, "");
     ASSERT_STR_EQ(log.rec[0]->rows[1].note, "second row's note");
     cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* Retry's other half: the batches still live that point at the popped reply
+ * stop pointing at it. */
+int test_cmd_run_batches_unkey(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 4), 0);      /* empty set */
+    ASSERT_EQ(cmd_run_batches_unkey(NULL, 4), 0);
+
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    CmdBatch *c = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ASSERT_NOT_NULL(c);
+    a->reply_msg = 4; a->reply_hash = 0x11u;
+    b->reply_msg = 6; b->reply_hash = 0x22u;
+    c->reply_msg = 4; c->reply_hash = 0x33u;
+
+    /* No batch keyed to the index: nothing changes. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 5), 0);
+    ASSERT_EQ(a->reply_msg, 4);
+    ASSERT_EQ(b->reply_msg, 6);
+
+    /* Several match: both detached, the other kept. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 4), 2);
+    ASSERT_EQ(a->reply_msg, -1);
+    ASSERT_EQ((int)a->reply_hash, 0);
+    ASSERT_EQ(c->reply_msg, -1);
+    ASSERT_EQ((int)c->reply_hash, 0);
+    ASSERT_EQ(b->reply_msg, 6);
+    ASSERT_EQ((int)b->reply_hash, 0x22);
+
+    /* A detached batch matches no turn, so its record cannot replay under a
+     * new reply at the same index. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 4), 0);
+    /* -1 (never keyed) is not an index to detach. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, -1), 0);
+    ASSERT_EQ(a->reply_msg, -1);
+
     cmd_batch_set_free(&set);
     TEST_END();
 }

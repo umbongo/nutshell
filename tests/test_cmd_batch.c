@@ -393,3 +393,40 @@ int test_cmd_batch_finished_rule(void) {
     cmd_batch_set_free(&set);
     TEST_END();
 }
+
+/* CmdBatch.settled says the live view has settled the batch's rows (a rebuild
+ * reads it): a new batch starts unsettled, whether or not the add evicted an
+ * older, settled one, and the flag stays with its own batch. */
+int test_cmd_batch_settled_flag_lifecycle(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *first = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(first);
+    ASSERT_EQ(first->settled, 0);
+
+    first->settled = 1;
+    CmdBatch *second = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(second);
+    ASSERT_EQ(second->settled, 0);
+    ASSERT_EQ(cmd_batch_find(&set, first->id)->settled, 1);
+
+    /* Fill the set with settled batches; the add that evicts the oldest
+     * still hands back an unsettled batch. */
+    for (int i = 0; i < CMD_BATCH_MAX; i++) {
+        int evicted = 0;
+        CmdBatch *b = cmd_batch_add(&set, NULL, &evicted);
+        ASSERT_NOT_NULL(b);
+        ASSERT_EQ(b->settled, 0);
+        b->settled = 1;
+    }
+    ASSERT_EQ(set.count, CMD_BATCH_MAX);
+    int evicted = 0;
+    CmdBatch *b = cmd_batch_add(&set, NULL, &evicted);
+    ASSERT_NOT_NULL(b);
+    ASSERT_TRUE(evicted > 0);
+    ASSERT_EQ(b->settled, 0);
+    ASSERT_EQ(set.b[0]->settled, 1);   /* the survivors keep theirs */
+    cmd_batch_set_free(&set);
+    TEST_END();
+}

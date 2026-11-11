@@ -66,6 +66,13 @@ void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner)
         chat_msg_batch_sync_run(&d->msg_list, oldest->id, &oldest->q, 1);
 }
 
+void ai_chat_batch_settle_rows(AiChatData *d, CmdBatch *batch)
+{
+    if (!d || !batch) return;
+    batch->settled = 1;
+    chat_msg_batch_settle(&d->msg_list, batch->id);
+}
+
 /* Once every entry in a batch has been decided (chat_approval_all_decided
  * -- PENDING is the only thing that blocks this; BLOCKED counts as
  * decided), render its command items inline (chat_msg_batch_settle) and,
@@ -80,7 +87,6 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
     if (!d || !batch) return;
     if (!chat_approval_all_decided(&batch->q)) return;
 
-    int batch_id = batch->id;
     /* Still runnable: a command approved but not sent, or sent and still
      * running (EXECUTING) -- denying the last pending row while another row
      * runs must not remove the batch under the dispatcher. */
@@ -94,7 +100,7 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
     if (cmd_batch_is_tool(batch))
         (void)ai_chat_tool_slot_answer(d, batch, TOOL_DECISION_NOT_APPROVED);
 
-    chat_msg_batch_settle(&d->msg_list, batch_id);
+    ai_chat_batch_settle_rows(d, batch);
     if (!has_runnable && d->active_state)
         ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
@@ -340,7 +346,7 @@ void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state)
         if (res == TOOL_DECISION_NONE) res = TOOL_DECISION_CANCELLED;
         if (displayed) {
             tool_rows_set_outcome(d, batch_id, res);
-            (void)chat_msg_batch_settle(&d->msg_list, batch_id);
+            ai_chat_batch_settle_rows(d, b);
         }
         cmd_batch_remove(&state->batches, batch_id);   /* frees b */
         swept++;
@@ -548,7 +554,7 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
                                                        sizeof(continue_text)) > 0;
         }
 
-        chat_msg_batch_settle(&d->msg_list, batch->id);
+        ai_chat_batch_settle_rows(d, batch);
         ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
     }
@@ -1026,7 +1032,7 @@ void ai_chat_dispatch_tick(AiChatData *d)
         d->dispatch_ambiguous_since_tick = 0;
         d->dispatch_ambiguous_reported = 0;
 
-        chat_msg_batch_settle(&d->msg_list, batch_id);
+        ai_chat_batch_settle_rows(d, batch);
         ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
 

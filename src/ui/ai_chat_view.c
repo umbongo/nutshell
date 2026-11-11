@@ -123,16 +123,17 @@ void ai_chat_thinking_history_clear(AiChatData *d)
  * Status maps onto the fields the list view reads: approved follows the
  * click (APPROVED/EXECUTING/COMPLETED 1, DENIED 0, PENDING/BLOCKED -1, which
  * chat_msg_set_command already defaults to). Whether the rows are settled
- * (inline, off the card) is the batch's, not each row's: the live view
- * settles a batch's rows together, once every row is decided
- * (ai_chat_settle_batch_if_done()) -- APPROVED included, well before the
- * dispatcher sends it -- so a batch with a row still PENDING comes back as
- * one whole card, and its summary line (needs a settled row) as absent as it
- * was live. chat_approval_rows_settled() is that rule. */
+ * (inline, off the card) is the batch's, not each row's, and not derived from
+ * the queue: the live view settles a batch's rows together
+ * (ai_chat_batch_settle_rows(), which sets CmdBatch.settled), and a ceiling
+ * change moves entries between PENDING and BLOCKED without settling or
+ * unsettling a row, so the queue alone cannot say which the live view shows.
+ * A batch not yet settled comes back as one whole card, and its summary line
+ * (needs a settled row) as absent as it was live. */
 void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
 {
     if (!list || !batch) return;
-    const int settled = chat_approval_rows_settled(&batch->q);
+    const int settled = batch->settled;
     for (int i = 0; i < batch->q.count; i++) {
         const ApprovalEntry *e = &batch->q.entries[i];
         ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");

@@ -92,21 +92,27 @@ int cmd_run_record_matches(const CmdRunRecord *rec, int msg_index,
 /* The index to key a new batch's rows to (CmdBatch.reply_msg): the last
  * message of the conversation, `msg_count - 1`, when it is the reply that was
  * just stored, else -1 (matches no turn). That needs all of: `stored` (the
- * reply was added to the conversation: ai_conv_add() returned 0), a
- * conversation with a message, the last message an assistant turn
- * (`last_is_assistant`), and its text (`last_content`, `last_len` bytes)
- * equal to the reply's (`reply`, `reply_len`). A full conversation refuses
- * the add, so "the last message" is then an older turn and must not be taken
- * for the reply. NULL texts are the empty string. */
-int cmd_run_reply_index(int stored, int msg_count, int last_is_assistant,
-                        const char *last_content, size_t last_len,
-                        const char *reply, size_t reply_len);
+ * code that produced the reply added it to the conversation: ai_conv_add()
+ * returned 0 -- a full conversation refuses the add, and then "the last
+ * message" is an older turn), a conversation with a message, and the last
+ * message an assistant turn (`last_is_assistant`). The reply's text is not
+ * compared: a reply that went through a tool round is posted as every
+ * iteration's text joined, while the conversation holds only the last. */
+int cmd_run_reply_index(int stored, int msg_count, int last_is_assistant);
 
 /* Drop (free) every record keyed to `reply_msg`, keeping the others in
  * order. Called where a reply is popped (Retry), so a new reply with the
  * same text at that index does not match the old reply's rows as well.
  * Returns the number dropped; NULL log or no match is 0. */
 int cmd_run_log_forget(CmdRunLog *log, int reply_msg);
+
+/* Detach every batch of `set` keyed to `reply_msg` (the popped reply's
+ * index): reply_msg = -1 and reply_hash = 0, so its rows match no turn when
+ * recorded. The other half of Retry's pop beside cmd_run_log_forget(): that
+ * drops the records already made, this stops the batches still live from
+ * making one for the old reply. A negative `reply_msg` does nothing. Returns
+ * the number detached; NULL set is 0. */
+int cmd_run_batches_unkey(CmdBatchSet *set, int reply_msg);
 
 /* Free every record, then cmd_run_log_init(). Safe twice and on NULL. */
 void cmd_run_log_free(CmdRunLog *log);

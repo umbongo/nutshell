@@ -869,9 +869,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                  * same text at this index would match them too. */
                 if (d->conv.msg_count > 0 &&
                     d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT) {
-                    if (d->active_state)
+                    if (d->active_state) {
+                        /* The records already made, and the live batches
+                         * that would make one for this reply later. */
                         (void)cmd_run_log_forget(&d->active_state->run_log,
                                                  d->conv.msg_count - 1);
+                        (void)cmd_run_batches_unkey(&d->active_state->batches,
+                                                    d->conv.msg_count - 1);
+                    }
                     ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
                 }
 
@@ -1225,14 +1230,13 @@ next_coalesce:;
                     const AiMessage *last = src->conv.msg_count > 0
                         ? &src->conv.messages[src->conv.msg_count - 1] : NULL;
                     /* The worker's own add may have failed (a full
-                     * conversation): the last message must then BE this
-                     * reply, by its text, or the rows match no turn. */
+                     * conversation): it says so in reply_stored, and the
+                     * rows then match no turn. Its text is not compared
+                     * with the posted one, which joins a tool round's
+                     * iterations while the conversation holds the last. */
                     const int reply_msg = cmd_run_reply_index(
-                        1, src->conv.msg_count,
-                        last && last->role == AI_ROLE_ASSISTANT,
-                        last ? ai_msg_content(last) : NULL,
-                        last ? last->content_len : 0,
-                        rmsg->content, strlen(rmsg->content));
+                        rmsg->reply_stored, src->conv.msg_count,
+                        last && last->role == AI_ROLE_ASSISTANT);
                     ai_chat_batch_record_oldest_if_full(d, src);
                     CmdBatch *batch = cmd_batch_add(&src->batches,
                                                     &bg_defaults, NULL);
@@ -1335,13 +1339,7 @@ next_coalesce:;
                 reply_stored, d->conv.msg_count,
                 d->conv.msg_count > 0 &&
                     d->conv.messages[d->conv.msg_count - 1].role ==
-                        AI_ROLE_ASSISTANT,
-                d->conv.msg_count > 0
-                    ? ai_msg_content(&d->conv.messages[d->conv.msg_count - 1])
-                    : NULL,
-                d->conv.msg_count > 0
-                    ? d->conv.messages[d->conv.msg_count - 1].content_len : 0,
-                text, text ? strlen(text) : 0);
+                        AI_ROLE_ASSISTANT);
 
             /* Save thinking for this assistant message in history. */
             if (d->stream_thinking_len > 0 &&
@@ -2587,6 +2585,11 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
             CmdBatch *batch = cmd_batch_add(&d->active_state->batches, NULL, NULL);
             if (!batch) continue;
             batch->q = *src;  /* only overwrites q -- batch->id stays */
+            /* A stand-in for a live session: the rows are settled inline
+             * when the live view would have settled them, i.e. when no card
+             * is left to ask the user (the test WM_AI_RESPONSE applies to a
+             * new batch). */
+            batch->settled = !chat_approval_needs_user(&batch->q);
             for (int i = 0; i < batch->q.count; i++)
                 if (batch->q.entries[i].status == APPROVE_EXECUTING)
                     any_executing = 1;

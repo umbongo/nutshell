@@ -41,6 +41,14 @@ typedef struct {
                       * moved or the reply replaced by then (a tab switch
                       * empties the working copy; Retry swaps the turn).
                       * 0 from cmd_batch_add(): not set. */
+    int settled;    /* 1 once the live view has settled this batch's rows
+                      * inline (the card is gone: ai_chat_batch_settle_rows()
+                      * in the dispatcher, every place that settles). A rebuild
+                      * (tab switch, undock) reads this, not the queue: the
+                      * queue alone cannot say whether the card is up, since a
+                      * ceiling change moves entries between PENDING and
+                      * BLOCKED without settling or unsettling any row. 0 from
+                      * cmd_batch_add()'s calloc: a new batch is on its card. */
     int user_acted; /* 1 once the user acted on this batch by hand (a
                       * Run/Approve click, or a user-initiated cancel).
                       * Read when the batch finishes: a batch the user

@@ -267,7 +267,8 @@ static int stream_callback(const char *data, size_t len, void *userdata)
 /* Post a WM_AI_RESPONSE. The handler clears the session's busy flag -- if
  * this stream is still the session's current one. */
 static void post_response(AiStream *s, WPARAM kind, const char *content,
-                          const char *thinking, int in_tok, int out_tok)
+                          const char *thinking, int in_tok, int out_tok,
+                          int reply_stored)
 {
     AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
     if (!rmsg) return;
@@ -276,6 +277,7 @@ static void post_response(AiStream *s, WPARAM kind, const char *content,
     rmsg->thinking = (thinking && thinking[0]) ? _strdup(thinking) : NULL;
     rmsg->input_tokens = in_tok;
     rmsg->output_tokens = out_tok;
+    rmsg->reply_stored = reply_stored;
     if (!PostMessage((HWND)s->post_target, WM_AI_RESPONSE, kind, (LPARAM)rmsg)) {
         free(rmsg->content);
         free(rmsg->thinking);
@@ -287,7 +289,7 @@ static void post_response(AiStream *s, WPARAM kind, const char *content,
 
 static void post_error_response(AiStream *s, const char *msg)
 {
-    post_response(s, 0, msg, NULL, 0, 0);
+    post_response(s, 0, msg, NULL, 0, 0, 0);
 }
 
 /* Post a tool-related status message to the UI thread.
@@ -370,6 +372,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
     char final_thinking[AI_MSG_MAX] = "";
     int total_input_tokens = 0, total_output_tokens = 0;
     int loop_done = 0;
+    int reply_stored = 0;   /* the normal end's ai_conv_add() of the reply took */
 
     while (!loop_done) {
         StreamContext ctx;
@@ -742,7 +745,8 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         } else {
             /* Normal end (no tool-use stop) — add assistant message and exit loop */
             loop_done = 1;
-            ai_conv_add(&s->conv, AI_ROLE_ASSISTANT, ctx.full_content);
+            reply_stored = ai_conv_add(&s->conv, AI_ROLE_ASSISTANT,
+                                       ctx.full_content) == 0;
         }
     } /* end agentic loop */
 
@@ -753,7 +757,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
      * cleanup completes. */
     if (!ai_stream_aborted(s))
         post_response(s, 2, final_content, final_thinking,
-                      total_input_tokens, total_output_tokens);
+                      total_input_tokens, total_output_tokens, reply_stored);
 
 out:
     if (!stream_failed) {

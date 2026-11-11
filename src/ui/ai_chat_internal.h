@@ -447,6 +447,11 @@ typedef struct {
     char *thinking;
     int input_tokens;          /* actual input token count from API (0 if unavailable) */
     int output_tokens;         /* actual output token count from API (0 if unavailable) */
+    int reply_stored;          /* 1 when the stream thread's own ai_conv_add() of
+                                * the reply into its conversation succeeded: the
+                                * reply is then that conversation's last message.
+                                * 0 on an error, a refused add (a full
+                                * conversation) and the tool-only paths. */
 } AiResponseMsg;
 
 /* WM_AI_STREAM payload (one delta) and WM_AI_TOOL_MSG payload (one status
@@ -581,6 +586,11 @@ int ai_chat_input_h(const AiChatData *d);
 void ai_chat_update_panel_state(AiChatData *d);
 void ai_chat_thinking_history_clear(AiChatData *d);
 void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch);
+
+/* Settle `batch`'s rows in the displayed list (chat_msg_batch_settle) and
+ * remember it on the batch (CmdBatch.settled), which a rebuild reads. The one
+ * place a live batch's rows are settled while the batch can outlive the call. */
+void ai_chat_batch_settle_rows(AiChatData *d, CmdBatch *batch);
 void ai_chat_rebuild_display(AiChatData *d);
 void ai_chat_add_tooltip(HWND hTooltip, HWND hCtrl, const char *text);
 void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,

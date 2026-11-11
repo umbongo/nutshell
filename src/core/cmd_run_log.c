@@ -128,15 +128,9 @@ int cmd_run_record_matches(const CmdRunRecord *rec, int msg_index,
     return cmd_run_log_turn_hash(content, len) == rec->turn_hash;
 }
 
-int cmd_run_reply_index(int stored, int msg_count, int last_is_assistant,
-                        const char *last_content, size_t last_len,
-                        const char *reply, size_t reply_len)
+int cmd_run_reply_index(int stored, int msg_count, int last_is_assistant)
 {
     if (!stored || msg_count <= 0 || !last_is_assistant) return -1;
-    if (!last_content) last_content = "";
-    if (!reply) reply = "";
-    if (last_len != reply_len || memcmp(last_content, reply, reply_len) != 0)
-        return -1;
     return msg_count - 1;
 }
 
@@ -155,6 +149,20 @@ int cmd_run_log_forget(CmdRunLog *log, int reply_msg)
     for (int i = kept; i < log->count; i++) log->rec[i] = NULL;
     log->count = kept;
     return dropped;
+}
+
+int cmd_run_batches_unkey(CmdBatchSet *set, int reply_msg)
+{
+    if (!set || reply_msg < 0) return 0;
+    int n = 0;
+    for (int i = 0; i < set->count; i++) {
+        CmdBatch *b = set->b[i];
+        if (b->reply_msg != reply_msg) continue;
+        b->reply_msg = -1;
+        b->reply_hash = 0;
+        n++;
+    }
+    return n;
 }
 
 void cmd_run_log_free(CmdRunLog *log)

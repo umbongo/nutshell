@@ -10,7 +10,6 @@
 #include "cmd_policy.h"
 #include "ai_prompt.h"
 #include "cmd_batch.h"
-#include "chat_msg.h"
 #include <string.h>
 
 int test_approval_init(void) {
@@ -1221,83 +1220,5 @@ int test_chat_approval_policy_walks_skip_tool(void) {
     ASSERT_EQ(chat_approval_next_approved(&q), -1);
     ASSERT_EQ(chat_approval_approve(&q, c), 0);
     ASSERT_EQ(chat_approval_next_approved(&q), c);
-    TEST_END();
-}
-
-/* ---- chat_approval_rows_settled: when a (re)built batch's rows have left the card ---- */
-
-int test_chat_approval_rows_settled_rule(void)
-{
-    TEST_BEGIN();
-    ApprovalQueue q;
-    chat_approval_init(&q);
-    ASSERT_EQ(chat_approval_rows_settled(&q), 0);      /* empty */
-    ASSERT_EQ(chat_approval_rows_settled(NULL), 0);
-
-    struct { ApprovalStatus s[3]; int n, want; } cases[] = {
-        /* A PENDING row keeps the whole card up, decided siblings or not:
-         * the live view settles a batch only when every row is decided. */
-        { { APPROVE_APPROVED, APPROVE_PENDING }, 2, 0 },
-        { { APPROVE_DENIED, APPROVE_PENDING }, 2, 0 },
-        { { APPROVE_COMPLETED, APPROVE_PENDING, APPROVE_BLOCKED }, 3, 0 },
-        { { APPROVE_PENDING }, 1, 0 },
-        /* Nothing but held rows: the card stays for the user to raise the
-         * ceiling (chat_approval_needs_user). */
-        { { APPROVE_BLOCKED, APPROVE_BLOCKED }, 2, 0 },
-        { { APPROVE_BLOCKED }, 1, 0 },
-        /* Decided, with at least one row that is not held. */
-        { { APPROVE_APPROVED, APPROVE_APPROVED }, 2, 1 },
-        { { APPROVE_APPROVED, APPROVE_BLOCKED }, 2, 1 },
-        { { APPROVE_DENIED, APPROVE_BLOCKED }, 2, 1 },
-        { { APPROVE_EXECUTING, APPROVE_COMPLETED, APPROVE_DENIED }, 3, 1 },
-        { { APPROVE_DENIED }, 1, 1 },
-    };
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        chat_approval_reset(&q);
-        for (int j = 0; j < cases[i].n; j++)
-            q.entries[j].status = cases[i].s[j];
-        q.count = cases[i].n;
-        ASSERT_EQ(chat_approval_rows_settled(&q), cases[i].want);
-    }
-    TEST_END();
-}
-
-/* A rebuilt batch of mixed APPROVED and PENDING rows has no summary line, as
- * the live one has none: its rows are all still on the card. */
-int test_chat_approval_rows_settled_mixed_has_no_summary(void)
-{
-    TEST_BEGIN();
-    ApprovalQueue q;
-    chat_approval_init(&q);
-    q.entries[0].status = APPROVE_APPROVED;
-    q.entries[1].status = APPROVE_PENDING;
-    q.entries[2].status = APPROVE_DENIED;
-    q.count = 3;
-
-    ChatMsgList list;
-    chat_msg_list_init(&list);
-    const int settled = chat_approval_rows_settled(&q);
-    for (int i = 0; i < q.count; i++) {
-        ChatMsgItem *it = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-        ASSERT_NOT_NULL(it);
-        chat_msg_set_batch(it, 7);
-        it->u.cmd.settled = settled;
-    }
-    ChatBatchCounts c;
-    ASSERT_EQ(chat_msg_batch_counts(&list, 7, &c), 3);
-    ASSERT_EQ(c.decided, 0);
-    char buf[128];
-    ASSERT_EQ(chat_batch_summary_text(&c, buf, sizeof(buf)), 0);
-    ASSERT_STR_EQ(buf, "");
-
-    /* Once the last row is decided the rows settle and the line appears. */
-    q.entries[1].status = APPROVE_DENIED;
-    const int settled2 = chat_approval_rows_settled(&q);
-    ASSERT_EQ(settled2, 1);
-    for (ChatMsgItem *it = list.head; it; it = it->next)
-        it->u.cmd.settled = settled2;
-    ASSERT_EQ(chat_msg_batch_counts(&list, 7, &c), 3);
-    ASSERT_TRUE(chat_batch_summary_text(&c, buf, sizeof(buf)) > 0);
-    chat_msg_list_clear(&list);
     TEST_END();
 }
