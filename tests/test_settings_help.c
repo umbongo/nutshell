@@ -454,7 +454,9 @@ int test_settings_help_font_sizes_and_notes(void) {
     size_t used = 0;
     for (int i = 0; i < APP_FONT_NUM_SIZES; i++) {
         const char *sep = i == 0 ? "" : (i == APP_FONT_NUM_SIZES - 1 ? " or " : ", ");
-        used += (size_t)snprintf(list + used, sizeof(list) - used, "%s%d", sep, k_app_font_sizes[i]);
+        int w = snprintf(list + used, sizeof(list) - used, "%s%d", sep, k_app_font_sizes[i]);
+        if (w < 0 || (size_t)w >= sizeof(list) - used) break;
+        used += (size_t)w;
     }
     ASSERT_STR_EQ(list, "6, 8, 10, 12, 14, 16, 18 or 20");
     const SettingsHelp *e = settings_help_get((int)SH_FONT_SIZE);
