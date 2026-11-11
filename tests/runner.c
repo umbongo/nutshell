@@ -3237,6 +3237,13 @@ int test_cheatsheet_input_from_table_fills_the_table_fields(void);
 int test_cheatsheet_input_from_table_stops_at_the_section_capacity(void);
 int test_cheatsheet_input_from_table_stops_at_the_row_capacity(void);
 
+/* test_settings_entry.c */
+int test_search_providers_table(void);
+int test_search_provider_index_case_and_unknown(void);
+int test_settings_entry_or_keep_range(void);
+int test_settings_entry_or_keep_zero_ok(void);
+int test_settings_entry_or_keep_huge_unsigned(void);
+
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
 int test_sl_scale_144_is_one_and_half(void);
@@ -7132,6 +7139,12 @@ int main(void) {
     failed += test_sl_scroll_clamp_negative_pins_zero();
     failed += test_sl_scroll_clamp_over_max_pins_max();
     failed += test_sl_scroll_clamp_zero_max();
+
+    failed += test_search_providers_table();
+    failed += test_search_provider_index_case_and_unknown();
+    failed += test_settings_entry_or_keep_range();
+    failed += test_settings_entry_or_keep_zero_ok();
+    failed += test_settings_entry_or_keep_huge_unsigned();
 
     printf("\n--- Design System: scale & type ---\n");
     failed += test_ns_scale_identity_at_96();
