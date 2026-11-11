@@ -10,6 +10,7 @@
  * byte with too few bytes after it is data. After every run of data and every
  * resize the ring invariant is checked: exactly the live part holds rows. */
 #include "term.h"
+#include "term_extract.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -46,11 +47,20 @@ static void check_invariant(const Terminal *t)
         __builtin_trap();
 }
 
+/* The absolute-line reader, under whatever state the allocation failures
+ * left: it allocates only its result, and reads only the live ring. */
+static void read_abs(const Terminal *t)
+{
+    free(term_extract_abs_range_dup(t, 0, term_abs_cursor_line(t) + 1,
+                                    NULL, NULL, NULL));
+}
+
 static void feed_run(Terminal *t, const uint8_t *data, size_t from, size_t to)
 {
     if (to > from) {
         term_process(t, (const char *)data + from, to - from);
         check_invariant(t);
+        read_abs(t);
     }
 }
 
@@ -66,7 +76,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     while (i < size) {
         if (data[i] == 0xFF && i + 2 < size) {
             feed_run(t, data, run, i);
-            (void)term_resize(t, 1 + data[i + 1] % 8, 1 + data[i + 2] % 16);
+            int new_rows = 1 + data[i + 1] % 8, new_cols = 1 + data[i + 2] % 16;
+            uint32_t seq = t->reflow_seq;
+            int changed = new_rows != t->rows || new_cols != t->cols;
+            bool ok = term_resize(t, new_rows, new_cols);
+            /* One reflow for a resize that committed, none for one that did
+             * not or that had nothing to do. */
+            if (t->reflow_seq != seq + (ok && changed ? 1u : 0u)) __builtin_trap();
             check_invariant(t);
             i += 3;
             run = i;

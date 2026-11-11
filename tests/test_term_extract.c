@@ -4,6 +4,7 @@
 #include "ai_prompt.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 int test_extract_empty_term(void) {
     TEST_BEGIN();
@@ -383,6 +384,316 @@ int test_extract_last_n_dup_empty_and_null(void) {
     ASSERT_NOT_NULL(s);
     if (s) ASSERT_STR_EQ(s, "abc");
     free(s);
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- Absolute-line capture (spec 2026-11-05-run-command-tool, decision 10) ---- */
+
+static void feed_str(Terminal *t, const char *s)
+{
+    term_process(t, s, strlen(s));
+}
+
+/* Feed "L0".."L<n-1>", one per line, no trailing newline. */
+static void feed_numbered(Terminal *t, int n)
+{
+    char b[32];
+    for (int i = 0; i < n; i++) {
+        int k = snprintf(b, sizeof b, i < n - 1 ? "L%d\r\n" : "L%d", i);
+        term_process(t, b, (size_t)k);
+    }
+}
+
+/* The cursor's absolute line is lines_recycled plus its logical index, and
+ * scrolling the view back does not move it. */
+int test_term_abs_cursor_line(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    ASSERT_EQ((int)term_abs_cursor_line(NULL), 0);
+    ASSERT_EQ((int)term_abs_cursor_line(t), 0);
+    feed_numbered(t, 12);
+    ASSERT_EQ(t->lines_count, 12);
+    int top = t->lines_count - t->rows;
+    ASSERT_EQ((int)term_abs_cursor_line(t),
+              (int)t->lines_recycled + top + t->cursor.row);
+    ASSERT_EQ((int)term_abs_cursor_line(t), 11);
+    t->scrollback_offset = 3;
+    ASSERT_EQ((int)term_abs_cursor_line(t), 11);
+    t->scrollback_offset = 0;
+
+    /* With rows recycled the number keeps counting from the first line ever. */
+    Terminal *u = term_init(5, 20, 10);
+    feed_numbered(u, 100);
+    ASSERT_TRUE(u->lines_recycled > 0);
+    ASSERT_EQ((int)term_abs_cursor_line(u), 99);
+    term_free(u);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_abs_range_across_scrollback(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    feed_numbered(t, 12);
+    size_t len = 99;
+    unsigned flags = 99;
+    char *s = term_extract_abs_range_dup(t, 2, 10, NULL, &len, &flags);
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_STR_EQ(s, "L2\nL3\nL4\nL5\nL6\nL7\nL8\nL9");
+        ASSERT_EQ((int)len, (int)strlen(s));
+    }
+    ASSERT_EQ((int)flags, 0);
+    free(s);
+    /* An end past the buffer is clamped to it. */
+    s = term_extract_abs_range_dup(t, 10, 500, NULL, &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "L10\nL11");
+    free(s);
+    /* NULL terminal, NULL out pointers. */
+    ASSERT_NULL(term_extract_abs_range_dup(NULL, 0, 5, NULL, &len, &flags));
+    ASSERT_EQ((int)len, 0);
+    s = term_extract_abs_range_dup(t, 0, 1, NULL, NULL, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "L0");
+    free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_abs_range_echo_dropped(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    feed_str(t, "$ ls\r\nout1\r\nout2\r\n");
+    size_t len = 0;
+    char *s = term_extract_abs_range_dup(t, 0, term_abs_cursor_line(t) + 1,
+                                         "ls", &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_STR_EQ(s, "out1\nout2");
+        ASSERT_EQ((int)len, 9);
+    }
+    free(s);
+    /* The same range without an echo keeps the prompt row. */
+    s = term_extract_abs_range_dup(t, 0, term_abs_cursor_line(t) + 1, NULL, &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "$ ls\nout1\nout2");
+    free(s);
+    /* An empty echo drops nothing. */
+    s = term_extract_abs_range_dup(t, 0, term_abs_cursor_line(t) + 1, "", &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "$ ls\nout1\nout2");
+    free(s);
+    term_free(t);
+    TEST_END();
+}
+
+/* A 29-byte command on a 20-column screen wraps; both rows are the echo. */
+int test_term_abs_range_echo_wrapped(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    const char *cmd = "echo aaaaaaaaaaaaaaaaaaaaaaaa";   /* 29 chars */
+    char line[80];
+    int n = snprintf(line, sizeof line, "$ %s\r\nresult\r\n", cmd);
+    term_process(t, line, (size_t)n);
+    ASSERT_TRUE(strlen(cmd) + 2 > 20);                    /* it did wrap */
+    size_t len = 0;
+    char *s = term_extract_abs_range_dup(t, 0, term_abs_cursor_line(t) + 1,
+                                         cmd, &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "result");
+    free(s);
+    /* A space at the wrap boundary does not break the match. */
+    Terminal *u = term_init(5, 20, 50);
+    const char *cmd2 = "ab cd ef gh ij kl mn op";         /* "$ " + 18 chars ends in a space on row 0 */
+    n = snprintf(line, sizeof line, "$ %s\r\nok\r\n", cmd2);
+    term_process(u, line, (size_t)n);
+    s = term_extract_abs_range_dup(u, 0, term_abs_cursor_line(u) + 1, cmd2, &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "ok");
+    free(s);
+    term_free(u);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_abs_range_echo_kept(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    feed_str(t, "$ ls\r\nout1\r\n");
+    size_t len = 0;
+    char *s = term_extract_abs_range_dup(t, 0, term_abs_cursor_line(t) + 1,
+                                         "cat", &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "$ ls\nout1");
+    free(s);
+    /* A range that starts on a continuation row does not start a logical
+     * line: nothing is dropped even if the row contains the echo. */
+    Terminal *u = term_init(5, 20, 50);
+    feed_str(u, "aaaaaaaaaaaaaaaaaaaaXYZ\r\nnext");
+    s = term_extract_abs_range_dup(u, 1, 3, "XYZ", &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "XYZ\nnext");
+    free(s);
+    term_free(u);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_abs_range_trailing_blank(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 20, 50);
+    feed_str(t, "a\r\n\r\nb\r\n   \r\n");
+    size_t len = 0;
+    char *s = term_extract_abs_range_dup(t, 0, 8, NULL, &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_STR_EQ(s, "a\n\nb");          /* the inner blank row stays */
+        ASSERT_EQ((int)len, 4);
+    }
+    free(s);
+    /* Only blank rows: empty text, zero length. */
+    s = term_extract_abs_range_dup(t, 3, 8, NULL, &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "");
+    ASSERT_EQ((int)len, 0);
+    free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_abs_range_start_recycled(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    feed_numbered(t, 200);
+    ASSERT_TRUE(t->lines_recycled > 0);
+    size_t len = 0;
+    unsigned flags = 0;
+    char *s = term_extract_abs_range_dup(t, 0, 200, NULL, &len, &flags);
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ((int)flags, (int)TERM_RANGE_START_RECYCLED);
+    char want[16];
+    snprintf(want, sizeof want, "L%d\n", (int)t->lines_recycled);
+    if (s) ASSERT_TRUE(strncmp(s, want, strlen(want)) == 0);
+    if (s) ASSERT_TRUE(strstr(s, "L199") != NULL);
+    free(s);
+    /* A range that starts at lines_recycled does not set the flag. */
+    flags = 7;
+    s = term_extract_abs_range_dup(t, t->lines_recycled, 200, NULL, &len, &flags);
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ((int)flags, 0);
+    free(s);
+    /* A range wholly in the recycled part is empty, flag still set. */
+    s = term_extract_abs_range_dup(t, 0, t->lines_recycled, NULL, &len, &flags);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "");
+    ASSERT_EQ((int)flags, (int)TERM_RANGE_START_RECYCLED);
+    free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_abs_range_empty(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    feed_numbered(t, 4);
+    size_t len = 99;
+    char *s = term_extract_abs_range_dup(t, 2, 2, NULL, &len, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "");
+    ASSERT_EQ((int)len, 0);
+    free(s);
+    len = 99;
+    s = term_extract_abs_range_dup(t, 3, 1, NULL, &len, NULL);   /* inverted */
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "");
+    ASSERT_EQ((int)len, 0);
+    free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_reflow_seq(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    ASSERT_EQ((int)t->reflow_seq, 0);
+    feed_numbered(t, 12);
+    ASSERT_TRUE(term_resize(t, 5, 30));
+    ASSERT_EQ((int)t->reflow_seq, 1);
+    ASSERT_TRUE(term_resize(t, 5, 30));              /* same size: nothing to do */
+    ASSERT_EQ((int)t->reflow_seq, 1);
+    ASSERT_TRUE(term_resize(t, 6, 30));
+    ASSERT_EQ((int)t->reflow_seq, 2);
+
+    /* An alternate-screen round trip leaves it, and the old rows keep their
+     * absolute line numbers. */
+    uint64_t line = term_abs_cursor_line(t);
+    size_t len = 0;
+    char *before = term_extract_abs_range_dup(t, 0, line + 1, NULL, &len, NULL);
+    ASSERT_NOT_NULL(before);
+    feed_str(t, "\x1b[?1049h");
+    ASSERT_TRUE(t->alt_screen_active);
+    ASSERT_EQ((int)t->reflow_seq, 2);
+    feed_str(t, "\x1b[?1049l");
+    ASSERT_FALSE(t->alt_screen_active);
+    ASSERT_EQ((int)t->reflow_seq, 2);
+    ASSERT_EQ((int)term_abs_cursor_line(t), (int)line);
+    char *after = term_extract_abs_range_dup(t, 0, line + 1, NULL, &len, NULL);
+    ASSERT_NOT_NULL(after);
+    if (before && after) ASSERT_STR_EQ(after, before);
+    free(before);
+    free(after);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_region_scroll_seq(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 50);
+    ASSERT_EQ((int)t->region_scroll_seq, 0);
+
+    /* A full-screen scroll on the primary screen recycles into scrollback. */
+    for (int i = 0; i < 10; i++) feed_str(t, "x\r\n");
+    ASSERT_EQ((int)t->region_scroll_seq, 0);
+
+    /* A scroll region: a newline on its last row swaps rows in place. */
+    feed_str(t, "\x1b[2;4r");
+    feed_str(t, "\x1b[4;1H");
+    uint32_t before = t->region_scroll_seq;
+    feed_str(t, "\n");
+    ASSERT_TRUE(t->region_scroll_seq > before);
+
+    /* Reverse index at the region's top row scrolls down in place. */
+    feed_str(t, "\x1b[2;1H");
+    before = t->region_scroll_seq;
+    feed_str(t, "\x1bM");
+    ASSERT_TRUE(t->region_scroll_seq > before);
+
+    /* Insert line moves rows in place too. */
+    before = t->region_scroll_seq;
+    feed_str(t, "\x1b[L");
+    ASSERT_TRUE(t->region_scroll_seq > before);
+
+    /* Back to the full screen: no more bumps. */
+    feed_str(t, "\x1b[r");
+    before = t->region_scroll_seq;
+    for (int i = 0; i < 10; i++) feed_str(t, "y\r\n");
+    ASSERT_EQ((int)t->region_scroll_seq, (int)before);
+
+    /* Entering and leaving the alternate screen does not bump it; scrolling
+     * on it does. */
+    feed_str(t, "\x1b[?1049h");
+    ASSERT_EQ((int)t->region_scroll_seq, (int)before);
+    for (int i = 0; i < 10; i++) feed_str(t, "z\r\n");
+    ASSERT_TRUE(t->region_scroll_seq > before);
+    before = t->region_scroll_seq;
+    feed_str(t, "\x1b[?1049l");
+    ASSERT_EQ((int)t->region_scroll_seq, (int)before);
+
+    /* A resize does not bump it. */
+    ASSERT_TRUE(term_resize(t, 5, 30));
+    ASSERT_EQ((int)t->region_scroll_seq, (int)before);
     term_free(t);
     TEST_END();
 }

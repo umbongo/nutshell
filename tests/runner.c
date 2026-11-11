@@ -1956,6 +1956,16 @@ int test_extract_buf_too_small_keeps_newest(void);
 int test_extract_last_n_dup_wide_row_keeps_prompt(void);
 int test_extract_last_n_dup_many_wide_rows_whole(void);
 int test_extract_last_n_dup_empty_and_null(void);
+int test_term_abs_cursor_line(void);
+int test_term_abs_range_across_scrollback(void);
+int test_term_abs_range_echo_dropped(void);
+int test_term_abs_range_echo_wrapped(void);
+int test_term_abs_range_echo_kept(void);
+int test_term_abs_range_trailing_blank(void);
+int test_term_abs_range_start_recycled(void);
+int test_term_abs_range_empty(void);
+int test_term_reflow_seq(void);
+int test_term_region_scroll_seq(void);
 
 /* test_scroll_region.c */
 int test_sr_init_defaults(void);
@@ -5952,6 +5962,16 @@ int main(void) {
     failed += test_extract_last_n_dup_wide_row_keeps_prompt();
     failed += test_extract_last_n_dup_many_wide_rows_whole();
     failed += test_extract_last_n_dup_empty_and_null();
+    failed += test_term_abs_cursor_line();
+    failed += test_term_abs_range_across_scrollback();
+    failed += test_term_abs_range_echo_dropped();
+    failed += test_term_abs_range_echo_wrapped();
+    failed += test_term_abs_range_echo_kept();
+    failed += test_term_abs_range_trailing_blank();
+    failed += test_term_abs_range_start_recycled();
+    failed += test_term_abs_range_empty();
+    failed += test_term_reflow_seq();
+    failed += test_term_region_scroll_seq();
 
     printf("\n--- AI Chat Indicator ---\n");
     failed += test_indicator_removal_with_newlines();

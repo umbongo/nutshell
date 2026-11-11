@@ -154,6 +154,16 @@ typedef struct {
     uint64_t lines_recycled;
     uint64_t primary_lines_recycled;
     uint32_t epoch;
+    /* Counters the AI command capture compares between a command's start and
+     * its end (run_command, spec decision 10). reflow_seq: bumped by every
+     * term_resize() that commits, beside epoch -- a failed resize leaves it,
+     * and the alternate screen does not touch it. region_scroll_seq: bumped
+     * whenever rows shift in place instead of being recycled into scrollback
+     * (a scroll region, any scroll on the alternate screen, every scroll
+     * down), the events after which absolute line numbers stop meaning the
+     * same rows. */
+    uint32_t reflow_seq;
+    uint32_t region_scroll_seq;
     uint64_t write_gen;
 
     /* The debug log's session id (the "s3" in a log line; 0 prints "-").
@@ -263,6 +273,11 @@ int term_cursor_row_is_windows_prompt(const Terminal *term);
  * ring (term_logical_rows() below) always covers the visible screen, so the
  * slot it names holds a row. */
 int term_screen_to_phys(const Terminal *term, int screen_row);
+
+/* The cursor's absolute line: lines_recycled plus the cursor's logical index
+ * (the same top term_screen_to_phys() uses). scrollback_offset never changes
+ * it. 0 for NULL. */
+uint64_t term_abs_cursor_line(const Terminal *term);
 
 /* Logical index of the row shown at screen_row in the view as scrolled
  * (scrollback_offset applied, top clamped to 0 exactly as the renderer's
