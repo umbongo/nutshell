@@ -1448,14 +1448,41 @@ int ai_stream_chunk_cut_off(const char *json)
     return cut;
 }
 
-int ai_provider_supports_tools(const char *provider)
+int ai_runcmd_auto_default(const char *provider)
+{
+    if (!provider) return 0;
+    if (strcmp(provider, "anthropic") == 0) return 1;
+    if (strcmp(provider, "openai") == 0) return 1;
+    if (strcmp(provider, "moonshot") == 0) return 1;
+    if (strcmp(provider, "deepseek") == 0) return 0;
+    if (strcmp(provider, "gemini") == 0) return 0;
+    if (strcmp(provider, "custom") == 0) return 0;
+    return 0;
+}
+
+int ai_provider_tools(const char *provider, int mode)
 {
     if (!provider) return 0;
     if (strcmp(provider, "anthropic") == 0) return 1;
     if (strcmp(provider, "openai") == 0) return 1;
     if (strcmp(provider, "deepseek") == 0) return 1;
     if (strcmp(provider, "moonshot") == 0) return 1;
-    return 0;  /* gemini and unknown providers: safe default */
+    /* gemini and custom: only on the user's say-so; unknown providers never */
+    if (strcmp(provider, "gemini") == 0) return mode == AI_RUNCMD_ON;
+    if (strcmp(provider, "custom") == 0) return mode == AI_RUNCMD_ON;
+    return 0;
+}
+
+int ai_provider_supports_tools(const char *provider)
+{
+    return ai_provider_tools(provider, AI_RUNCMD_AUTO);
+}
+
+int ai_provider_runcmd(const char *provider, int mode)
+{
+    if (mode == AI_RUNCMD_OFF) return 0;
+    if (mode == AI_RUNCMD_ON) return ai_provider_tools(provider, AI_RUNCMD_ON);
+    return ai_runcmd_auto_default(provider);
 }
 
 int ai_parse_stream_chunk_ex(const char *json,

@@ -225,7 +225,7 @@ ifeq ($(origin FUZZ_CC),undefined)
 FUZZ_CC := $(firstword $(foreach c,clang clang-18 clang-17 clang-16,$(shell command -v $(c))))
 endif
 FUZZ_TIME    ?= 60
-FUZZ_TARGETS = json term exec_markers cmd_classify html url
+FUZZ_TARGETS = json term exec_markers cmd_classify html url runcmd
 FUZZ_DIR     = build/fuzz
 FUZZ_BINS    = $(FUZZ_TARGETS:%=$(FUZZ_DIR)/%)
 FUZZ_CFLAGS  = $(TEST_CFLAGS) -Wno-ignored-attributes -Wno-unknown-warning-option

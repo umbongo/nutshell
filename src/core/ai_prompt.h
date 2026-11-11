@@ -233,8 +233,31 @@ int ai_parse_stream_chunk_ex(const char *json,
                              AiToolStreamState *tool_stream,
                              const char *provider);
 
-/* Returns 1 if the provider supports native tool use, 0 otherwise. */
+/* The setting "Commands as tool calls" (Settings.ai_runcmd_mode). Automatic
+ * resolves through ai_runcmd_auto_default(); On enables any provider; Off
+ * leaves [EXEC] markers wherever they are today. */
+enum { AI_RUNCMD_AUTO = 0, AI_RUNCMD_ON = 1, AI_RUNCMD_OFF = 2 };
+
+/* What Automatic means for a provider: 1 for anthropic, openai and moonshot,
+ * 0 for deepseek, gemini, custom and anything else (NULL included). The one
+ * table; flipping a row is one line. */
+int ai_runcmd_auto_default(const char *provider);
+
+/* 1 if the provider gets native tools (web_search, web_fetch, read_debug_log
+ * and, with ai_provider_runcmd(), run_command) in a request. anthropic,
+ * openai, deepseek and moonshot always; gemini and custom only when mode is
+ * AI_RUNCMD_ON (the user's statement that the endpoint accepts them); any
+ * other provider and NULL never. */
+int ai_provider_tools(const char *provider, int mode);
+
+/* Returns 1 if the provider supports native tool use with the setting left
+ * on Automatic, 0 otherwise: ai_provider_tools(provider, AI_RUNCMD_AUTO). */
 int ai_provider_supports_tools(const char *provider);
+
+/* 1 when a request to this provider offers the run_command tool: Off never;
+ * On wherever ai_provider_tools(provider, AI_RUNCMD_ON) holds; Automatic as
+ * ai_runcmd_auto_default() says. */
+int ai_provider_runcmd(const char *provider, int mode);
 
 /* Output limit sent as "max_completion_tokens" to provider "moonshot" (and
  * only to it). Without one the server's default is far lower, and a thinking

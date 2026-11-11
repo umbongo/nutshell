@@ -3,6 +3,7 @@
 #include "ai_prompt.h"
 #include "chat_approval.h"
 #include "json_parser.h"
+#include "run_command.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -1972,5 +1973,62 @@ int test_ai_tool_card_text_detail_fits_approval_note(void)
         ASSERT_EQ(chat_approval_add_tool(&q, row, detail, CMD_UNKNOWN), 0);
         ASSERT_STR_EQ(q.entries[0].note, detail);
     }
+    TEST_END();
+}
+
+int test_runcmd_serialized_both_formats(void)
+{
+    TEST_BEGIN();
+    AiToolRegistry reg;
+    static char buf[4096];
+    ai_tools_init(&reg);
+    ASSERT_EQ(runcmd_register(&reg), 0);
+    ASSERT_EQ(reg.count, 1);
+    ASSERT_EQ(ai_tools_validate_schemas(&reg), 0);
+
+    const AiToolDef *t = ai_tools_find(&reg, RUNCMD_TOOL_NAME);
+    ASSERT_NOT_NULL(t);
+    if (t) {
+        ASSERT_EQ((int)t->safety, (int)TOOL_CRITICAL);
+        ASSERT_STR_EQ(t->input_schema_json,
+            "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\","
+            "\"description\":\"one single-line command, at most 1023 bytes\"},"
+            "\"note\":{\"type\":\"string\",\"description\":\"one line for the user: "
+            "what the command does and why\"}},\"required\":[\"command\"]}");
+    }
+
+    ASSERT_TRUE(ai_tools_serialize_anthropic(&reg, buf, sizeof buf) > 0);
+    ASSERT_NOT_NULL(strstr(buf, "\"name\":\"run_command\""));
+    ASSERT_NOT_NULL(strstr(buf, "\"input_schema\""));
+
+    ASSERT_TRUE(ai_tools_serialize_openai(&reg, buf, sizeof buf) > 0);
+    ASSERT_NOT_NULL(strstr(buf, "\"type\":\"function\""));
+    ASSERT_NOT_NULL(strstr(buf, "\"name\":\"run_command\""));
+    ASSERT_NOT_NULL(strstr(buf, "\"required\":[\"command\"]"));
+
+    ASSERT_EQ(runcmd_register(NULL), -1);
+    TEST_END();
+}
+
+int test_runcmd_stub_is_error(void)
+{
+    TEST_BEGIN();
+    AiToolRegistry reg;
+    ai_tools_init(&reg);
+    ASSERT_EQ(runcmd_register(&reg), 0);
+
+    AiToolCall call;
+    memset(&call, 0, sizeof call);
+    snprintf(call.id, sizeof call.id, "toolu_1");
+    snprintf(call.name, sizeof call.name, "%s", RUNCMD_TOOL_NAME);
+    snprintf(call.input_json, sizeof call.input_json, "{\"command\":\"ls\"}");
+
+    AiToolResult r;
+    int rc = ai_tool_execute(&reg, &call, NULL, &r);
+    ASSERT_TRUE(rc != 0);
+    ASSERT_EQ(r.is_error, 1);
+    ASSERT_NOT_NULL(strstr(r.tool_note, "handled by the panel"));
+    ASSERT_NULL(r.content);   /* Nutshell's own text: note, not data */
+    free(r.content);
     TEST_END();
 }
