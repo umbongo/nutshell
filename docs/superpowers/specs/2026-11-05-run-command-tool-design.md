@@ -142,6 +142,14 @@ copy `launch_reg` beside `ai_debug_tool_register_if_enabled` (~171), before
 request with no web tools and debugging off carries no tools array)*.
 `AiStream` gains `int run_command`.
 
+*(review of the fix wave, 2026-11-11)* **The one intended byte change to an
+existing request body.** A tool call with no id (or an id an earlier call of
+its turn already has) used to be stored and sent as `"id":""` /
+`"tool_call_id":""`, a turn no provider accepts back; it is now stored and sent
+as `call_<n>` (decision 19, "Ids"). A turn whose ids are unique and non-empty,
+and every other body, the pinned Moonshot ones included, is byte for byte what
+it was.
+
 **The providers** *(re-base, maintainer and critique 2026-11-11)*.
 - **The setting "Commands as tool calls"** *(critique 2: conservative
   defaults)* (`Settings.ai_runcmd_mode`: `AI_RUNCMD_AUTO` 0, the default,
@@ -307,6 +315,15 @@ bidirectional formatting characters: send one single-line command".
   name never runs with call A's arguments; the rest of the chunk (other
   calls, the finish reason) is still processed. The same id again on the same
   index (a resend) is not a new call.
+- *(review of the fix wave, 2026-11-11, R51)* **Only an explicit index
+  overflows.** When a delta carries no `index` (a server that leaves it out;
+  counted in `index_defaulted`) it continues the open slot, the last one, or
+  slot 0 when there is none; but a delta carrying a non-empty id different
+  from the open slot's id (or any id once the open slot has a name and no id)
+  opens the next slot, so two parallel index-less calls a and b streamed in
+  pieces each keep their own id, name and arguments and neither is
+  overflowed. Reuse of an explicit index with a different id is the overflow
+  case above and nothing else.
 - *(review of B1-B11, 2026-11-11)* **A `\u0000` escape makes the command
   NO_COMMAND.** The JSON layer decodes `\u0000` to a NUL byte, which ends the
   C string: `"rm -rf /home/u\u0000/build"` used to parse as `rm -rf /home/u`,
@@ -315,8 +332,17 @@ bidirectional formatting characters: send one single-line command".
   node (`JsonNode.str_len`, the decoded length of a `JSON_STRING`); the parser
   reads `command` as NO_COMMAND when `str_len` differs from `strlen`, and
   drops `note` the same way as for any unsafe text (the command still runs
-  without it). An object key with a `\u0000` escape fails the parse (it would
-  be cut short and could equal `command`); a backslash followed by the text
+  without it). *(review of the fix wave, 2026-11-11, R52, replacing the first
+  fix, which failed the whole parse)* An object key with a `\u0000` escape does
+  not fail the parse: the config loader and every provider response go through
+  `json_parse`, and one such key would have discarded the whole document. The
+  key is kept with its decoded length (`JsonNode.as.obj.key_lens`), and
+  `json_obj_get` compares lengths as well as bytes, so the member is kept but
+  is never returned for any C-string name (`command\u0000x` is not `command`,
+  and the real `command` member, wherever it stands, is the one read); the
+  tool-input serialiser writes the key back whole, escaped, so a stored input
+  never turns it into `command`. The rule for a `\u0000` in the command value
+  above is unchanged. A backslash followed by the text
   `u0000` (`"\\u0000"` in the JSON) is ordinary text and unaffected. No scan of
   the raw JSON for the six characters is made.
 
@@ -405,6 +431,17 @@ checks below move ahead of that store, for every tool stop:
   because decision 7's settle flushes the queue right after the results and
   the flushed notes must not take the slot kept for the reply. The refusal of
   `agentic_add_tool_results` is told apart by its return value (decision 25).
+  *(review of the fix wave, 2026-11-11, R45 and R47)* The stream thread cannot
+  read the owner's queue (the UI appends to it while the stream runs), so it
+  passes NULL, and the slot for the reply is kept at the flush instead:
+  `ai_conv_flush_notes(conv, q, keep_free)` leaves `keep_free` slots of the
+  conversation free. A flush that precedes a relaunch leaves 1 (the reply),
+  the typed message's finish leaves 2 (the typed message and its reply), a
+  flush that precedes nothing 0. A note that does not fit stays queued, in
+  order, for the next flush; nothing is dropped, a note waits a round longer.
+  So a conversation at 61 messages whose results turn (62) is followed by two
+  queued notes stores the first (63), keeps the second queued, and stores the
+  reply (64).
 - Otherwise it stores the assistant turn
   (`agentic_add_assistant_tool_msg_ex`: text, the reasoning, every
   `tool_use` block), executes no call, asks no tool card, posts no "using
@@ -718,6 +755,8 @@ sends the note alone. Trust's 64 KiB cap never cuts a run_command result.
 | Session ended; set full | *(round 2)* "not run (session ended)"; "not run (too many pending cards)" | no |
 | PENDING or APPROVED never sent, at Stop *(review of B1-B11, 2026-11-11: PENDING added, as the code does)* | "not run: stopped by the user; do not run it again unless the user asks" | no |
 | OTHER_TOOL; INVALID | decision 4's; decision 2's; `is_error` 1 | no |
+| *(review of the fix wave, 2026-11-11)* Notes-only answer: a results copy failed (decision 25), for any row above that had output | the row's own note, then "output dropped: Nutshell ran out of memory", joined by "; " ("ran; output dropped: Nutshell ran out of memory"), the phrase alone after an empty note; a stale "output cut: N bytes omitted from the middle" phrase is removed first; a row with no output (DENIED, BLOCKED, INVALID, an empty web result) keeps its note unchanged; the part keeps `is_error` | no |
+| *(review of the fix wave, 2026-11-11)* Planner failure: `runcmd_plan` or `cmd_batch_add` ran out of memory, so no call was ever planned (written by the UI, Task B15) | "not run: Nutshell ran out of memory" | no |
 
 `<reason>` at Stop reads "stopped by the user; do not run it again unless
 the user asks" *(review of B1-B11, 2026-11-11: a semicolon, as in the table
@@ -925,17 +964,31 @@ run_command call never runs under that count.
   first one the conversation cannot store; that note and every later one stay
   queued, in order, and the return value is the number appended. A new note
   that finds notes still queued after its flush is queued behind them rather
-  than overtaking them.
+  than overtaking them. *(review of the fix wave, 2026-11-11, R47)* The flush
+  takes a number of slots to leave free, `ai_conv_flush_notes(conv, q,
+  keep_free)`: it stops at the first note that would take one of them, so a
+  flush that precedes a relaunch (`keep_free` 1) never takes the reply's slot,
+  the typed message's finish (2) never takes the typed message's or its
+  reply's, and any other flush passes 0. The notes it stops at stay queued,
+  in order, for the next flush (decision 4).
 - *(review of B1-B11, 2026-11-11)* **Ids.** When a tool-call turn is stored
   (`agentic_add_assistant_tool_msg_ex`), an empty call id, or one an earlier
   call of the same turn already has, is replaced by `call_<n>`, `n` the
   smallest number from 1 that no id in the turn or anywhere in the
   conversation uses; a turn whose ids are already unique and non-empty is
   stored byte for byte as before. The caller's calls are not changed.
-  `agentic_add_tool_results` takes each part's `tool_call_id` from the open
-  stored turn's call at the same position (results are in call order
-  everywhere), not from the caller's array, so the answer always names the
-  stored id. Without the made-up id, two `web_search` calls with id `""`
+  `agentic_add_tool_results` takes each part's `tool_call_id` (and
+  `tool_name`) from the stored call the result answers *(review of the fix
+  wave, 2026-11-11, R50, replacing pairing by position)*: the call whose
+  stored id equals the result's `tool_use_id`, unless an earlier result of the
+  same array carries that id too; otherwise, only where the store made the id
+  up, the call at the result's own position (the stored id at that position
+  differs from the caller's own id for it, `calls[i].id`, or from the
+  result's `tool_use_id` when there is no calls array); otherwise the result
+  keeps its own id. So a results array in the wrong order still pairs
+  correctly by id, while one whose ids are wrong, repeated or out of place
+  fails `ai_conv_tool_pairs_well_formed` instead of being paired by luck.
+  Without the made-up id, two `web_search` calls with id `""`
   stored a turn no provider accepts back, and every request was refused until
   New Chat.
 - *(review of B1-B11, 2026-11-11)* **The invariant rejects repeated ids.**
@@ -1169,7 +1222,10 @@ sent; start a New Chat]". A reply the thread cannot store is shown with
 notes queued for the session (`notes.count`; a NULL queue counts 0), since
 the typed message's finish flushes them after the results turn (62 + 2 notes
 = 64 would leave the typed message itself with no slot). A typed message
-that passes the check can always be stored.
+that passes the check can always be stored. *(review of the fix wave,
+2026-11-11)* The finish's flush leaves 2 slots free (decision 4), so even a
+send that was let through on a stale count stores the typed message and its
+reply and leaves the notes that do not fit queued.
 
 **25. No allocation failure leaves a call unanswered** *(critique 2)*.
 Every new heap path (the parts array and each part's content, the frozen

@@ -26,7 +26,10 @@ typedef struct JsonNode {
         char *str_val;
         Vector arr;
         struct {
-            Vector keys;
+            Vector keys;      /* decoded bytes, NUL-terminated */
+            Vector key_lens;  /* each key's decoded length, (void *)(uintptr_t);
+                               * longer than strlen(key) when the key held a
+                               * \u0000 escape, which json_obj_get never matches */
             Vector vals;
         } obj;
     } as;

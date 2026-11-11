@@ -989,7 +989,7 @@ int test_snapshot_note_flag_door_copy_take(void)
         AiNoteQueue q;
         memset(&q, 0, sizeof(q));
         ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "queued"), 1);
-        ASSERT_EQ(ai_conv_flush_notes(c, &q), 1);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 1);
         ai_conv_add(c, AI_ROLE_USER, "typed again");
         ASSERT_EQ(c->msg_count, 5);
         ASSERT_EQ(c->messages[2].nutshell_note, 1);

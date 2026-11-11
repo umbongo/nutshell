@@ -5,6 +5,7 @@
 #include "dlog_query.h"
 #include "net_guard.h"
 #include "paste_filter.h"
+#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,7 +36,9 @@ static size_t json_object_to_string(const JsonNode *node, char *buf, size_t max)
 
         if (pos + 1 >= max) return 0;
         buf[pos++] = '"';
-        size_t key_len = strlen(key);
+        /* the decoded length: a key holding a \u0000 escape is written back
+         * with it, never cut short into a name it is not */
+        size_t key_len = (size_t)(uintptr_t)vec_get(&node->as.obj.key_lens, i);
         size_t new_pos = json_escape_string(key, key_len, buf, max, pos, 0);
         if (new_pos == 0 && key_len > 0) return 0;
         pos = new_pos;

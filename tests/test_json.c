@@ -661,8 +661,7 @@ int test_json_depth_resets_between_siblings(void)
 
 /* A \u0000 escape decodes to a NUL byte, which ends the C string. The string
  * node keeps its real decoded length so a caller can tell (review of B1-B11,
- * 2026-11-11); a key with a NUL could match a shorter name, so it fails the
- * parse. A backslash followed by the text u0000 is ordinary text. */
+ * 2026-11-11). A backslash followed by the text u0000 is ordinary text. */
 int test_json_string_len_and_nul(void)
 {
     TEST_BEGIN();
@@ -698,11 +697,51 @@ int test_json_string_len_and_nul(void)
         json_free(n);
     }
 
-    /* a key that decodes to "k" plus a NUL plus "x" would equal "k" */
-    ASSERT_NULL(json_parse("{\"k\\u0000x\":1}"));
-    ASSERT_NULL(json_parse_exact("{\"k\\u0000x\":1}"));
     n = json_parse("{\"k\":1}");
     ASSERT_NOT_NULL(n);
+    json_free(n);
+    TEST_END();
+}
+
+/* A key that decodes to "k" plus a NUL plus "x" does not fail the parse (the
+ * config loader and every provider response go through json_parse): the
+ * member is kept, json_obj_get never returns it for "k", and the other members
+ * read normally (ruling R52, review of the fix wave, 2026-11-11). */
+int test_json_nul_key_kept_never_matched(void)
+{
+    TEST_BEGIN();
+    JsonNode *n = json_parse("{\"a\":1,\"k\\u0000x\":2,\"k\":3,\"b\":\"two\"}");
+    ASSERT_NOT_NULL(n);
+    if (n) {
+        ASSERT_EQ((int)vec_size(&n->as.obj.keys), 4);        /* the member is kept */
+        ASSERT_EQ((int)json_obj_num(n, "a", -1.0), 1);
+        ASSERT_EQ((int)json_obj_num(n, "k", -1.0), 3);       /* the real "k", not the NUL key */
+        ASSERT_STR_EQ(json_obj_str(n, "b"), "two");
+        ASSERT_NULL(json_obj_get(n, "kx"));
+        ASSERT_NULL(json_obj_get(n, "k\\u0000x"));
+        json_free(n);
+    }
+
+    /* the NUL key first, the real one after it: the real one still answers */
+    n = json_parse("{\"k\\u0000x\":\"evil\",\"k\":\"good\"}");
+    ASSERT_NOT_NULL(n);
+    if (n) ASSERT_STR_EQ(json_obj_str(n, "k"), "good");
+    json_free(n);
+
+    /* a NUL key alone: parses, and "k" is simply absent */
+    n = json_parse_exact("{\"k\\u0000x\":1}");
+    ASSERT_NOT_NULL(n);
+    if (n) {
+        ASSERT_EQ((int)vec_size(&n->as.obj.keys), 1);
+        ASSERT_NULL(json_obj_get(n, "k"));
+        ASSERT_EQ((int)json_obj_num(n, "k", -7.0), -7);
+    }
+    json_free(n);
+
+    /* a key that is only a NUL never matches the empty name */
+    n = json_parse("{\"\\u0000\":1,\"\":2}");
+    ASSERT_NOT_NULL(n);
+    if (n) ASSERT_EQ((int)json_obj_num(n, "", -1.0), 2);
     json_free(n);
     TEST_END();
 }

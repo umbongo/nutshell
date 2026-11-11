@@ -37,11 +37,14 @@ int ai_conv_room_for_send(const AiConversation *conv, int open_batch,
                           const AiNoteQueue *q);
 
 /* While no tool call is open, append the queued notes in order and return how
- * many were appended. A note the conversation cannot store (it is full) stops
- * the flush: it and every later note stay queued, in order, at the front of
- * `q`; nothing is dropped. While a call is open, return 0 and leave `q`
- * alone. NULL-safe (0). */
-int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q);
+ * many were appended, leaving `keep_free` slots of the conversation free: a
+ * flush that precedes a relaunch passes 1 (the reply), one before a typed
+ * message and its reply passes 2, any other 0. A note the conversation cannot
+ * store without taking one of those slots stops the flush: it and every later
+ * note stay queued, in order, at the front of `q`, for the next flush; nothing
+ * is dropped. While a call is open, return 0 and leave `q` alone. A negative
+ * keep_free counts as 0. NULL-safe (0). */
+int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q, int keep_free);
 
 /* Free a trailing open assistant tool turn and any partial results after it,
  * so the conversation is well-formed again. Returns 1 when it dropped one,

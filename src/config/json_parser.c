@@ -1,6 +1,7 @@
 #include "json_parser.h"
 #include "json_tokenizer.h"
 #include "xmalloc.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,6 +48,7 @@ void json_free(JsonNode *node)
                 json_free((JsonNode *)vec_get(&node->as.obj.vals, i));
             }
             vec_free(&node->as.obj.keys);
+            vec_free(&node->as.obj.key_lens);
             vec_free(&node->as.obj.vals);
             break;
         }
@@ -123,6 +125,7 @@ static JsonNode *parse_object(Parser *p)
     JsonNode *node = xcalloc(1u, sizeof(JsonNode));
     node->type = JSON_OBJECT;
     vec_init(&node->as.obj.keys);
+    vec_init(&node->as.obj.key_lens);
     vec_init(&node->as.obj.vals);
 
     if (p->cur.type == TOK_RBRACE) {
@@ -141,13 +144,14 @@ static JsonNode *parse_object(Parser *p)
             p->error = 1;
             break;
         }
-        /* a key with a \u0000 escape would be cut short and could equal a
-         * shorter name: refuse it */
-        if (strlen(p->cur.value) != p->cur.len) {
-            p->error = 1;
-            break;
-        }
-        char *key = xstrdup(p->cur.value);
+        /* The key is kept with its decoded length: one with a \u0000 escape
+         * holds a NUL byte, so it never equals a C-string name and json_obj_get
+         * never returns its member, but it does not fail the parse (the
+         * config loader and every provider response go through here; review of
+         * the fix wave, 2026-11-11). */
+        size_t key_len = p->cur.len;
+        char *key = (char *)xcalloc(key_len + 1u, 1u);
+        memcpy(key, p->cur.value, key_len);
         advance(p);
 
         /* Expect colon. */
@@ -167,6 +171,7 @@ static JsonNode *parse_object(Parser *p)
         }
 
         vec_push(&node->as.obj.keys, key);
+        vec_push(&node->as.obj.key_lens, (void *)(uintptr_t)key_len);
         vec_push(&node->as.obj.vals, val);
 
         if (p->cur.type == TOK_COMMA) {
@@ -290,11 +295,16 @@ JsonNode *json_obj_get(const JsonNode *obj, const char *key)
     /* Cast away const-on-struct to get non-const Vector * for vec_get;
      * the stored pointers are not const, so the return value is safe. */
     const Vector *keys = &obj->as.obj.keys;
+    const Vector *lens = &obj->as.obj.key_lens;
     const Vector *vals = &obj->as.obj.vals;
+    size_t klen = strlen(key);
     size_t n = vec_size(keys);
     for (size_t i = 0u; i < n; i++) {
         const char *k = (const char *)vec_get(keys, i);
-        if (k && strcmp(k, key) == 0) {
+        /* the decoded length decides: a key holding a NUL byte is longer than
+         * any C string that is a prefix of it */
+        if (k && (size_t)(uintptr_t)vec_get(lens, i) == klen
+            && memcmp(k, key, klen) == 0) {
             return (JsonNode *)vec_get(vals, i);
         }
     }

@@ -1212,6 +1212,93 @@ int test_ai_stream_openai_index_less_id_only_on_first_chunk_stays_one_call(void)
     TEST_END();
 }
 
+/* Ruling R51 (review of the fix wave, 2026-11-11): with no "index" at all, a
+ * chunk carrying a new non-empty id that differs from the open slot's opens
+ * the next slot, whatever else the chunk holds; two parallel calls a and b
+ * streamed in pieces both survive whole with their own arguments. The id is
+ * repeated on some of a's chunks and on none of b's, and b's id comes in a
+ * chunk of its own before its name. */
+int test_ai_stream_openai_index_less_parallel_calls_survive(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"type\":\"function\",\"function\":{\"name\":\"web_fetch\","
+        "\"arguments\":\"\"}}]},\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"function\":{\"arguments\":\"{\\\"url\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"https://a.example/\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    /* b's id alone, then its name, then its arguments in two pieces */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"b\"}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"cats\\\"}\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(st.index_defaulted, 6);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://a.example/\"}");
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].id, "b");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"cats\"}");
+    ASSERT_EQ(st.pending_tool_calls[1].overflowed, 0);
+    ai_tools_stream_reset(&st);
+
+    /* only an explicit index reused with a different id overflows */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}},"
+        "{\"index\":0,\"id\":\"b\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_EQ(st.index_defaulted, 0);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+/* A tool input whose object holds a key with a \u0000 escape (review of the
+ * fix wave, 2026-11-11): the call is kept, the key is written back whole and
+ * never read as "command", so the real "command" member is the one that runs. */
+int test_ai_parse_tool_calls_anthropic_nul_key(void)
+{
+    TEST_BEGIN();
+    const char *resp =
+        "{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":"
+        "\"run_command\",\"input\":{\"command\\u0000x\":\"evil\","
+        "\"command\":\"ls\"}}]}";
+    AiToolCall calls[2];
+    memset(calls, 0, sizeof(calls));
+    ASSERT_EQ(ai_parse_tool_calls_anthropic(resp, calls, 2), 1);
+    ASSERT_STR_EQ(calls[0].input_json,
+                  "{\"command\\u0000x\":\"evil\",\"command\":\"ls\"}");
+    char cmd[RUNCMD_COMMAND_MAX + 1];
+    char note[RUNCMD_NOTE_MAX];
+    ASSERT_EQ(runcmd_parse_input(calls[0].input_json, cmd, note),
+              RUNCMD_PARSE_OK);
+    ASSERT_STR_EQ(cmd, "ls");
+    TEST_END();
+}
+
 int test_ai_stream_openai_indexed_parallel_calls_unchanged(void)
 {
     TEST_BEGIN();

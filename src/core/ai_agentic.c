@@ -195,17 +195,49 @@ static void parts_free(AiToolPart *parts, int n)
     free(parts);
 }
 
-/* The fixed fields of part i: ids and note, never content. The id is the
- * stored turn's call at the same position (`stored`, n_stored of them; results
- * are in call order everywhere), the caller's only when no stored call is
- * there to pair with. */
+/* Which stored call result i answers, or -1 for none (ruling R50, review of
+ * the fix wave, 2026-11-11):
+ *  1. by id: its tool_use_id is non-empty, equals the id of a stored call, and
+ *     no earlier result carries the same id (stored ids are unique, so this is
+ *     the one call it names);
+ *  2. by position, only for an id the store made up: i is a stored call whose
+ *     stored id differs from the caller's own id for that position
+ *     (calls[i].id, or this result's tool_use_id when there is no calls array)
+ *     -- an empty or repeated id became call_<n> when the turn was stored, so
+ *     the result cannot name it;
+ *  3. otherwise none: the part keeps the result's own id, and a results array
+ *     whose ids are wrong or out of place fails
+ *     ai_conv_tool_pairs_well_formed instead of being paired by luck. */
+static int pair_result(const AiToolCall *calls, const AiToolResult *results,
+                       int i, const AiToolCall *stored, int n_stored)
+{
+    const char *rid = results[i].tool_use_id;
+    if (rid[0]) {
+        int dup = 0;
+        for (int k = 0; k < i && !dup; k++)
+            dup = strcmp(results[k].tool_use_id, rid) == 0;
+        if (!dup)
+            for (int j = 0; j < n_stored; j++)
+                if (strcmp(stored[j].id, rid) == 0) return j;
+    }
+    if (i < n_stored) {
+        const char *caller_id = calls ? calls[i].id : rid;
+        if (strcmp(stored[i].id, caller_id) != 0) return i;
+    }
+    return -1;
+}
+
+/* The fixed fields of part i: ids and note, never content. */
 static void part_fill_head(AiToolPart *p, const AiToolCall *calls,
-                           const AiToolResult *r, int i,
+                           const AiToolResult *results, int i,
                            const AiToolCall *stored, int n_stored)
 {
+    int j = pair_result(calls, results, i, stored, n_stored);
     snprintf(p->tool_call_id, sizeof(p->tool_call_id), "%s",
-             i < n_stored ? stored[i].id : r->tool_use_id);
-    if (calls)
+             j >= 0 ? stored[j].id : results[i].tool_use_id);
+    if (j >= 0)
+        snprintf(p->tool_name, sizeof(p->tool_name), "%s", stored[j].name);
+    else if (calls)
         snprintf(p->tool_name, sizeof(p->tool_name), "%s", calls[i].name);
 }
 
@@ -221,7 +253,7 @@ static AiToolPart *parts_from_results(const AiToolCall *calls,
 
     for (int i = 0; i < n; i++) {
         AiToolPart *p = &parts[i];
-        part_fill_head(p, calls, &results[i], i, stored, n_stored);
+        part_fill_head(p, calls, results, i, stored, n_stored);
         p->is_error = results[i].is_error;
         memcpy(p->tool_note, results[i].tool_note, sizeof(p->tool_note));
         p->tool_note[sizeof(p->tool_note) - 1] = '\0';
@@ -292,7 +324,7 @@ static AiToolPart *parts_notes_only(const AiToolCall *calls,
     if (!parts) return NULL;
     memset(parts, 0, (size_t)n * sizeof(AiToolPart));
     for (int i = 0; i < n; i++) {
-        part_fill_head(&parts[i], calls, &results[i], i, stored, n_stored);
+        part_fill_head(&parts[i], calls, results, i, stored, n_stored);
         parts[i].is_error = results[i].is_error;
         notes_only_note(parts[i].tool_note, sizeof(parts[i].tool_note), &results[i]);
     }

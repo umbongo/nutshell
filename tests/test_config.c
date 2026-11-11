@@ -617,6 +617,37 @@ int test_config_load_unknown_fields(void)
     TEST_END();
 }
 
+/* A key with a \u0000 escape no longer fails the whole parse (review of the
+ * fix wave, 2026-11-11): the member is kept, never matches a name, and the
+ * other settings load. */
+int test_config_load_nul_key_member_ignored(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(
+        "{\n"
+        "  \"settings\": {\n"
+        "    \"font\\u0000x\": \"Evil\",\n"
+        "    \"font\": \"Hack\",\n"
+        "    \"font_size\": 14\n"
+        "  }\n"
+        "}\n", f);
+    fclose(f);
+
+    ConfigLoadStatus st = CONFIG_LOAD_MISSING;
+    Config *cfg = config_load_ex(TMP_CFG, &st);
+    ASSERT_EQ((int)st, (int)CONFIG_LOAD_OK);
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_STR_EQ(cfg->settings.font, "Hack");
+        ASSERT_EQ(cfg->settings.font_size, 14);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
 /* ============================================================
  * Load config with out-of-range values (validate clamps them)
  * ============================================================ */

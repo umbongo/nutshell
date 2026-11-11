@@ -85,9 +85,16 @@ int agentic_cap_tool_result(AiToolResult *r);
  * UTF-8 boundary), so no call is left unanswered and a command that ran is
  * never reported as not run (spec decision 25). A result with no output
  * keeps its note unchanged.
- * Each part's tool_call_id is the id of the open stored assistant turn's call
- * at the same position (results are in call order everywhere), not the id in
- * the caller's array, which is only used when no stored call is there.
+ * Each part's tool_call_id and tool_name come from the open stored assistant
+ * turn's call the result answers (ruling R50, review of the fix wave,
+ * 2026-11-11): the call whose stored id equals the result's tool_use_id (when
+ * no earlier result carries that id too); else the call at the result's own
+ * position when the store made that call's id up (an empty or repeated id
+ * became call_<n>, so it differs from the caller's calls[i].id; with `calls`
+ * NULL, from the result's own tool_use_id); else none, and the part keeps the
+ * result's own tool_use_id. A results array whose ids are wrong or out of
+ * place therefore fails ai_conv_tool_pairs_well_formed instead of being
+ * paired by position.
  * Returns 0 when the results are stored; 1 when an allocation failure left only
  * the notes-only answer stored; -1 when the conversation is full; -2 when even
  * the notes-only array could not be had. On -1 and -2 nothing is stored and the
@@ -124,7 +131,9 @@ int agentic_sanitize_tool_inputs(AiToolCall *calls, int n);
 /* 1 when the conversation has room for one tool round (the assistant turn,
  * the results turn and a closing reply) and for the notes queued in `q` (NULL
  * counts 0), which the settle flushes after the results:
- * msg_count + 3 + q->count <= AI_MAX_MESSAGES. 0 for a NULL conversation. */
+ * msg_count + 3 + q->count <= AI_MAX_MESSAGES. 0 for a NULL conversation. The
+ * stream thread passes NULL (it never reads the owner's queue); the reply's
+ * slot is then kept by the flush itself (ai_conv_flush_notes' keep_free). */
 int agentic_room_for_tool_round(const AiConversation *conv,
                                 const AiNoteQueue *q);
 

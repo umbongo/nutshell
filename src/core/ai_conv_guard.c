@@ -144,14 +144,17 @@ static int add_note_turn(AiConversation *conv, const char *text)
     return 0;
 }
 
-int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q)
+int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q, int keep_free)
 {
     if (!conv || !q || q->count <= 0) return 0;
     if (ai_conv_tool_calls_open(conv)) return 0;
-    /* In order, up to the first note that cannot be stored; that one and
-     * every later one stay queued (review of B1-B11, 2026-11-11). */
+    if (keep_free < 0) keep_free = 0;
+    /* In order, up to the first note that cannot be stored or would take one
+     * of the keep_free slots; that one and every later one stay queued
+     * (review of B1-B11 and of the fix wave, 2026-11-11). */
     int appended = 0;
     while (appended < q->count
+           && conv->msg_count + 1 + keep_free <= AI_MAX_MESSAGES
            && add_note_turn(conv, q->text[appended]) == 0)
         appended++;
     if (appended == 0) return 0;
@@ -176,7 +179,7 @@ int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
 
     /* earlier notes still waiting go in first, so the order is kept; one
      * that could not be stored keeps this note behind it */
-    ai_conv_flush_notes(conv, q);
+    ai_conv_flush_notes(conv, q, 0);
     if (q && q->count > 0) {
         if (q->count >= AI_NOTE_QUEUE_MAX) return -1;
         note_copy(q->text[q->count], text);

@@ -307,10 +307,10 @@ int test_conv_note_queued_while_open(void)
         ASSERT_EQ(c->msg_count, before);
         ASSERT_EQ(q.count, 1);
         /* flush does nothing while open */
-        ASSERT_EQ(ai_conv_flush_notes(c, &q), 0);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 0);
         ASSERT_EQ(q.count, 1);
         ASSERT_EQ(add_results(c, calls, 0, 1), 0);
-        ASSERT_EQ(ai_conv_flush_notes(c, &q), 1);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 1);
         ASSERT_EQ(q.count, 0);
         AiMessage *last = &c->messages[c->msg_count - 1];
         ASSERT_EQ((int)last->role, (int)AI_ROLE_USER);
@@ -334,7 +334,7 @@ int test_conv_note_deferred_while_busy(void)
         ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "second"), 1);
         ASSERT_EQ(c->msg_count, before);
         ASSERT_EQ(q.count, 2);
-        ASSERT_EQ(ai_conv_flush_notes(c, &q), 2);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 2);
         ASSERT_EQ(c->msg_count, before + 2);
         ASSERT_STR_EQ(c->messages[before].content, "first");
         ASSERT_STR_EQ(c->messages[before + 1].content, "second");
@@ -384,7 +384,7 @@ int test_conv_note_refusals(void)
         ASSERT_EQ(q2.count, 0);
         /* queued notes that no longer fit stay queued (review of B1-B11) */
         ASSERT_EQ(ai_conv_add_user_note(c, &q2, 1, "queued"), 1);
-        ASSERT_EQ(ai_conv_flush_notes(c, &q2), 0);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q2, 0), 0);
         ASSERT_EQ(q2.count, 1);
         ASSERT_STR_EQ(q2.text[0], "queued");
         ASSERT_EQ(c->msg_count, AI_MAX_MESSAGES);
@@ -608,9 +608,13 @@ static void queue_notes(AiNoteQueue *q, int n)
     }
 }
 
-/* Review Focus 1's own sequence: 61 messages, an open run_command turn, two
- * notes queued. The typed finish stores the results (62) and the flush two
- * notes (64); the typed message then has no room. The check must say so. */
+/* Review Focus 1's own sequence, run for real (review of the fix wave,
+ * 2026-11-11): an open run_command turn with notes queued, then the typed
+ * message's finish (the results stored), the flush that leaves the typed
+ * message's slot and its reply's (2), the typed add and the reply. When
+ * ai_conv_room_for_send says yes everything is stored and nothing waits; when
+ * it says no the notes that do not fit stay queued and neither the typed
+ * message nor the reply is lost. */
 int test_conv_room_counts_queued_notes(void)
 {
     TEST_BEGIN();
@@ -619,17 +623,56 @@ int test_conv_room_counts_queued_notes(void)
     AiNoteQueue q;
     ASSERT_NOT_NULL(c);
     if (c) {
+        /* 59 messages, the last the open turn, two notes: room says yes */
+        conv_open_at(c, 59, calls);
+        ASSERT_EQ(c->msg_count, 59);
+        queue_notes(&q, 2);
+        ASSERT_EQ(ai_conv_room_for_send(c, 1, NULL), 1);
+        ASSERT_EQ(ai_conv_room_for_send(c, 1, &q), 1);      /* 59 + 3 + 2 = 64 */
+        ASSERT_EQ(add_results(c, calls, 0, 1), 0);          /* 60 */
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 2), 2);        /* 62 */
+        ASSERT_EQ(q.count, 0);
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_USER, "typed"), 0);   /* 63 */
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);   /* 64 */
+        ASSERT_EQ(c->msg_count, 64);
+        ASSERT_STR_EQ(c->messages[60].content, "note1");
+        ASSERT_STR_EQ(c->messages[61].content, "note2");
+        ASSERT_STR_EQ(c->messages[62].content, "typed");
+        ASSERT_STR_EQ(c->messages[63].content, "reply");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+
+        /* 61 messages, two notes: room says no (61 + 3 + 2 = 66) ... */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
         conv_open_at(c, 61, calls);
-        ASSERT_EQ(c->msg_count, 61);
         queue_notes(&q, 2);
-        ASSERT_EQ(ai_conv_room_for_send(c, 1, NULL), 1);   /* 61 + 3 <= 64 */
-        ASSERT_EQ(ai_conv_room_for_send(c, 1, &q), 0);     /* + 2 notes */
+        ASSERT_EQ(ai_conv_room_for_send(c, 1, NULL), 1);    /* 61 + 3 <= 64 */
+        ASSERT_EQ(ai_conv_room_for_send(c, 1, &q), 0);
+        /* ... and run anyway, the way a stale check would: the results (62),
+         * a flush leaving 2 stores no note (62 + 1 + 2 > 64), the typed
+         * message (63) and the reply (64) are both stored, both notes wait */
+        ASSERT_EQ(add_results(c, calls, 0, 1), 0);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 2), 0);
+        ASSERT_EQ(q.count, 2);
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_USER, "typed"), 0);
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);
+        ASSERT_EQ(c->msg_count, 64);
+        ASSERT_STR_EQ(q.text[0], "note1");
+        ASSERT_STR_EQ(q.text[1], "note2");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+
+        /* an emptied queue counts nothing */
         q.count = 0;
-        ASSERT_EQ(ai_conv_room_for_send(c, 1, &q), 1);     /* an empty queue */
-        queue_notes(&q, 2);
+        ASSERT_EQ(ai_conv_room_for_send(c, 1, &q), 0);      /* 64 + 3 */
+        ai_conv_reset(c);
+        while (c->msg_count < 61) ai_conv_add(c, AI_ROLE_USER, "x");
+        ASSERT_EQ(ai_conv_room_for_send(c, 1, &q), 1);      /* 61 + 3 <= 64 */
+
         /* no batch open: 60 + 2 + 2 = 64 fits, 61 + 2 + 2 does not */
         ai_conv_reset(c);
         while (c->msg_count < 60) ai_conv_add(c, AI_ROLE_USER, "x");
+        queue_notes(&q, 2);
         ASSERT_EQ(ai_conv_room_for_send(c, 0, &q), 1);
         ai_conv_add(c, AI_ROLE_USER, "x");
         ASSERT_EQ(ai_conv_room_for_send(c, 0, &q), 0);
@@ -673,7 +716,7 @@ int test_conv_flush_keeps_what_does_not_fit(void)
     if (c) {
         while (c->msg_count < AI_MAX_MESSAGES - 2) ai_conv_add(c, AI_ROLE_USER, "x");
         queue_notes(&q, 4);
-        ASSERT_EQ(ai_conv_flush_notes(c, &q), 2);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 2);
         ASSERT_EQ(c->msg_count, AI_MAX_MESSAGES);
         ASSERT_STR_EQ(c->messages[AI_MAX_MESSAGES - 2].content, "note1");
         ASSERT_STR_EQ(c->messages[AI_MAX_MESSAGES - 1].content, "note2");
@@ -681,7 +724,7 @@ int test_conv_flush_keeps_what_does_not_fit(void)
         ASSERT_STR_EQ(q.text[0], "note3");
         ASSERT_STR_EQ(q.text[1], "note4");
         /* nothing more fits: nothing more moves */
-        ASSERT_EQ(ai_conv_flush_notes(c, &q), 0);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 0);
         ASSERT_EQ(q.count, 2);
         /* a new note queues behind them rather than overtaking */
         ai_conv_reset(c);
@@ -690,6 +733,94 @@ int test_conv_flush_keeps_what_does_not_fit(void)
         ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "later"), 1);
         ASSERT_EQ(q.count, 3);
         ASSERT_STR_EQ(q.text[2], "later");
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+/* The real sequence at 61 messages (review of the fix wave, 2026-11-11, R47):
+ * the assistant tool turn, notes queued through the door while it is open, the
+ * results stored, the flush that precedes a relaunch leaving 1 free, then the
+ * reply. Without the slot kept free the second note would take the reply's. */
+int test_conv_flush_leaves_the_reply_slot(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiToolCall calls[1];
+    AiNoteQueue q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        while (c->msg_count < 60) ai_conv_add(c, AI_ROLE_USER, "x");
+        ASSERT_EQ(add_asst(c, 1, calls), 0);
+        ASSERT_EQ(c->msg_count, 61);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "note1"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "note2"), 1);
+        ASSERT_EQ(q.count, 2);
+        ASSERT_EQ(add_results(c, calls, 0, 1), 0);
+        ASSERT_EQ(c->msg_count, 62);
+
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 1), 1);   /* 63: one slot stays */
+        ASSERT_EQ(c->msg_count, 63);
+        ASSERT_STR_EQ(c->messages[62].content, "note1");
+        ASSERT_EQ(c->messages[62].nutshell_note, 1);
+        ASSERT_EQ(q.count, 1);                         /* note2 waits, in order */
+        ASSERT_STR_EQ(q.text[0], "note2");
+
+        /* the reply is stored */
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);
+        ASSERT_EQ(c->msg_count, 64);
+        ASSERT_STR_EQ(c->messages[63].content, "reply");
+        ASSERT_EQ((int)c->messages[63].role, (int)AI_ROLE_ASSISTANT);
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+        ASSERT_EQ(body_ok(c, "openai"), 1);
+        ASSERT_EQ(body_ok(c, "anthropic"), 1);
+        ASSERT_EQ(q.count, 1);                         /* nothing dropped */
+
+        /* one note that fits is stored and the reply still fits */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        while (c->msg_count < 60) ai_conv_add(c, AI_ROLE_USER, "x");
+        ASSERT_EQ(add_asst(c, 1, calls), 0);
+        memset(&q, 0, sizeof(q));
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "only"), 1);
+        ASSERT_EQ(add_results(c, calls, 0, 1), 0);     /* 62 */
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 1), 1);   /* 63 */
+        ASSERT_EQ(q.count, 0);
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);
+        ASSERT_EQ(c->msg_count, 64);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+/* keep_free: 0 is the old flush, a negative value counts as 0, a value larger
+ * than the room appends nothing and drops nothing. */
+int test_conv_flush_keep_free_values(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiNoteQueue q;
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        while (c->msg_count < 61) ai_conv_add(c, AI_ROLE_USER, "x");
+        queue_notes(&q, 4);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 4), 0);   /* 61 + 1 + 4 > 64 */
+        ASSERT_EQ(c->msg_count, 61);
+        ASSERT_EQ(q.count, 4);
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 2), 1);   /* 61 + 1 + 2 = 64 */
+        ASSERT_EQ(c->msg_count, 62);
+        ASSERT_EQ(q.count, 3);
+        ASSERT_STR_EQ(q.text[0], "note2");
+        ASSERT_STR_EQ(q.text[2], "note4");
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, -5), 2);  /* negative: 0 */
+        ASSERT_EQ(c->msg_count, 64);
+        ASSERT_EQ(q.count, 1);
+        ASSERT_STR_EQ(q.text[0], "note4");
+        ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 0);
+        ASSERT_EQ(ai_conv_flush_notes(NULL, &q, 1), 0);
+        ASSERT_EQ(ai_conv_flush_notes(c, NULL, 1), 0);
     }
     free_conv(c);
     TEST_END();
@@ -843,6 +974,161 @@ int test_ids_unique_stored_unchanged(void)
         ASSERT_STR_EQ(t->parts[0].tool_call_id, "toolu_01");
         ASSERT_STR_EQ(t->parts[1].tool_call_id, "toolu_02");
         ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+/* ---- R50: a result pairs by its id, by position only for a made-up id --------- */
+
+/* One result per entry of ids[] ("" for none), content "R0", "R1" ... */
+static int results_with_ids(AiConversation *c, const AiToolCall *calls,
+                            const char *const *ids, int n)
+{
+    AiToolResult r[4];
+    static char text[4][16];
+    memset(r, 0, sizeof(r));
+    for (int i = 0; i < n; i++) {
+        snprintf(text[i], sizeof(text[i]), "R%d", i);
+        snprintf(r[i].tool_use_id, sizeof(r[i].tool_use_id), "%s", ids[i]);
+        r[i].content = text[i];
+        r[i].content_len = 2;
+    }
+    return agentic_add_tool_results(c, calls, r, n);
+}
+
+/* The rule (ruling R50), per result i in order: (1) its tool_use_id equals the
+ * stored id of a call and no earlier result carries the same id: it answers
+ * that call, whatever its position; (2) else, when the stored id at position i
+ * differs from the caller's calls[i].id (the store made it up: call_<n>), it
+ * answers the call at position i; (3) else it keeps its own id. */
+int test_results_pair_by_id(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiToolCall calls[2];
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        /* calls a (web_search), b (web_fetch); results arrive b first: each
+         * pairs with its own call by id, content and name follow the call */
+        set_call(&calls[0], "a", "web_search");
+        set_call(&calls[1], "b", "web_fetch");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        const char *rev[2] = {"b", "a"};
+        ASSERT_EQ(results_with_ids(c, calls, rev, 2), 0);
+        const AiMessage *t = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(t->parts[0].tool_call_id, "b");
+        ASSERT_STR_EQ(t->parts[0].tool_name, "web_fetch");
+        ASSERT_STR_EQ(t->parts[0].content, "R0");
+        ASSERT_STR_EQ(t->parts[1].tool_call_id, "a");
+        ASSERT_STR_EQ(t->parts[1].tool_name, "web_search");
+        ASSERT_STR_EQ(t->parts[1].content, "R1");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+        ASSERT_EQ(body_ok(c, "openai"), 1);
+
+        /* in order, the same by id */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        const char *fwd[2] = {"a", "b"};
+        ASSERT_EQ(results_with_ids(c, calls, fwd, 2), 0);
+        t = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(t->parts[0].tool_call_id, "a");
+        ASSERT_STR_EQ(t->parts[1].tool_call_id, "b");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+
+        /* made-up ids: calls "" and "" were stored call_1, call_2; results with
+         * no ids pair by position */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        set_call(&calls[0], "", "web_search");
+        set_call(&calls[1], "", "web_fetch");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        const char *none[2] = {"", ""};
+        ASSERT_EQ(results_with_ids(c, calls, none, 2), 0);
+        t = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(t->parts[0].tool_call_id, "call_1");
+        ASSERT_STR_EQ(t->parts[1].tool_call_id, "call_2");
+        ASSERT_STR_EQ(t->parts[1].tool_name, "web_fetch");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+
+        /* a repeated id: calls a, a (stored a, call_1), results a, a: the
+         * first by id, the second (same id as an earlier result, position
+         * made up) by position */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        set_call(&calls[0], "a", "web_search");
+        set_call(&calls[1], "a", "web_fetch");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        const char *rep[2] = {"a", "a"};
+        ASSERT_EQ(results_with_ids(c, calls, rep, 2), 0);
+        t = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(t->parts[0].tool_call_id, "a");
+        ASSERT_STR_EQ(t->parts[1].tool_call_id, "call_1");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+/* Results whose ids are wrong or out of place, for calls whose ids the store
+ * kept (so no position is made up), are not paired by luck: the part keeps the
+ * result's own id and the pair check fails. */
+int test_results_out_of_place_fail_the_pair_check(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiToolCall calls[2];
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        set_call(&calls[0], "a", "web_search");
+        set_call(&calls[1], "b", "web_fetch");
+
+        /* ids that name no call */
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        const char *wrong[2] = {"x", "y"};
+        ASSERT_EQ(results_with_ids(c, calls, wrong, 2), 0);
+        ASSERT_STR_EQ(c->messages[c->msg_count - 1].parts[0].tool_call_id, "x");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 0);
+        ASSERT_EQ(body_ok(c, "openai"), 0);
+
+        /* the same id twice: b answered twice, a never */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        const char *twice[2] = {"b", "b"};
+        ASSERT_EQ(results_with_ids(c, calls, twice, 2), 0);
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 0);
+
+        /* one id right, one empty, where the stored id was the provider's: the
+         * empty one is not a made-up id, so it stays empty and fails */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        const char *half[2] = {"", "a"};
+        ASSERT_EQ(results_with_ids(c, calls, half, 2), 0);
+        ASSERT_STR_EQ(c->messages[c->msg_count - 1].parts[0].tool_call_id, "");
+        ASSERT_STR_EQ(c->messages[c->msg_count - 1].parts[1].tool_call_id, "a");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 0);
+
+        /* a third result with no call to answer keeps its id (the turn has
+         * two calls, so a results turn of three fails the count) */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        AiToolCall three[3];
+        memcpy(three, calls, sizeof(calls));
+        set_call(&three[2], "c", "web_fetch");
+        const char *abc[3] = {"a", "b", "c"};
+        ASSERT_EQ(results_with_ids(c, three, abc, 3), 0);
+        ASSERT_STR_EQ(c->messages[c->msg_count - 1].parts[2].tool_call_id, "c");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 0);
     }
     free_conv(c);
     TEST_END();
