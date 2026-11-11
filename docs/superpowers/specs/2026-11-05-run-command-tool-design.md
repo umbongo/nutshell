@@ -1108,7 +1108,8 @@ today.
   zero-filled session conversation has `snapshot_msg` 0 and no snapshot, so
   the index is never the test). `ai_conv_snapshot_trim(conv)` frees the
   snapshot and sets `snapshot_msg` −1 when the index is negative or
-  >= `msg_count`, or the message there is no longer a USER turn; a valid
+  >= `msg_count`, or the message there is no longer a USER turn the user typed
+  (it is gone, or it is a Nutshell note); a valid
   snapshot is kept. Every site that pops messages off the end of a
   conversation must call it (the pop sites in `src/ui` are task B17's).
 
