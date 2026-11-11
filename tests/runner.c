@@ -2554,6 +2554,8 @@ int test_chat_msg_batch_sync_run_empty_queue_leaves_items_untouched(void);
 /* test_ai_stream.c */
 int test_ai_conv_take_moves_overflow_and_clears_source(void);
 int test_ai_conv_take_frees_previous_destination(void);
+int test_ai_conv_take_keeps_destination_model(void);
+int test_ai_conv_take_background_path_model(void);
 int test_ai_conv_take_self_and_null_are_noops(void);
 int test_ai_conv_take_repeated_switch_then_send(void);
 int test_ai_conv_copy_replaces_destination(void);
@@ -7629,6 +7631,8 @@ int main(void) {
 
     failed += test_ai_conv_take_moves_overflow_and_clears_source();
     failed += test_ai_conv_take_frees_previous_destination();
+    failed += test_ai_conv_take_keeps_destination_model();
+    failed += test_ai_conv_take_background_path_model();
     failed += test_ai_conv_take_self_and_null_are_noops();
     failed += test_ai_conv_take_repeated_switch_then_send();
     failed += test_ai_conv_copy_replaces_destination();

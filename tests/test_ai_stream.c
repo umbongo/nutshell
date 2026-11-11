@@ -60,7 +60,7 @@ int test_ai_conv_take_moves_overflow_and_clears_source(void)
     ASSERT_TRUE(dst->messages[0].content_overflow == ovf);
     ASSERT_TRUE(dst->messages[1].attachment == att);
     ASSERT_TRUE(dst->messages[2].tool_calls == tc);
-    ASSERT_STR_EQ(dst->model, "model-x");
+    ASSERT_STR_EQ(dst->model, "other");   /* the destination keeps its model */
     /* The source owns nothing any more, but keeps its model. */
     ASSERT_EQ(src->msg_count, 0);
     ASSERT_NULL(src->messages[0].content_overflow);
@@ -96,6 +96,76 @@ int test_ai_conv_take_frees_previous_destination(void)
     ai_conv_reset(src);
     free(src);
     free(dst);
+    TEST_END();
+}
+
+/* A take moves the messages but not the model: the model is the panel's
+ * setting, so a model chosen while the conversation sat in a session must
+ * survive the take back. A destination with no model takes the source's. */
+int test_ai_conv_take_keeps_destination_model(void)
+{
+    TEST_BEGIN();
+    AiConversation *src = calloc(1, sizeof(*src));
+    AiConversation *dst = calloc(1, sizeof(*dst));
+    ai_conv_init(src, "a");
+    ai_conv_add(src, AI_ROLE_USER, "hello");
+    ai_conv_init(dst, "b");
+
+    ai_conv_take(dst, src);
+    ASSERT_STR_EQ(dst->model, "b");
+    ASSERT_EQ(dst->msg_count, 1);
+    ASSERT_STR_EQ(ai_msg_content(&dst->messages[0]), "hello");
+    ASSERT_STR_EQ(src->model, "a");       /* the source keeps its own */
+    ASSERT_EQ(src->msg_count, 0);
+
+    /* A destination with an empty model takes the source's. */
+    ai_conv_add(src, AI_ROLE_USER, "again");
+    ai_conv_init(dst, "");
+    ai_conv_take(dst, src);
+    ASSERT_STR_EQ(dst->model, "a");
+    ASSERT_EQ(dst->msg_count, 1);
+
+    ai_conv_reset(src);
+    ai_conv_reset(dst);
+    free(src);
+    free(dst);
+    TEST_END();
+}
+
+/* The tab switch (ai_chat.c do_session_switch): the displayed conversation
+ * goes into the old session, the new session's comes back into the panel.
+ * A model chosen in Settings meanwhile lives in the panel's conversation and
+ * must not be reverted by the session's stale one. Likewise the background
+ * branch of WM_AI_RESPONSE takes the stream's copy into the session. */
+int test_ai_conv_take_background_path_model(void)
+{
+    TEST_BEGIN();
+    AiConversation *panel = calloc(1, sizeof(*panel));
+    AiConversation *sess = calloc(1, sizeof(*sess));
+    ai_conv_init(sess, "old");
+    ai_conv_add(sess, AI_ROLE_USER, "from the session");
+    ai_conv_init(panel, "new");           /* chosen in Settings meanwhile */
+
+    ai_conv_take(panel, sess);            /* the switch's take into d->conv */
+    ASSERT_STR_EQ(panel->model, "new");
+    ASSERT_EQ(panel->msg_count, 1);
+    ASSERT_STR_EQ(ai_msg_content(&panel->messages[0]), "from the session");
+
+    /* Save the panel into the old session, then bring another session in:
+     * the panel's model still stands. */
+    AiConversation *other = calloc(1, sizeof(*other));
+    ai_conv_init(other, "older");
+    ai_conv_add(other, AI_ROLE_USER, "other tab");
+    ai_conv_take(sess, panel);
+    ai_conv_take(panel, other);
+    ASSERT_STR_EQ(panel->model, "new");
+    ASSERT_STR_EQ(ai_msg_content(&panel->messages[0]), "other tab");
+    ai_conv_reset(other);
+    free(other);
+    ai_conv_reset(sess);
+    ai_conv_reset(panel);
+    free(sess);
+    free(panel);
     TEST_END();
 }
 

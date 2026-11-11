@@ -86,9 +86,11 @@ void ai_conv_reset(AiConversation *conv);
 
 /* Move a conversation: free dst's messages, give dst every message of src
  * together with the heap buffers they own (overflow content, attachments,
- * tool calls), and leave src empty with its model kept. Afterwards exactly
- * one conversation owns each buffer, so both can be reset or taken again
- * safely. dst == src, or either NULL, is a no-op. */
+ * tool calls), and leave src empty with its model kept. dst keeps its own
+ * model (the panel's setting is not reverted by a stale copy); only a dst
+ * with an empty model takes src's. Afterwards exactly one conversation owns
+ * each buffer, so both can be reset or taken again safely. dst == src, or
+ * either NULL, is a no-op. */
 void ai_conv_take(AiConversation *dst, AiConversation *src);
 
 /* Deep copy: free dst's messages, then copy src into dst with its own

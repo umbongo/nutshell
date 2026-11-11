@@ -165,8 +165,14 @@ void ai_conv_reset(AiConversation *conv)
 void ai_conv_take(AiConversation *dst, AiConversation *src)
 {
     if (!dst || !src || dst == src) return;
-    ai_conv_reset(dst);
+    ai_conv_reset(dst);   /* frees the messages, keeps dst->model */
+    /* The model is the panel's setting, not part of the conversation: keep
+     * the destination's so a model chosen meanwhile is not reverted. An
+     * empty destination model takes the source's. */
+    char keep[64];
+    memcpy(keep, dst->model, sizeof(keep));
     memcpy(dst, src, sizeof(*dst));
+    if (keep[0]) memcpy(dst->model, keep, sizeof(dst->model));
     /* src gives up every pointer it had -- including stale ones in slots
      * past msg_count -- so no buffer ends up with two owners. */
     char model[64];
