@@ -226,7 +226,7 @@ int agentic_sanitize_tool_inputs(AiToolCall *calls, int n)
     for (int i = 0; i < n; i++) {
         int bad = calls[i].overflowed;
         if (!bad) {
-            JsonNode *root = json_parse(calls[i].input_json);
+            JsonNode *root = json_parse_exact(calls[i].input_json);
             bad = !root || root->type != JSON_OBJECT;
             if (root) json_free(root);
         }

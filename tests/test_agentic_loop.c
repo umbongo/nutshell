@@ -331,6 +331,26 @@ int test_agentic_sanitize_keeps_valid(void)
     TEST_END();
 }
 
+/* An input is kept only when it is exactly one JSON object: anything after
+ * it would make every later request body invalid. */
+int test_agentic_sanitize_exactly_one_object(void)
+{
+    TEST_BEGIN();
+    AiToolCall c[6];
+    memset(c, 0, sizeof(c));
+    strcpy(c[0].input_json, "{\"command\":\"ls\"}x");
+    strcpy(c[1].input_json, "{}{}");
+    strcpy(c[2].input_json, "{\"a\":1}{\"a\":1");
+    strcpy(c[3].input_json, "{\"command\":\"ls\"}garbage");
+    strcpy(c[4].input_json, "{\"command\":\"ls\"}  \n\t");
+    strcpy(c[5].input_json, " \n{\"command\":\"ls\"}");
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 6), 4);
+    for (int i = 0; i < 4; i++) ASSERT_STR_EQ(c[i].input_json, "{}");
+    ASSERT_STR_EQ(c[4].input_json, "{\"command\":\"ls\"}  \n\t");
+    ASSERT_STR_EQ(c[5].input_json, " \n{\"command\":\"ls\"}");
+    TEST_END();
+}
+
 int test_agentic_room_for_tool_round(void)
 {
     TEST_BEGIN();
@@ -381,6 +401,45 @@ int test_agentic_runcmd_result_not_capped(void)
     ai_conv_reset(&conv);
     free(a);
     free(b);
+    TEST_END();
+}
+
+/* A long note ending with the cap's "\n" truncation line: the stored note
+ * keeps the line at its end and shortens the text before it, never cutting a
+ * UTF-8 sequence (here the natural cut at byte 216 falls inside one). */
+int test_agentic_note_copy_keeps_marker(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    strcpy(call.name, "web_fetch");
+    AiToolResult r;
+    memset(&r, 0, sizeof(r));
+    size_t marker = strlen(AI_TOOL_TRUNC_NOTE);
+    /* 'a' then 200 two-byte characters: 401 bytes of head, odd on purpose */
+    size_t head_len = 401;
+    r.tool_note[0] = 'a';
+    for (size_t i = 1; i + 1 < head_len + 1; i += 2)
+        memcpy(r.tool_note + i, "\xC3\xA9", 2);
+    r.tool_note[head_len] = '\n';
+    memcpy(r.tool_note + head_len + 1, AI_TOOL_TRUNC_NOTE, marker + 1);
+    ASSERT_TRUE(head_len + 1 + marker < AI_TOOL_PART_NOTE_MAX);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
+    const char *got = conv.messages[0].tool_note;
+    size_t glen = strlen(got);
+    ASSERT_TRUE(glen <= AI_TOOL_NOTE_MAX - 1);
+    ASSERT_EQ(glen, 254);  /* the head gave up one byte to stay on a boundary */
+    ASSERT_STR_EQ(got + glen - marker - 1, "\n" AI_TOOL_TRUNC_NOTE);
+    size_t head = glen - marker - 1;
+    ASSERT_EQ(head, 215);
+    ASSERT_EQ(got[0], 'a');
+    for (size_t i = 1; i < head; i += 2) {
+        ASSERT_EQ((unsigned char)got[i], 0xC3);
+        ASSERT_EQ((unsigned char)got[i + 1], 0xA9);
+    }
+    ai_conv_reset(&conv);
     TEST_END();
 }
 

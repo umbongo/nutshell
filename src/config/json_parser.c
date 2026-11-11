@@ -257,6 +257,24 @@ JsonNode *json_parse(const char *src)
     return root;
 }
 
+JsonNode *json_parse_exact(const char *src)
+{
+    Parser p;
+    tok_init(&p.tok, src ? src : "");
+    p.error = 0;
+    p.depth = 0;
+    advance(&p);   /* load first token */
+
+    JsonNode *root = parse_value(&p);
+    /* parse_value has already read the token after the value: it must be the
+     * end of the input (tok_next skips whitespace). */
+    if (!root || p.error || p.cur.type != TOK_EOF) {
+        json_free(root);
+        return NULL;
+    }
+    return root;
+}
+
 JsonNode *json_obj_get(const JsonNode *obj, const char *key)
 {
     if (!obj || obj->type != JSON_OBJECT || !key) {

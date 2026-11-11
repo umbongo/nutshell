@@ -413,6 +413,35 @@ int test_parse_obj_num_fallback(void)
     TEST_END();
 }
 
+/* json_parse_exact: one value and nothing after it but whitespace. */
+int test_json_parse_exact(void)
+{
+    TEST_BEGIN();
+    JsonNode *n = json_parse_exact("{\"command\":\"ls\"}");
+    ASSERT_NOT_NULL(n);
+    ASSERT_EQ(n->type, JSON_OBJECT);
+    json_free(n);
+    n = json_parse_exact("  {\"a\":1} \n\t\r\n");
+    ASSERT_NOT_NULL(n);
+    json_free(n);
+    n = json_parse_exact("42");
+    ASSERT_NOT_NULL(n);
+    ASSERT_EQ(n->type, JSON_NUMBER);
+    json_free(n);
+    /* trailing bytes, a second value, an unterminated tail */
+    ASSERT_NULL(json_parse_exact("{\"command\":\"ls\"}x"));
+    ASSERT_NULL(json_parse_exact("{\"command\":\"ls\"}garbage"));
+    ASSERT_NULL(json_parse_exact("{}{}"));
+    ASSERT_NULL(json_parse_exact("{\"a\":1}{\"a\":1"));
+    ASSERT_NULL(json_parse_exact("[1] 2"));
+    ASSERT_NULL(json_parse_exact("{} ,"));
+    /* what json_parse alone rejects stays rejected */
+    ASSERT_NULL(json_parse_exact(""));
+    ASSERT_NULL(json_parse_exact(NULL));
+    ASSERT_NULL(json_parse_exact("{\"a\":"));
+    TEST_END();
+}
+
 int test_json_free_null(void)
 {
     TEST_BEGIN();

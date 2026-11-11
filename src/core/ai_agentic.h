@@ -53,7 +53,7 @@ int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
  * boundary at the longest prefix whose JSON-escaped size is at most
  * AI_TOOL_RESULT_ESCAPED_MAX. A cut sets tool_note to AI_TOOL_TRUNC_NOTE, or
  * appends "\n" AI_TOOL_TRUNC_NOTE to a note already there (the old note
- * shortens if both do not fit in AI_TOOL_NOTE_MAX). Returns 1 when it cut,
+ * shortens if both do not fit in AI_TOOL_PART_NOTE_MAX). Returns 1 when it cut,
  * 0 otherwise (also for a NULL result or NULL content). */
 int agentic_cap_tool_result(AiToolResult *r);
 
@@ -84,9 +84,10 @@ int agentic_truncation_warning(const char *tool_name, size_t omitted_bytes,
 
 /* Make every call's stored input something a provider will accept back: an
  * input that overflowed AI_TOOL_INPUT_MAX (a cut or spliced command must
- * never be read as a different one) or does not parse as a JSON object (a
- * reply cut off mid-call leaves an unterminated string) is replaced with
- * "{}". The overflowed flag is left set. Returns how many were replaced. */
+ * never be read as a different one) or is not exactly one JSON object
+ * followed by nothing but whitespace (a reply cut off mid-call leaves an
+ * unterminated string; trailing bytes or a second value would make every
+ * later request body invalid) is replaced with "{}". The overflowed flag is left set. Returns how many were replaced. */
 int agentic_sanitize_tool_inputs(AiToolCall *calls, int n);
 
 /* 1 when the conversation has room for one tool round (the assistant turn,

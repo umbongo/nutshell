@@ -30,6 +30,10 @@ typedef struct JsonNode {
 } JsonNode;
 
 JsonNode *json_parse(const char *src);
+/* Like json_parse, but the value must be the whole input: only JSON
+ * whitespace may follow it. Trailing bytes, a second value ("{}{}") or an
+ * unterminated tail give NULL. */
+JsonNode *json_parse_exact(const char *src);
 void json_free(JsonNode *node);
 JsonNode *json_obj_get(const JsonNode *obj, const char *key);
 const char *json_obj_str(const JsonNode *obj, const char *key);
