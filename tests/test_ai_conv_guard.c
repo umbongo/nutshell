@@ -1175,6 +1175,66 @@ int test_results_pair_by_id(void)
     TEST_END();
 }
 
+/* The "no second cap" rule for run_command reads the call a result is PAIRED
+ * with (by id, R50), not the call at the result's own position (C0): results
+ * in a different order from the calls, ids matching. a is run_command, b is
+ * web_fetch; both results are 70,000 bytes, over the 65,536 cap. b's is cut
+ * (and noted), a's is kept whole whichever order the results come in. */
+int test_results_runcmd_no_second_cap_by_pair(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiToolCall calls[2];
+    char *big0 = (char *)malloc(70001), *big1 = (char *)malloc(70001);
+    ASSERT_NOT_NULL(c);
+    ASSERT_NOT_NULL(big0);
+    ASSERT_NOT_NULL(big1);
+    if (c && big0 && big1) {
+        memset(big0, 'x', 70000); big0[70000] = '\0';
+        memset(big1, 'y', 70000); big1[70000] = '\0';
+        set_call(&calls[0], "a", "run_command");
+        set_call(&calls[1], "b", "web_fetch");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        /* results b first, then a */
+        AiToolResult r[2];
+        memset(r, 0, sizeof(r));
+        snprintf(r[0].tool_use_id, sizeof(r[0].tool_use_id), "b");
+        r[0].content = big0; r[0].content_len = 70000;
+        snprintf(r[1].tool_use_id, sizeof(r[1].tool_use_id), "a");
+        r[1].content = big1; r[1].content_len = 70000;
+        ASSERT_EQ(agentic_add_tool_results(c, calls, r, 2), 0);
+        const AiMessage *t = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(t->parts[0].tool_call_id, "b");
+        ASSERT_STR_EQ(t->parts[0].tool_name, "web_fetch");
+        ASSERT_EQ((int)t->parts[0].content_len, 65536);       /* the web tool is capped */
+        ASSERT_TRUE(t->parts[0].tool_note[0] != '\0');
+        ASSERT_STR_EQ(t->parts[1].tool_call_id, "a");
+        ASSERT_STR_EQ(t->parts[1].tool_name, "run_command");
+        ASSERT_EQ((int)t->parts[1].content_len, 70000);       /* run_command is not */
+        ASSERT_STR_EQ(t->parts[1].tool_note, "");
+        ASSERT_EQ(ai_conv_tool_pairs_well_formed(c), 1);
+
+        /* in order, the same by id */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
+        ai_conv_add(c, AI_ROLE_USER, "go");
+        ASSERT_EQ(agentic_add_assistant_tool_msg(c, "x", calls, 2), 0);
+        memset(r, 0, sizeof(r));
+        snprintf(r[0].tool_use_id, sizeof(r[0].tool_use_id), "a");
+        r[0].content = big0; r[0].content_len = 70000;
+        snprintf(r[1].tool_use_id, sizeof(r[1].tool_use_id), "b");
+        r[1].content = big1; r[1].content_len = 70000;
+        ASSERT_EQ(agentic_add_tool_results(c, calls, r, 2), 0);
+        t = &c->messages[c->msg_count - 1];
+        ASSERT_EQ((int)t->parts[0].content_len, 70000);
+        ASSERT_EQ((int)t->parts[1].content_len, 65536);
+    }
+    free(big0);
+    free(big1);
+    free_conv(c);
+    TEST_END();
+}
+
 /* Results whose ids are wrong or out of place, for calls whose ids the store
  * kept (so no position is made up), are not paired by luck: the part keeps the
  * result's own id and the pair check fails. */

@@ -3219,6 +3219,7 @@ int test_conv_note_door_keep_free_values(void);
 int test_conv_flush_keep_free_values(void);
 int test_results_pair_by_id(void);
 int test_results_out_of_place_fail_the_pair_check(void);
+int test_results_runcmd_no_second_cap_by_pair(void);
 int test_ids_empty_get_made_up(void);
 int test_ids_repeated_get_made_up(void);
 int test_pairs_repeated_ids_fail(void);
@@ -8570,6 +8571,7 @@ int main(void) {
     failed += test_conv_flush_keep_free_values();
     failed += test_results_pair_by_id();
     failed += test_results_out_of_place_fail_the_pair_check();
+    failed += test_results_runcmd_no_second_cap_by_pair();
         failed += test_ids_empty_get_made_up();
         failed += test_ids_repeated_get_made_up();
         failed += test_pairs_repeated_ids_fail();

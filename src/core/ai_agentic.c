@@ -268,8 +268,11 @@ static AiToolPart *parts_from_results(const AiToolCall *calls,
         capped.content[results[i].content_len] = '\0';
 
         /* run_command's output is bounded by its own executor (64 KiB
-         * escaped, with its own cut note): no second cap. */
-        int runcmd = calls && strcmp(calls[i].name, RUNCMD_TOOL_NAME) == 0;
+         * escaped, with its own cut note): no second cap. The tool is the
+         * one of the call this result was paired with (by id, R50), which
+         * part_fill_head wrote into the part: a results array in another
+         * order than the calls must not cap the wrong one (C0). */
+        int runcmd = strcmp(p->tool_name, RUNCMD_TOOL_NAME) == 0;
         if (!runcmd) {
             (void)agentic_cap_tool_result(&capped);
             memcpy(p->tool_note, capped.tool_note, sizeof(p->tool_note));
