@@ -317,10 +317,10 @@ static void build_executing(AiConversation *conv, ApprovalQueue *approval)
 
 /* ---------------------------------------------------------------------
  * "tool": a web_search tool call, and a truncated tool result. The
- * win32 replay (ai_chat_view.c ai_chat_rebuild_display) shows the "using tool:"
- * line for the call and a preview + "truncated to 1MB" note for a result
- * whose content is long enough that the 200-char preview actually cuts
- * it off.
+ * replay (chat_rebuild.c, called by ai_chat_rebuild_display) shows the "using
+ * tool:" line for the call, the result's note, the truncation row (the result
+ * carries the cap's note, so the cut is real: a result merely longer than the
+ * 200-byte preview gets no such row) and the preview.
  * --------------------------------------------------------------------- */
 static const char TOOL_USER_MSG[] =
     "Why are we hitting API rate limits again? Look it up.";
@@ -364,6 +364,8 @@ static void build_tool(AiConversation *conv)
     if (result.content) {
         memcpy(result.content, TOOL_RESULT_CONTENT, result.content_len + 1);
         result.was_truncated = 1;
+        snprintf(result.tool_note, sizeof(result.tool_note), "%s",
+                 AI_TOOL_TRUNC_NOTE);
         agentic_add_tool_results(conv, &call, &result, 1);
         free(result.content);
     }

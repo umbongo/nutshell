@@ -798,7 +798,8 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 /* Truncation warning */
                 if (results[ti].was_truncated) {
                     char warn[256];
-                    agentic_truncation_warning(call->name, 0, warn, sizeof(warn));
+                    agentic_truncation_warning(call->name, results[ti].omitted_bytes,
+                                               warn, sizeof(warn));
                     post_tool_msg(s, CHAT_ITEM_STATUS, warn);
                 }
 

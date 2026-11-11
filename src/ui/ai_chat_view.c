@@ -6,6 +6,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_header_layout.h"
+#include "chat_rebuild.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -113,38 +114,13 @@ void ai_chat_thinking_history_clear(AiChatData *d)
     d->stream_thinking_len = 0;
 }
 
-/* Append a recorded batch (cmd_run_log.h) as settled CHAT_ITEM_COMMAND rows,
- * tagged with `batch_id` (negative: live batch ids start at 1, so no
- * chat_msg_batch_sync_run() or settle ever touches a replayed row). The
- * fields are the ones the rows had when the batch ended, so the same painter
- * draws the same chips; `run` is set directly because nothing syncs these
- * rows. */
-static void append_run_record_items(ChatMsgList *list, const CmdRunRecord *rec,
-                                    int batch_id)
-{
-    for (int i = 0; i < rec->n; i++) {
-        const CmdRunRow *r = &rec->rows[i];
-        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
-        if (!item) continue;
-        chat_msg_set_command(item, r->command ? r->command : "", r->safety,
-                             r->blocked);
-        chat_msg_set_quoted(item, r->quoted);
-        chat_msg_set_reason(item, r->reason);
-        chat_msg_set_batch(item, batch_id);
-        chat_msg_set_note(item, r->note);
-        item->u.cmd.approved = r->approved;
-        item->u.cmd.run = r->run;
-        item->u.cmd.settled = 1;
-    }
-    /* A reply answered without a card (R64): its rows, after the command rows
-     * (a record has one kind or the other). */
-    for (int i = 0; i < rec->n_status && i < CMD_RUN_STATUS_ROWS; i++)
-        chat_msg_append(list, CHAT_ITEM_STATUS, rec->status[i]);
-}
-
 /* Rebuild the chat display from the conversation history.
- * Used when switching sessions to replay the loaded conversation.
- * Populates the ChatMsgList and invalidates the ChatListView. */
+ * Used when switching sessions (and redocking) to replay the loaded
+ * conversation. Which rows a stored turn yields is chat_rebuild_replay()'s
+ * (src/core/chat_rebuild.c, native tests): the rows of every tool call and
+ * its result, the replayed command rows of the session's run log, the live
+ * batches' cards. This clears the list, calls it and invalidates the
+ * ChatListView. */
 void ai_chat_rebuild_display(AiChatData *d)
 {
     if (!d) return;
@@ -153,111 +129,11 @@ void ai_chat_rebuild_display(AiChatData *d)
     d->stream_ai_item = NULL;
 
     /* No welcome placeholder any more -- an empty msg_list here (no real
-     * messages replayed below) is painted by chat_listview as the empty/
-     * no-key/no-session state instead (see ai_chat_update_panel_state()). */
-
-    /* Replay messages, skipping the system prompt at index 0 */
-    for (int i = 1; i < d->conv.msg_count; i++) {
-        const AiMessage *msg = &d->conv.messages[i];
-
-        if (msg->role == AI_ROLE_USER) {
-            chat_msg_append(&d->msg_list, CHAT_ITEM_USER,
-                            ai_msg_content(msg));
-        } else if (msg->role == AI_ROLE_ASSISTANT) {
-            /* Tool-use blocks first, matching the live "using tool: <name>"
-             * status row posted while the call is in flight. */
-            if (msg->n_tool_calls > 0 && msg->tool_calls) {
-                for (int ti = 0; ti < msg->n_tool_calls; ti++) {
-                    char tool_call_text[256];
-                    char fetch_desc[160] = "";
-                    if (strcmp(msg->tool_calls[ti].name, "web_fetch") == 0)
-                        (void)web_fetch_describe(msg->tool_calls[ti].input_json,
-                                                 fetch_desc, sizeof(fetch_desc));
-                    if (fetch_desc[0])
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s - %s",
-                                 msg->tool_calls[ti].name, fetch_desc);
-                    else
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s", msg->tool_calls[ti].name);
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_CALL,
-                                    tool_call_text);
-                }
-            }
-            const char *content = ai_msg_content(msg);
-            /* Records of the displayed session's run log that belong to this
-             * reply (cmd_run_record_matches(): same index, still an
-             * assistant turn, same text). Such a reply shows only its
-             * pre-command text, as it does live, and its commands follow as
-             * the recorded rows -- so each command appears once. */
-            const CmdRunLog *rlog = d->active_state ? &d->active_state->run_log
-                                                    : NULL;
-            /* A tool turn's hash mixes in its calls' ids, the same function
-             * the batch builder keyed the record with. */
-            const uint32_t turn_hash = cmd_run_log_reply_hash(
-                content, msg->content_len, msg->tool_calls,
-                msg->n_tool_calls);
-            int has_record = 0;
-            for (int ri = 0; rlog && ri < rlog->count; ri++)
-                if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1,
-                                                turn_hash))
-                    has_record = 1;
-
-            char pre_text[AI_MSG_MAX];
-            const char *shown = content;
-            if (has_record && content) {
-                ai_response_split(content, pre_text, sizeof(pre_text), NULL, 0);
-                shown = pre_text;
-            }
-            int has_thinking = d->thinking_history[i] &&
-                               d->thinking_history[i][0];
-            if (shown && (shown[0] != '\0' || (has_record && has_thinking))) {
-                ChatMsgItem *item = chat_msg_append(&d->msg_list,
-                                                     CHAT_ITEM_AI_TEXT,
-                                                     shown);
-                if (item && has_thinking) {
-                    chat_msg_set_thinking(item, d->thinking_history[i]);
-                    item->u.ai.thinking_complete = 1;
-                }
-            }
-            for (int ri = 0; has_record && ri < rlog->count; ri++)
-                if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1,
-                                                turn_hash))
-                    append_run_record_items(&d->msg_list, rlog->rec[ri],
-                                            -(ri + 1));
-        } else if (msg->role == AI_ROLE_TOOL) {
-            /* One results turn: a row per part (its first 200 bytes), and a
-             * truncation row for a part longer than that. */
-            for (int pi = 0; msg->parts && pi < msg->n_parts; pi++) {
-                const AiToolPart *part = &msg->parts[pi];
-                size_t clen = part->content ? part->content_len : 0;
-                char preview[256];
-                size_t plen = clen < 200 ? clen : 200;
-                memcpy(preview, part->content ? part->content : "", plen);
-                preview[plen] = '\0';
-                chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
-                if (clen > 200) {
-                    char warn[256];
-                    agentic_truncation_warning(part->tool_name, 0, warn,
-                                               sizeof(warn));
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
-                }
-            }
-        }
-        /* Skip system messages injected mid-conversation */
-    }
-
-    /* Pending command batches: rebuild one card per batch still in the
-     * active session's set, oldest first -- the interleaving with earlier
-     * conversation turns isn't reconstructed (every batch's cards land
-     * after the full replay above), only which cards exist and their
-     * state (see docs/superpowers/specs/
-     * 2026-09-09-pending-command-batches.md, "Session switch"). */
-    if (d->active_state) {
-        for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            chat_msg_append_batch_items(&d->msg_list,
-                                               d->active_state->batches.b[bi]);
-    }
+     * messages replayed) is painted by chat_listview as the empty/no-key/
+     * no-session state instead (see ai_chat_update_panel_state()). */
+    chat_rebuild_replay(&d->msg_list, &d->conv, d->thinking_history,
+                        d->active_state ? &d->active_state->run_log : NULL,
+                        d->active_state ? &d->active_state->batches : NULL);
 
     if (d->hChatList) {
         chat_listview_invalidate(d->hChatList);
