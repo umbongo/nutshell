@@ -190,6 +190,10 @@ Four things Part A's reviews found that Part B must do, each in the task named:
 
 Also for Task B16 (`WM_DESTROY`): undocking the panel while a command runs sets `dispatch_active = 0` but neither cancels nor records the batch, so after a redock its row may read "running" for good. This predates the branch; the finish function ends that batch with its cause ("while dispatching", spec §13) for `[EXEC]` batches too, and the final review checks it.
 
+### Carried from fix round 3 (2026-11-11)
+
+- **H1, DeepSeek (review item I1):** spec decision 23's `reasoning_content` and its refusal of a cut reasoning apply only to a `deepseek` request whose tools array offers `run_command`; any other DeepSeek request is byte-identical to `6432ca0` (four pinned bodies). The reject hint and the single-delta `thinking_cut` false positive are unchanged and wait for the DeepSeek settling test (spec §23).
+
 ### Carried from the review of B1 to B11 (built, reviewed and fixed; code head `1802305`, then the FW6 docs commits)
 
 Tasks B1 to B11 and five fix waves (FW1 to FW5) are built. The review found what B12 to B22 will trip over; the items below are in the task that owns each (rulings R12 to R53 are in the ledger, `progress.md`; the ones a later task acts on are below, and a ruling marked ★ there was decided in the second fix round: R46, R47, R48 and R50 each change a step, R49, R51, R52 and R53 refine one). Step texts of B2, B3, B4, B7, B8, B11 and B12 to B18 below are corrected to match; a correction is marked "(corrected by the review of B1-B11)". Signatures are at HEAD; read the headers, not this list, when they differ.
@@ -840,7 +844,7 @@ int test_body_after_cut_input_validates(void);  /* a call sanitised to "{}" (Tas
 **Interfaces:**
 - `AI_REASONING_MAX` and the stream's 16 KiB accumulator stay. `AiMessage` gains `int reasoning_cut;`: set when the accumulator dropped reasoning, when `AI_REASONING_MAX` cut it, or when its copy failed to allocate.
 - The thread's normal end stores `ctx.full_thinking` on the turn it adds (`ai_msg_set_reasoning`); only the DeepSeek rule reads plain turns.
-- `deepseek` with `with_tools`: every assistant turn carries `"reasoning_content":` its stored reasoning or `""`; a conversation with any `reasoning_cut` turn makes the builder refuse with the reason shown as spec §23's row. Without tools: none.
+- `deepseek` with `with_tools`: every assistant turn carries `"reasoning_content":` its stored reasoning or `""`; a conversation with any `reasoning_cut` turn makes the builder refuse with the reason shown as spec §23's row. Without tools: none. *(Corrected 2026-11-11, fix round 3 H1, maintainer's "off until tested": "with tools" means a tools array that offers `run_command` (`tools_offer_runcmd`, `deepseek_reasoning_applies`); a DeepSeek request with web tools only is built as at `6432ca0`, pinned by `test_body_deepseek_pinned_no_runcmd`.)*
 - `moonshot`: exactly as shipped (tool-call turns only). Anthropic, OpenAI, Gemini, Custom: none.
 - `runcmd_request_estimate` counts reasoning for `moonshot` tool-call turns and for every `deepseek` turn when `tools_json_len > 0`.
 - **If DeepSeek's settling test fails** on a model (a 400 saying `reasoning_content` is not accepted): `deepseek` reverts to none sent, `ai_runcmd_auto_default("deepseek")` stays 0, README says so; one commit.

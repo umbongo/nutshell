@@ -229,10 +229,15 @@ it was.
   the pricing page name only `deepseek-flash` and `deepseek-v4-pro`, not
   Nutshell's `deepseek-chat` (default), `deepseek-coder` or
   `deepseek-reasoner` (`ai_prompt.c` ~1829, ~1844). So: on a `deepseek`
-  request that carries tools, every assistant turn carries
-  `reasoning_content`, whole or not at all (decision 23); without tools,
-  none. This also repairs DeepSeek's existing web-tool rounds, which by the
-  guide fail today on a thinking model. **The settling test**, on each of
+  request that offers `run_command`, every assistant turn carries
+  `reasoning_content`, whole or not at all (decision 23); on one that does
+  not, none. *(2026-11-11, maintainer, "off until tested": the rule applies
+  only to a request whose tools array offers `run_command`, so a default
+  DeepSeek user, Commands as tool calls on Automatic, sees no change from
+  `6432ca0`. A DeepSeek request with web tools only, or with no tools, is
+  built exactly as at `6432ca0` and is never refused for a cut reasoning.
+  This does not repair DeepSeek's existing web-tool rounds on a thinking
+  model: that waits for the settling test below.)* **The settling test**, on each of
   `deepseek-chat`, `deepseek-coder` and `deepseek-reasoner` with the
   setting On: a run_command reply, Run, and the resumed request; and one
   web_search round with the setting Off. Pass on all: the table row may
@@ -816,7 +821,7 @@ every head and tail is halved (`omitted_bytes` grows), down to notes only
 even then; if notes alone do not fit, the next request fails with today's
 visible error row, the conversation still well-formed. The estimate also
 counts the escaped `reasoning` of every stored assistant turn when the
-provider sends it back (`moonshot` always, `deepseek` with tools); the
+provider sends it back (`moonshot` always, `deepseek` when the request offers `run_command`, decision 23); the
 fit never cuts it.
 
 **16. Hygiene.**
@@ -918,7 +923,7 @@ fit never cuts it.
   take keeps the destination's model, on both the displayed and the
   background paths. Body tests: a turn recorded under another provider is
   text; the frozen snapshot leaves the original question's bytes the same
-  in round 1 and round 2; DeepSeek with a cut reasoning is not sent;
+  in round 1 and round 2; DeepSeek with a cut reasoning is not sent when the request offers run_command;
   a pinned Moonshot body is byte-identical before and after this PR for a
   conversation `[EXEC]` would also produce, among them one that ends on a
   note the door marked and a plain `[EXEC]` exchange, each built with the
@@ -1268,6 +1273,27 @@ sent: a reply's reasoning was too long to send back whole; start a New
 Chat, or set Commands as tool calls to Off]", because DeepSeek's guide says
 "fully passed back" and a 400 otherwise. Moonshot: exactly as shipped
 (decision 1), its body pinned by a test.
+
+*(2026-11-11, maintainer's "off until tested", review item I1)* All of this
+applies only to a `deepseek` request whose tools array offers `run_command`
+(`tools_offer_runcmd`, the one switch the refusal and the body both read:
+`deepseek_reasoning_applies`). A DeepSeek request that does not offer it
+(web tools only, or no tools: Commands as tool calls Off, or Automatic, which
+is Off for DeepSeek) is built exactly as at `6432ca0`: no `reasoning_content`
+on any turn, never refused for a cut reasoning, whatever the stored turns
+hold. The row above can therefore show only on a request that offered
+`run_command`, so its advice is true: the same conversation builds once the
+option is Off. Pinned by `test_body_deepseek_pinned_no_runcmd` (four bodies
+captured from `git archive 6432ca0`, two conversations on `deepseek-reasoner`
+and `deepseek-chat`, matched byte for byte at HEAD also when every stored turn
+has reasoning and `reasoning_cut`) and by
+`test_body_deepseek_cut_refused_only_with_runcmd`. **DeepSeek items that wait
+for the live test** (the settling test above), left as they are: the reject
+hint (`runcmd_reject_hint`, a 400 or 422 naming `tool`, `function` or
+`reasoning_content`, decision 1) and `thinking_cut` firing for any single
+reasoning delta of 1023 bytes or more and for any cut 8191-byte SSE line (a
+conservative false positive: it sets `reasoning_cut`, which now refuses only a
+request that offers `run_command`).
 
 **24. A full conversation refuses visibly.** Today a typed message that
 `ai_conv_add` cannot store is still sent without it

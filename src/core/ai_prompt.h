@@ -664,12 +664,13 @@ int ai_conv_add_reply(AiConversation *conv, const char *content,
 
 /* 1 when a request to `provider` with `tools_json` (NULL or "" for none) holds
  * an assistant turn with reasoning_cut whose reasoning it would send:
- * provider "deepseek" with a tools array sends every assistant turn's
- * reasoning_content, and DeepSeek wants it whole, so the builder returns 0 for
- * such a request (spec decision 23). A turn that goes out as text counts for
- * nothing, nor does a plain turn another provider or model wrote (it is sent
- * as "": DeepSeek gets back only the reasoning it wrote, R68). Any other
- * provider, or no tools: 0. */
+ * provider "deepseek" with a tools array that offers run_command sends every
+ * assistant turn's reasoning_content, and DeepSeek wants it whole, so the
+ * builder returns 0 for such a request (spec decision 23). A turn that goes out
+ * as text counts for nothing, nor does a plain turn another provider or model
+ * wrote (it is sent as "": DeepSeek gets back only the reasoning it wrote,
+ * R68). Any other provider, no tools, or tools without run_command (the option
+ * Off: the request is built as it was before the tool): 0. */
 int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provider,
                                   const char *tools_json);
 

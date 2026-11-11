@@ -3446,6 +3446,8 @@ int test_body_foreign_provider_turn_as_text(void);
 int test_body_text_form_neighbours(void);
 int test_body_moonshot_pinned(void);
 int test_body_moonshot_pinned_snapshot(void);
+int test_body_deepseek_pinned_no_runcmd(void);
+int test_body_deepseek_cut_refused_only_with_runcmd(void);
 int test_body_after_cut_input_validates(void);
 int test_chat_card_header_noun(void);
 int test_chat_msg_set_tool_and_outcome(void);
@@ -7640,6 +7642,8 @@ int main(void) {
     failed += test_body_text_form_neighbours();
     failed += test_body_moonshot_pinned();
     failed += test_body_moonshot_pinned_snapshot();
+    failed += test_body_deepseek_pinned_no_runcmd();
+    failed += test_body_deepseek_cut_refused_only_with_runcmd();
     failed += test_body_after_cut_input_validates();
     failed += test_chat_card_header_noun();
     failed += test_chat_msg_set_tool_and_outcome();

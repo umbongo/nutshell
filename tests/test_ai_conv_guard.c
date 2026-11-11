@@ -1713,6 +1713,8 @@ int test_body_failure_text_reasoning_cut(void)
 {
     TEST_BEGIN();
     static const char tools[] =
+        "[{\"type\":\"function\",\"function\":{\"name\":\"run_command\"}}]";
+    static const char web_tools[] =
         "[{\"type\":\"function\",\"function\":{\"name\":\"web_fetch\"}}]";
     const char *cut_row =
         "[request not sent: a reply's reasoning was too long to send back whole; "
@@ -1723,9 +1725,11 @@ int test_body_failure_text_reasoning_cut(void)
         ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);
         c->messages[c->msg_count - 1].reasoning_cut = 1;
         ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", tools), cut_row);
-        /* only for deepseek with tools: otherwise the generic cause */
+        /* only for deepseek with run_command offered: otherwise the generic cause */
         const char *generic = ai_body_failure_text(c);
         ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", NULL), generic);
+        /* web tools only (the option Off): the row's advice would be false */
+        ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", web_tools), generic);
         ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", ""), generic);
         ASSERT_STR_EQ(ai_body_failure_text_for(c, "moonshot", tools), generic);
         ASSERT_STR_EQ(ai_body_failure_text_for(c, NULL, tools), generic);

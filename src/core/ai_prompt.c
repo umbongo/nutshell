@@ -1196,17 +1196,30 @@ static int reasoning_goes_back(const AiMessage *msg, const char *provider,
            strcmp(msg->tool_model, model ? model : "") == 0;
 }
 
+/* 1 when DeepSeek's reasoning rule (spec decision 23) applies to a request:
+ * provider "deepseek" and a tools array that offers run_command. The maintainer
+ * left DeepSeek "off until tested": a DeepSeek request that does not offer
+ * run_command (web tools only, or no tools) is built exactly as it was before
+ * the tool existed, no reasoning_content on any turn and never refused for a
+ * cut reasoning. The one switch both the refusal and the body read. */
+static int deepseek_reasoning_applies(const char *provider, const char *tools_json)
+{
+    return provider && strcmp(provider, "deepseek") == 0 &&
+           tools_offer_runcmd(tools_json);
+}
+
 /* 1 when a request to `provider` with `tools_json` would send an assistant turn
  * whose reasoning was cut (AiMessage.reasoning_cut) and DeepSeek must have it
- * whole: provider "deepseek" with a tools array, and a turn that goes out
- * structured and whose reasoning would go back (a turn rendered as text carries
- * no reasoning_content, nor does a plain turn another provider or model wrote). The
- * builder refuses such a request; ai_body_failure_text_for says why. */
+ * whole: provider "deepseek" with a tools array that offers run_command, and a
+ * turn that goes out structured and whose reasoning would go back (a turn
+ * rendered as text carries no reasoning_content, nor does a plain turn another
+ * provider or model wrote). The builder refuses such a request;
+ * ai_body_failure_text_for says why, and only such a request can show it, so
+ * its advice (set Commands as tool calls to Off) is true. */
 int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provider,
                                   const char *tools_json)
 {
-    if (!conv || !provider || strcmp(provider, "deepseek") != 0) return 0;
-    if (!tools_json || tools_json[0] == '\0') return 0;
+    if (!conv || !deepseek_reasoning_applies(provider, tools_json)) return 0;
     for (int i = 0; i < conv->msg_count; i++) {
         const AiMessage *m = &conv->messages[i];
         if (m->role == AI_ROLE_ASSISTANT && m->reasoning_cut &&
@@ -1336,12 +1349,12 @@ static size_t build_body_core(const AiConversation *conv,
      * shows an error row (spec 2026-11-05 run-command tool, decision 19). */
     if (!ai_conv_tool_pairs_well_formed(conv)) return 0;
 
-    /* DeepSeek's reasoning goes back whole or not at all (spec decision 23):
-     * a request that must carry every turn's reasoning_content and holds a turn
-     * whose reasoning was cut is not sent. */
+    /* DeepSeek's reasoning goes back whole or not at all (spec decision 23),
+     * for a request that offers run_command only: such a request must carry
+     * every turn's reasoning_content, and one that holds a turn whose reasoning
+     * was cut is not sent. Any other DeepSeek request is built as before. */
     if (ai_body_refuses_cut_reasoning(conv, provider, tools_json)) return 0;
-    const int deepseek_reasoning = provider && strcmp(provider, "deepseek") == 0 &&
-                                   tools_json && tools_json[0] != '\0';
+    const int deepseek_reasoning = deepseek_reasoning_applies(provider, tools_json);
 
     /* The data block goes in the last user message (never a tool result), or
      * in message snapshot_at - 1 while no user-typed message follows it (the
@@ -1674,7 +1687,7 @@ static size_t build_body_core(const AiConversation *conv,
             /* Moonshot's thinking models want the turn's reasoning back and
              * answer 400 without it: the field is always there, an empty
              * string when nothing was streamed. DeepSeek gets it on every
-             * assistant turn of a request that carries tools (below and in the
+             * assistant turn of a request that offers run_command (below and in the
              * plain-turn branch), whole or not at all. No other provider gets
              * it (OpenAI has no such field). */
             if (is_moonshot || deepseek_reasoning) {

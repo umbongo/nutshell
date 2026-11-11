@@ -536,11 +536,20 @@ static void reasoning_conv(AiConversation *conv, const char *reasoning)
     agentic_add_tool_results(conv, &call, &res, 1);
 }
 
+/* DeepSeek's reasoning rule (spec decision 23) applies only to a request that
+ * offers run_command: the tests of that rule build with this array. */
+static const char REASON_TOOLS_RC[] =
+    "[{\"type\":\"function\",\"function\":{\"name\":\"web_fetch\","
+    "\"description\":\"d\",\"parameters\":{\"type\":\"object\"}}},"
+    "{\"type\":\"function\",\"function\":{\"name\":\"run_command\","
+    "\"description\":\"d\",\"parameters\":{\"type\":\"object\"}}}]";
+
 static size_t reasoning_body(const AiConversation *conv, const char *provider,
                              char *buf, size_t cap)
 {
-    return ai_build_request_body_tools(conv, NULL, REASON_TOOLS, buf, cap, 1,
-                                       provider);
+    const char *tools = strcmp(provider, "deepseek") == 0 ? REASON_TOOLS_RC
+                                                          : REASON_TOOLS;
+    return ai_build_request_body_tools(conv, NULL, tools, buf, cap, 1, provider);
 }
 
 int test_ai_supports_tools_moonshot(void)
@@ -753,12 +762,16 @@ int test_ai_reasoning_deepseek_cut_not_sent(void)
     /* a plain turn whose reasoning was cut: the request is not sent */
     conv.messages[4].reasoning_cut = 1;
     ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
-    ASSERT_STR_EQ(ai_body_failure_text_for(&conv, "deepseek", REASON_TOOLS),
+    ASSERT_STR_EQ(ai_body_failure_text_for(&conv, "deepseek", REASON_TOOLS_RC),
         "[request not sent: a reply's reasoning was too long to send back whole; "
         "start a New Chat, or set Commands as tool calls to Off]");
     /* without tools the field is not sent, so nothing is refused */
     ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, NULL, buf, sizeof(buf), 1,
                                             "deepseek") > 0);
+    /* nor with web tools only (Commands as tool calls Off): built as before */
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, REASON_TOOLS, buf, sizeof(buf), 1,
+                                            "deepseek") > 0);
+    ASSERT_NULL(strstr(buf, "reasoning_content"));
     /* Moonshot sends only the tool-call turn's: a cut plain turn is no matter */
     ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
     conv.messages[4].reasoning_cut = 0;
@@ -934,7 +947,7 @@ int test_ai_reasoning_deepseek_foreign_cut_plain_turn_not_refused(void)
     /* (c) a cut turn of another provider, or of another model, refuses nothing */
     issuer_conv(&conv, "deepseek-chat", "moonshot", "kimi-k2", "rm", 1);
     ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
-    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS), 0);
+    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS_RC), 0);
     ai_conv_reset(&conv);
     issuer_conv(&conv, "deepseek-reasoner", "deepseek", "deepseek-chat", "x", 1);
     ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
@@ -943,7 +956,7 @@ int test_ai_reasoning_deepseek_foreign_cut_plain_turn_not_refused(void)
     /* a deepseek turn of the same model, cut, still refuses */
     issuer_conv(&conv, "deepseek-chat", "deepseek", "deepseek-chat", "x", 1);
     ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
-    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS), 1);
+    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS_RC), 1);
     ai_conv_reset(&conv);
     TEST_END();
 }
