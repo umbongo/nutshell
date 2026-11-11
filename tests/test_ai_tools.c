@@ -1298,6 +1298,162 @@ int test_ai_stream_openai_plain_reply_stop_ends_normally(void)
     TEST_END();
 }
 
+/* ---- Sticky overflow: a refused fragment poisons its call ---------------- */
+
+/* An OpenAI chunk carrying one fragment of tool call `index`; `args` is
+ * already JSON-escaped for the arguments string. id/name only when non-NULL. */
+static void oa_frag(char *out, size_t sz, int index, const char *id,
+                    const char *name, const char *args)
+{
+    char head[160] = "";
+    if (id && name)
+        snprintf(head, sizeof head, "\"id\":\"%s\",\"type\":\"function\",", id);
+    snprintf(out, sz,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":%d,%s"
+        "\"function\":{%s%s%s\"arguments\":\"%s\"}}]},\"finish_reason\":null}]}",
+        index, head,
+        name ? "\"name\":\"" : "", name ? name : "", name ? "\"," : "", args);
+}
+
+/* The fragment that overflows: past AI_TOOL_INPUT_MAX on its own. */
+static void fill_overflow(char *buf, size_t n)
+{
+    memset(buf, 'a', n);
+    buf[n] = '\0';
+}
+
+int test_tool_stream_overflow_splice_refused(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4800];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_1", "run_command", "{\\\"note\\\":\\\"");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+
+    /* 4200 bytes: refused, past AI_TOOL_INPUT_MAX */
+    fill_overflow(big, 4200);
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL, big);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+
+    /* the tail would fit on its own: it must not be appended */
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL,
+            "\\\",\\\"command\\\":\\\"rm -rf /home/user/build-cache\\\"}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "rm -rf") == NULL);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "command") == NULL);
+
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_overflow_keeps_rest_of_chunk(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4900];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_1", "run_command", "{\\\"note\\\":\\\"");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    oa_frag(chunk, sizeof chunk, 1, "call_2", "web_search", "");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+
+    /* one chunk: call 0 overflows, call 1 completes, then the finish */
+    fill_overflow(big, 4200);
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"function\":{\"arguments\":\"%s\"}},"
+        "{\"index\":1,\"function\":{\"arguments\":\"{\\\"query\\\":\\\"q\\\"}\"}}"
+        "]},\"finish_reason\":\"tool_calls\"}]}", big);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 1);
+
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_EQ(st.pending_tool_calls[1].overflowed, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"q\"}");
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_anthropic_overflow_sticky(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4900];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_start\",\"index\":0,"
+        "\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\","
+        "\"name\":\"run_command\"}}", &st), 0);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"input_json_delta\","
+        "\"partial_json\":\"{\\\"note\\\":\\\"\"}}", &st), 0);
+
+    fill_overflow(big, 4200);
+    snprintf(chunk, sizeof chunk,
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"%s\"}}", big);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(chunk, &st), 0);
+    ASSERT_EQ(st.active_tool_call.overflowed, 1);
+
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"input_json_delta\","
+        "\"partial_json\":\"\\\",\\\"command\\\":\\\"rm -rf /home/user/build-cache\\\"}\"}}",
+        &st), 0);
+    ASSERT_TRUE(strstr(st.active_tool_call.input_json, "rm -rf") == NULL);
+
+    /* the block still commits, flagged, and the stop reason is still read */
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_stop\",\"index\":0}", &st), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "rm -rf") == NULL);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}",
+        &st), 1);
+
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_web_fetch_url_not_spliced(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4800];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_1", "web_fetch", "{\\\"note\\\":\\\"");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    fill_overflow(big, 4200);
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL, big);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL,
+            "\\\",\\\"url\\\":\\\"https://evil.example/x\\\"}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "evil.example") == NULL);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "url") == NULL);
+
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
 int test_ai_tool_round_should_run_rules(void)
 {
     TEST_BEGIN();

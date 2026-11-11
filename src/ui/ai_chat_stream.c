@@ -501,6 +501,21 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
          * finish_reason said (spec: Kimi trace, Task 17) ---- */
         if (run_tools) {
 
+            /* A call whose input overflowed AI_TOOL_INPUT_MAX keeps no part
+             * of it. Stored as "{}", the conversation, the card and the
+             * executor all see an empty input, never a truncated one that
+             * could read as a different command or URL; the executor then
+             * answers with its own "missing argument" error. */
+            for (int oi = 0; oi < tool_stream_ptr->pending_tool_count; oi++) {
+                AiToolCall *oc = &tool_stream_ptr->pending_tool_calls[oi];
+                if (oc->overflowed) {
+                    memcpy(oc->input_json, "{}", 3);
+                    DLOG(DLOG_AI, DLOG_WARN, 0, "stream.tool_input_overflow",
+                         "stream=%u iter=%d call=%d", stream_id,
+                         agentic.loop_iter, oi);
+                }
+            }
+
             /* Add assistant message with tool_use blocks */
             /* ctx.full_thinking is this turn's reasoning; the builder sends it
              * back with the tool calls for provider "moonshot" only. */

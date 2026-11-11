@@ -39,6 +39,11 @@ typedef struct {
     char id[AI_TOOL_ID_MAX];
     char name[AI_TOOL_NAME_MAX];
     char input_json[AI_TOOL_INPUT_MAX];
+    /* Set by the stream accumulators at the first fragment they refuse for
+     * passing AI_TOOL_INPUT_MAX; nothing more is appended after that, so a
+     * later, smaller fragment cannot splice into a different call. The stream
+     * thread stores such a call's input as "{}". */
+    int overflowed;
 } AiToolCall;
 
 typedef struct {

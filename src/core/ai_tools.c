@@ -554,22 +554,25 @@ void ai_tools_stream_reset(AiToolStreamState *state)
     state->pending_tool_calls = NULL;
 }
 
-/* Append partial_json to tool_call->input_json.
- * Returns 0 on success, -1 on overflow. */
-static int stream_append_input(AiToolCall *tool_call, const char *partial)
+/* Append partial_json to tool_call->input_json. The first fragment that
+ * would pass AI_TOOL_INPUT_MAX marks the call overflowed and is dropped, and
+ * so is every later fragment: a smaller one that fits must not splice onto
+ * the text before the gap and make a different, valid call. Never an error
+ * for the caller: the chunk's other calls and its finish_reason still count. */
+static void stream_append_input(AiToolCall *tool_call, const char *partial)
 {
-    if (!tool_call || !partial) return 0;
+    if (!tool_call || !partial || tool_call->overflowed) return;
 
     size_t existing = strlen(tool_call->input_json);
     size_t added    = strlen(partial);
 
     if (existing + added >= (size_t)AI_TOOL_INPUT_MAX) {
-        return -1;  /* overflow */
+        tool_call->overflowed = 1;
+        return;
     }
 
     memcpy(tool_call->input_json + existing, partial, added);
     tool_call->input_json[existing + added] = '\0';
-    return 0;
 }
 
 /* Add completed active_tool_call to pending_tool_calls array.
@@ -645,12 +648,8 @@ int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *st
                 } else if (strcmp(delta_type, "input_json_delta") == 0
                            && state->current_block_type == BLOCK_TOOL_USE) {
                     const char *partial = json_obj_str(delta, "partial_json");
-                    if (partial) {
-                        if (stream_append_input(&state->active_tool_call, partial) < 0) {
-                            json_free(root);
-                            return -1;
-                        }
-                    }
+                    if (partial)
+                        stream_append_input(&state->active_tool_call, partial);
                 }
             }
         }
@@ -755,10 +754,8 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
             }
 
             const char *arguments = json_obj_str(func, "arguments");
-            if (arguments && arguments[0] != '\0') {
-                if (stream_append_input(&state->pending_tool_calls[slot], arguments) < 0)
-                    return -1;
-            }
+            if (arguments && arguments[0] != '\0')
+                stream_append_input(&state->pending_tool_calls[slot], arguments);
         }
     }
     return 0;
