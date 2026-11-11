@@ -2233,14 +2233,24 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
 /* ---- Public API --------------------------------------------------------- */
 
-static void settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
-                             int initial_page, int demo)
+/* The one open Settings dialog, or NULL. A second request while it is open
+ * brings it to the front instead of creating another. */
+static HWND s_open = NULL;
+
+/* Returns 1 when it ran a dialog (opened and closed), 0 when it ran none:
+ * one is already open, cfg is NULL, or the window could not be created. */
+static int settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
+                            int initial_page, int demo)
 {
-    if (!cfg) return;
+    if (s_open && IsWindow(s_open)) {
+        SetForegroundWindow(s_open);
+        return 0;
+    }
+    if (!cfg) return 0;
 
     /* Allocate dialog state — freed in WM_DESTROY */
     SettingsDlgData *d = (SettingsDlgData *)calloc(1u, sizeof(SettingsDlgData));
-    if (!d) return;
+    if (!d) return 0;
     d->cfg = cfg;
     d->config_path = config_path;
     d->initial_page = initial_page;
@@ -2286,28 +2296,31 @@ static void settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {
+        s_open = hwnd;
         EnableWindow(parent, FALSE);
         MSG msg;
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+        s_open = NULL;
         EnableWindow(parent, TRUE);
         SetFocus(parent);
-    } else {
-        free(d);
+        return 1;
     }
+    free(d);
+    return 0;
 }
 
-void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
-                        int initial_page)
+int settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
+                      int initial_page)
 {
-    settings_dlg_run(parent, cfg, config_path, initial_page, 0);
+    return settings_dlg_run(parent, cfg, config_path, initial_page, 0);
 }
 
 void settings_dlg_show_demo_debug(HWND parent, Config *cfg)
 {
-    settings_dlg_run(parent, cfg, "", SETTINGS_PAGE_DEBUG, 1);
+    (void)settings_dlg_run(parent, cfg, "", SETTINGS_PAGE_DEBUG, 1);
 }
 
 #endif
