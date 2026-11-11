@@ -101,6 +101,7 @@
 #define IDC_AI_POLICY_AUTO       3076 /* Settings: "Auto-approve by default" tickbox */
 #define IDC_AI_TOOL_TIMEOUT      3077 /* Settings: tool approval card timeout, seconds */
 #define IDC_AI_TOOL_ROUNDS       3078 /* Settings: automatic tool rounds before a tool call asks */
+#define IDC_AI_RUNCMD_MODE       3079 /* Settings: "Commands as tool calls" combo (Automatic, On, Off) */
 #define IDC_CHAT_THINKING_OPENED 3074 /* Thinking disclosure manually expanded (chat_listview -> chat panel) */
 #define IDC_CHAT_THINKING_CLOSED 3075 /* Thinking disclosure manually collapsed (chat_listview -> chat panel) */
 

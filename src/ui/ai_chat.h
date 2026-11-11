@@ -126,6 +126,12 @@ void ai_chat_set_tool_timeout(HWND hwnd, int seconds);
  * call: a stream keeps the value it started with. */
 void ai_chat_set_tool_rounds(HWND hwnd, int rounds);
 
+/* The setting "Commands as tool calls" (settings.ai_runcmd_mode: AI_RUNCMD_AUTO
+ * 0, AI_RUNCMD_ON 1, AI_RUNCMD_OFF 2; anything else is Automatic). Applies to
+ * requests launched after the call; a run_command batch that is open when it
+ * changes finishes as it was built. */
+void ai_chat_set_runcmd_mode(HWND hwnd, int mode);
+
 /* --ui-demo only: layer the canned approval queue(s) and small activity
  * flourishes onto a conversation already loaded via ai_chat_show()'s
  * initial_state or ai_chat_switch_session() (see ui_demo_build() in

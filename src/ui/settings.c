@@ -1401,6 +1401,21 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             nd->ctrl_ai_url_warn = add_ctrl(nd, NULL, nd->hUrlWarn, NULL,
                 SETTINGS_PAGE_AI_PROVIDER, 0, 0, 2, 0, 0, 1);
         }
+        {
+            /* "Commands as tool calls": a row of its own, shown for every
+             * provider (Base URL's row above is custom-only). The item index
+             * is the AI_RUNCMD_* value (Automatic 0, On 1, Off 2). */
+            HWND lbl = make_label2(nd, SH_AI_RUNCMD_MODE);
+            HWND cmb = make_combo2(nd, IDC_AI_RUNCMD_MODE, CBS_DROPDOWNLIST,
+                                   SH_AI_RUNCMD_MODE);
+            static const char *const k_runcmd_modes[] = { "Automatic", "On", "Off" };
+            for (int i = 0; i < 3; i++)
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_runcmd_modes[i]);
+            int rsel = nd->cfg->settings.ai_runcmd_mode;
+            if (rsel != AI_RUNCMD_ON && rsel != AI_RUNCMD_OFF) rsel = AI_RUNCMD_AUTO;
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)rsel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 0);
+        }
         }
 
         /* ==== AI_BEHAVIOUR ==== */
@@ -2052,6 +2067,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* AI custom URL */
             GetDlgItemText(d->hPage, IDC_AI_CUSTOM_URL,
                            s->ai_custom_url, (int)sizeof(s->ai_custom_url));
+
+            /* Commands as tool calls: the item index is the mode */
+            {
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_RUNCMD_MODE,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel == AI_RUNCMD_AUTO || sel == AI_RUNCMD_ON || sel == AI_RUNCMD_OFF)
+                    s->ai_runcmd_mode = sel;
+            }
 
             /* AI model — read combo text (works for both selection and free-text) */
             GetDlgItemText(d->hPage, IDC_AI_CUSTOM_MODEL,

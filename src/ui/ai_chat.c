@@ -2559,6 +2559,18 @@ void ai_chat_set_tool_rounds(HWND hwnd, int rounds)
     d->tool_auto_rounds = ai_tool_rounds_clamp(rounds);
 }
 
+void ai_chat_set_runcmd_mode(HWND hwnd, int mode)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    /* Read at each launch (ai_chat_provider_tools/_runcmd): a batch that is
+     * open when this changes finishes as it was built, and the next request
+     * uses the new value. */
+    d->runcmd_mode = (mode == AI_RUNCMD_ON || mode == AI_RUNCMD_OFF)
+                     ? mode : AI_RUNCMD_AUTO;
+}
+
 /* Internal helper: perform the actual session switch (save/load/rebuild).
  * Safe to call even while busy — each thread targets its own session. */
 static void do_session_switch(AiChatData *d,

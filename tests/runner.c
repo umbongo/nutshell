@@ -441,6 +441,8 @@ int test_config_load_tool_timeout(void);
 int test_config_roundtrip_tool_timeout_never(void);
 int test_config_load_tool_rounds(void);
 int test_config_roundtrip_tool_rounds(void);
+int test_config_load_runcmd_mode(void);
+int test_config_roundtrip_runcmd_mode(void);
 int test_config_roundtrip_all_fields(void);
 int test_config_default_ai_font(void);
 int test_config_roundtrip_ai_font(void);
@@ -4823,6 +4825,8 @@ int main(void) {
     failed += test_config_roundtrip_tool_timeout_never();
     failed += test_config_load_tool_rounds();
     failed += test_config_roundtrip_tool_rounds();
+    failed += test_config_load_runcmd_mode();
+    failed += test_config_roundtrip_runcmd_mode();
     failed += test_config_roundtrip_all_fields();
     failed += test_config_default_ai_font();
     failed += test_config_roundtrip_ai_font();

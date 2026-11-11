@@ -408,7 +408,7 @@ typedef struct {
                                   * records the generation it snapshotted */
     int tool_support_notified;  /* 1 after showing "tools unavailable" message */
     int runcmd_mode;            /* "Commands as tool calls": AI_RUNCMD_AUTO (0, the zero value),
-                                 * _ON or _OFF; Task B21 sets it from Settings */
+                                 * _ON or _OFF; ai_chat_set_runcmd_mode() sets it */
 
     /* Empty/no-key/no-session state (ai_panel_states.h), pushed to
      * hChatList whenever it might change -- see ai_chat_update_panel_state()

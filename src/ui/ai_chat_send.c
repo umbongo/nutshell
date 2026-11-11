@@ -313,12 +313,14 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     s = NULL;   /* the thread may free it from here on; only the id is ours */
     SetTimer(d->hwnd, TIMER_STREAM_REAP, STREAM_REAP_MS, NULL);
 
-    /* One-time notification when tools are configured but provider doesn't support them */
+    /* One-time notification when tools are configured but a Custom endpoint
+     * has not been told it accepts them (Commands as tool calls not On). */
     if (d->tool_registry.count > 0 && !provider_tools
+        && strcmp(d->provider, "custom") == 0
         && !d->tool_support_notified) {
         d->tool_support_notified = 1;
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-            "[Note: web search/fetch tools require Anthropic, OpenAI, or DeepSeek provider]");
+            "[Note: a Custom endpoint gets tools only with Settings > Provider > Commands as tool calls set to On]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
     }
 
