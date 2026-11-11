@@ -137,4 +137,29 @@ int agentic_sanitize_tool_inputs(AiToolCall *calls, int n);
 int agentic_room_for_tool_round(const AiConversation *conv,
                                 const AiNoteQueue *q);
 
+/* What the stream thread does after the conversation took (or refused) a tool
+ * turn or a round's results (Task B13; spec decision 25, R37). */
+typedef enum {
+    AGENTIC_STEP_GO,     /* stored: carry on */
+    AGENTIC_STEP_NOTE,   /* stored as notes only: carry on, say AGENTIC_REDUCED_ROW */
+    AGENTIC_STEP_FULL,   /* conversation full: end with agentic_full_row() */
+    AGENTIC_STEP_FAIL    /* could not store (out of memory): end with an error */
+} AgenticStep;
+
+/* agentic_add_tool_results' return value: 0 GO, 1 NOTE, negative (-1 full,
+ * -2 not even the notes-only array) FULL. The turn is already dropped then. */
+AgenticStep agentic_results_step(int rc);
+
+/* agentic_add_assistant_tool_msg_ex' return value: 0 GO, -1 FULL (the
+ * conversation filled meanwhile), anything else FAIL. */
+AgenticStep agentic_turn_step(int rc);
+
+#define AGENTIC_REDUCED_ROW \
+    "[some results were reduced to notes: Nutshell ran out of memory]"
+
+/* The status row for a round that is not stored for want of room:
+ * "[conversation full: N tool call(s) not run; start a New Chat]". Returns
+ * snprintf's value; 0 and nothing written for a NULL or empty buffer. */
+int agentic_full_row(int n_calls, char *buf, size_t cap);
+
 #endif /* NUTSHELL_AI_AGENTIC_H */

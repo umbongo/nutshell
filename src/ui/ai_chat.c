@@ -1157,9 +1157,7 @@ next_coalesce:;
         if (!resp_stream) {
             /* Stale: the reply was stopped or retried, its tab closed, or
              * the panel rebuilt. Nothing of it may touch a session. */
-            free(rmsg->content);
-            free(rmsg->thinking);
-            free(rmsg);
+            ai_response_msg_free(rmsg);
             return 0;
         }
         AiSessionState *src = (AiSessionState *)resp_owner;
@@ -1301,9 +1299,7 @@ next_coalesce:;
                 src->busy = 0;
                 src->activity_phase = (int)ACTIVITY_IDLE;
             }
-            free(rmsg->content);
-            free(rmsg->thinking);
-            free(rmsg);
+            ai_response_msg_free(rmsg);
             return 0;
         }
 
@@ -1615,9 +1611,9 @@ next_coalesce:;
              * bottom in recalc_layout. */
             if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
-            free(text);
-            free(rmsg->thinking);
-            free(rmsg);
+            /* A run_command stop's calls are not acted on until Task B15:
+             * they are freed with the message, unread. */
+            ai_response_msg_free(rmsg);
             ai_chat_update_context_bar(d);
         } else {
             /* Error */
@@ -1628,10 +1624,8 @@ next_coalesce:;
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                 text);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
-                free(text);
             }
-            free(rmsg->thinking);
-            free(rmsg);
+            ai_response_msg_free(rmsg);
         }
 
         if (src) src->busy = 0;

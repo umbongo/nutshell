@@ -547,6 +547,32 @@ int test_runcmd_reply_has_call(void)
     TEST_END();
 }
 
+/* ---- The stream thread's stop (Task B13) ---- */
+
+int test_runcmd_round_plan(void)
+{
+    TEST_BEGIN();
+    AiToolCall web, cmd, both[2];
+    set_call(&web, "a", "web_search", "{\"query\":\"x\"}");
+    set_cmd_call(&cmd, 1);
+    both[0] = web; both[1] = cmd;
+    /* no room beats everything: the text is stored, nothing is handed over */
+    ASSERT_EQ((int)runcmd_round_plan(0, 1, &cmd, 1), (int)RUNCMD_ROUND_FULL);
+    ASSERT_EQ((int)runcmd_round_plan(0, 0, &web, 1), (int)RUNCMD_ROUND_FULL);
+    /* a run_command call in a stream that registered the tool stops */
+    ASSERT_EQ((int)runcmd_round_plan(1, 1, &cmd, 1), (int)RUNCMD_ROUND_STOP);
+    ASSERT_EQ((int)runcmd_round_plan(1, 1, both, 2), (int)RUNCMD_ROUND_STOP);
+    /* web tools only: today's loop */
+    ASSERT_EQ((int)runcmd_round_plan(1, 1, &web, 1), (int)RUNCMD_ROUND_LOOP);
+    /* a stream that did not register run_command never stops for one: a call
+     * to it is answered by the executor as an unknown tool, as before */
+    ASSERT_EQ((int)runcmd_round_plan(1, 0, &cmd, 1), (int)RUNCMD_ROUND_LOOP);
+    ASSERT_EQ((int)runcmd_round_plan(1, 0, both, 2), (int)RUNCMD_ROUND_LOOP);
+    ASSERT_EQ((int)runcmd_round_plan(1, 1, NULL, 0), (int)RUNCMD_ROUND_LOOP);
+    ASSERT_EQ((int)runcmd_round_plan(1, 1, &cmd, 0), (int)RUNCMD_ROUND_LOOP);
+    TEST_END();
+}
+
 /* ---- The cap, the cut and the capture (spec decisions 10 and 11) ---- */
 
 int test_runcmd_cap_bytes(void)

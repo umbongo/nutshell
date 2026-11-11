@@ -1229,3 +1229,47 @@ int test_agentic_notes_only_drops_cut_note(void)
     ai_conv_reset(&conv);
     TEST_END();
 }
+
+/* ---- What the stream thread does with the store's answers (Task B13) ---- */
+
+int test_agentic_results_step_from_return(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)agentic_results_step(0), (int)AGENTIC_STEP_GO);
+    ASSERT_EQ((int)agentic_results_step(1), (int)AGENTIC_STEP_NOTE);
+    ASSERT_EQ((int)agentic_results_step(-1), (int)AGENTIC_STEP_FULL);
+    ASSERT_EQ((int)agentic_results_step(-2), (int)AGENTIC_STEP_FULL);
+    ASSERT_EQ((int)agentic_results_step(-7), (int)AGENTIC_STEP_FULL);
+    TEST_END();
+}
+
+int test_agentic_turn_step_from_return(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)agentic_turn_step(0), (int)AGENTIC_STEP_GO);
+    /* -1 is "the conversation filled meanwhile"; anything else is a failure
+     * to allocate, which is not a full conversation */
+    ASSERT_EQ((int)agentic_turn_step(-1), (int)AGENTIC_STEP_FULL);
+    ASSERT_EQ((int)agentic_turn_step(-2), (int)AGENTIC_STEP_FAIL);
+    ASSERT_EQ((int)agentic_turn_step(1), (int)AGENTIC_STEP_FAIL);
+    TEST_END();
+}
+
+int test_agentic_stop_row_texts(void)
+{
+    TEST_BEGIN();
+    char buf[128];
+    ASSERT_EQ(agentic_full_row(3, buf, sizeof(buf)) > 0, 1);
+    ASSERT_STR_EQ(buf, "[conversation full: 3 tool call(s) not run; start a New Chat]");
+    agentic_full_row(1, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[conversation full: 1 tool call(s) not run; start a New Chat]");
+    /* a small buffer cuts, never overruns */
+    char tiny[12];
+    memset(tiny, 'x', sizeof(tiny));
+    agentic_full_row(2, tiny, sizeof(tiny));
+    ASSERT_EQ((int)strlen(tiny), 11);
+    ASSERT_EQ(agentic_full_row(2, NULL, 0), 0);
+    ASSERT_STR_EQ(AGENTIC_REDUCED_ROW,
+                  "[some results were reduced to notes: Nutshell ran out of memory]");
+    TEST_END();
+}

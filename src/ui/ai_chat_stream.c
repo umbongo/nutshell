@@ -6,6 +6,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
+#include "run_command.h"
 #include "json_parser.h"
 
 #ifdef _WIN32
@@ -268,27 +269,57 @@ static int stream_callback(const char *data, size_t len, void *userdata)
     return 0;
 }
 
+/* Free a response message and everything it owns. Every site that drops an
+ * AiResponseMsg calls this, so the calls a run_command stop hands over are
+ * freed with it. NULL-safe. */
+void ai_response_msg_free(AiResponseMsg *m)
+{
+    if (!m) return;
+    free(m->content);
+    free(m->thinking);
+    free(m->calls);
+    free(m);
+}
+
 /* Post a WM_AI_RESPONSE. The handler clears the session's busy flag -- if
- * this stream is still the session's current one. */
-static void post_response(AiStream *s, WPARAM kind, const char *content,
-                          const char *thinking, int in_tok, int out_tok,
-                          int reply_stored)
+ * this stream is still the session's current one. `calls` (n_calls of them,
+ * heap-allocated; NULL for none) become the message's: they are freed here
+ * when nothing could be posted. `exec_inert` is the stream's run_command
+ * flag on every message, and `fetch_registered` says whether its registry
+ * held web_fetch. */
+static void post_response_ex(AiStream *s, WPARAM kind, const char *content,
+                             const char *thinking, int in_tok, int out_tok,
+                             int reply_stored, AiToolCall *calls, int n_calls,
+                             int fetch_registered)
 {
     AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
-    if (!rmsg) return;
+    if (!rmsg) {
+        free(calls);
+        return;
+    }
     rmsg->stream_id = s->id;
     rmsg->content = _strdup(content ? content : "");
     rmsg->thinking = (thinking && thinking[0]) ? _strdup(thinking) : NULL;
     rmsg->input_tokens = in_tok;
     rmsg->output_tokens = out_tok;
     rmsg->reply_stored = reply_stored;
+    rmsg->calls = calls;
+    rmsg->n_calls = calls ? n_calls : 0;
+    rmsg->exec_inert = s->run_command;
+    rmsg->fetch_registered = fetch_registered;
     if (!PostMessage((HWND)s->post_target, WM_AI_RESPONSE, kind, (LPARAM)rmsg)) {
-        free(rmsg->content);
-        free(rmsg->thinking);
-        free(rmsg);
+        ai_response_msg_free(rmsg);
         return;
     }
     ai_stream_note_delivered(s);
+}
+
+static void post_response(AiStream *s, WPARAM kind, const char *content,
+                          const char *thinking, int in_tok, int out_tok,
+                          int reply_stored)
+{
+    post_response_ex(s, kind, content, thinking, in_tok, out_tok,
+                     reply_stored, NULL, 0, 0);
 }
 
 static void post_error_response(AiStream *s, const char *msg)
@@ -377,6 +408,11 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
     int total_input_tokens = 0, total_output_tokens = 0;
     int loop_done = 0;
     int reply_stored = 0;   /* the normal end's ai_conv_add() of the reply took */
+    /* A run_command reply's calls, copied from the stored turn and handed to
+     * the panel in the done message (post_response_ex takes them). */
+    AiToolCall *handoff_calls = NULL;
+    int handoff_n = 0;
+    int handoff_fetch_registered = 0;
 
     while (!loop_done) {
         StreamContext ctx;
@@ -437,7 +473,19 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                  (rc != 0 && status >= 200 && status < 300) ? "connection_lost"
                      : rc != 0 ? "transport" : "http", status,
                  (unsigned long long)(GetTickCount64() - t_stream));
-            post_error_response(s, msg);
+            /* A provider that refused the request over its tools: the error
+             * row, then a row that says run_command can be turned off. The
+             * error response is the thread's last message and ends the stream
+             * (a row posted after it would find no stream), so the error goes
+             * out as a status row and the hint as the response. In-stream
+             * error objects never get it (status 0 above). */
+            if (s->run_command &&
+                runcmd_reject_hint_applies(status, errbuf)) {
+                post_tool_msg(s, CHAT_ITEM_STATUS, msg);
+                post_error_response(s, runcmd_reject_hint());
+            } else {
+                post_error_response(s, msg);
+            }
             goto out;
         }
 
@@ -509,29 +557,48 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         if (run_tools) {
 
             /* A call whose input overflowed AI_TOOL_INPUT_MAX keeps no part
-             * of it. Stored as "{}", the conversation, the card and the
-             * executor all see an empty input, never a truncated one that
-             * could read as a different command or URL; the executor then
+             * of it, and an input that is not exactly one valid JSON object
+             * (a reply cut off mid-call, trailing bytes) is not stored
+             * either: both become "{}". The conversation, the card and the
+             * executor then see an empty input, never a truncated or spliced
+             * one that could read as a different command or URL; the executor
              * answers with its own "missing argument" error. */
-            for (int oi = 0; oi < tool_stream_ptr->pending_tool_count; oi++) {
-                AiToolCall *oc = &tool_stream_ptr->pending_tool_calls[oi];
-                if (oc->overflowed) {
-                    memcpy(oc->input_json, "{}", 3);
+            const int n_calls = tool_stream_ptr->pending_tool_count;
+            AiToolCall *pending = tool_stream_ptr->pending_tool_calls;
+            const int replaced = agentic_sanitize_tool_inputs(pending, n_calls);
+            for (int oi = 0; oi < n_calls; oi++) {
+                if (pending[oi].overflowed)
                     DLOG(DLOG_AI, DLOG_WARN, 0, "stream.tool_input_overflow",
                          "stream=%u iter=%d call=%d", stream_id,
                          agentic.loop_iter, oi);
-                }
             }
+            if (replaced > 0)
+                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.tool_input_sanitized",
+                     "stream=%u iter=%d replaced=%d", stream_id,
+                     agentic.loop_iter, replaced);
+
+            /* No room for a round (the assistant turn, the results and the
+             * reply that follows): the text is stored as a plain turn and
+             * nothing runs, a web tool included. The thread never reads the
+             * owner's note queue, so it passes NULL (R45). */
+            const RunCmdRound plan = runcmd_round_plan(
+                agentic_room_for_tool_round(&s->conv, NULL), s->run_command,
+                pending, n_calls);
 
             /* Add assistant message with tool_use blocks */
             /* ctx.full_thinking is this turn's reasoning; the builder sends it
-             * back with the tool calls for provider "moonshot" only. */
-            if (agentic_add_assistant_tool_msg_ex(&s->conv,
-                                                  ctx.full_content,
-                                                  ctx.full_thinking,
-                                                  s->provider, s->conv.model,
-                                                  tool_stream_ptr->pending_tool_calls,
-                                                  tool_stream_ptr->pending_tool_count) != 0) {
+             * back with the tool calls for provider "moonshot" only. It makes
+             * up an empty or repeated call id (call_<n>): read ids from the
+             * stored turn, never from `pending`. */
+            AgenticStep turn_step = AGENTIC_STEP_FULL;
+            if (plan != RUNCMD_ROUND_FULL)
+                turn_step = agentic_turn_step(
+                    agentic_add_assistant_tool_msg_ex(&s->conv,
+                                                      ctx.full_content,
+                                                      ctx.full_thinking,
+                                                      s->provider, s->conv.model,
+                                                      pending, n_calls));
+            if (turn_step == AGENTIC_STEP_FAIL) {
                 /* Results must never go out without their tool-call turn. */
                 stream_failed = 1;
                 DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=oom ms=%llu",
@@ -539,6 +606,59 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 post_tool_msg(s, CHAT_ITEM_STATUS, "[tool loop stopped: out of memory]");
                 post_error_response(s, "Error: out of memory for the tool call");
                 goto out;
+            }
+            if (turn_step == AGENTIC_STEP_FULL) {
+                /* The text of the reply is kept as a plain assistant turn (an
+                 * empty one is not: no provider takes an empty turn). */
+                char full_row[128];
+                if (ctx.full_content[0])
+                    reply_stored = ai_conv_add(&s->conv, AI_ROLE_ASSISTANT,
+                                               ctx.full_content) == 0;
+                (void)agentic_full_row(n_calls, full_row, sizeof(full_row));
+                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.round_full",
+                     "stream=%u iter=%d calls=%d stage=turn", stream_id,
+                     agentic.loop_iter, n_calls);
+                post_tool_msg(s, CHAT_ITEM_STATUS, full_row);
+                loop_done = 1;
+                continue;
+            }
+
+            /* A run_command call ends the stream: nothing runs here, no card
+             * is asked and no "using tool" row is posted. The stored turn's
+             * calls (their ids, as stored) go to the panel in the done message
+             * and the panel plans the batch (Task B15). */
+            if (plan == RUNCMD_ROUND_STOP) {
+                const AiMessage *turn = &s->conv.messages[s->conv.msg_count - 1];
+                const int stored_n = turn->n_tool_calls;
+                handoff_calls = stored_n > 0
+                    ? (AiToolCall *)calloc((size_t)stored_n, sizeof(AiToolCall))
+                    : NULL;
+                if (!handoff_calls) {
+                    /* Nobody would answer the calls: take the turn back out. */
+                    (void)ai_conv_drop_open_tool_turn(&s->conv);
+                    stream_failed = 1;
+                    DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
+                         "stream=%u class=oom ms=%llu", stream_id,
+                         (unsigned long long)(GetTickCount64() - t_stream));
+                    post_error_response(s, "Error: out of memory for the tool call");
+                    goto out;
+                }
+                memcpy(handoff_calls, turn->tool_calls,
+                       (size_t)stored_n * sizeof(AiToolCall));
+                handoff_n = stored_n;
+                handoff_fetch_registered =
+                    ai_tools_find(&s->tools, "web_fetch") != NULL;
+                for (int fi = 0; fi < stored_n; fi++) {
+                    if (tool_dispatch_rule(handoff_calls[fi].name,
+                            ai_tools_find(&s->tools, handoff_calls[fi].name) != NULL) ==
+                        TOOL_DISPATCH_FETCH_OFF)
+                        post_tool_msg(s, CHAT_ITEM_STATUS, tool_fetch_off_row());
+                }
+                DLOG(DLOG_AI, DLOG_INFO, 0, "stream.runcmd_stop",
+                     "stream=%u iter=%d calls=%d", stream_id,
+                     agentic.loop_iter, stored_n);
+                loop_done = 1;
+                continue;
             }
 
             /* Execute each tool call */
@@ -697,14 +817,19 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 }
             }
 
-            /* Add tool results to conversation */
-            agentic_add_tool_results(&s->conv,
-                                     tool_stream_ptr->pending_tool_calls,
-                                     results,
-                                     tool_stream_ptr->pending_tool_count);
+            /* Add tool results to conversation. -1 and -2 stored nothing and
+             * already dropped the open turn (R37), so the conversation is
+             * well-formed: end the loop here, or the next round would run the
+             * same tool again and fail to store it again. 1 stored a
+             * notes-only answer: carry on and say so. */
+            const int n_round = tool_stream_ptr->pending_tool_count;
+            const AgenticStep results_step = agentic_results_step(
+                agentic_add_tool_results(&s->conv,
+                                         tool_stream_ptr->pending_tool_calls,
+                                         results, n_round));
 
             /* Free tool results */
-            for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++)
+            for (int ti = 0; ti < n_round; ti++)
                 free(results[ti].content);
             free(results);
 
@@ -714,6 +839,19 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             if (ai_stream_aborted(s))
                 goto out;
 
+            if (results_step == AGENTIC_STEP_FULL) {
+                char full_row[128];
+                (void)agentic_full_row(n_round, full_row, sizeof(full_row));
+                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.round_full",
+                     "stream=%u iter=%d calls=%d stage=results", stream_id,
+                     agentic.loop_iter, n_round);
+                post_tool_msg(s, CHAT_ITEM_STATUS, full_row);
+                loop_done = 1;
+                continue;
+            }
+            if (results_step == AGENTIC_STEP_NOTE)
+                post_tool_msg(s, CHAT_ITEM_STATUS, AGENTIC_REDUCED_ROW);
+
             /* Check if we can continue */
             if (!agentic_can_continue(&agentic)) {
                 post_tool_msg(s, CHAT_ITEM_STATUS,
@@ -721,6 +859,16 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 loop_done = 1;
             } else {
                 /* Rebuild request body with updated conversation (including tool results) */
+                /* A conversation that does not pair its tool calls with
+                 * their results is never sent: say why, as an error. */
+                if (!ai_conv_tool_pairs_well_formed(&s->conv)) {
+                    stream_failed = 1;
+                    DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
+                         "stream=%u class=pairing ms=%llu", stream_id,
+                         (unsigned long long)(GetTickCount64() - t_stream));
+                    post_error_response(s, ai_body_failure_text(&s->conv));
+                    goto out;
+                }
                 int last_msg = s->conv.msg_count - 1;
                 const AiAttachment *att2 = (last_msg >= 0)
                     ? s->conv.messages[last_msg].attachment : NULL;
@@ -758,6 +906,9 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             loop_done = 1;
             reply_stored = ai_conv_add(&s->conv, AI_ROLE_ASSISTANT,
                                        ctx.full_content) == 0;
+            if (!reply_stored)   /* the reply stays on screen, but not in the conversation */
+                post_tool_msg(s, CHAT_ITEM_STATUS,
+                              "[reply not stored: conversation full; start a New Chat]");
         }
     } /* end agentic loop */
 
@@ -766,11 +917,15 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
      * take s->conv. busy is cleared by the WM_AI_RESPONSE handler on the UI
      * thread to prevent a race where the user sends a new message before
      * cleanup completes. */
-    if (!ai_stream_aborted(s))
-        post_response(s, 2, final_content, final_thinking,
-                      total_input_tokens, total_output_tokens, reply_stored);
+    if (!ai_stream_aborted(s)) {
+        post_response_ex(s, 2, final_content, final_thinking,
+                         total_input_tokens, total_output_tokens, reply_stored,
+                         handoff_calls, handoff_n, handoff_fetch_registered);
+        handoff_calls = NULL;   /* the message owns them now, posted or freed */
+    }
 
 out:
+    free(handoff_calls);   /* aborted before the post: nobody took them */
     if (!stream_failed) {
         if (ai_stream_aborted(s))
             DLOG(DLOG_AI, DLOG_INFO, 0, "stream.cancel", "stream=%u ms=%llu", stream_id,

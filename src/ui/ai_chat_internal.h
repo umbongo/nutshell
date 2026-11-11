@@ -454,7 +454,18 @@ typedef struct {
                                 * reply is then that conversation's last message.
                                 * 0 on an error, a refused add (a full
                                 * conversation) and the tool-only paths. */
+    AiToolCall *calls;         /* a run_command stop: the stored turn's calls
+                                * (ids as stored), heap-copied by the thread; NULL
+                                * otherwise. Freed by ai_response_msg_free. */
+    int n_calls;               /* how many; 0 when calls is NULL */
+    int exec_inert;            /* the stream's run_command flag: this reply's [EXEC]
+                                * text is not acted on (set on every done message) */
+    int fetch_registered;      /* the stream's registry held web_fetch (planner input) */
 } AiResponseMsg;
+
+/* Free the message and what it owns (content, thinking, calls). NULL-safe.
+ * Every site that drops an AiResponseMsg uses it. */
+void ai_response_msg_free(AiResponseMsg *m);
 
 /* WM_AI_STREAM payload (one delta) and WM_AI_TOOL_MSG payload (one status
  * line; wParam is the ChatItemType). */

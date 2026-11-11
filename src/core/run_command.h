@@ -152,6 +152,21 @@ RunCmdCall *runcmd_call_for_entry(RunCmdReply *r, int entry);
 /* 1 when any of the calls is named run_command. */
 int runcmd_reply_has_call(const AiToolCall *calls, int n_calls);
 
+/* What the stream thread does with a reply that made tool calls (Task B13),
+ * decided in this order: no room for a round anywhere (`room` 0, from
+ * agentic_room_for_tool_round) is FULL for every tool, run_command or not;
+ * then a stream that registered run_command (`run_command` 1) whose reply
+ * holds a run_command call is STOP (the turn is stored and the calls go to the
+ * panel); anything else is today's LOOP. */
+typedef enum {
+    RUNCMD_ROUND_LOOP,   /* today's tool loop */
+    RUNCMD_ROUND_FULL,   /* the text becomes a plain turn; "conversation full" row */
+    RUNCMD_ROUND_STOP    /* store the tool turn, hand the calls to the panel */
+} RunCmdRound;
+
+RunCmdRound runcmd_round_plan(int room, int run_command,
+                              const AiToolCall *calls, int n_calls);
+
 /* ---- Capture: where a call's output starts and what it reads back ---- */
 
 /* The most bytes of one command's output kept: min(16384, 65536 / n_slot), n

@@ -428,3 +428,25 @@ int agentic_room_for_tool_round(const AiConversation *conv,
     int notes = q && q->count > 0 ? q->count : 0;
     return conv->msg_count + 3 + notes <= AI_MAX_MESSAGES;
 }
+
+AgenticStep agentic_results_step(int rc)
+{
+    if (rc == 0) return AGENTIC_STEP_GO;
+    if (rc > 0) return AGENTIC_STEP_NOTE;
+    return AGENTIC_STEP_FULL;
+}
+
+AgenticStep agentic_turn_step(int rc)
+{
+    if (rc == 0) return AGENTIC_STEP_GO;
+    if (rc == -1) return AGENTIC_STEP_FULL;
+    return AGENTIC_STEP_FAIL;
+}
+
+int agentic_full_row(int n_calls, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    return snprintf(buf, cap,
+                    "[conversation full: %d tool call(s) not run; start a New Chat]",
+                    n_calls);
+}

@@ -282,6 +282,15 @@ int runcmd_reply_has_call(const AiToolCall *calls, int n_calls)
     return 0;
 }
 
+RunCmdRound runcmd_round_plan(int room, int run_command,
+                              const AiToolCall *calls, int n_calls)
+{
+    if (!room) return RUNCMD_ROUND_FULL;
+    if (run_command && n_calls > 0 && runcmd_reply_has_call(calls, n_calls))
+        return RUNCMD_ROUND_STOP;
+    return RUNCMD_ROUND_LOOP;
+}
+
 /* ---- Cap, cut and capture (spec decisions 10 and 11) ---- */
 
 #define RUNCMD_CAP_MAX 16384u

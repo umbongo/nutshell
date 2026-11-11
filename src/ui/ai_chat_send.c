@@ -393,7 +393,7 @@ void ai_chat_drain_stream_messages(HWND hwnd)
     while (PeekMessage(&m, hwnd, WM_AI_RESPONSE, WM_AI_TOOL_MSG, PM_REMOVE)) {
         if (m.message == WM_AI_RESPONSE) {
             AiResponseMsg *r = (AiResponseMsg *)m.lParam;
-            if (r) { free(r->content); free(r->thinking); free(r); }
+            ai_response_msg_free(r);
         } else if (m.message == WM_AI_STREAM || m.message == WM_AI_TOOL_MSG) {
             AiStreamChunk *c = (AiStreamChunk *)m.lParam;
             if (c) { free(c->delta); free(c); }
