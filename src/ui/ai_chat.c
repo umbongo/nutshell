@@ -1060,7 +1060,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_ACTIVITY_RETRY → cancel current request and resend */
             if (d && ctl_id == IDC_ACTIVITY_RETRY) {
                 /* Cancel current stream if possible, reset activity */
-                ai_chat_abort_session_stream(d, d->active_state);
+                ai_chat_abort_session_stream(d, d->active_state,
+                    runcmd_cause_keep_free(RUNCMD_CAUSE_RETRY));   /* Retry relaunches */
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
                 if (d->hChatList) {
@@ -1850,7 +1851,7 @@ next_coalesce:;
                                     "[the AI reply was lost]");
                     if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 } else {
-                    ai_chat_abort_session_stream(d, (AiSessionState *)lost);
+                    ai_chat_abort_session_stream(d, (AiSessionState *)lost, 0);
                 }
             }
             if (d->streams.count == 0)
@@ -2110,7 +2111,7 @@ next_coalesce:;
                 AiSessionState *owner =
                     (AiSessionState *)ai_stream_table_owner_at(&d->streams, 0);
                 if (owner)
-                    ai_chat_abort_session_stream(d, owner);
+                    ai_chat_abort_session_stream(d, owner, 0);
                 else
                     ai_stream_table_abort_owner(&d->streams, NULL);
             }
@@ -2708,7 +2709,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
     /* Abort and orphan its reply in flight, if any: the thread frees its
      * own stream, and its late messages no longer resolve to this state.
      * Also frees the session's stream buffers and clears busy. */
-    ai_chat_abort_session_stream(d, state);
+    ai_chat_abort_session_stream(d, state, 0);
 
     /* Free every pending batch (the caller frees the AiSessionState itself
      * right after this call returns). */

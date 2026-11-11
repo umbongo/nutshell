@@ -668,6 +668,25 @@ static int excerpt_content(const RunCmdCapture *cap, AiToolResult *res)
     return 1;
 }
 
+/* A command the dispatcher never wrote (no session, refused characters) whose
+ * entry nonetheless reads EXECUTING or COMPLETED: say it did not run. 1 when
+ * the note was written (no excerpt follows). */
+static int slot_unsent_note(NoteBuf *nb, const RunCmdCall *c, const ApprovalQueue *q,
+                            AiToolResult *res)
+{
+    if (c->unsent == RUNCMD_UNSENT_NONE || !q || c->entry < 0 || c->entry >= q->count)
+        return 0;
+    const ApprovalStatus st = q->entries[c->entry].status;
+    if (st != APPROVE_COMPLETED && st != APPROVE_EXECUTING) return 0;
+    if (c->unsent == RUNCMD_UNSENT_UNSAFE) {
+        note_part(nb, "not run (command rejected: control characters)");
+        res->is_error = 1;
+    } else {
+        note_part(nb, "not run (session ended)");
+    }
+    return 1;
+}
+
 /* The note, and whether the call ran with an excerpt, for one SLOT call. */
 static void slot_note(NoteBuf *nb, const RunCmdCall *c, const ApprovalQueue *q,
                       RunCmdCause cause, int *with_excerpt)
@@ -752,6 +771,7 @@ int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCau
             break;
         case RUNCMD_KIND_SLOT:
         default:
+            if (slot_unsent_note(&nb, c, q, res)) break;
             slot_note(&nb, c, q, cause, &with_excerpt);
             break;
         }

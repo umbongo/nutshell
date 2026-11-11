@@ -119,9 +119,19 @@ typedef struct {
     int      prompt_long;            /* the start row's text did not fit: not recorded */
 } RunCmdCapture;
 
+/* Why the dispatcher never wrote a SLOT call's command although its entry went
+ * on through EXECUTING and COMPLETED: set by the UI where the write is refused.
+ * NONE: it was written. */
+typedef enum {
+    RUNCMD_UNSENT_NONE,
+    RUNCMD_UNSENT_NO_SESSION,   /* no transport to write to: "not run (session ended)" */
+    RUNCMD_UNSENT_UNSAFE        /* a control or bidirectional character: refused, is_error 1 */
+} RunCmdUnsent;
+
 typedef struct {
     char tool_use_id[AI_TOOL_ID_MAX], tool_name[AI_TOOL_NAME_MAX];
     RunCmdKind kind;  RunCmdParse parse;
+    RunCmdUnsent unsent;             /* NONE from runcmd_plan; the UI sets it when the write is refused */
     char command[RUNCMD_COMMAND_MAX + 1], note[RUNCMD_NOTE_MAX];
     int  entry;                      /* ApprovalEntry index; -1 unless SLOT and queued */
     int  fetch_off;                  /* OTHER_TOOL web_fetch the stream's registry lacked (spec section 4) */
@@ -348,6 +358,11 @@ RunCmdPathPlan runcmd_path_plan(RunCmdPath p);
  * note with "output not captured" ("ran; output not captured"), never a bare
  * "ran". The Stop reason reads "stopped by the user; do not run it again
  * unless the user asks" in every note that carries it.
+ * A SLOT call with `unsent` set and an entry that is COMPLETED or EXECUTING
+ * (the dispatcher walked it through its states but never wrote the command)
+ * is "not run (session ended)" (NO_SESSION) or "not run (command rejected:
+ * control characters)" with is_error 1 (UNSAFE), no excerpt, whatever its
+ * capture holds; any other entry status keeps its own row.
  * An excerpt that cannot be copied (the allocation fails) is dropped with the
  * same note and the call is still answered, so no allocation failure leaves a
  * call without a result (spec decision 25). Returns r->n_calls, or -1 for a

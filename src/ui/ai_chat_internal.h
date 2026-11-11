@@ -616,7 +616,11 @@ void ai_chat_register_tools(AiChatData *d, const char *search_provider,
                             const char *search_url, int max_search_results,
                             int web_fetch_enabled);
 void ai_chat_launch_stream_thread(AiChatData *d, const char *src);
-void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state);
+/* `keep_free`: the slots the flush of the owner's queued notes leaves free: 1
+ * where a launch follows the abort (Retry: runcmd_cause_keep_free of RETRY),
+ * 0 otherwise (Stop, New Chat, a closed session, the reaper, WM_DESTROY). */
+void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state,
+                                  int keep_free);
 void ai_chat_drain_stream_messages(HWND hwnd);
 void ai_chat_cancel_active_stream(AiChatData *d);
 void ai_chat_send_user_message(AiChatData *d);

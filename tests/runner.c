@@ -3090,6 +3090,8 @@ int test_runcmd_path_plan_table(void);
 int test_runcmd_cause_captures_table(void);
 int test_runcmd_cause_keep_free_table(void);
 int test_runcmd_finish_relaunches_conditions(void);
+int test_runcmd_results_unsent_command(void);
+int test_runcmd_abort_keep_free_by_cause(void);
 int test_runcmd_fit_to_notes(void);
 int test_runcmd_fit_multibyte(void);
 int test_runcmd_frame_direct(void);
@@ -7264,6 +7266,8 @@ int main(void) {
     failed += test_runcmd_cause_captures_table();
     failed += test_runcmd_cause_keep_free_table();
     failed += test_runcmd_finish_relaunches_conditions();
+    failed += test_runcmd_results_unsent_command();
+    failed += test_runcmd_abort_keep_free_by_cause();
     failed += test_runcmd_fit_to_notes();
     failed += test_runcmd_fit_multibyte();
     failed += test_runcmd_frame_direct();

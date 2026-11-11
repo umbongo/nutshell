@@ -3814,3 +3814,57 @@ int test_runcmd_finish_relaunches_conditions(void)
         ASSERT_EQ(runcmd_finish_relaunches(quiet[i], 1, 0, 1, 1), 0);
     TEST_END();
 }
+
+/* A command the dispatcher never wrote (no session, refused characters) is
+ * answered as not run, even though its entry went through EXECUTING and
+ * COMPLETED (review of B16). */
+int test_runcmd_results_unsent_command(void)
+{
+    TEST_BEGIN();
+    RunCmdReply *r = plan_runs(5);
+    ASSERT_NOT_NULL(r);
+    const ApprovalStatus st[5] = { APPROVE_COMPLETED, APPROVE_EXECUTING,
+        APPROVE_DENIED, APPROVE_COMPLETED, APPROVE_COMPLETED };
+    ApprovalQueue q;
+    queue_of(&q, r, st, 5);
+    r->calls[0].unsent = RUNCMD_UNSENT_NO_SESSION;
+    r->calls[1].unsent = RUNCMD_UNSENT_UNSAFE;
+    r->calls[2].unsent = RUNCMD_UNSENT_NO_SESSION;   /* not run for another reason */
+    r->calls[3].unsent = RUNCMD_UNSENT_NONE;         /* written: "ran" as before */
+    r->calls[4].unsent = RUNCMD_UNSENT_UNSAFE;
+    cap_excerpt(&r->calls[0], "stale", NULL, 0, 0);  /* no excerpt is sent for it */
+    cap_excerpt(&r->calls[3], "hello\n", NULL, 0, 0);
+    r->calls[4].cap.started = 0;                     /* never started, never taken */
+
+    AiToolResult res[5];
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_SETTLED, res), 5);
+    ASSERT_STR_EQ(res[0].tool_note, "not run (session ended)");
+    ASSERT_EQ(res[0].is_error, 0);
+    ASSERT_NULL(res[0].content);
+    ASSERT_STR_EQ(res[1].tool_note, "not run (command rejected: control characters)");
+    ASSERT_EQ(res[1].is_error, 1);
+    ASSERT_NULL(res[1].content);
+    ASSERT_STR_EQ(res[2].tool_note, "not run (denied)");
+    ASSERT_EQ(res[2].is_error, 0);
+    ASSERT_STR_EQ(res[3].tool_note, "ran");
+    ASSERT_EQ(res[3].is_error, 0);
+    ASSERT_STR_EQ(res[3].content, "hello\n");
+    ASSERT_STR_EQ(res[4].tool_note, "not run (command rejected: control characters)");
+    ASSERT_EQ(res[4].is_error, 1);
+    free_results(res, 5);
+    runcmd_reply_free(r);
+    TEST_END();
+}
+
+/* The abort before a Retry keeps the reply's slot: the flush's keep_free is
+ * the RETRY cause's, 1; Stop, New Chat and a closed session pass 0. */
+int test_runcmd_abort_keep_free_by_cause(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(runcmd_cause_keep_free(RUNCMD_CAUSE_RETRY), 1);
+    ASSERT_EQ(runcmd_cause_keep_free(RUNCMD_CAUSE_STOP), 0);
+    ASSERT_EQ(runcmd_cause_keep_free(RUNCMD_CAUSE_NEW_CHAT), 0);
+    ASSERT_EQ(runcmd_cause_keep_free(RUNCMD_CAUSE_SESSION_CLOSED), 0);
+    ASSERT_EQ(runcmd_cause_keep_free(RUNCMD_CAUSE_PANEL_CLOSED), 0);
+    TEST_END();
+}

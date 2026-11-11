@@ -365,7 +365,8 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
 /* Abort and orphan the reply `state` has in flight, and put the session
  * back to idle: its busy flag and its stream accumulators. Touches no
  * panel UI -- see ai_chat_cancel_active_stream() for that. Safe with no stream. */
-void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state)
+void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state,
+                                  int keep_free)
 {
     if (!d || !state) return;
     /* Answer and remove the session's tool cards first, so no stream thread
@@ -383,9 +384,11 @@ void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state)
     state->stream_phase = 0;
     state->activity_phase = (int)ACTIVITY_IDLE;
     /* A stopped stream's reply never arrives to flush the notes queued behind
-     * it (nothing relaunches here: keep_free 0). A note that does not fit stays
+     * it. keep_free is the caller's: 1 where a launch follows (Retry), so a
+     * note never takes the reply's slot. A note that does not fit stays
      * queued; an open tool call keeps them all. */
-    (void)ai_conv_flush_notes(ai_chat_owner_conv(d, state), &state->notes, 0);
+    (void)ai_conv_flush_notes(ai_chat_owner_conv(d, state), &state->notes,
+                              keep_free);
 }
 
 /* Free the payloads of stream messages still queued for a panel that is
@@ -417,7 +420,7 @@ void ai_chat_cancel_active_stream(AiChatData *d)
 
     /* Abort and orphan this session's stream only -- another tab's reply
      * keeps running -- and put the session back to idle. */
-    ai_chat_abort_session_stream(d, d->active_state);
+    ai_chat_abort_session_stream(d, d->active_state, 0);
 
     /* Kill timers */
     KillTimer(d->hwnd, TIMER_HEARTBEAT);

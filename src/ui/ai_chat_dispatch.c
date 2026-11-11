@@ -345,6 +345,12 @@ void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch
             chat_activity_reset(&d->activity);
             ai_chat_update_context_bar(d);
         }
+        /* Nothing launched, so the stream that would have ended in
+         * ai_chat_maybe_start_next_batch() never runs: an approved batch
+         * waiting behind this one must not be stranded. Its own guards make it
+         * a no-op while a dispatch runs or a stream is busy; a background owner
+         * is never started here. */
+        if (displayed) ai_chat_maybe_start_next_batch(d);
     }
     if (displayed && d->hChatList) chat_listview_invalidate(d->hChatList);
 }
@@ -615,7 +621,7 @@ void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state)
  * decided it was safe to send at all (dispatch_line_clear.h). */
 static void execute_command(AiChatData *d, const char *cmd,
                              DispatchLineClearMode line_clear_mode,
-                             RunCmdCapture *cap)
+                             RunCmdCall *call)
 {
     if (!d || !cmd || !cmd[0]) return;
     SessionIo *io = d->active_io;
@@ -623,6 +629,8 @@ static void execute_command(AiChatData *d, const char *cmd,
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                         "[error: no active session]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        /* A run_command call is answered as not run, not "ran". */
+        if (call) call->unsent = RUNCMD_UNSENT_NO_SESSION;
         return;
     }
     /* Defense in depth: even though ai_extract_commands() and
@@ -636,13 +644,14 @@ static void execute_command(AiChatData *d, const char *cmd,
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
             "[command rejected: control characters inside an EXEC block]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        if (call) call->unsent = RUNCMD_UNSENT_UNSAFE;
         return;
     }
 
     /* A run_command call records where its output starts, just before this
      * command's first write (the prefix below, or the command itself). It
      * writes nothing to the terminal. */
-    if (cap) runcmd_capture_start(cap, d->active_term);
+    if (call) runcmd_capture_start(&call->cap, d->active_term);
 
     /* Clear any existing text on the line before pasting -- but only for a
      * shell known to treat Ctrl+E (end of line) + Ctrl+U (kill to start of
@@ -1235,8 +1244,7 @@ void ai_chat_dispatch_tick(AiChatData *d)
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
         RunCmdCall *rcall = batch->runcmd
             ? runcmd_call_for_entry(batch->runcmd, idx) : NULL;
-        execute_command(d, batch->q.entries[idx].command, line_clear_mode,
-                        rcall ? &rcall->cap : NULL);
+        execute_command(d, batch->q.entries[idx].command, line_clear_mode, rcall);
         d->dispatch_last_idx = idx;
         d->dispatch_sent_count++;
         d->dispatch_await_echo = 1;
