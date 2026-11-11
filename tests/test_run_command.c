@@ -2714,7 +2714,7 @@ int test_runcmd_capture_home_erase_below(void)
     memset(&c, 0, sizeof c);
     rc_feed(t, "a\r\nb\r\nc\r\n$ ");
     cap_run(t, &c, "clear; ls", "clear; ls\r\n\x1b[H\x1b[J" "f1\r\nf2\r\nf3\r\nf4\r\nf5\r\n$ ");
-    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_EQ((int)c.flags, 17);
     ASSERT_HEAD(c, "f1\nf2\nf3\nf4\nf5\n$");
     cap_free(&c);
     term_free(t);
@@ -2726,7 +2726,7 @@ int test_runcmd_capture_home_erase_below(void)
     memset(&d, 0, sizeof d);
     rc_feed(u, "$ ");
     cap_run(u, &d, "demo", "demo\r\nold1\r\nold2\r\n\x1b[H\x1b[J" "new\r\n$ ");
-    ASSERT_EQ((int)d.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_EQ((int)d.flags, 17);
     ASSERT_HEAD(d, "new\n$");
     cap_free(&d);
     term_free(u);
@@ -2897,7 +2897,7 @@ int test_runcmd_capture_prompt_rules(void)
     RunCmdCapture d;
     memset(&d, 0, sizeof d);
     cap_run(t, &d, "true", "true\r\nuser@h:~$ ");
-    ASSERT_EQ((int)d.flags, (int)RUNCMD_CAP_EMPTY);
+    ASSERT_EQ((int)d.flags, 8);
     ASSERT_NULL(d.head);
     cap_free(&d);
     term_free(t);
@@ -2974,7 +2974,7 @@ int test_runcmd_capture_changing_prompt(void)
     memset(&f, 0, sizeof f);
     cap_run(t, &f, "true", "true\r\n[3] $ ");
     ASSERT_NULL(f.head);
-    ASSERT_EQ((int)f.flags, (int)RUNCMD_CAP_EMPTY);
+    ASSERT_EQ((int)f.flags, 8);
 
     /* a cursor row that is not a prompt is output: added whole, trimmed */
     RunCmdCapture g;
@@ -3007,6 +3007,15 @@ int test_runcmd_capture_changing_prompt(void)
     ASSERT_NULL(k.head);
     ASSERT_EQ((int)k.flags, 32);
     cap_free(&k);
+
+    /* the same limit for a progress line that ends in '%' (a zsh prompt
+     * character): "progress 50%" on the cursor row is dropped, flags 32 */
+    RunCmdCapture m;
+    memset(&m, 0, sizeof m);
+    cap_run(u, &m, "run", "run\r\nprogress 50%");
+    ASSERT_NULL(m.head);
+    ASSERT_EQ((int)m.flags, 32);
+    cap_free(&m);
     term_free(u);
     TEST_END();
 }

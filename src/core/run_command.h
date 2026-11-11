@@ -315,7 +315,8 @@ RunCmdPathPlan runcmd_path_plan(RunCmdPath p);
  * SET_FULL and SESSION_GONE every SLOT call gets that cause's note. OVER_CAP,
  * INVALID and OTHER_TOOL calls keep their own rows under every cause. A
  * capture whose excerpt was lost to an allocation failure (captured, no
- * head or tail, no EMPTY) says "output dropped: Nutshell ran out of memory".
+ * head or tail, no EMPTY, no PROMPT) says "output dropped: Nutshell ran out of
+ * memory"; a PROMPT capture (the same shape) says the plain "ran".
  * A COMPLETED or EXECUTING call whose capture never ran (captured 0) ends its
  * note with "output not captured" ("ran; output not captured"), never a bare
  * "ran". The Stop reason reads "stopped by the user; do not run it again
