@@ -294,6 +294,19 @@ int test_runcmd_auto_default_table(void)
     TEST_END();
 }
 
+int test_provider_runcmd_gemini(void)
+{
+    TEST_BEGIN();
+    /* spec section 1: Gemini's tools, the web tools included, come only with On */
+    ASSERT_EQ(ai_provider_tools("gemini", AI_RUNCMD_AUTO), 0);
+    ASSERT_EQ(ai_provider_tools("gemini", AI_RUNCMD_ON), 1);
+    ASSERT_EQ(ai_provider_tools("gemini", AI_RUNCMD_OFF), 0);
+    ASSERT_EQ(ai_provider_runcmd("gemini", AI_RUNCMD_AUTO), 0);
+    ASSERT_EQ(ai_provider_runcmd("gemini", AI_RUNCMD_ON), 1);
+    ASSERT_EQ(ai_provider_runcmd("gemini", AI_RUNCMD_OFF), 0);
+    TEST_END();
+}
+
 int test_provider_runcmd_modes(void)
 {
     TEST_BEGIN();
@@ -2101,7 +2114,7 @@ static void add_round(AiConversation *c, int round, int n, const char *const *na
         if (strcmp(names[i], RUNCMD_TOOL_NAME) == 0)
             snprintf(res[i].tool_note, sizeof(res[i].tool_note), "ran");
     }
-    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, calls, n);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, calls, n, NULL);
     agentic_add_tool_results(c, calls, res, n);
     for (int i = 0; i < n; i++) free(res[i].content);
 }
@@ -2175,7 +2188,7 @@ int test_runcmd_estimate_reasoning_rules(void)
     ai_conv_add(c, AI_ROLE_USER, "hello");
     AiToolCall call;
     set_call(&call, "t1", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
-    agentic_add_assistant_tool_msg_ex(c, "", "aaaaaaaaaa", NULL, NULL, &call, 1);   /* 10 */
+    agentic_add_assistant_tool_msg_ex(c, "", "aaaaaaaaaa", NULL, NULL, &call, 1, NULL);   /* 10 */
     AiToolResult res;
     memset(&res, 0, sizeof(res));
     snprintf(res.tool_use_id, sizeof(res.tool_use_id), "t1");
@@ -2217,7 +2230,7 @@ int test_runcmd_estimate_counts_reasoning(void)
     reasoning[10240] = '\0';
     AiToolCall call;
     set_call(&call, "t1", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
-    agentic_add_assistant_tool_msg_ex(c, "text", reasoning, NULL, NULL, &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "text", reasoning, NULL, NULL, &call, 1, NULL);
     AiToolResult res;
     memset(&res, 0, sizeof(res));
     snprintf(res.tool_use_id, sizeof(res.tool_use_id), "t1");
@@ -2271,7 +2284,7 @@ int test_runcmd_body_bounded_over_rounds(void)
         char id[16];
         snprintf(id, sizeof(id), "t%d", round);
         set_call(&call, id, RUNCMD_TOOL_NAME, "{\"command\":\"journalctl\"}");
-        ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1), 0);
+        ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1, NULL), 0);
 
         RunCmdReply *r = runcmd_plan(&call, 1, 1);
         ASSERT_NOT_NULL(r);
@@ -2330,7 +2343,7 @@ static void rc_round(AiConversation *c, int round, size_t len, const char *input
     char id[16];
     snprintf(id, sizeof(id), "t%d", round);
     set_call(&call, id, RUNCMD_TOOL_NAME, input);
-    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1, NULL);
     AiToolResult r;
     memset(&r, 0, sizeof(r));
     snprintf(r.tool_use_id, sizeof(r.tool_use_id), "%s", id);
@@ -2488,7 +2501,7 @@ static double meter_vs_body(const char *provider, int rounds, int nrc, size_t ou
             res[n].content_len = 2000;
             n++;
         }
-        int ok = agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, calls, n) == 0 &&
+        int ok = agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, calls, n, NULL) == 0 &&
                  agentic_add_tool_results(c, calls, res, n) == 0;
         for (int i = 0; i < n; i++) free(res[i].content);
         if (!ok) { worst = -1; break; }
@@ -2549,7 +2562,7 @@ static AiConversation *retry_conv(const char *tail)
                 snprintf(call.id, sizeof(call.id), "t%d", ++round);
                 snprintf(call.name, sizeof(call.name), "%s", RUNCMD_TOOL_NAME);
                 snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
-                agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1);
+                agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1, NULL);
             } else {
                 /* a whole round: call and results (add_round) */
                 add_round(c, ++round, 1, names, contents);
@@ -3405,7 +3418,7 @@ static void add_one_round(AiConversation *c, int round, const char *name,
     res.omit_at = omit_at;
     res.omitted_bytes = omitted;
     snprintf(res.tool_note, sizeof(res.tool_note), "%s", note);
-    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1, NULL);
     agentic_add_tool_results(c, &call, &res, 1);
     free(res.content);
 }
@@ -3606,7 +3619,7 @@ int test_runcmd_oom_results_store_and_pair(void)
     AiToolCall calls[2];
     set_call(&calls[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
     set_call(&calls[1], "", RUNCMD_TOOL_NAME, "{\"command\":\"pwd\"}");
-    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", calls, 2), 0);
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", calls, 2, NULL), 0);
     const AiMessage *turn = &c->messages[c->msg_count - 1];
     ASSERT_EQ(turn->n_tool_calls, 2);
     AiToolResult res[2];
@@ -3641,7 +3654,7 @@ static int idless_round(const char *provider)
     AiToolCall provider_calls[2];
     set_call(&provider_calls[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls -la\",\"note\":\"list\"}");
     set_call(&provider_calls[1], "", RUNCMD_TOOL_NAME, "{\"command\":\"pwd\"}");
-    if (agentic_add_assistant_tool_msg_ex(c, "", NULL, provider, "m", provider_calls, 2) != 0) goto done;
+    if (agentic_add_assistant_tool_msg_ex(c, "", NULL, provider, "m", provider_calls, 2, NULL) != 0) goto done;
 
     /* the stored turn carries the made-up ids */
     const AiMessage *turn = &c->messages[c->msg_count - 1];
@@ -3701,7 +3714,7 @@ int test_runcmd_idless_results_with_empty_ids_pair_by_position(void)
     ai_conv_add(c, AI_ROLE_USER, "go");
     AiToolCall provider[1];
     set_call(&provider[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
-    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", provider, 1), 0);
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", provider, 1, NULL), 0);
     AiToolResult res[1];
     memset(res, 0, sizeof(res));                     /* tool_use_id "" as the provider sent it */
     snprintf(res[0].tool_note, sizeof(res[0].tool_note), "ran");
@@ -3756,7 +3769,7 @@ int test_runcmd_idless_batch_and_rebuild_hashes_agree(void)
     ai_conv_add(c, AI_ROLE_USER, "go");
     AiToolCall provider[1];
     set_call(&provider[0], "", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
-    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", provider, 1), 0);
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, "anthropic", "m", provider, 1, NULL), 0);
     const AiMessage *turn = ai_conv_open_tool_turn(c);
     ASSERT_NOT_NULL(turn);
     const int idx = (int)(turn - c->messages);
@@ -3924,5 +3937,24 @@ int test_runcmd_cause_starts_next_table(void)
         { RUNCMD_CAUSE_SET_FULL, 0 } };
     for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
         ASSERT_EQ(runcmd_cause_starts_next(t[i].c), t[i].starts);
+    TEST_END();
+}
+
+int test_runcmd_estimate_counts_gemini_signature(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    AiToolCall call;
+    set_call(&call, "t1", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, "gemini", "m", &call, 1, "abcdefghij");
+    size_t base = runcmd_request_estimate(c, "openai", 100, 0);
+    /* the 52-byte frame of the extra_content block plus the 10 signature bytes */
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "gemini", 100, 0) - base), 62);
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "moonshot", 100, 0) - base), 0);
+    ai_conv_reset(c);
+    free(c);
     TEST_END();
 }

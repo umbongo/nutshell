@@ -193,6 +193,18 @@ typedef struct {
      * as index 0). Both feed the per-round log line, nothing else. */
     char        finish[32];
     int         index_defaulted;
+
+    /* Gemini's thought signature: the first
+     * tool_calls[i].extra_content.google.thought_signature of the response
+     * (only the first call of a parallel set carries one), kept whole in a
+     * heap buffer grown as needed (Google states no size). NULL and sig_len 0
+     * when there is none or an allocation failed (the call still stands);
+     * sig_seen is set at the first one seen, kept or not, so a later one is
+     * never taken in its place. Freed by ai_tools_stream_reset. */
+    char       *sig;
+    size_t      sig_len;
+    size_t      sig_cap;
+    int         sig_seen;
 } AiToolStreamState;
 
 /* Streaming tool detection — Anthropic format */

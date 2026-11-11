@@ -525,7 +525,7 @@ static void reasoning_conv(AiConversation *conv, const char *reasoning)
     snprintf(call.id, sizeof(call.id), "call_1");
     snprintf(call.name, sizeof(call.name), "web_fetch");
     snprintf(call.input_json, sizeof(call.input_json), "{\"url\":\"https://x.test/\"}");
-    agentic_add_assistant_tool_msg_ex(conv, "", reasoning, NULL, NULL, &call, 1);
+    agentic_add_assistant_tool_msg_ex(conv, "", reasoning, NULL, NULL, &call, 1, NULL);
 
     const char *page = "page text";
     AiToolResult res;
@@ -1030,7 +1030,7 @@ int test_ai_reasoning_copy_take_compact(void)
     snprintf(call.name, sizeof(call.name), "web_fetch");
     for (int i = 0; i < 4; i++) {
         ai_conv_add(&t, AI_ROLE_USER, "u");
-        agentic_add_assistant_tool_msg_ex(&t, "", i == 3 ? "last" : "old", NULL, NULL, &call, 1);
+        agentic_add_assistant_tool_msg_ex(&t, "", i == 3 ? "last" : "old", NULL, NULL, &call, 1, NULL);
     }
     ASSERT_TRUE(ai_conv_compact(&t, 1) > 0);
     ASSERT_STR_EQ(t.messages[t.msg_count - 1].reasoning, "last");
@@ -1592,5 +1592,163 @@ int test_agentic_stop_row_texts(void)
     ASSERT_EQ(agentic_full_row(2, NULL, 0), 0);
     ASSERT_STR_EQ(AGENTIC_REDUCED_ROW,
                   "[some results were reduced to notes: Nutshell ran out of memory]");
+    TEST_END();
+}
+
+/* ---- Gemini thought signatures (spec 2026-11-05 run-command §1) ------------ */
+
+/* system, user, assistant (two tool calls, issuer `provider`/"gem-model",
+ * thought_sig), the two results. */
+static void signature_conv(AiConversation *conv, const char *provider,
+                           const char *sig)
+{
+    ai_conv_init(conv, "gem-model");
+    ai_conv_add(conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(conv, AI_ROLE_USER, "look it up");
+
+    AiToolCall calls[2];
+    memset(calls, 0, sizeof(calls));
+    snprintf(calls[0].id, sizeof(calls[0].id), "call_a");
+    snprintf(calls[0].name, sizeof(calls[0].name), "web_search");
+    snprintf(calls[0].input_json, sizeof(calls[0].input_json), "{\"query\":\"x\"}");
+    snprintf(calls[1].id, sizeof(calls[1].id), "call_b");
+    snprintf(calls[1].name, sizeof(calls[1].name), "web_fetch");
+    snprintf(calls[1].input_json, sizeof(calls[1].input_json), "{\"url\":\"https://x.test/\"}");
+    agentic_add_assistant_tool_msg_ex(conv, "", NULL, provider, "gem-model",
+                                      calls, 2, sig);
+
+    static const char one[] = "r1", two[] = "r2";
+    AiToolResult res[2];
+    memset(res, 0, sizeof(res));
+    snprintf(res[0].tool_use_id, sizeof(res[0].tool_use_id), "call_a");
+    res[0].content = (char *)(uintptr_t)one;
+    res[0].content_len = 2;
+    snprintf(res[1].tool_use_id, sizeof(res[1].tool_use_id), "call_b");
+    res[1].content = (char *)(uintptr_t)two;
+    res[1].content_len = 2;
+    agentic_add_tool_results(conv, calls, res, 2);
+}
+
+static size_t signature_body(const AiConversation *conv, const char *provider,
+                             char *buf, size_t cap)
+{
+    return ai_build_request_body_tools(conv, NULL, REASON_TOOLS, buf, cap, 1,
+                                       provider);
+}
+
+int test_body_gemini_echoes_signature_first_call(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    signature_conv(&conv, "gemini", "c2ln\"\\x");   /* quote and backslash escape */
+    char buf[16384];
+    ASSERT_TRUE(signature_body(&conv, "gemini", buf, sizeof(buf)) > 0);
+    ASSERT_EQ(json_validate(buf, strlen(buf), NULL, 0), 1);
+
+    const char *blk = "\"extra_content\":{\"google\":{\"thought_signature\":"
+                      "\"c2ln\\\"\\\\x\"}}";
+    const char *at = strstr(buf, blk);
+    ASSERT_NOT_NULL(at);
+    ASSERT_NULL(strstr(at + 1, "\"extra_content\""));   /* once, not on the second call */
+
+    /* it sits on the first call (call_a), before the second call opens */
+    const char *a = strstr(buf, "\"id\":\"call_a\"");
+    const char *b = strstr(buf, "\"id\":\"call_b\"");
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ASSERT_TRUE(a < at && at < b);
+    /* the call object closes right after the block: ...}}}},{"id":"call_b" */
+    ASSERT_EQ(strncmp(at + strlen(blk), "},{\"id\":\"call_b\"", 16), 0);
+    ASSERT_NULL(strstr(buf, "skip_thought_signature_validator"));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_body_gemini_no_signature(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    signature_conv(&conv, "gemini", NULL);
+    char buf[16384];
+    ASSERT_TRUE(signature_body(&conv, "gemini", buf, sizeof(buf)) > 0);
+    ASSERT_EQ(json_validate(buf, strlen(buf), NULL, 0), 1);
+    ASSERT_NULL(strstr(buf, "extra_content"));
+    ASSERT_NULL(strstr(buf, "thought_signature"));
+    ASSERT_NULL(strstr(buf, "skip_thought_signature_validator"));
+    ASSERT_NOT_NULL(strstr(buf, "\"id\":\"call_a\""));
+
+    /* an empty string is no signature either */
+    ai_conv_reset(&conv);
+    signature_conv(&conv, "gemini", "");
+    ASSERT_NULL(conv.messages[2].thought_sig);
+    ASSERT_TRUE(signature_body(&conv, "gemini", buf, sizeof(buf)) > 0);
+    ASSERT_NULL(strstr(buf, "extra_content"));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_body_openai_never_signature(void)
+{
+    TEST_BEGIN();
+    const char *provs[] = { "openai", "moonshot", "deepseek", "custom", "anthropic" };
+    for (int p = 0; p < 5; p++) {
+        AiConversation conv;
+        signature_conv(&conv, provs[p], "c2ln");   /* issued by that provider */
+        char buf[16384];
+        ASSERT_TRUE(signature_body(&conv, provs[p], buf, sizeof(buf)) > 0);
+        ASSERT_NULL(strstr(buf, "extra_content"));
+        ASSERT_NULL(strstr(buf, "thought_signature"));
+        ai_conv_reset(&conv);
+    }
+
+    /* a turn Gemini issued, sent to another provider, is text: no signature */
+    AiConversation conv;
+    signature_conv(&conv, "gemini", "c2ln");
+    char buf[16384];
+    ASSERT_TRUE(signature_body(&conv, "openai", buf, sizeof(buf)) > 0);
+    ASSERT_NULL(strstr(buf, "thought_signature"));
+    ASSERT_NULL(strstr(buf, "extra_content"));
+    ASSERT_EQ(json_validate(buf, strlen(buf), NULL, 0), 1);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_conv_thought_sig_owned_copied_moved(void)
+{
+    TEST_BEGIN();
+    AiConversation conv, copy, taken;
+    signature_conv(&conv, "gemini", "c2ln");
+    ASSERT_STR_EQ(conv.messages[2].thought_sig, "c2ln");
+
+    ai_conv_init(&copy, "m");
+    ASSERT_EQ(ai_conv_copy(&copy, &conv), 0);
+    ASSERT_STR_EQ(copy.messages[2].thought_sig, "c2ln");
+    ASSERT_TRUE(copy.messages[2].thought_sig != conv.messages[2].thought_sig);
+
+    ai_conv_init(&taken, "m");
+    ai_conv_take(&taken, &conv);
+    ASSERT_STR_EQ(taken.messages[2].thought_sig, "c2ln");
+    ASSERT_EQ(conv.msg_count, 0);
+
+    /* a plain reply added later starts with none */
+    ASSERT_EQ(ai_conv_add(&taken, AI_ROLE_ASSISTANT, "done"), 0);
+    ASSERT_NULL(taken.messages[taken.msg_count - 1].thought_sig);
+
+    /* the reasoning move carries it with the rest */
+    AiMessage a, b;
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    b.thought_sig = (char *)malloc(5);
+    memcpy(b.thought_sig, "abcd", 5);
+    a.thought_sig = (char *)malloc(2);
+    memcpy(a.thought_sig, "z", 2);
+    ai_msg_move_reasoning(&a, &b);
+    ASSERT_STR_EQ(a.thought_sig, "abcd");
+    ASSERT_NULL(b.thought_sig);
+    ai_msg_free(&a);
+    ASSERT_NULL(a.thought_sig);
+
+    ai_conv_reset(&taken);
+    ai_conv_reset(&copy);
     TEST_END();
 }

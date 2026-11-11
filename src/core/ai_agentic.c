@@ -50,7 +50,7 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
                                     const AiToolCall *calls, int n_calls)
 {
     return agentic_add_assistant_tool_msg_ex(conv, assistant_text, NULL,
-                                             NULL, NULL, calls, n_calls);
+                                             NULL, NULL, calls, n_calls, NULL);
 }
 
 /* 1 when `id` is the id of a call in calls[0..n) or of any call or result
@@ -100,7 +100,8 @@ int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
                                        const char *assistant_text,
                                        const char *reasoning,
                                        const char *provider, const char *model,
-                                       const AiToolCall *calls, int n_calls)
+                                       const AiToolCall *calls, int n_calls,
+                                       const char *thought_sig)
 {
     if (!conv) return -1;
     if (conv->msg_count >= AI_MAX_MESSAGES) return -1;
@@ -122,7 +123,8 @@ int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
         make_ids_unique(conv, msg->tool_calls, n_calls);
     }
 
-    if (ai_msg_set_reasoning(msg, reasoning) != 0) {
+    if (ai_msg_set_reasoning(msg, reasoning) != 0 ||
+        ai_msg_set_thought_sig(msg, thought_sig) != 0) {
         ai_msg_free(msg);
         return -1;
     }

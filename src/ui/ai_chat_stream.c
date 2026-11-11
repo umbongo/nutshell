@@ -629,7 +629,8 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                                                       ctx.full_content,
                                                       ctx.full_thinking,
                                                       s->provider, s->conv.model,
-                                                      pending, n_calls));
+                                                      pending, n_calls,
+                                                      tool_stream_ptr->sig));
             if (turn_step == AGENTIC_STEP_FAIL) {
                 /* Results must never go out without their tool-call turn. */
                 stream_failed = 1;

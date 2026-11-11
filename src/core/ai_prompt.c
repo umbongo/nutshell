@@ -132,6 +132,10 @@ void ai_msg_free(AiMessage *msg)
         msg->reasoning = NULL;
     }
     msg->reasoning_cut = 0;
+    if (msg->thought_sig) {
+        free(msg->thought_sig);
+        msg->thought_sig = NULL;
+    }
     if (msg->attachment) {
         ai_attachment_free(&msg->attachment);
     }
@@ -167,9 +171,27 @@ int ai_msg_set_reasoning(AiMessage *msg, const char *text)
     return 0;
 }
 
+int ai_msg_set_thought_sig(AiMessage *msg, const char *sig)
+{
+    if (!msg) return -1;
+    free(msg->thought_sig);
+    msg->thought_sig = NULL;
+    if (!sig || !sig[0]) return 0;
+
+    size_t len = strlen(sig);
+    char *copy = (char *)g_alloc(len + 1);
+    if (!copy) return -1;
+    memcpy(copy, sig, len + 1);
+    msg->thought_sig = copy;
+    return 0;
+}
+
 void ai_msg_move_reasoning(AiMessage *dst, AiMessage *src)
 {
     if (!dst || !src || dst == src) return;
+    free(dst->thought_sig);
+    dst->thought_sig = src->thought_sig;
+    src->thought_sig = NULL;
     free(dst->reasoning);
     dst->reasoning = src->reasoning;
     dst->reasoning_cut = src->reasoning_cut;
@@ -255,6 +277,7 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
         m->tool_calls = NULL;
         m->n_tool_calls = 0;
         m->reasoning = NULL;
+        m->thought_sig = NULL;
         m->parts = NULL;
         m->n_parts = 0;
         dst->msg_count = i + 1;   /* a failure below frees what we have */
@@ -281,6 +304,12 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
             m->reasoning = (char *)malloc(rl + 1);
             if (!m->reasoning) goto fail;
             memcpy(m->reasoning, sm->reasoning, rl + 1);
+        }
+        if (sm->thought_sig) {
+            size_t sl = strlen(sm->thought_sig);
+            m->thought_sig = (char *)malloc(sl + 1);
+            if (!m->thought_sig) goto fail;
+            memcpy(m->thought_sig, sm->thought_sig, sl + 1);
         }
         if (sm->parts && sm->n_parts > 0) {
             size_t sz = (size_t)sm->n_parts * sizeof(AiToolPart);
@@ -385,6 +414,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->n_tool_calls = 0;
     m->reasoning = NULL;
     m->reasoning_cut = 0;
+    m->thought_sig = NULL;
     m->tool_provider[0] = '\0';
     m->tool_model[0] = '\0';
     m->parts = NULL;
@@ -1692,12 +1722,37 @@ static size_t build_body_core(const AiConversation *conv,
                 pos = json_escape_string(tc->input_json, strlen(tc->input_json), buf, buf_size, pos, 1);
                 if (pos == 0) return 0;
 
-                /* Close function object and tool_call object */
-                const char *tc_close = "}}";
-                size_t tcc2_len = strlen(tc_close);
-                if (pos + tcc2_len >= buf_size) return 0;
-                memcpy(buf + pos, tc_close, tcc2_len);
-                pos += tcc2_len;
+                /* Close the function object */
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = '}';
+
+                /* Gemini wants the turn's thought signature back on its first
+                 * tool call (a 400 without it on its thinking models). Only
+                 * when this very provider wrote it: a turn recorded under
+                 * another provider is text by now, and the placeholder Google
+                 * documents for a missing one is never sent. */
+                if (t == 0 && msg->thought_sig && provider &&
+                    strcmp(provider, "gemini") == 0) {
+                    const char *sig_open =
+                        ",\"extra_content\":{\"google\":{\"thought_signature\":";
+                    size_t so_len = strlen(sig_open);
+                    if (pos + so_len >= buf_size) return 0;
+                    memcpy(buf + pos, sig_open, so_len);
+                    pos += so_len;
+
+                    pos = json_escape_string(msg->thought_sig,
+                                             strlen(msg->thought_sig), buf,
+                                             buf_size, pos, 1);
+                    if (pos == 0) return 0;
+
+                    if (pos + 2 >= buf_size) return 0;
+                    buf[pos++] = '}';
+                    buf[pos++] = '}';
+                }
+
+                /* Close the tool_call object */
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = '}';
             }
 
             /* Close tool_calls array and assistant object */

@@ -452,7 +452,7 @@ static AiConversation *make_runcmd_conv(const char *content, size_t omit_at,
     snprintf(call.id, sizeof(call.id), "call_rc");
     snprintf(call.name, sizeof(call.name), "run_command");
     snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
-    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1, NULL);
     AiToolResult r;
     memset(&r, 0, sizeof(r));
     snprintf(r.tool_use_id, sizeof(r.tool_use_id), "call_rc");
@@ -588,7 +588,7 @@ static void add_runcmd_round(AiConversation *c, const char *id)
     snprintf(call.id, sizeof(call.id), "%s", id);
     snprintf(call.name, sizeof(call.name), "run_command");
     snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
-    agentic_add_assistant_tool_msg_ex(c, "", NULL, "openai", "test-model", &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, "openai", "test-model", &call, 1, NULL);
     char out[] = "out";
     AiToolResult r;
     memset(&r, 0, sizeof(r));

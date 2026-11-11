@@ -100,6 +100,16 @@ typedef struct {
      * ai_conv_take() moves it with the rest. */
     char *reasoning;
 
+    /* Gemini's thought signature for this assistant turn's tool calls, as
+     * the stream carried it (the first tool call's
+     * extra_content.google.thought_signature). Heap, NULL when none. Only the
+     * OpenAI-format builder reads it: written back on the turn's first tool
+     * call for provider "gemini" (a turn recorded under another provider goes
+     * out as text, so it never carries it). Owned like `reasoning`:
+     * ai_msg_free() frees it, ai_conv_copy() duplicates it, ai_conv_take() and
+     * ai_msg_move_reasoning() move it. */
+    char *thought_sig;
+
     /* 1 when the reasoning stored for this assistant turn is not the whole of
      * what the model streamed: the stream dropped some (its 16 KiB), the
      * AI_REASONING_MAX cap cut it, or its copy failed to allocate. DeepSeek
@@ -627,7 +637,13 @@ int ai_msg_set_content(AiMessage *msg, const char *data, size_t len);
  * that cuts nothing clears it. */
 int ai_msg_set_reasoning(AiMessage *msg, const char *text);
 
-/* Move src's reasoning, reasoning_cut and issuer (tool_provider, tool_model) to
+/* Store a copy of `sig` as msg's thought_sig (see AiMessage), replacing any
+ * earlier one; NULL or "" clears it. No cap: Google states no size. Returns 0,
+ * or -1 on allocation failure (the signature cleared). */
+int ai_msg_set_thought_sig(AiMessage *msg, const char *sig);
+
+/* Move src's reasoning, reasoning_cut, thought_sig and issuer (tool_provider,
+ * tool_model) to
  * dst, freeing dst's own reasoning and leaving src with none: no allocation, so
  * it cannot fail. The panel uses it to carry a reply's reasoning from the
  * stream thread's copy of the conversation to the working copy that stores the

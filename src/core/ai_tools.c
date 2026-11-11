@@ -552,6 +552,7 @@ void ai_tools_stream_reset(AiToolStreamState *state)
     if (state->pending_tool_calls) {
         free(state->pending_tool_calls);
     }
+    free(state->sig);
     memset(state, 0, sizeof(*state));
     state->current_block_type = BLOCK_NONE;
     state->pending_tool_calls = NULL;
@@ -694,6 +695,102 @@ int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *st
 
 /* ---- OpenAI streaming parser --------------------------------------------- */
 
+/* Keep the first thought signature of a response (Gemini). The call's own
+ * extra_content.google.thought_signature; later ones are ignored, and a copy
+ * that cannot be allocated drops the signature without failing the stream. */
+static void openai_take_signature(AiToolStreamState *state, JsonNode *tc_node)
+{
+    if (state->sig_seen) return;
+    JsonNode *extra = json_obj_get(tc_node, "extra_content");
+    if (!extra || extra->type != JSON_OBJECT) return;
+    JsonNode *google = json_obj_get(extra, "google");
+    if (!google || google->type != JSON_OBJECT) return;
+    const char *sig = json_obj_str(google, "thought_signature");
+    if (!sig || !sig[0]) return;
+
+    state->sig_seen = 1;
+    size_t len = strlen(sig);
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) return;
+    memcpy(copy, sig, len + 1);
+    state->sig = copy;
+    state->sig_len = len;
+    state->sig_cap = len + 1;
+}
+
+/* The JSON parser refuses a string longer than TOK_VALUE_MAX, and a Gemini
+ * signature can be longer. For a chunk whose parse failed, cut the signature's
+ * value out of a copy (the copy parses with an empty signature) and decode the
+ * value on its own. Base64 text: the simple escapes and \u00XX below 0x80 are
+ * decoded, anything else gives up. 1 with *stripped and *sig_out malloc'd (the
+ * caller frees both), 0 for no rescue. */
+static int openai_split_long_signature(const char *chunk, char **stripped,
+                                       char **sig_out, size_t *sig_len)
+{
+    static const char key[] = "\"thought_signature\"";
+    const char *k = strstr(chunk, key);
+    if (!k) return 0;
+    const char *p = k + sizeof(key) - 1;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p++ != ':') return 0;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p != '"') return 0;
+    const char *vstart = ++p;
+    const char *q = vstart;
+    while (*q && *q != '"') {
+        if (*q == '\\') { q++; if (!*q) return 0; }
+        q++;
+    }
+    if (*q != '"') return 0;
+
+    size_t raw = (size_t)(q - vstart);
+    char *sig = (char *)malloc(raw + 1);
+    if (!sig) return 0;
+    size_t n = 0;
+    for (const char *r = vstart; r < q; r++) {
+        if (*r != '\\') { sig[n++] = *r; continue; }
+        r++;
+        switch (*r) {
+        case '"': case '\\': case '/': sig[n++] = *r; break;
+        case 'b': sig[n++] = '\b'; break;
+        case 'f': sig[n++] = '\f'; break;
+        case 'n': sig[n++] = '\n'; break;
+        case 'r': sig[n++] = '\r'; break;
+        case 't': sig[n++] = '\t'; break;
+        case 'u': {
+            unsigned v = 0;
+            if (q - r < 5) { free(sig); return 0; }
+            for (int i = 1; i <= 4; i++) {
+                char h = r[i];
+                unsigned d = (h >= '0' && h <= '9') ? (unsigned)(h - '0')
+                           : (h >= 'a' && h <= 'f') ? (unsigned)(h - 'a' + 10)
+                           : (h >= 'A' && h <= 'F') ? (unsigned)(h - 'A' + 10)
+                           : 16u;
+                if (d > 15u) { free(sig); return 0; }
+                v = (v << 4) | d;
+            }
+            if (v == 0 || v >= 0x80) { free(sig); return 0; }
+            sig[n++] = (char)v;
+            r += 4;
+            break;
+        }
+        default: free(sig); return 0;
+        }
+    }
+    sig[n] = '\0';
+
+    size_t clen = strlen(chunk);
+    char *copy = (char *)malloc(clen - raw + 1);
+    if (!copy) { free(sig); return 0; }
+    size_t head = (size_t)(vstart - chunk);
+    memcpy(copy, chunk, head);
+    memcpy(copy + head, q, clen - (size_t)(q - chunk) + 1);   /* closing quote on */
+    *stripped = copy;
+    *sig_out = sig;
+    *sig_len = n;
+    return 1;
+}
+
 /* Accumulate one delta.tool_calls array into the state. -1 on out of memory. */
 static int openai_accumulate_tool_calls(AiToolStreamState *state,
                                         JsonNode *tool_calls)
@@ -768,6 +865,8 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
             }
         }
 
+        openai_take_signature(state, tc_node);
+
         /* First chunk: id and function.name */
         if (id) {
             snprintf(state->pending_tool_calls[slot].id,
@@ -795,18 +894,29 @@ int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state
     if (!chunk_json || !state) return -1;
 
     JsonNode *root = json_parse(chunk_json);
-    if (!root) return -1;
+    char *stripped = NULL, *long_sig = NULL;
+    size_t long_len = 0;
+    if (!root && !state->sig_seen && strstr(chunk_json, "thought_signature") &&
+        openai_split_long_signature(chunk_json, &stripped, &long_sig, &long_len))
+        root = json_parse(stripped);
+    free(stripped);
+    if (!root) {
+        free(long_sig);
+        return -1;
+    }
 
     /* Check choices array */
     JsonNode *choices = json_obj_get(root, "choices");
     if (!choices || choices->type != JSON_ARRAY || vec_size(&choices->as.arr) == 0) {
         json_free(root);
+        free(long_sig);
         return 0;
     }
 
     JsonNode *choice = (JsonNode *)vec_get(&choices->as.arr, 0);
     if (!choice || choice->type != JSON_OBJECT) {
         json_free(root);
+        free(long_sig);
         return 0;
     }
 
@@ -818,7 +928,18 @@ int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state
         if (tool_calls && tool_calls->type == JSON_ARRAY &&
             openai_accumulate_tool_calls(state, tool_calls) < 0) {
             json_free(root);
+            free(long_sig);
             return -1;
+        }
+    }
+    if (long_sig) {
+        if (!state->sig_seen && long_len > 0) {
+            state->sig_seen = 1;
+            state->sig = long_sig;
+            state->sig_len = long_len;
+            state->sig_cap = long_len + 1;
+        } else {
+            free(long_sig);
         }
     }
 

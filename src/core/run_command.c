@@ -860,6 +860,7 @@ size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
     size_t total = tools_json_len + 2 * snapshot_len;
     if (!conv) return total;
     int moonshot = provider && strcmp(provider, "moonshot") == 0;
+    int gemini = provider && strcmp(provider, "gemini") == 0;
     /* DeepSeek sends every assistant turn's reasoning back, but only on a
      * request that carries tools */
     int deepseek = provider && strcmp(provider, "deepseek") == 0 && tools_json_len > 0;
@@ -881,6 +882,11 @@ size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
         if (m->role == AI_ROLE_ASSISTANT && m->reasoning &&
             ((moonshot && m->n_tool_calls > 0) || deepseek))
             total += escaped_len(m->reasoning, strlen(m->reasoning));
+        /* Gemini's thought signature goes back on the turn's first call */
+        if (gemini && m->role == AI_ROLE_ASSISTANT && m->thought_sig &&
+            m->n_tool_calls > 0)
+            total += strlen(",\"extra_content\":{\"google\":{\"thought_signature\":\"\"}}") +
+                     escaped_len(m->thought_sig, strlen(m->thought_sig));
     }
     return total + ai_tool_wire_bytes(conv, 1, RUNCMD_AGE_ROUNDS - 1);
 }

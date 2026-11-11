@@ -4453,7 +4453,7 @@ static void tt_round(AiConversation *c, const char *model, const char *provider,
     ai_conv_add(c, AI_ROLE_USER, "go");
     AiToolCall call;
     tt_call(&call, id, tool, input);
-    agentic_add_assistant_tool_msg_ex(c, "Checking.", reasoning, provider, rec_model, &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "Checking.", reasoning, provider, rec_model, &call, 1, NULL);
     char out[] = "out";
     AiToolResult r;
     tt_result(&r, &call, out, "ran");
@@ -4487,7 +4487,7 @@ int test_save_text_tool_turns(void)
         AiToolCall calls[2];
         tt_call(&calls[0], "c0", "run_command", "{\"command\":\"ls\"}");
         tt_call(&calls[1], "c1", "web_fetch", "{\"url\":\"x\"}");
-        agentic_add_assistant_tool_msg_ex(c, "Checking.", NULL, "openai", "m", calls, 2);
+        agentic_add_assistant_tool_msg_ex(c, "Checking.", NULL, "openai", "m", calls, 2, NULL);
         char cut[] = "HEADTAIL";
         char page[] = "PAGE";
         AiToolResult r[2];
@@ -4564,7 +4564,7 @@ int test_body_runcmd_turn_as_text_no_runcmd_tool(void)
         tt_round(c, "m", "deepseek", "m", "run_command", "id1", "{\"command\":\"ls\"}", NULL);
         AiToolCall call;
         tt_call(&call, "id2", "web_search", "{\"query\":\"q\"}");
-        agentic_add_assistant_tool_msg_ex(c, "Searching.", NULL, "deepseek", "m", &call, 1);
+        agentic_add_assistant_tool_msg_ex(c, "Searching.", NULL, "deepseek", "m", &call, 1, NULL);
         char res[] = "found";
         AiToolResult r;
         tt_result(&r, &call, res, NULL);
@@ -4718,7 +4718,7 @@ int test_body_text_form_neighbours(void)
         AiToolCall calls[2];
         tt_call(&calls[0], "a", "run_command", "{\"command\":\"pwd\"}");
         tt_call(&calls[1], "b", "web_fetch", "{\"url\":\"u\"}");
-        agentic_add_assistant_tool_msg_ex(c, "", NULL, "custom", "m", calls, 2);
+        agentic_add_assistant_tool_msg_ex(c, "", NULL, "custom", "m", calls, 2, NULL);
         char o1[] = "PWD", o2[] = "PAGE";
         AiToolResult r[2];
         tt_result(&r[0], &calls[0], o1, NULL);
@@ -4768,7 +4768,7 @@ int test_body_after_cut_input_validates(void)
             ai_conv_init(c, "m");
             ai_conv_add(c, AI_ROLE_SYSTEM, "SYS");
             ai_conv_add(c, AI_ROLE_USER, "go");
-            agentic_add_assistant_tool_msg_ex(c, "x", NULL, provs[p], "m", &call, 1);
+            agentic_add_assistant_tool_msg_ex(c, "x", NULL, provs[p], "m", &call, 1, NULL);
             char note[] = "";
             AiToolResult r;
             tt_result(&r, &call, note, "not run: the command was too long");
@@ -4875,7 +4875,7 @@ int test_body_moonshot_pinned(void)
         AiToolCall call;
         tt_call(&call, "functions.web_fetch:0", "web_fetch", "{\"url\":\"https://example.com\"}");
         ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c2, "Fetching it.",
-                      "I should fetch the page.", "moonshot", "kimi-k3.1-pro", &call, 1), 0);
+                      "I should fetch the page.", "moonshot", "kimi-k3.1-pro", &call, 1, NULL), 0);
         char content[] = "Example Domain\nThis domain is for use in examples.";
         AiToolResult res;
         tt_result(&res, &call, content, NULL);

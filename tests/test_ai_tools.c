@@ -2244,3 +2244,188 @@ int test_runcmd_stub_is_error(void)
     free(r.content);
     TEST_END();
 }
+
+/* ======================================================================== */
+/* Gemini thought signatures (OpenAI-compatible stream)                       */
+/* ======================================================================== */
+
+int test_ai_stream_gemini_signature_captured(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    ASSERT_NULL(state.sig);
+
+    /* no "index" (Gemini leaves it out), the signature on the call itself */
+    const char *chunk =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\","
+        "\"tool_calls\":[{\"id\":\"function-call-1\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"x\\\"}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"c2ln\"}}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 1);
+    ASSERT_STR_EQ(state.pending_tool_calls[0].name, "web_search");
+    ASSERT_NOT_NULL(state.sig);
+    ASSERT_STR_EQ(state.sig, "c2ln");
+    ASSERT_EQ((int)state.sig_len, 4);
+
+    /* a later chunk of the same response, with another signature: ignored */
+    const char *later =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"function\":{\"arguments\":\"\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"b3RoZXI=\"}}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(later, &state), 0);
+    ASSERT_STR_EQ(state.sig, "c2ln");
+
+    /* the reset frees it */
+    ai_tools_stream_reset(&state);
+    ASSERT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, 0);
+    ASSERT_EQ((int)state.sig_cap, 0);
+    TEST_END();
+}
+
+int test_ai_stream_gemini_parallel_first_only(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+
+    /* two index-less calls in one chunk: the first carries the signature; a
+     * signature on the second (which Gemini does not send) is not taken */
+    const char *chunk =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"Zmlyc3Q=\"}}},"
+        "{\"id\":\"b\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"c2Vjb25k\"}}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_STR_EQ(state.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(state.pending_tool_calls[1].id, "b");
+    ASSERT_STR_EQ(state.sig, "Zmlyc3Q=");
+
+    /* a second call without one (the usual case) leaves the first's alone */
+    ai_tools_stream_reset(&state);
+    const char *usual =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"Zmlyc3Q=\"}}},"
+        "{\"id\":\"b\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(usual, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_STR_EQ(state.sig, "Zmlyc3Q=");
+
+    /* no signature anywhere: none */
+    ai_tools_stream_reset(&state);
+    const char *none =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(none, &state), 0);
+    ASSERT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, 0);
+    ai_tools_stream_reset(&state);
+    TEST_END();
+}
+
+int test_ai_stream_gemini_long_signature_kept(void)
+{
+    TEST_BEGIN();
+    enum { SIG_LEN = 20 * 1024 };
+    char *sig = (char *)malloc(SIG_LEN + 1);
+    ASSERT_NOT_NULL(sig);
+    for (int i = 0; i < SIG_LEN; i++) sig[i] = (char)('A' + i % 26);
+    sig[SIG_LEN] = '\0';
+
+    const char *head =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"type\":\"function\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"";
+    const char *tail = "\"}}}]}}]}";
+    char *chunk = (char *)malloc(strlen(head) + SIG_LEN + strlen(tail) + 1);
+    ASSERT_NOT_NULL(chunk);
+    sprintf(chunk, "%s%s%s", head, sig, tail);
+
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 1);
+    ASSERT_NOT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, SIG_LEN);
+    ASSERT_TRUE(state.sig_cap > state.sig_len);
+    ASSERT_TRUE(strcmp(state.sig, sig) == 0);
+
+    ai_tools_stream_reset(&state);
+    free(chunk);
+    free(sig);
+    TEST_END();
+}
+
+int test_ai_stream_gemini_long_signature_escapes(void)
+{
+    TEST_BEGIN();
+    /* a signature past the JSON parser's string limit, with base64 slashes
+     * escaped as \/ and a + plus: decoded, and the rest of the chunk
+     * (the call, a second call) still read */
+    enum { RAW = 12000 };
+    char *esc = (char *)malloc(RAW * 2 + 64);
+    char *want = (char *)malloc(RAW + 8);
+    ASSERT_NOT_NULL(esc);
+    ASSERT_NOT_NULL(want);
+    size_t e = 0, w = 0;
+    for (int i = 0; i < RAW; i++) {
+        if (i % 50 == 7)       { memcpy(esc + e, "\\/", 2); e += 2; want[w++] = '/'; }
+        else if (i % 50 == 9)  { memcpy(esc + e, "\\u002b", 6); e += 6; want[w++] = '+'; }
+        else                   { esc[e++] = want[w++] = (char)('a' + i % 26); }
+    }
+    esc[e] = '\0';
+    want[w] = '\0';
+
+    const char *head =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"";
+    const char *tail =
+        "\"}}},{\"id\":\"b\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]}}]}";
+    char *chunk = (char *)malloc(strlen(head) + e + strlen(tail) + 1);
+    ASSERT_NOT_NULL(chunk);
+    sprintf(chunk, "%s%s%s", head, esc, tail);
+
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_STR_EQ(state.pending_tool_calls[1].name, "web_fetch");
+    ASSERT_NOT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, (int)w);
+    ASSERT_TRUE(strcmp(state.sig, want) == 0);
+    ai_tools_stream_reset(&state);
+
+    /* a long string that is not a signature, or an escape it cannot decode,
+     * is still a parse failure */
+    char *bad = (char *)malloc(strlen(head) + 20000 + strlen(tail) + 8);
+    ASSERT_NOT_NULL(bad);
+    size_t b = (size_t)sprintf(bad, "%s", head);
+    memset(bad + b, 'q', 9000);
+    b += 9000;
+    memcpy(bad + b, "\\ud83d", 6);
+    b += 6;
+    sprintf(bad + b, "%s", tail);
+    ai_tools_stream_init(&state);
+    ASSERT_EQ(ai_parse_tool_stream_openai(bad, &state), -1);
+    ASSERT_NULL(state.sig);
+    ai_tools_stream_reset(&state);
+
+    free(bad);
+    free(chunk);
+    free(esc);
+    free(want);
+    TEST_END();
+}

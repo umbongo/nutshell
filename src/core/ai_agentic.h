@@ -47,12 +47,17 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
  * provider and model (NULL or "" for unknown) are recorded on the message as
  * AiMessage.tool_provider / tool_model, cut to their fields: the request
  * builder sends the turn's ids and reasoning only to that provider and model,
- * and renders the turn as text to any other (spec decision 16). */
+ * and renders the turn as text to any other (spec decision 16).
+ * thought_sig (NULL or "" for none) is Gemini's thought signature for the
+ * turn's tool calls, stored on the message as AiMessage.thought_sig (no cap);
+ * the builder writes it back on the turn's first tool call for provider
+ * "gemini" only. */
 int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
                                       const char *assistant_text,
                                       const char *reasoning,
                                       const char *provider, const char *model,
-                                      const AiToolCall *calls, int n_calls);
+                                      const AiToolCall *calls, int n_calls,
+                                      const char *thought_sig);
 
 /* A stored tool result is at most this many bytes once JSON-escaped (the size
  * json_escape_string would write for it). */
