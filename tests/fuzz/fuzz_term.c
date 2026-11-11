@@ -59,14 +59,10 @@ static void feed_run(Terminal *t, const uint8_t *data, size_t from, size_t to)
 {
     if (to > from) {
         uint32_t erase = t->erase_seq;
-        term_reset_cursor_low(t);   /* a live mark: the parser has something to lower */
         term_process(t, (const char *)data + from, to - from);
         check_invariant(t);
-        /* The capture counters: erase_seq never goes back; the low-water mark
-         * never sits above the cursor's line on the primary screen. */
+        /* The capture counter: erase_seq never goes back. */
         if (t->erase_seq < erase) __builtin_trap();
-        if (!t->alt_screen_active && t->cursor_low_line > term_abs_cursor_line(t))
-            __builtin_trap();
         read_abs(t);
     }
 }
@@ -85,19 +81,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             feed_run(t, data, run, i);
             int new_rows = 1 + data[i + 1] % 8, new_cols = 1 + data[i + 2] % 16;
             uint32_t seq = t->reflow_seq, erase = t->erase_seq;
-            uint64_t low = t->cursor_low_line;
             int changed = new_rows != t->rows || new_cols != t->cols;
             bool ok = term_resize(t, new_rows, new_cols);
             /* One reflow for a resize that committed, none for one that did
              * not or that had nothing to do. */
             if (t->reflow_seq != seq + (ok && changed ? 1u : 0u)) __builtin_trap();
-            /* A resize never touches erase_seq; a failed or empty one leaves
-             * the low-water mark too (a committed one resets it to 0). */
+            /* A resize never touches erase_seq. */
             if (t->erase_seq != erase) __builtin_trap();
-            if (!(ok && changed) && t->cursor_low_line != low) __builtin_trap();
-            if (ok && changed && t->cursor_low_line != 0) __builtin_trap();
             check_invariant(t);
-            term_reset_cursor_low(t);
             i += 3;
             run = i;
         } else if (data[i] == 0xFE && i + 1 < size) {

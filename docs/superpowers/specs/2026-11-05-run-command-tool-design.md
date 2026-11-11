@@ -582,28 +582,33 @@ cursor, while `active_term` exists.
   when it is the range's first row and contains the command; trailing blank
   rows are trimmed. Nothing left and an empty screen: "no output on the
   screen".
-- *(review of B1-B11, 2026-11-11)* **A clear or a repaint is a screen
-  result, whatever the line numbers say.** `clear; ls` on a terminal whose
-  prompt sat on row 3 leaves the end line (5) past the start (3): the range
-  is neither empty nor inverted, yet the new output's first rows sit above the
-  start and the range reads only its tail. So the take also falls
-  back to the visible screen rows, with the same note and REDRAWN, when
-  (a) `erase_seq` moved: `Terminal` gains `uint32_t erase_seq`, bumped by
-  every ED 2 on the **primary** screen only (as `region_scroll_seq`, Ruling
-  R30), set to 0 in `term_init` and untouched by `term_resize`; or
-  (b) the cursor went above the start line: `Terminal` gains
-  `uint64_t cursor_low_line`, the lowest absolute line (as
-  `term_abs_cursor_line`) the primary cursor has been on since
-  `term_reset_cursor_low()`, which `runcmd_capture_start` calls. The parser
-  lowers it after every CSI, RI and DECRC (the only ways to move up) while
-  the primary screen is on, so nothing polls; a committed `term_resize`
-  resets it to 0 (the numbering changed, and `reflow_seq` forces the screen
-  anyway), a failed one leaves it. The take compares `cursor_low_line <
-  start_line`. A move up that stays at or below the start row (a progress
-  line redrawn with CUU) is the command's own rows and changes nothing.
-  Today's parser handles ED 0, 1 and 2; **ED 3 and RIS (ESC c) are not
-  handled** (they neither erase nor move the cursor, so they bump nothing);
-  a terminal that gains them bumps `erase_seq` there.
+- *(review of B1-B11, 2026-11-11; trigger narrowed by the review of the fix
+  wave, 2026-11-11)* **A clear is a screen result, whatever the line numbers
+  say.** `clear; ls` on a terminal whose prompt sat on row 3 leaves the end
+  line (5) past the start (3): the range is neither empty nor inverted, yet
+  the new output's first rows sit above the start and the range reads only
+  its tail. So the take also falls back to the visible screen rows, with the
+  same note and REDRAWN, when `erase_seq` moved. `Terminal` gains
+  `uint32_t erase_seq`, set to 0 in `term_init`, untouched by `term_resize`
+  and by the alternate screen, bumped on the **primary** screen only (as
+  `region_scroll_seq`, Ruling R30) by exactly two things: **ED 2**, and
+  **ED 0 issued with the cursor at row 0, column 0** (the Linux console's
+  `clear` sends `ESC[H ESC[J`; xterm's sends `ESC[H ESC[2J`). Nothing else
+  counts: no cursor move (CUP, CUU, RI, DECSC/DECRC, DECSTBM) and no other
+  erase. Today's parser handles ED 0, 1 and 2; **ED 3 and RIS (ESC c) are not
+  handled** (they neither erase nor move the cursor, so they bump nothing); a
+  terminal that gains them bumps `erase_seq` there. *(The review of B1-B11
+  first added a second trigger, a cursor low-water mark: the cursor going
+  above the start row. It is removed, ruling R46: prompt decorations (a
+  two-line prompt redrawn with `\r ESC[1A ESC[J`, a clock drawn with
+  `ESC7 ESC[1;70H ... ESC8`, `ESC7 ESC[r ESC8`) and `apt`-style progress bars
+  move the cursor above the start row far more often than a program repaints
+  without erasing, and each made a capture that worked read the whole
+  screen.)*
+  **Known limit:** a program that homes the cursor and repaints the primary
+  screen without erasing it (no ED 2, no home ED 0) is captured from the
+  start row down, with no screen note: the rows it overwrote above the start
+  row are not read, and rows it repainted below it show their new text.
 - *(review of B1-B11, 2026-11-11)* **The cursor's own row.** The range ends
   at the cursor's line, so a row the command wrote without a final newline
   (`printf foo`, `cat` of a file with no last newline, a progress line when
@@ -617,12 +622,31 @@ cursor, while `active_term` exists.
   row out, as before; that is the only case where output with no final
   newline can still be lost. At the take, the cursor row's text left of the
   cursor is compared with the recorded prompt **as raw text** (the prompt's
-  trailing space counts; trimming comes after): equal adds nothing; ending
-  with the prompt adds the part before it; anything else is added whole (a
-  prompt changed by `cd` shows as a last line: real screen text, accepted).
-  What is added has its trailing blanks trimmed and follows the range text
-  after one newline. EMPTY only when the final text is empty. The screen
-  path is unchanged (it already includes the prompt row).
+  trailing space counts; trimming comes after) *(rules and order: review of
+  the fix wave, 2026-11-11, ruling R49)*: ending with the recorded prompt, the
+  part before it is added (equal: nothing); otherwise, when
+  `shell_prompt_line()` (`shell_prompt.h`) takes the text for a prompt (a
+  prompt that changed: a counter, `cd`, a clock), nothing is added, and the
+  result is **not** EMPTY on that ground alone; otherwise the text is added
+  whole. (A prompt recorded as empty, a start row that was blank, never
+  matches the first rule.) What is added has its trailing blanks trimmed and
+  follows the range text after one newline. EMPTY only when the final text
+  is empty and no prompt row was left out: when one was, the capture carries
+  `RUNCMD_CAP_PROMPT` instead and B8's note is the plain "ran" (neither "no
+  output on the screen", which the changed prompt does not prove, nor the
+  allocation-failure note, which an empty capture without EMPTY would
+  otherwise read as). The screen path is unchanged (it already includes the
+  prompt row). A `RunCmdCapture` must be zero-initialised before its first
+  `runcmd_capture_start` (`run_command.h`); `runcmd_plan` zeroes the ones it
+  makes.
+- *(review of the fix wave, 2026-11-11)* **Limits of the cursor-row rule**,
+  known and accepted: output without a final newline that reads like a
+  prompt (its last non-blank character is one of `$ # % >`: `printf '50%'`)
+  is dropped as a prompt; a prompt wrapped over two rows leaves its first
+  row's fragment in the output when the first row differs from the recorded
+  one; a progress line that returns to column 0 and is not finished shows as
+  the last line; and a take before the echo's CR (the command line still
+  being written) adds the typed line as the cursor row's text.
 - *(review of B1-B11, 2026-11-11)* `runcmd_capture_start` also resets
   `captured`, the flags and any excerpt: a capture armed again takes again.
 

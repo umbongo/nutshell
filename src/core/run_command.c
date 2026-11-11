@@ -3,6 +3,7 @@
 #include "json_parser.h"
 #include "json_validate.h"
 #include "paste_filter.h"
+#include "shell_prompt.h"
 #include "term_extract.h"
 #include "tool_decision.h"
 
@@ -353,7 +354,7 @@ void runcmd_cut(const char *text, size_t len, size_t cap, RunCmdCapture *c)
     c->omitted_bytes = len - head_len - tail_len;
 }
 
-void runcmd_capture_start(RunCmdCapture *c, Terminal *t)
+void runcmd_capture_start(RunCmdCapture *c, const Terminal *t)
 {
     if (!c || !t) return;
     /* A capture armed again (Retry, a second look) starts clean: nothing of
@@ -361,7 +362,6 @@ void runcmd_capture_start(RunCmdCapture *c, Terminal *t)
     cap_clear_excerpt(c);
     c->flags = 0;
     c->captured = 0;
-    term_reset_cursor_low(t);
     c->start_line = term_abs_cursor_line(t);
     c->start_reflow_seq = t->reflow_seq;
     c->start_region_seq = t->region_scroll_seq;
@@ -379,14 +379,18 @@ void runcmd_capture_start(RunCmdCapture *c, Terminal *t)
 }
 
 /* The part of the cursor's row the command wrote: its text left of the
- * cursor minus the recorded prompt (equal: nothing; ending with it: what
- * comes before it; anything else: all of it), trailing blanks trimmed. Heap
- * text with its length in *len_out ("" length 0 when there is none); NULL
- * only when the allocation fails. A prompt that was too long to record
- * (prompt_long) leaves the row out. */
-static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *len_out)
+ * cursor, by these rules in order (ruling R49): ending with the recorded
+ * prompt, the part before it; equal to it, nothing; otherwise, when
+ * shell_prompt_line() takes the text for a prompt (a prompt that changed: a
+ * counter, a cd, a clock), nothing, and *prompt_row_out says so; otherwise all
+ * of it. Trailing blanks trimmed. Heap text with its length in *len_out ("" length
+ * 0 when there is none); NULL only when the allocation fails. A prompt that was
+ * too long to record (prompt_long) leaves the row out. */
+static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *len_out,
+                             int *prompt_row_out)
 {
     *len_out = 0;
+    *prompt_row_out = 0;
     size_t full = c->prompt_long ? 0 : term_extract_cursor_prefix(t, NULL, 0);
     char *row = (char *)g_alloc(full + 1);
     if (!row) return NULL;
@@ -394,8 +398,13 @@ static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *
     if (full > 0) (void)term_extract_cursor_prefix(t, row, full + 1);
 
     size_t n = full;
-    if (n >= c->prompt_len && memcmp(row + n - c->prompt_len, c->prompt, c->prompt_len) == 0)
+    if (c->prompt_len > 0 && n >= c->prompt_len &&
+        memcmp(row + n - c->prompt_len, c->prompt, c->prompt_len) == 0) {
         n -= c->prompt_len;
+    } else if (shell_prompt_line(row)) {
+        n = 0;
+        *prompt_row_out = 1;
+    }
     while (n > 0 && row[n - 1] == ' ') n--;
     row[n] = '\0';
     *len_out = n;
@@ -416,12 +425,11 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
     int screen = c->start_alt || t->alt_screen_active ||
                  t->reflow_seq != c->start_reflow_seq ||
                  t->region_scroll_seq != c->start_region_seq;
-    /* A clear, or a repaint from above the start row: the numbering still
+    /* A clear (ED 2, or ED 0 from the home position): the numbering still
      * counts rows, but the rows from the start line on are no longer the
-     * command's output. */
+     * command's output. A cursor move is never read as one (spec section 10). */
     int redrawn = 0;
-    if (!screen && (t->erase_seq != c->start_erase_seq ||
-                    t->cursor_low_line < c->start_line))
+    if (!screen && t->erase_seq != c->start_erase_seq)
         screen = redrawn = 1;
     if (!screen && end <= c->start_line) screen = redrawn = 1;
 
@@ -430,7 +438,7 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
      * for a blank screen too, so a one-row probe (it fills a tiny buffer from
      * the same rows, writing at least a byte exactly when any row has
      * content) tells the two apart. */
-    int oom = 0;
+    int oom = 0, prompt_row = 0;
     if (screen) {
         flags |= RUNCMD_CAP_SCREEN;
         text = term_extract_last_n_dup(t, t->rows, &len);
@@ -450,7 +458,7 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
          * it (output with no final newline, a progress line at a cancel). */
         if (text) {
             size_t rest_len = 0;
-            char *rest = cursor_row_rest(c, t, &rest_len);
+            char *rest = cursor_row_rest(c, t, &rest_len, &prompt_row);
             if (!rest) {
                 oom = 1;
             } else if (rest_len > 0) {
@@ -481,7 +489,10 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
         c->flags = flags;
         return 1;
     }
-    if (!text || len == 0) flags |= RUNCMD_CAP_EMPTY;
+    /* Nothing left: "no output on the screen", except that a cursor row left
+     * out as a changed prompt is not evidence of that (ruling R49): that is
+     * the PROMPT flag instead, and the note stays "ran". */
+    if (!text || len == 0) flags |= prompt_row ? RUNCMD_CAP_PROMPT : RUNCMD_CAP_EMPTY;
     c->flags = flags;
     runcmd_cut(text, len, cap, c);
     free(text);
@@ -610,8 +621,9 @@ static void capture_notes(NoteBuf *nb, const RunCmdCapture *cap)
     if (cap->flags & RUNCMD_CAP_SCREEN)       note_part(nb, NOTE_SCREEN);
     if (cap->flags & RUNCMD_CAP_SCROLLED_OUT) note_part(nb, NOTE_SCROLLED);
     if (!has_excerpt) {
-        if (cap->flags & RUNCMD_CAP_EMPTY) note_part(nb, NOTE_NO_OUTPUT);
-        else                               note_part(nb, NOTE_OOM_DROPPED);   /* ruling R31 */
+        if (cap->flags & RUNCMD_CAP_EMPTY)       note_part(nb, NOTE_NO_OUTPUT);
+        else if (cap->flags & RUNCMD_CAP_PROMPT) { /* only a changed prompt: the plain "ran" */ }
+        else                                     note_part(nb, NOTE_OOM_DROPPED);   /* ruling R31 */
     } else if (cap->omitted_bytes > 0) {
         note_part_n(nb, NOTE_CUT_PRE, cap->omitted_bytes, NOTE_CUT_POST);
     }

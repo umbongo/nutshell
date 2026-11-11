@@ -165,20 +165,14 @@ typedef struct {
      * capture reads the alternate-screen flag itself. */
     uint32_t reflow_seq;
     uint32_t region_scroll_seq;
-    /* Two more, for a capture that must notice a clear or a repaint. erase_seq:
-     * bumped by every ED 2 (erase whole display) on the PRIMARY screen; ED 3
-     * and RIS (ESC c) are not handled by the parser, so they bump nothing and
-     * move nothing; a failed term_resize leaves it, a committed one does not
-     * touch it. cursor_low_line: the lowest absolute line (as
-     * term_abs_cursor_line() counts) the primary screen's cursor has been on
-     * since term_reset_cursor_low(): the parser lowers it after every escape
-     * sequence that can move the cursor up (CSI, RI, DECRC) while the primary
-     * screen is on, so no one polls it. A committed term_resize sets it to 0
-     * (the numbering changed; reflow_seq says so too), a failed one leaves it.
-     * Always <= term_abs_cursor_line() on the primary screen after
-     * term_process(). */
+    /* One more, for a capture that must notice a clear. erase_seq: bumped on
+     * the PRIMARY screen by ED 2 (erase whole display) and by ED 0 issued with
+     * the cursor at row 0, column 0 (`clear` sends ESC[H ESC[J). Nothing else
+     * bumps it: no cursor move (CUP, CUU, RI, DECRC), no other erase. ED 3 and
+     * RIS (ESC c) are not handled by the parser, so they bump nothing and move
+     * nothing; the alternate screen does not touch it; a failed term_resize
+     * leaves it, a committed one does not touch it. */
     uint32_t erase_seq;
-    uint64_t cursor_low_line;
     uint64_t write_gen;
 
     /* The debug log's session id (the "s3" in a log line; 0 prints "-").
@@ -293,11 +287,6 @@ int term_screen_to_phys(const Terminal *term, int screen_row);
  * (the same top term_screen_to_phys() uses). scrollback_offset never changes
  * it. 0 for NULL. */
 uint64_t term_abs_cursor_line(const Terminal *term);
-
-/* Start a new low-water mark: cursor_low_line becomes the cursor's current
- * absolute line (primary screen; on the alternate screen the next return to
- * the primary lowers it). NULL-safe. The only writer besides the parser. */
-void term_reset_cursor_low(Terminal *term);
 
 /* Logical index of the row shown at screen_row in the view as scrolled
  * (scrollback_offset applied, top clamped to 0 exactly as the renderer's

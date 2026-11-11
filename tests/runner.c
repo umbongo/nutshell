@@ -1974,8 +1974,6 @@ int test_term_abs_range_empty(void);
 int test_term_reflow_seq(void);
 int test_term_region_scroll_seq(void);
 int test_term_erase_seq(void);
-int test_term_cursor_low_line(void);
-int test_term_cursor_low_scrolled(void);
 int test_term_extract_cursor_prefix(void);
 
 /* test_scroll_region.c */
@@ -3043,6 +3041,10 @@ int test_runcmd_capture_clear_taller_than_start(void);
 int test_runcmd_capture_clear_from_row_zero(void);
 int test_runcmd_capture_erase_display_alone(void);
 int test_runcmd_capture_cursor_home_redraw(void);
+int test_runcmd_capture_home_erase_below(void);
+int test_runcmd_capture_prompt_decorations(void);
+int test_runcmd_capture_changing_prompt(void);
+int test_runcmd_results_prompt_only_note(void);
 int test_runcmd_capture_cursor_up_inside_range(void);
 int test_runcmd_capture_no_final_newline(void);
 int test_runcmd_capture_partial_row_at_cancel(void);
@@ -6098,8 +6100,6 @@ int main(void) {
     failed += test_term_reflow_seq();
     failed += test_term_region_scroll_seq();
     failed += test_term_erase_seq();
-    failed += test_term_cursor_low_line();
-    failed += test_term_cursor_low_scrolled();
     failed += test_term_extract_cursor_prefix();
 
     printf("\n--- AI Chat Indicator ---\n");
@@ -7171,6 +7171,10 @@ int main(void) {
     failed += test_runcmd_capture_clear_from_row_zero();
     failed += test_runcmd_capture_erase_display_alone();
     failed += test_runcmd_capture_cursor_home_redraw();
+    failed += test_runcmd_capture_home_erase_below();
+    failed += test_runcmd_capture_prompt_decorations();
+    failed += test_runcmd_capture_changing_prompt();
+    failed += test_runcmd_results_prompt_only_note();
     failed += test_runcmd_capture_cursor_up_inside_range();
     failed += test_runcmd_capture_no_final_newline();
     failed += test_runcmd_capture_partial_row_at_cancel();

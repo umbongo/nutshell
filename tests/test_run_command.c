@@ -2685,7 +2685,10 @@ int test_runcmd_capture_erase_display_alone(void)
     TEST_END();
 }
 
-/* Cursor-home redraw with no clear at all (a full-screen repaint). */
+/* A home-and-repaint with no erase at all is not detected (spec section 10's
+ * known limit): the take reads from the start row down, with no note. The
+ * prompt decorations and apt-style progress bars that move the cursor above
+ * the start row are far more common than a repaint that never erases. */
 int test_runcmd_capture_cursor_home_redraw(void)
 {
     TEST_BEGIN();
@@ -2694,15 +2697,103 @@ int test_runcmd_capture_cursor_home_redraw(void)
     memset(&c, 0, sizeof c);
     rc_feed(t, "a\r\nb\r\n$ ");
     cap_run(t, &c, "redraw", "redraw\r\n\x1b[H" "x1\x1b[K\r\nx2\x1b[K\r\nx3\x1b[K\r\nx4\x1b[K\r\nx5\x1b[K\r\n$ ");
-    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
-    ASSERT_HEAD(c, "x1\nx2\nx3\nx4\nx5\n$");
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_HEAD(c, "x3\nx4\nx5");
     cap_free(&c);
     term_free(t);
     TEST_END();
 }
 
+/* `clear` as ESC[H ESC[J (ED 0 at the home position) is an erase: the screen
+ * rows, with the note. */
+int test_runcmd_capture_home_erase_below(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "a\r\nb\r\nc\r\n$ ");
+    cap_run(t, &c, "clear; ls", "clear; ls\r\n\x1b[H\x1b[J" "f1\r\nf2\r\nf3\r\nf4\r\nf5\r\n$ ");
+    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_HEAD(c, "f1\nf2\nf3\nf4\nf5\n$");
+    cap_free(&c);
+    term_free(t);
+
+    /* the prompt on row 0: the home never goes above the start row, only the
+     * erase tells (the old output is gone, the screen is the result) */
+    Terminal *u = term_init(10, 40, 100);
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    rc_feed(u, "$ ");
+    cap_run(u, &d, "demo", "demo\r\nold1\r\nold2\r\n\x1b[H\x1b[J" "new\r\n$ ");
+    ASSERT_EQ((int)d.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_HEAD(d, "new\n$");
+    cap_free(&d);
+    term_free(u);
+    TEST_END();
+}
+
+/* Three cursor moves that must not trigger the screen fallback (the
+ * re-review's experiments; the outputs are what the tree before the cursor
+ * test gave): none of them erases the screen, so none is a screen result. */
+int test_runcmd_capture_prompt_decorations(void)
+{
+    TEST_BEGIN();
+    /* a two-line prompt redrawn after the Enter (powerlevel10k's transient prompt) */
+    Terminal *t = term_init(24, 80, 1000);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "old\r\n~/src main\r\n> ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "ls\r\x1b[1A\x1b[J> ls\r\n");
+    for (int i = 0; i < 40; i++) {
+        char b[16];
+        snprintf(b, sizeof b, "file%02d\r\n", i);
+        rc_feed(t, b);
+    }
+    rc_feed(t, "~/src main\r\n> ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 16384), 1);
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_HEAD(c,
+        "file00\nfile01\nfile02\nfile03\nfile04\nfile05\nfile06\nfile07\nfile08\nfile09\n"
+        "file10\nfile11\nfile12\nfile13\nfile14\nfile15\nfile16\nfile17\nfile18\nfile19\n"
+        "file20\nfile21\nfile22\nfile23\nfile24\nfile25\nfile26\nfile27\nfile28\nfile29\n"
+        "file30\nfile31\nfile32\nfile33\nfile34\nfile35\nfile36\nfile37\nfile38\nfile39\n"
+        "~/src main");
+    cap_free(&c);
+    term_free(t);
+
+    /* a clock at the right margin of the first row, drawn with save and restore */
+    Terminal *u = term_init(24, 80, 1000);
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    rc_feed(u, "a\r\nb\r\n$ ");
+    runcmd_capture_start(&d, u);
+    rc_feed(u, "ls\r\nf1\r\nf2\r\n\x1b" "7\x1b[1;70H12:00:01\x1b" "8$ ");
+    ASSERT_EQ(runcmd_capture_take(&d, u, "ls", 16384), 1);
+    ASSERT_EQ((int)d.flags, 0);
+    ASSERT_HEAD(d, "f1\nf2");
+    cap_free(&d);
+    term_free(u);
+
+    /* save, reset the scroll region (moves the cursor home), restore */
+    Terminal *v = term_init(24, 80, 1000);
+    RunCmdCapture e;
+    memset(&e, 0, sizeof e);
+    rc_feed(v, "a\r\nb\r\n$ ");
+    runcmd_capture_start(&e, v);
+    rc_feed(v, "prog\r\nline1\r\n\x1b" "7\x1b[r\x1b" "8line2\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&e, v, "prog", 16384), 1);
+    ASSERT_EQ((int)e.flags, 0);
+    ASSERT_HEAD(e, "line1\nline2");
+    cap_free(&e);
+    term_free(v);
+    TEST_END();
+}
+
 /* Moving up inside the command's own rows (a progress line) is not a redraw,
- * and neither is an earlier command's home: the mark restarts at each start. */
+ * and neither is an earlier command's clear: erase_seq is compared with its
+ * value at each start. */
 int test_runcmd_capture_cursor_up_inside_range(void)
 {
     TEST_BEGIN();
@@ -2768,9 +2859,9 @@ int test_runcmd_capture_partial_row_at_cancel(void)
     RunCmdCapture c;
     memset(&c, 0, sizeof c);
     rc_feed(t, "$ ");
-    cap_run(t, &c, "run", "run\r\nstep 1\r\nprogress 50%");
+    cap_run(t, &c, "run", "run\r\nstep 1\r\nprogress 50 of 80");
     ASSERT_EQ((int)c.flags, 0);
-    ASSERT_HEAD(c, "step 1\nprogress 50%");
+    ASSERT_HEAD(c, "step 1\nprogress 50 of 80");
     cap_free(&c);
     term_free(t);
 
@@ -2787,8 +2878,8 @@ int test_runcmd_capture_partial_row_at_cancel(void)
 }
 
 /* An ordinary command leaves no prompt line; the prompt's trailing space is
- * part of the comparison; a changed prompt shows as a last line; a prompt
- * past the buffer is never read (the cursor row stays out). */
+ * part of the comparison; a changed prompt is not output; a prompt past the
+ * buffer is never read (the cursor row stays out). */
 int test_runcmd_capture_prompt_rules(void)
 {
     TEST_BEGIN();
@@ -2811,13 +2902,15 @@ int test_runcmd_capture_prompt_rules(void)
     cap_free(&d);
     term_free(t);
 
-    /* a prompt that changed (cd): the new prompt is a last line, trimmed */
+    /* a prompt that changed (cd) is a prompt, not output (shell_prompt_line):
+     * nothing is added, and the result is not EMPTY on that ground alone */
     Terminal *u = term_init(10, 60, 100);
     RunCmdCapture e;
     memset(&e, 0, sizeof e);
     rc_feed(u, "user@h:~$ ");
     cap_run(u, &e, "cd /tmp", "cd /tmp\r\nuser@h:/tmp$ ");
-    ASSERT_HEAD(e, "user@h:/tmp$");
+    ASSERT_NULL(e.head);
+    ASSERT_EQ((int)e.flags, 32);
     cap_free(&e);
     term_free(u);
 
@@ -2838,6 +2931,106 @@ int test_runcmd_capture_prompt_rules(void)
     ASSERT_HEAD(f, "out");
     cap_free(&f);
     term_free(w);
+    TEST_END();
+}
+
+/* Rule order for the cursor row's text (ruling R49): ends with the recorded
+ * prompt -> strip it, keep the rest; equals it -> nothing; else when
+ * shell_prompt_line() calls it a prompt -> nothing, and no EMPTY on that
+ * ground alone; else the whole text. Expected values are literals. */
+int test_runcmd_capture_changing_prompt(void)
+{
+    TEST_BEGIN();
+    /* `false` under a prompt that counts: no stray prompt line, no EMPTY.
+     * The flag (32) says "the cursor row was a changed prompt and the text is
+     * empty", so B8's note stays the plain "ran". */
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "[0] $ ");
+    cap_run(t, &c, "false", "false\r\n[1] $ ");
+    ASSERT_NULL(c.head);
+    ASSERT_NULL(c.tail);
+    ASSERT_EQ((int)c.omitted_bytes, 0);
+    ASSERT_EQ((int)c.flags, 32);                 /* not 8 (EMPTY), not 0 (a drop) */
+    ASSERT_EQ(c.captured, 1);
+
+    /* the next command starts from the prompt as it now is */
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    cap_run(t, &d, "false", "false\r\n[2] $ ");
+    ASSERT_NULL(d.head);
+    ASSERT_EQ((int)d.flags, 32);
+
+    /* with output, the changed prompt adds nothing to it and no flag shows */
+    RunCmdCapture e;
+    memset(&e, 0, sizeof e);
+    cap_run(t, &e, "ls", "ls\r\nout1\r\nout2\r\n[3] $ ");
+    ASSERT_EQ((int)e.flags, 0);
+    ASSERT_HEAD(e, "out1\nout2");
+
+    /* an unchanged prompt is still EMPTY, never 32 */
+    RunCmdCapture f;
+    memset(&f, 0, sizeof f);
+    cap_run(t, &f, "true", "true\r\n[3] $ ");
+    ASSERT_NULL(f.head);
+    ASSERT_EQ((int)f.flags, (int)RUNCMD_CAP_EMPTY);
+
+    /* a cursor row that is not a prompt is output: added whole, trimmed */
+    RunCmdCapture g;
+    memset(&g, 0, sizeof g);
+    cap_run(t, &g, "apt x", "apt x\r\nProgress: 50  ");
+    ASSERT_EQ((int)g.flags, 0);
+    ASSERT_HEAD(g, "Progress: 50");
+    cap_free(&c);
+    cap_free(&d);
+    cap_free(&e);
+    cap_free(&f);
+    cap_free(&g);
+    term_free(t);
+
+    /* a changed prompt that ends with the old one is stripped, the rest kept */
+    Terminal *u = term_init(10, 40, 100);
+    RunCmdCapture h;
+    memset(&h, 0, sizeof h);
+    rc_feed(u, "$ ");
+    cap_run(u, &h, "printf foo", "printf foo\r\nfoo$ ");
+    ASSERT_EQ((int)h.flags, 0);
+    ASSERT_HEAD(h, "foo");
+    cap_free(&h);
+
+    /* output without a newline that happens to read like a prompt is dropped
+     * (a known limit, spec section 10): printf '#1 >' under a changed prompt */
+    RunCmdCapture k;
+    memset(&k, 0, sizeof k);
+    cap_run(u, &k, "x", "x\r\n#1 > ");
+    ASSERT_NULL(k.head);
+    ASSERT_EQ((int)k.flags, 32);
+    cap_free(&k);
+    term_free(u);
+    TEST_END();
+}
+
+/* The note B8 builds for that capture: the plain "ran", neither "no output on
+ * the screen" nor the allocation-failure note an empty capture without EMPTY
+ * would read as. */
+int test_runcmd_results_prompt_only_note(void)
+{
+    TEST_BEGIN();
+    RunCmdReply *r = plan_runs(2);
+    ASSERT_NOT_NULL(r);
+    const ApprovalStatus st[2] = { APPROVE_COMPLETED, APPROVE_COMPLETED };
+    ApprovalQueue q;
+    queue_of(&q, r, st, 2);
+    cap_excerpt(&r->calls[0], NULL, NULL, 0, 32);                       /* a changed prompt only */
+    cap_excerpt(&r->calls[1], NULL, NULL, 0, 0);                        /* the read failed */
+    AiToolResult res[2];
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_SETTLED, res), 2);
+    ASSERT_STR_EQ(res[0].tool_note, "ran");
+    ASSERT_NULL(res[0].content);
+    ASSERT_STR_EQ(res[1].tool_note, "ran; output dropped: Nutshell ran out of memory");
+    free_results(res, 2);
+    runcmd_reply_free(r);
     TEST_END();
 }
 
