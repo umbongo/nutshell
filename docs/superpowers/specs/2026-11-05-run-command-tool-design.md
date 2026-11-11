@@ -695,10 +695,14 @@ cursor, while `active_term` exists.
   `runcmd_capture_start` (`run_command.h`); `runcmd_plan` zeroes the ones it
   makes.
 - *(review of the fix wave, 2026-11-11; C0 removed its first limit)*
-  **Limits of the cursor-row rule**, known and accepted: a prompt wrapped
-  over two rows leaves its first
-  row's fragment in the output when the first row differs from the recorded
-  one; a progress line that returns to column 0 and is not finished shows as
+  **Limits of the cursor-row rule**, known and accepted: only the cursor row
+  is compared with the recorded prompt, so a multi-line prompt's earlier rows
+  are complete rows of the range and come out as output lines (a two-line
+  prompt redrawn as a transient one ends the output with its first line); a
+  prompt wrapped over two rows leaves its first row's fragment in the output
+  when the first row differs from the recorded one; a prompt recorded as
+  empty (the start row was blank) never matches, so the new prompt is then
+  the output's last line; a progress line that returns to column 0 and is not finished shows as
   the last line; and a take before the echo's CR (the command line still
   being written) adds the typed line as the cursor row's text.
 - *(review of B1-B11, 2026-11-11)* `runcmd_capture_start` also resets

@@ -896,6 +896,92 @@ int test_conv_note_door_keep_free_values(void)
     TEST_END();
 }
 
+/* An append that fails once (the test hook): the door says -1, never "full",
+ * and stores no text; the notes the failure stopped stay queued, in order. */
+static int g_add_calls, g_add_fail_at;
+static int failing_add(AiConversation *conv, AiRole role, const char *text)
+{
+    if (++g_add_calls == g_add_fail_at) return -1;
+    return ai_conv_add(conv, role, text);
+}
+
+int test_conv_note_door_out_of_memory_is_not_full(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiNoteQueue q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        int before = c->msg_count;
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "note1"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "note2"), 1);
+        /* the first append (note1, in the door's flush) fails: -1, nothing stored */
+        ai_conv_guard_set_add_for_test(failing_add);
+        g_add_calls = 0;
+        g_add_fail_at = 1;
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "text"), -1);
+        ASSERT_EQ(c->msg_count, before);
+        ASSERT_EQ(q.count, 2);
+        ASSERT_STR_EQ(q.text[0], "note1");
+        ASSERT_STR_EQ(q.text[1], "note2");
+        /* the second append (note2) fails: note1 stored, note2 stays, text not stored */
+        g_add_calls = 0;
+        g_add_fail_at = 2;
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "text"), -1);
+        ASSERT_EQ(c->msg_count, before + 1);
+        ASSERT_STR_EQ(c->messages[before].content, "note1");
+        ASSERT_EQ(q.count, 1);
+        ASSERT_STR_EQ(q.text[0], "note2");
+        /* the text's own append fails with nothing queued before it */
+        g_add_calls = 0;
+        g_add_fail_at = 2;
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "text"), -1);
+        ASSERT_EQ(c->msg_count, before + 2);                 /* note2 stored, text not */
+        ASSERT_EQ(q.count, 0);
+        ai_conv_guard_set_add_for_test(NULL);
+        /* and it works again */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "text"), 0);
+        ASSERT_EQ(c->msg_count, before + 3);
+        ASSERT_STR_EQ(c->messages[before + 2].content, "text");
+
+        /* a failure with no room anyway is still "full" (2), not -1 */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "S");
+        while (c->msg_count < 61) ai_conv_add(c, AI_ROLE_USER, "x");
+        memset(&q, 0, sizeof(q));
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "n1"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "n2"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "text"), 2);   /* n1 fits (62), n2 would not */
+        ASSERT_EQ(c->msg_count, 62);
+        ASSERT_EQ(q.count, 1);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+/* keep_free beyond the conversation is clamped: nothing fits (2), nothing
+ * is stored or queued, and keep_free + 1 never overflows. */
+int test_conv_note_door_keep_free_huge(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiNoteQueue q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        int before = c->msg_count;
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 2147483647, "text"), 2);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, AI_MAX_MESSAGES, "text"), 2);
+        ASSERT_EQ(c->msg_count, before);
+        ASSERT_EQ(q.count, 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 2147483647, "queued"), 1);   /* defer ignores it */
+        ASSERT_EQ(q.count, 1);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
 /* keep_free: 0 is the old flush, a negative value counts as 0, a value larger
  * than the room appends nothing and drops nothing. */
 int test_conv_flush_keep_free_values(void)

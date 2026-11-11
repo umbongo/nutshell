@@ -137,9 +137,16 @@ static void note_copy(char *dst, const char *text)
 
 /* Append `text` as a USER turn marked as Nutshell's own: the one place the
  * mark is set (spec decision 22). */
+static int (*g_add_turn)(AiConversation *, AiRole, const char *) = ai_conv_add;
+
+void ai_conv_guard_set_add_for_test(int (*add)(AiConversation *, AiRole, const char *))
+{
+    g_add_turn = add ? add : ai_conv_add;
+}
+
 static int add_note_turn(AiConversation *conv, const char *text)
 {
-    if (ai_conv_add(conv, AI_ROLE_USER, text) != 0) return -1;
+    if (g_add_turn(conv, AI_ROLE_USER, text) != 0) return -1;
     conv->messages[conv->msg_count - 1].nutshell_note = 1;
     return 0;
 }
@@ -178,13 +185,19 @@ int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
     }
 
     if (keep_free < 0) keep_free = 0;
+    if (keep_free > AI_MAX_MESSAGES) keep_free = AI_MAX_MESSAGES;   /* nothing fits; no overflow */
     /* Earlier notes waiting go in first, so the order is kept, and each leaves
      * the text's own slot and keep_free more (the reply's, when the text
      * launches a request): the flush is the door's, not the caller's. A note
      * that cannot be stored under that rule stays queued with every later one
      * (C0, R54). */
     ai_conv_flush_notes(conv, q, keep_free + 1);
-    if (q && q->count > 0) return 2;                  /* never ahead of a queued note */
+    if (q && q->count > 0) {
+        /* The flush stops for room or for a failed allocation: when the next
+         * note would have had its room, it was the allocation. The text is
+         * not stored (never ahead of a queued note) and the notes stay. */
+        return conv->msg_count + 2 + keep_free <= AI_MAX_MESSAGES ? -1 : 2;
+    }
     if (conv->msg_count + 1 + keep_free > AI_MAX_MESSAGES) return 2;
 
     char cut[AI_NOTE_TEXT_MAX];

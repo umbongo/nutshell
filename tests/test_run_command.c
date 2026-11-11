@@ -2735,8 +2735,9 @@ int test_runcmd_capture_home_erase_below(void)
 
 /* A two-line prompt redrawn as a transient one (`\r ESC[1A ESC[J`) leaves the
  * cursor at the home position without a CUP: not a clear (C0). Prompt on rows 0
- * and 1 of 24, 40 lines of output: all 40 lines, flags 0. The new prompt's
- * first line is a complete row of the range (a known limit, spec section 10). */
+ * and 1 of 24, 40 lines of output: flags 0 and all 40 lines, then the new
+ * prompt's first line `~/src main` as a 41st. That line is a complete row of the range: only the cursor row is compared
+ * with the recorded prompt (a known limit, spec section 10). */
 int test_runcmd_capture_transient_prompt_not_clear(void)
 {
     TEST_BEGIN();

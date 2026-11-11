@@ -400,6 +400,8 @@ int test_conv_room_for_send(void);          /* msg_count 62 -> 1; 63 -> 0; 62 wi
                                                "stop, don't do that" into a 63-message conversation: refused, msg_count unchanged */
 int test_conv_note_door_keeps_the_reply_slot(void);   /* 61 messages, two queued notes, the launching text (keep_free 1): 2, msg_count 62, one note still queued, a reply fits; keep_free 0: both notes then the text, 64 (C0, R54) */
 int test_conv_note_door_keep_free_values(void);       /* the text alone at 62/63/64 messages, negative keep_free, defer on a full conversation still 1, bad arguments -1 (C0, R54) */
+int test_conv_note_door_out_of_memory_is_not_full(void);   /* a failed append (test hook `ai_conv_guard_set_add_for_test`) is -1, notes stay queued; no room anyway is still 2 (C0 review) */
+int test_conv_note_door_keep_free_huge(void);   /* keep_free INT_MAX or AI_MAX_MESSAGES is clamped: 2, nothing stored or queued (C0 review) */
 int test_conv_drop_open_tool_turn(void);    /* open -> 1, then well_formed 1; closed -> 0 */
 int test_body_refuses_malformed(void);
 /* ai_build_request_body_frame on test_pairs_note_between_fails' conv returns 0 for "anthropic" and "openai" */

@@ -28,11 +28,19 @@ int ai_conv_tool_calls_open(const AiConversation *conv);
  *      queued, in order, and the text is never stored ahead of a queued note.
  *      The caller shows the conversation-full notice (spec decision 24);
  *   -1 a NULL conv or text, an empty text, a full queue or a NULL queue when
- *      one is needed (the caller shows a row), or the allocation failed.
+ *      one is needed (the caller shows a row), or an allocation failed (the
+ *      text is not stored; queued notes that the failure stopped stay queued,
+ *      in order). Out of memory is never reported as 2.
+ * keep_free is clamped to AI_MAX_MESSAGES (nothing then fits: 2).
  * A text of AI_NOTE_TEXT_MAX bytes or more is cut on a UTF-8 boundary and
  * ends " [\xE2\x80\xA6 cut]" (both ways of storing it). */
 int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
                           int keep_free, const char *text);
+
+/* TEST ONLY. Replace the function the door and ai_conv_flush_notes() append a
+ * turn with (default ai_conv_add; NULL restores it), so a test can fail one
+ * append. Not for product code. */
+void ai_conv_guard_set_add_for_test(int (*add)(AiConversation *, AiRole, const char *));
 
 /* 1 when a typed message can be stored with its reply:
  * msg_count + 2 (+ 1 when a run_command batch is open, since the typed
