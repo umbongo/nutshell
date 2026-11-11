@@ -447,8 +447,10 @@ void ai_chat_cancel_active_stream(AiChatData *d)
 
     /* Remove the last assistant message from conv if partially added */
     if (d->conv.msg_count > 0 &&
-        d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
+        d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT) {
         ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
+        ai_conv_snapshot_trim(&d->conv);   /* R40: after every pop */
+    }
 
     /* Update UI */
     ai_chat_update_context_bar(d);
@@ -565,7 +567,34 @@ void ai_chat_send_user_message(AiChatData *d)
         return;
     }
 
+    /* A run_command batch still open (a card nobody ran) ends with this
+     * message (spec decisions 8 and 24): its results go in first, then the
+     * typed turn. Without room for the results turn, the typed turn and the
+     * reply, nothing is sent and the text stays in the box. */
+    CmdBatch *runcmd_batch = cmd_batch_runcmd(&d->active_state->batches);
+    const int ends_runcmd_batch = (runcmd_batch != NULL);   /* the finish frees it */
+    if (ends_runcmd_batch &&
+        !ai_conv_room_for_send(&d->conv, ends_runcmd_batch,
+                               &d->active_state->notes)) {
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            "[conversation full: your message was not sent; start a New Chat]");
+        if (d->hChatList) {
+            chat_listview_invalidate(d->hChatList);
+            chat_listview_scroll_to_bottom(d->hChatList);
+        }
+        secure_zero(input, input_len);
+        free(input);
+        return;
+    }
+
     SetWindowText(d->hInput, "");
+
+    /* The finish leaves two slots free (this message's and its reply's, R47)
+     * and settles the card above the typed message. It relaunches nothing:
+     * the typed message does. */
+    if (ends_runcmd_batch)
+        ai_chat_runcmd_finish(d, d->active_state, runcmd_batch,
+                              runcmd_path_plan(RUNCMD_PATH_TYPED).cause);
 
     /* Display user message in ChatListView */
     chat_msg_append(&d->msg_list, CHAT_ITEM_USER, input);
@@ -598,6 +627,12 @@ void ai_chat_send_user_message(AiChatData *d)
     ai_chat_start_indicator(d, "thinking");
 
     ai_chat_launch_stream_thread(d, "user");
+
+    /* The finish above starts no next batch (a request was to follow). When
+     * the launch failed, an approved batch waiting behind the one that ended
+     * must not be stranded; a no-op while the stream is busy. */
+    if (ends_runcmd_batch)
+        ai_chat_maybe_start_next_batch(d);
 
     /* Clear pending attachment after thread is launched */
     ai_attachment_free(&d->pending_attachment);

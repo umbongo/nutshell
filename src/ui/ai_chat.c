@@ -721,6 +721,16 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->dispatch_active)
                     ai_chat_dispatch_cancel(d, NULL, 0,
                         runcmd_path_plan(RUNCMD_PATH_NEW_CHAT).cause);
+                /* A run_command card nobody ran is still in the set: it ends
+                 * with NEW_CHAT (nothing stored, no request) before the set
+                 * is freed below, so its rows are recorded and settled and the
+                 * finish is the one place a batch leaves. */
+                if (d->active_state) {
+                    CmdBatch *rc_batch = cmd_batch_runcmd(&d->active_state->batches);
+                    if (rc_batch)
+                        ai_chat_runcmd_finish(d, d->active_state, rc_batch,
+                            runcmd_path_plan(RUNCMD_PATH_NEW_CHAT).cause);
+                }
 
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
@@ -1059,7 +1069,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
             /* IDC_ACTIVITY_RETRY → cancel current request and resend */
             if (d && ctl_id == IDC_ACTIVITY_RETRY) {
-                /* Cancel current stream if possible, reset activity */
+                /* Cancel current stream if possible, reset activity. The
+                 * abort also flushes the notes queued behind the stream
+                 * (keep_free 1: Retry relaunches, the reply keeps its slot),
+                 * so the retried body carries them. */
                 ai_chat_abort_session_stream(d, d->active_state,
                     runcmd_cause_keep_free(RUNCMD_CAUSE_RETRY));   /* Retry relaunches */
                 KillTimer(hwnd, TIMER_HEARTBEAT);
@@ -1080,10 +1093,43 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_thinking[0] = '\0';
                 d->stream_thinking_len = 0;
 
+                /* What Retry does is runcmd_retry_plan's decision, read after
+                 * the abort so it sees the conversation the pop below acts on
+                 * (the abort's flush may have added notes at its end). */
+                CmdBatch *retry_batch = d->active_state
+                    ? cmd_batch_runcmd(&d->active_state->batches) : NULL;
+                const RunCmdRetry retry_plan =
+                    runcmd_retry_plan(&d->conv, retry_batch != NULL);
+
+                if (retry_plan == RUNCMD_RETRY_CANCEL_BATCH && retry_batch) {
+                    /* A run_command batch is waiting or running: it ends with
+                     * its results and the cause RETRY, and the finish
+                     * relaunches from them. The turn that holds its calls is
+                     * never popped. A batch the dispatcher is running goes
+                     * through the dispatch cancel (it stops the timer first);
+                     * a card nobody has run goes straight to the finish. */
+                    const RunCmdCause retry_cause =
+                        runcmd_path_plan(RUNCMD_PATH_RETRY).cause;
+                    if (d->dispatch_active &&
+                        d->dispatch_batch_id == retry_batch->id)
+                        ai_chat_dispatch_cancel(d, NULL, 0, retry_cause);
+                    else
+                        ai_chat_runcmd_finish(d, d->active_state, retry_batch,
+                                              retry_cause);
+                    /* A RETRY finish starts the next approved batch itself
+                     * never (a request follows). When none followed (no room,
+                     * the door full, a failed launch), an approved batch
+                     * waiting behind this one must not be stranded; the call
+                     * is a no-op while the relaunch's stream is busy. */
+                    ai_chat_maybe_start_next_batch(d);
+                    return 0;
+                }
+
                 /* Remove the last assistant message from conv if added, and
                  * forget the run records keyed to it: a new reply with the
                  * same text at this index would match them too. */
-                if (d->conv.msg_count > 0 &&
+                if (retry_plan == RUNCMD_RETRY_POP_ASSISTANT &&
+                    d->conv.msg_count > 0 &&
                     d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT) {
                     if (d->active_state) {
                         /* The records already made, and the live batches
@@ -1094,6 +1140,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                                     d->conv.msg_count - 1);
                     }
                     ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
+                    ai_conv_snapshot_trim(&d->conv);   /* R40: after every pop */
                 }
 
                 /* Re-launch stream */
@@ -2609,7 +2656,13 @@ static void do_session_switch(AiChatData *d,
      * after the user's next prompt. Hidden-tab batches are all pending, so
      * they wait for a click; a batch the user had approved on this tab and
      * that the switch away cancelled was removed by ai_chat_dispatch_cancel(), so
-     * only batches still holding approved, unrun rows start here. */
+     * only batches still holding approved, unrun rows start here. Showing a
+     * tab starts no model request, run_command conversation or not (spec
+     * decision 7): the rebuilt view shows the stored rows and any waiting
+     * card, and the user continues by Run on the card or a typed message.
+     * The TAB_SWITCH finish above relaunches nothing
+     * (runcmd_cause_relaunches), and this call only dispatches a command the
+     * user already approved. */
     ai_chat_maybe_start_next_batch(d);
 
     /* If switching to a session that's still streaming,
