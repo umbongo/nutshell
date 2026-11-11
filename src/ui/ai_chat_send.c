@@ -382,6 +382,10 @@ void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state)
     state->stream_thinking_len = 0;
     state->stream_phase = 0;
     state->activity_phase = (int)ACTIVITY_IDLE;
+    /* A stopped stream's reply never arrives to flush the notes queued behind
+     * it (nothing relaunches here: keep_free 0). A note that does not fit stays
+     * queued; an open tool call keeps them all. */
+    (void)ai_conv_flush_notes(ai_chat_owner_conv(d, state), &state->notes, 0);
 }
 
 /* Free the payloads of stream messages still queued for a panel that is
@@ -633,6 +637,21 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
     }
 
     ai_rounds_continue(d->active_state, unattended);
+
+    ai_chat_start_indicator(d, "continuing");
+
+    ai_chat_launch_stream_thread(d, "continue");
+}
+
+void ai_chat_send_tool_results(AiChatData *d, int unattended)
+{
+    if (!d || !d->active_state || d->active_state->busy) return;
+
+    ai_rounds_continue(d->active_state, unattended);
+
+    /* Notes the finish could not store ahead of the results (R47): the
+     * reply's slot stays free, a note that does not fit stays queued. */
+    (void)ai_conv_flush_notes(&d->conv, &d->active_state->notes, 1);
 
     ai_chat_start_indicator(d, "continuing");
 

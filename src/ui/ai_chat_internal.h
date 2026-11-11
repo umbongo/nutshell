@@ -582,7 +582,19 @@ void ai_chat_runcmd_answer_reply(AiChatData *d, AiSessionState *owner,
 void ai_chat_runcmd_answer_oom(AiChatData *d, AiSessionState *owner);
 void ai_chat_dispatch_start(AiChatData *d, int batch_id);
 void ai_chat_maybe_start_next_batch(AiChatData *d);
-void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);
+/* Stop the dispatcher (see ai_chat_dispatch.c). `cause` is the RunCmdCause the
+ * running batch is answered with when it is a run_command batch (read from
+ * runcmd_path_plan(<the path>).cause at each caller); an [EXEC] batch ignores it. */
+void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify,
+                             RunCmdCause cause);
+/* The one end of a run_command batch (spec decisions 8 and 9): capture the
+ * EXECUTING entry's output where the cause says the terminal may exist, build
+ * the results, store them in `owner`'s conversation when the cause appends,
+ * settle the rows when `owner` is displayed, record and remove the batch (freed),
+ * and relaunch only where runcmd_finish_relaunches says so. Everything runs on
+ * the UI thread. */
+void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch,
+                           RunCmdCause cause);
 void ai_chat_dispatch_tick(AiChatData *d);
 /* Tool cards (trust boundary spec decisions 14, 15, 20). The slot answer is
  * found by the batch's stream id and generation; no stream: NONE. Returns the
@@ -610,6 +622,11 @@ void ai_chat_cancel_active_stream(AiChatData *d);
 void ai_chat_send_user_message(AiChatData *d);
 void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
                                    int unattended);
+/* Relaunch from a conversation that now ends on a run_command results turn: no
+ * USER turn. Same guard as the continue message; counts as a round
+ * (ai_rounds_continue), flushes the displayed session's queued notes leaving
+ * the reply's slot free, and launches the stream. */
+void ai_chat_send_tool_results(AiChatData *d, int unattended);
 
 /* ai_chat_status.c */
 void ai_chat_invalidate_status_line(AiChatData *d);

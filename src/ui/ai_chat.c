@@ -655,7 +655,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         &d->active_state->batches, d->dispatch_batch_id);
                     if (running) running->user_acted = 1;
                 }
-                ai_chat_dispatch_cancel(d, "[command queue stopped]", 1);
+                ai_chat_dispatch_cancel(d, "[command queue stopped]", 1,
+                                        runcmd_path_plan(RUNCMD_PATH_STOP).cause);
                 ai_rounds_user_message(d->active_state);
                 if (d->hChatList)
                     chat_listview_scroll_to_bottom(d->hChatList);
@@ -718,7 +719,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (ACTIVE_BUSY(d))
                     ai_chat_cancel_active_stream(d);
                 if (d->dispatch_active)
-                    ai_chat_dispatch_cancel(d, NULL, 0);
+                    ai_chat_dispatch_cancel(d, NULL, 0,
+                        runcmd_path_plan(RUNCMD_PATH_NEW_CHAT).cause);
 
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
@@ -952,13 +954,15 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                             it->u.cmd.approved = 1;
                     }
 
+                    /* Read before the settle, which may free the batch. */
+                    batch->user_acted = 1;
+                    const int approved_id = batch->id;
                     ai_chat_settle_batch_if_done(d, batch);
                     if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
                     /* Let the dispatcher send the approved commands one at a
                      * time, only once the terminal is at a prompt. */
-                    batch->user_acted = 1;
-                    ai_chat_dispatch_start(d, batch->id);
+                    ai_chat_dispatch_start(d, approved_id);
                 }
                 SetFocus(d->hInput);
                 return 0;
@@ -1770,10 +1774,11 @@ next_coalesce:;
                      * the batch immediately so its rows show "queued"/
                      * "running"/"ran" instead of sitting on the pending
                      * card's un-settled styling while it runs. */
+                    const int settled_id = batch->id;   /* the settle may free it */
                     ai_chat_settle_batch_if_done(d, batch);
                     /* Let the dispatcher send the approved commands one
                      * at a time, only once the terminal is at a prompt. */
-                    ai_chat_dispatch_start(d, batch->id);
+                    ai_chat_dispatch_start(d, settled_id);
                 } else {
                     /* Leave the card pending and reset its container's
                      * scroll -- it stays interactive for the life of
@@ -2117,6 +2122,14 @@ next_coalesce:;
             KillTimer(hwnd, TIMER_HEARTBEAT);
             KillTimer(hwnd, TIMER_CMD_QUEUE);
             KillTimer(hwnd, TIMER_STREAM_REAP);
+            /* A command still running when the panel closes (undock/redock
+             * builds a new panel over the same session) ends with its cause,
+             * an [EXEC] batch as well as a run_command batch: its rows are
+             * recorded in the session's run log, so after a redock none reads
+             * "running" for good. Before the save-back take below: a
+             * run_command batch stores its results in the working copy. */
+            ai_chat_dispatch_cancel(d, NULL, 0,
+                runcmd_path_plan(RUNCMD_PATH_PANEL_CLOSED).cause);
             d->dispatch_active = 0;
             /* Save conversation back to session before cleanup */
             if (d->active_state) {
@@ -2490,6 +2503,23 @@ static void do_session_switch(AiChatData *d,
     /* A Critical confirmation still up from the old session must not apply
      * to this one (ai_chat_request_policy_change()). */
     d->session_gen++;
+    /* Kill command timers -- they belong to the old session. The dispatcher
+     * itself is per-panel, not per-session, so switching away just stops it
+     * silently (no "[command queue stopped]" -- that's the Stop button's
+     * message); ai_chat_dispatch_cancel() marks whatever was left APPROVED in
+     * the old session's running batch "not run" on its card, settles and
+     * removes just that one batch (so a later ai_chat_dispatch_start() can't
+     * resurrect it), and restores the Send button. A run_command batch is
+     * answered with its results (TAB_SWITCH), which go into the panel's working
+     * copy and read the old terminal: both are still the old session's here,
+     * so this comes before the conversation moves. Every other pending batch
+     * in the old session stays in its CmdBatchSet untouched --
+     * ai_chat_rebuild_display() re-creates their cards when the user switches
+     * back (rule 6). */
+    KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+    ai_chat_dispatch_cancel(d, NULL, 0,
+                            runcmd_path_plan(RUNCMD_PATH_TAB_SWITCH).cause);
+
     /* Save current conversation to old session state. A busy session's
      * thread works on its own copy, so this is safe mid-reply; when the
      * reply lands, WM_AI_RESPONSE replaces it with the thread's copy. */
@@ -2497,18 +2527,6 @@ static void do_session_switch(AiChatData *d,
         ai_conv_take(&d->active_state->conv, &d->conv);
         d->active_state->valid = 1;
     }
-
-    /* Kill command timers — they belong to the old session. The dispatcher
-     * itself is per-panel, not per-session, so switching away just stops
-     * it silently (no "[command queue stopped]" -- that's the Stop button's
-     * message); ai_chat_dispatch_cancel() marks whatever was left APPROVED in the
-     * old session's running batch "not run" on its card, settles and
-     * removes just that one batch (so a later ai_chat_dispatch_start() can't
-     * resurrect it), and restores the Send button. Every other pending batch in the old session stays
-     * in its CmdBatchSet untouched -- ai_chat_rebuild_display() re-creates
-     * their cards when the user switches back (rule 6). */
-    KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-    ai_chat_dispatch_cancel(d, NULL, 0);
 
     /* Save policy, show-thinking and activity phase to old session */
     if (d->active_state && d->active_state != new_state) {
@@ -2683,7 +2701,8 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
          * stop before the set is freed. */
         if (state->busy) ai_chat_cancel_active_stream(d);
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-        ai_chat_dispatch_cancel(d, NULL, 0);
+        ai_chat_dispatch_cancel(d, NULL, 0,
+                                runcmd_path_plan(RUNCMD_PATH_SESSION_CLOSED).cause);
     }
 
     /* Abort and orphan its reply in flight, if any: the thread frees its

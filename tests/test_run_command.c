@@ -3743,3 +3743,74 @@ int test_runcmd_idless_batch_and_rebuild_hashes_agree(void)
     free(c);
     TEST_END();
 }
+
+/* ---- The finish function's decisions (Task B16) ---- */
+
+int test_runcmd_cause_captures_table(void)
+{
+    TEST_BEGIN();
+    /* the terminal may still exist for every cause but the two that clear or
+     * lose the conversation */
+    static const struct { RunCmdCause c; int captures; } t[] = {
+        { RUNCMD_CAUSE_SETTLED, 1 },        { RUNCMD_CAUSE_DECIDED, 1 },
+        { RUNCMD_CAUSE_TIMEOUT, 1 },        { RUNCMD_CAUSE_RETRY, 1 },
+        { RUNCMD_CAUSE_STOP, 1 },           { RUNCMD_CAUSE_TAB_SWITCH, 1 },
+        { RUNCMD_CAUSE_SESSION_ENDED, 1 },  { RUNCMD_CAUSE_TYPED, 1 },
+        { RUNCMD_CAUSE_NEW_CHAT, 0 },       { RUNCMD_CAUSE_SESSION_CLOSED, 0 },
+        { RUNCMD_CAUSE_PANEL_CLOSED, 1 },   { RUNCMD_CAUSE_EVICTED, 1 },
+        { RUNCMD_CAUSE_NO_SLOT, 1 },        { RUNCMD_CAUSE_SESSION_GONE, 1 },
+        { RUNCMD_CAUSE_SET_FULL, 1 } };
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
+        ASSERT_EQ(runcmd_cause_captures(t[i].c), t[i].captures);
+    /* the path table reads the same answer */
+    for (int p = 0; p < (int)RUNCMD_PATH_COUNT; p++) {
+        RunCmdPathPlan pl = runcmd_path_plan((RunCmdPath)p);
+        ASSERT_EQ(pl.capture, runcmd_cause_captures(pl.cause));
+    }
+    TEST_END();
+}
+
+int test_runcmd_cause_keep_free_table(void)
+{
+    TEST_BEGIN();
+    /* R47: a flush before a relaunch leaves the reply's slot, a typed
+     * message's finish leaves its own and the reply's, any other leaves none */
+    static const struct { RunCmdCause c; int keep; } t[] = {
+        { RUNCMD_CAUSE_SETTLED, 1 },        { RUNCMD_CAUSE_TIMEOUT, 1 },
+        { RUNCMD_CAUSE_RETRY, 1 },          { RUNCMD_CAUSE_TYPED, 2 },
+        { RUNCMD_CAUSE_DECIDED, 0 },        { RUNCMD_CAUSE_STOP, 0 },
+        { RUNCMD_CAUSE_TAB_SWITCH, 0 },     { RUNCMD_CAUSE_SESSION_ENDED, 0 },
+        { RUNCMD_CAUSE_NEW_CHAT, 0 },       { RUNCMD_CAUSE_SESSION_CLOSED, 0 },
+        { RUNCMD_CAUSE_PANEL_CLOSED, 0 },   { RUNCMD_CAUSE_EVICTED, 0 },
+        { RUNCMD_CAUSE_NO_SLOT, 0 } };
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
+        ASSERT_EQ(runcmd_cause_keep_free(t[i].c), t[i].keep);
+    TEST_END();
+}
+
+int test_runcmd_finish_relaunches_conditions(void)
+{
+    TEST_BEGIN();
+    /* the three causes that relaunch do so only for the displayed, idle owner
+     * whose results were stored and who has room (governing principle) */
+    static const RunCmdCause relaunching[] = {
+        RUNCMD_CAUSE_SETTLED, RUNCMD_CAUSE_TIMEOUT, RUNCMD_CAUSE_RETRY };
+    for (size_t i = 0; i < sizeof(relaunching) / sizeof(relaunching[0]); i++) {
+        const RunCmdCause c = relaunching[i];
+        ASSERT_EQ(runcmd_finish_relaunches(c, 1, 0, 1, 1), 1);
+        ASSERT_EQ(runcmd_finish_relaunches(c, 0, 0, 1, 1), 0);   /* a background owner */
+        ASSERT_EQ(runcmd_finish_relaunches(c, 1, 1, 1, 1), 0);   /* a stream is running */
+        ASSERT_EQ(runcmd_finish_relaunches(c, 1, 0, 0, 1), 0);   /* results not stored */
+        ASSERT_EQ(runcmd_finish_relaunches(c, 1, 0, 1, 0), 0);   /* no room for a round */
+    }
+    /* every other cause never relaunches, whatever the conditions say */
+    static const RunCmdCause quiet[] = {
+        RUNCMD_CAUSE_DECIDED, RUNCMD_CAUSE_STOP, RUNCMD_CAUSE_TAB_SWITCH,
+        RUNCMD_CAUSE_SESSION_ENDED, RUNCMD_CAUSE_TYPED, RUNCMD_CAUSE_NEW_CHAT,
+        RUNCMD_CAUSE_SESSION_CLOSED, RUNCMD_CAUSE_PANEL_CLOSED,
+        RUNCMD_CAUSE_EVICTED, RUNCMD_CAUSE_NO_SLOT, RUNCMD_CAUSE_SESSION_GONE,
+        RUNCMD_CAUSE_SET_FULL };
+    for (size_t i = 0; i < sizeof(quiet) / sizeof(quiet[0]); i++)
+        ASSERT_EQ(runcmd_finish_relaunches(quiet[i], 1, 0, 1, 1), 0);
+    TEST_END();
+}

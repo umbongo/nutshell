@@ -513,6 +513,25 @@ int runcmd_cause_appends(RunCmdCause c)
     return c != RUNCMD_CAUSE_NEW_CHAT && c != RUNCMD_CAUSE_SESSION_CLOSED;
 }
 
+int runcmd_cause_captures(RunCmdCause c)
+{
+    /* The terminal is still there except when the chat is cleared or the
+     * session is gone (the results are not stored then either). */
+    return c != RUNCMD_CAUSE_NEW_CHAT && c != RUNCMD_CAUSE_SESSION_CLOSED;
+}
+
+int runcmd_cause_keep_free(RunCmdCause c)
+{
+    if (runcmd_cause_relaunches(c)) return 1;
+    return c == RUNCMD_CAUSE_TYPED ? 2 : 0;
+}
+
+int runcmd_finish_relaunches(RunCmdCause c, int displayed, int busy, int stored,
+                             int room)
+{
+    return runcmd_cause_relaunches(c) && displayed && !busy && stored && room;
+}
+
 RunCmdRetry runcmd_retry_plan(const AiConversation *conv, int has_runcmd_batch)
 {
     if (has_runcmd_batch) return RUNCMD_RETRY_CANCEL_BATCH;
@@ -543,9 +562,7 @@ RunCmdPathPlan runcmd_path_plan(RunCmdPath p)
     }
     r.append = runcmd_cause_appends(r.cause);
     r.relaunch = runcmd_cause_relaunches(r.cause);
-    /* The terminal is still there except when the chat is cleared or the
-     * session is gone (the results are not stored then either). */
-    r.capture = (p != RUNCMD_PATH_NEW_CHAT && p != RUNCMD_PATH_SESSION_CLOSED);
+    r.capture = runcmd_cause_captures(r.cause);
     /* Today's [EXEC] path resets auto_rounds on Stop (ai_chat.c, the
      * IDC_CHAT_SEND handler's ai_rounds_user_message) and on a typed message
      * (ai_chat_send_user_message). New Chat calls neither and ai_conv_reset

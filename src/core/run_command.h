@@ -257,6 +257,26 @@ int runcmd_cause_relaunches(RunCmdCause c);
  * session gone: the results are not stored); 1 for every other cause. */
 int runcmd_cause_appends(RunCmdCause c);
 
+/* 1 when the session's terminal may still exist at the batch's end, so an
+ * EXECUTING entry's rows are captured first: 0 for NEW_CHAT and SESSION_CLOSED,
+ * 1 for every other cause. */
+int runcmd_cause_captures(RunCmdCause c);
+
+/* The slots the flush of the owner's queued notes leaves free (R47): 1 for a
+ * cause that relaunches (the reply's), 2 for TYPED (the typed message's and
+ * its reply's), 0 for every other. */
+int runcmd_cause_keep_free(RunCmdCause c);
+
+/* 1 when the finish of a batch starts the next model request: the cause
+ * relaunches (runcmd_cause_relaunches), the owner is the displayed session
+ * (`displayed`) and has no stream running (`busy` 0), the results were stored
+ * (`stored`: the store returned 0 or 1) and the conversation has room for the
+ * round (`room`: agentic_room_for_tool_round with the owner's queue). Any
+ * other combination starts nothing (spec decision 8 and the governing
+ * principle). */
+int runcmd_finish_relaunches(RunCmdCause c, int displayed, int busy, int stored,
+                             int room);
+
 /* ---- Retry and the removal paths (spec decisions 8, 9 and 14) ---- */
 
 /* What the Retry button does (IDC_ACTIVITY_RETRY). */
