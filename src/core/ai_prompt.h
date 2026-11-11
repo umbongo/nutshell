@@ -178,6 +178,17 @@ void ai_build_system_prompt_ex(char *buf, size_t buf_size,
                                int debug_log_tool,
                                const AiToolRegistry *tools);
 
+/* The tool variant: when tools holds run_command (RUNCMD_TOOL_NAME) the opening,
+ * the "IMPORTANT" text and the tools paragraph's closing sentence tell the
+ * model to call that tool instead of writing [EXEC] markers (spec
+ * 2026-11-05-run-command-tool-design.md section 3). Any other registry, and
+ * NULL, builds the [EXEC] prompt byte for byte. */
+
+/* The note stored for a tool-chat reply whose n [EXEC] markers were not run:
+ * writes it to buf and returns its length; 0 when n <= 0, buf is NULL or cap
+ * is too small (buf is then left an empty string when cap > 0). */
+int ai_build_runcmd_marker_note(int n, char *buf, size_t cap);
+
 /* Build the JSON request body from the conversation.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_request_body(const AiConversation *conv,
