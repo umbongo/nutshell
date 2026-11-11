@@ -174,7 +174,7 @@ scrolls if you shrink it below the content.
 
 Logging itself is started and stopped from **File > Start/Stop Logging**, not here.
 
-#### General > Debugging
+#### Debugging
 - **Debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, its per-category levels, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log)
 
 #### Connection > SSH
