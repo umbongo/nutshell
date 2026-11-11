@@ -235,6 +235,23 @@ int test_term_sb_grow_alloc_failure_recycles(void)
     TEST_END();
 }
 
+int test_term_sb_resize_clears_grow_failing(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 100);
+    feed(t, "A\r\nB\r\nC\r\nD");
+    hook(-1);
+    feed(t, "\r\nE");
+    ASSERT_TRUE(t->grow_failing);
+    unhook();
+    /* A committed resize ends the failing streak, so a later one logs again. */
+    ASSERT_TRUE(term_resize(t, 4, 12));
+    ASSERT_FALSE(t->grow_failing);
+    ASSERT_TRUE(ring_ok(t));
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_sb_grow_cells_failure_no_leak(void)
 {
     TEST_BEGIN();

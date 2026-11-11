@@ -294,8 +294,9 @@ static bool term_reflow_buffer(
     int new_count = cur_new_row + 1;
     if (new_count > new_capacity) new_count = new_capacity;
 
-    /* Strip trailing empty rows, keeping at least the cursor row. A slot past
-     * the rows the text needs is NULL, and empty. */
+    /* Strip trailing empty rows, keeping at least the cursor row. Slots in
+     * [needed, allocated) hold allocated blank rows (empty); only slots at or
+     * past `allocated` are NULL. */
     {
         int min_count = new_cursor_row + 1;
         if (min_count < 1) min_count = 1;
@@ -340,11 +341,14 @@ static bool term_reflow_buffer(
      * drops rows and the cursor that live beyond lines_count. */
     if (new_count < new_rows) new_count = new_rows;
 
-    /* Free every row outside the new segment (the trailing blanks the strip
-     * dropped, the spares nothing took): only the live part holds rows. A
-     * slot at or past `allocated` is NULL or a padding slot, which is inside
-     * the segment. On the alternate screen (max_scrollback 0) the padding
-     * slots are already allocated, so nothing moves and nothing is freed. */
+    /* Free every row outside the new segment, so that only the live part
+     * holds rows. After the strip new_count equals `needed`, and the padding
+     * above consumes exactly the spares in [needed, allocated), so as the
+     * code stands nothing is left to free here: this loop is unreachable
+     * defensive code, kept so the invariant holds whatever the counting pass
+     * decided. A slot at or past `allocated` is NULL or a padding slot, which
+     * is inside the segment. On the alternate screen (max_scrollback 0) the
+     * padding slots are already allocated, so nothing moves either. */
     for (int i = 0; i < allocated; i++) {
         if (new_lines[i] &&
             ((i - new_start + new_capacity) % new_capacity) >= new_count) {
@@ -450,6 +454,7 @@ bool term_resize(Terminal *term, int rows, int cols) {
         term->primary_lines_recycled += pdropped;
     }
     term->resize_failing = false;
+    term->grow_failing = false;
 
     /* Reflow renumbered every row: a selection's line numbers no longer apply. */
     term->epoch++;
@@ -540,9 +545,9 @@ void term_scroll(Terminal *term) {
 
     /* Mark all visible rows dirty: each screen position now maps to a
      * different logical row, so the renderer must repaint every row.
-     * When lines_count < rows (sparse content after resize), we must
-     * also mark the pre-allocated rows beyond lines_count that are
-     * still visible on screen; otherwise they never get repainted. */
+     * Only the live part of the ring holds rows (term.h, term_logical_rows())
+     * and lines_count >= rows, so the visible rows all lie inside it; a slot
+     * outside it is NULL and the guard below skips it. */
     int vis_start = term->lines_count - term->rows;
     if (vis_start < 0) vis_start = 0;
     int vis_end = vis_start + term->rows;

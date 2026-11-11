@@ -190,7 +190,9 @@ uint32_t color256_to_rgb(uint8_t index);
 /* The allocator behind every allocation buffer.c lets fail without ending the
  * process: a scrollback row, a reflow, the alternate screen. Tests only (a
  * fake that counts calls and fails the n-th, as tests/fake_dpapi.c does for
- * DPAPI): no product code calls it. NULL restores calloc. */
+ * DPAPI): no product code calls it. NULL restores calloc. The function must
+ * return zeroed memory, like calloc, that free() can release: buffer.c relies
+ * on a zeroed slot array being all NULL. */
 typedef void *(*TermCallocFn)(size_t nmemb, size_t size);
 void term_set_calloc(TermCallocFn fn);
 

@@ -387,7 +387,7 @@ Read the spec first: "Layout and behaviour changes", item C, from "Memory today"
 - Create: `tests/test_term_scrollback.c` (LF)
 - Modify: `src/core/selection.c` (LF; `sel_row_blank()` only)
 - Modify: `tests/runner.c`, `tests/fuzz/fuzz_term.c` (LF)
-- Create: `tests/fuzz/corpus/term/27-ring-wrap`, `28-resize`, `29-alloc-fail` (binary seeds, no line-ending attribute, like the existing ones)
+- Create: `tests/fuzz/corpus/term/31-ring-wrap`, `32-resize`, `33-alloc-fail` (binary seeds, no line-ending attribute, like the existing ones)
 - Modify: `src/ui/window.c` (LF; the two `term_resize()` callers only)
 
 **Interfaces:**
@@ -495,7 +495,7 @@ int test_term_sb_grow_alloc_failure_recycles(void)
   The rest, each ending with `ring_ok(t)` true, `unhook()` and `term_free()`:
   - `test_term_sb_fresh_tab_rows_only`: `term_init(50, 200, 10000)` gives `rows_held == 50` and `lines_capacity == 10050`; with 50000, `rows_held == 50` and `lines_capacity == 50050`. `rows_held` is the behavioural check. The test also asserts `lines_capacity * sizeof(TermRow *) + 50 * (sizeof(TermRow) + 200 * sizeof(TermCell))` is 282000 and 602000, with a comment saying these two asserts document the arithmetic behind the spec's memory figures and test no behaviour.
   - `test_term_sb_full_ring_recycles_without_alloc`: `term_init(4, 10, 6)`, then `L01` to `L30`, each followed by `"\r\n"`. Expect `lines_count == 10`, `rows_held == 10`, `lines_recycled == 21`, and the oldest row (`lines[lines_start]`) starting `"L22"`. Then `hook(0)`, ten more lines, and `g_calls == 0`.
-  - `test_term_sb_resize_partly_filled`: `term_init(5, 10, 100)`, twelve lines of 10 characters and one of 25, then `before = all_text(t)`. Resize in turn to 5x20, 5x4, 8x10 and 3x10. After each, `term_resize` returned true, `rows_held == lines_count`, `lines_count <= lines_capacity`, and `all_text(t)` equals `before`. Then the padding edge: `term_init(3, 10, 1)` holding two short lines, resized to 6x10, where the padding slots overlap the spare rows; `ring_ok` and the text hold.
+  - `test_term_sb_resize_partly_filled`: `term_init(5, 10, 100)`, twelve lines of 10 characters and one of 25, then `before = all_text(t)`. Resize in turn to 5x20, 5x4, 8x10 and 3x10. After each, `term_resize` returned true, `rows_held == lines_count`, `lines_count <= lines_capacity`, and `all_text(t)` equals `before`. Then the padding edge: `term_init(3, 10, 1)` holding two short lines, resized to 6x10, where the padding slots overlap the spare rows; `ring_ok` holds, and the text is the old text under the four blank rows the padding prepends (growing pads above the content), so the test expects exactly that.
   - `test_term_sb_resize_alt_screen_partly_filled`: as above, then `"\x1b[?1049h"`, resize to 5x20, `"\x1b[?1049l"`. Expect `ring_ok` throughout and the primary's `all_text` equal to `before`.
   - `test_term_sb_grow_cells_failure_no_leak`: a full screen, then `hook(2)` (the cells block of the first new row fails), one line feed: `lines_count` unchanged, `grow_failing` true. `make test SAN=1` reports no leak.
   - `test_term_sb_resize_alloc_failure_unchanged`: a local `make_partly()` builds the partly filled terminal above. Build one, resize it to 5x4 under `hook(0)` to learn `N = g_calls`, and free it. Then for each `f` in 1, 2, N / 2 and N, build a fresh one, record rows, cols, `lines_count`, `lines_start`, `lines_recycled`, `epoch`, the cursor and `all_text`, then `hook(f)` and `term_resize(t, 5, 4)`. Expect false, every recorded value unchanged and `ring_ok`. Also: `resize_failing` is true after the first failure, still true after a second failing resize, and false after the next resize that succeeds.
@@ -533,9 +533,9 @@ int test_term_sb_grow_alloc_failure_recycles(void)
   - Scan the input. `0xFF r c` (with two bytes after it): feed the pending data run to `term_process()`, then `term_resize(t, 1 + r % 8, 1 + c % 16)`. `0xFE k` (with one byte after it): feed the pending run, then arm a counting allocator, installed with `term_set_calloc()`, so that allocation number `1 + k % 4` from now on returns NULL once and the allocator then disarms. Any other byte, and a command byte with too few bytes after it, is data.
   - After every `term_process()` run and every resize, check `seg_ok()` (copied into the target, which links only the product sources) on the active ring with `term_logical_rows(t)` and, while `alt_screen_active`, on the saved primary; `__builtin_trap()` on a mismatch. Call `term_set_calloc(NULL)` before `term_free()` and return.
   - The seeds, hand-written (never crash outputs), created with `printf` into `tests/fuzz/corpus/term/`:
-    - `27-ring-wrap`: `L01\r\n` through `L30\r\n`.
-    - `28-resize`: `A\r\nB\r\nC`, `\xff\x07\x09` (8 x 10, the padding path), twenty `\n`, `\xff\x04\x03` (5 x 4, the wrapped ring), `\x1b[?1049h`, `\xff\x01\x0f` (2 x 16 on the alternate screen), `\x1b[?1049l`.
-    - `29-alloc-fail`: eight `x\r\n`, `\xfe\x00` then `y\r\n` (a failing grow), `\xfe\x01` then `\xff\x07\x0f` (a resize to 8 x 16 whose second allocation fails), `\xfe\x00` then `\x1b[?1049h` and `z` (a failing alternate-screen entry).
+    - `31-ring-wrap`: `L01\r\n` through `L30\r\n`.
+    - `32-resize`: `A\r\nB\r\nC`, `\xff\x07\x09` (8 x 10, the padding path), twenty `\n`, `\xff\x04\x03` (5 x 4, the wrapped ring), `\x1b[?1049h`, `\xff\x01\x0f` (2 x 16 on the alternate screen), `\x1b[?1049l`.
+    - `33-alloc-fail`: eight `x\r\n`, `\xfe\x00` then `y\r\n` (a failing grow), `\xfe\x01` then `\xff\x07\x0f` (a resize to 8 x 16 whose second allocation fails), `\xfe\x00` then `\x1b[?1049h` and `z` (a failing alternate-screen entry).
   - If clang is installed (`command -v clang`), run `make fuzz && make fuzz-run`: every target reports ok. Otherwise the pull-request `Fuzz` job runs it; say so in the PR body.
 - [ ] **Step 5: The two `window.c` callers.** In the grid sync (the `grid.sync` log site) and in `WM_SIZE`, wrap `term_mark_all_dirty()`, `dispbuf_resize()` and `io.resize()` in `if (term_resize(...)) { ... }`. The `InvalidateRect()` and `update_scrollbar()` calls after them stay unconditional.
 - [ ] **Step 6: Verify.**
@@ -546,7 +546,7 @@ int test_term_sb_grow_alloc_failure_recycles(void)
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/term/buffer.c src/term/term.h src/core/selection.c tests/test_term_scrollback.c tests/runner.c tests/fuzz/fuzz_term.c tests/fuzz/corpus/term/27-ring-wrap tests/fuzz/corpus/term/28-resize tests/fuzz/corpus/term/29-alloc-fail src/ui/window.c
+git add src/term/buffer.c src/term/term.h src/core/selection.c tests/test_term_scrollback.c tests/runner.c tests/fuzz/fuzz_term.c tests/fuzz/corpus/term/31-ring-wrap tests/fuzz/corpus/term/32-resize tests/fuzz/corpus/term/33-alloc-fail src/ui/window.c
 git commit   # "feat(terminal): allocate scrollback rows as lines are kept" + trailer
 ```
 

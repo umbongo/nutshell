@@ -1031,11 +1031,11 @@ it never reaches a full ring, a grow failure or a reflow. It changes to:
   saved primary, and calls `__builtin_trap()` on a violation. It restores
   `term_set_calloc(NULL)` before it returns.
 - Three hand-written seeds join `tests/fuzz/corpus/term/` (seeds are
-  hand-written inputs, never crash outputs): `27-ring-wrap` (`L01` to
+  hand-written inputs, never crash outputs): `31-ring-wrap` (`L01` to
   `L30`, each followed by CR LF, three times past the capacity),
-  `28-resize` (three lines, a resize to 8 x 10 that pads, twenty line
+  `32-resize` (three lines, a resize to 8 x 10 that pads, twenty line
   feeds into the wrapped ring, a resize to 5 x 4, then a resize to 2 x 16
-  on the alternate screen and its exit) and `29-alloc-fail` (a filled
+  on the alternate screen and its exit) and `33-alloc-fail` (a filled
   ring, then a failing grow, a failing resize and a failing
   alternate-screen entry).
 
@@ -1062,7 +1062,7 @@ argument and the two resize callers) are checked by the Windows checklist
 | `src/term/buffer.c` | modify | Lazy scrollback rows (C): `term_init()` allocates the screen rows only; `term_scroll()` allocates a row into a NULL slot as the ring grows and recycles the oldest on failure; NULL guards in `term_scroll()`'s dirty loop and in `term_scroll_up()`/`term_scroll_down()`; `resize_failing`; `term_reflow_buffer()` allocates only the rows it needs, all or nothing, and no longer frees the old buffer; `term_resize()` commits or leaves the terminal unchanged; a fallible `term_alt_screen_enter()`; the replaceable allocator. **CRLF file**: keep its line endings. |
 | `src/term/term.h` | modify | `bool grow_failing` and `bool resize_failing` in `Terminal`; `term_resize()` returns `bool`; `TermCallocFn` and `term_set_calloc()`; the comments on `term_logical_rows()` and `term_screen_to_phys()` that say every slot is pre-allocated are corrected. LF file. |
 | `tests/test_term_scrollback.c` | create | Native test 9 (C). |
-| `tests/fuzz/fuzz_term.c`, `tests/fuzz/corpus/term/27-ring-wrap`, `28-resize`, `29-alloc-fail` | modify, create | The fuzz target on a 4 x 10 terminal with 6 lines of scrollback, resize and allocation-failure command bytes, and the invariant check on both rings; three hand-written seeds (C). |
+| `tests/fuzz/fuzz_term.c`, `tests/fuzz/corpus/term/31-ring-wrap`, `32-resize`, `33-alloc-fail` | modify, create | The fuzz target on a 4 x 10 terminal with 6 lines of scrollback, resize and allocation-failure command bytes, and the invariant check on both rings; three hand-written seeds (C). |
 | `src/core/selection.c` | modify | `sel_row_blank()` treats a NULL row as blank (C, Readers). LF file. |
 | `src/ui/ns_tip.h`, `.c` | create | Themed tooltip helper: create (`TTS_NOPREFIX \| TTS_ALWAYSTIP`, classic render, token colours, font, width, delays), add a window tool, add a `CBS_DROPDOWN` combo's edit, add and move a rect tool. Changes no window style. Takes `HFONT` and `const ThemeTokens *` so the wintest links it without `window.c`. |
 | `src/core/settings_layout.h`, `.c` | modify | `settings_initial_placement()`, the initial size and position rule (Layout and behaviour changes A: just tall enough for Behaviour). |

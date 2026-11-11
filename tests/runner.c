@@ -1326,6 +1326,7 @@ int test_term_sb_full_ring_recycles_without_alloc(void);
 int test_term_sb_resize_partly_filled(void);
 int test_term_sb_resize_alt_screen_partly_filled(void);
 int test_term_sb_grow_alloc_failure_recycles(void);
+int test_term_sb_resize_clears_grow_failing(void);
 int test_term_sb_grow_cells_failure_no_leak(void);
 int test_term_sb_resize_alloc_failure_unchanged(void);
 int test_term_sb_resize_alt_alloc_failure_unchanged(void);
@@ -5270,6 +5271,7 @@ int main(void) {
     failed += test_term_sb_resize_partly_filled();
     failed += test_term_sb_resize_alt_screen_partly_filled();
     failed += test_term_sb_grow_alloc_failure_recycles();
+    failed += test_term_sb_resize_clears_grow_failing();
     failed += test_term_sb_grow_cells_failure_no_leak();
     failed += test_term_sb_resize_alloc_failure_unchanged();
     failed += test_term_sb_resize_alt_alloc_failure_unchanged();
