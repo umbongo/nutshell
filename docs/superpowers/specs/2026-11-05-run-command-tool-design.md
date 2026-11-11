@@ -1153,6 +1153,21 @@ batches alike.
   painter, same chips, nothing new in `src/ui` beyond the replay call and
   the record calls and (d). No timer, no hover state, no new token or
   size.
+  *(fix round 3, 2026-11-11, H3)* A reply answered without a card keeps
+  what its live rows showed, so the rebuilt view shows the same rows: its
+  status record carries `no_card` (the live view drew none of its run_command
+  calls, so the rebuild draws none), the markers a run_command chat showed as
+  "quoted, not run" and that landed on no card are recorded as a record of
+  their own (`cmd_run_log_record_quoted`; it splits the reply's text at the
+  first marker as the live view did, and also serves a plain reply with
+  markers and no call), drawn after the status rows as live (`quoted, not run:
+  <command>`, `runcmd_quoted_row`). A card's call that is on no card line (an
+  OVER_CAP call, a call the approval queue refused) now gets one status row,
+  live and rebuilt (`not run (<why>): <command>`, `runcmd_unqueued_row`), drawn
+  right after the card's rows and kept in its record (`after_rows`) or read
+  from the live batch's `runcmd`. A record made before this change has none of
+  it and rebuilds as before.
+
 - **`--ui-demo=runlist`** (not part of `all`, which keeps its pinned
   shape): one live batch with a "ran", a "running" and two "queued" rows
   under the line `4 commands: 1 ran, 1 running, 2 queued`, plus one

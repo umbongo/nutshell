@@ -162,6 +162,36 @@ static void append_record_status(ChatMsgList *list, const CmdRunRecord *rec)
         chat_msg_append(list, CHAT_ITEM_STATUS, rec->status[i]);
 }
 
+/* The status rows of a record's calls that are on no card line, as live drew
+ * them right under the card. */
+static void append_record_after(ChatMsgList *list, const CmdRunRecord *rec)
+{
+    for (int i = 0; i < rec->n_after; i++)
+        if (rec->after_rows && rec->after_rows[i])
+            chat_msg_append(list, CHAT_ITEM_STATUS, rec->after_rows[i]);
+}
+
+/* The markers a run_command chat showed and did not run, as live drew them
+ * after the reply's status rows. */
+static void append_record_quoted(ChatMsgList *list, const CmdRunRecord *rec)
+{
+    char row[RUNCMD_ROW_TEXT_MAX];
+    for (int i = 0; i < rec->n_quoted; i++)
+        if (rec->quoted && rec->quoted[i] &&
+            runcmd_quoted_row(rec->quoted[i], row, sizeof(row)) > 0)
+            chat_msg_append(list, CHAT_ITEM_STATUS, row);
+}
+
+/* The rows of a live batch's calls that are on no card line. */
+static void append_batch_after(ChatMsgList *list, const CmdBatch *b)
+{
+    if (!b || cmd_batch_is_tool(b) || !b->runcmd || !b->runcmd->calls) return;
+    char row[RUNCMD_ROW_TEXT_MAX];
+    for (int i = 0; i < b->runcmd->n_calls; i++)
+        if (runcmd_unqueued_row(&b->runcmd->calls[i], row, sizeof(row)) > 0)
+            chat_msg_append(list, CHAT_ITEM_STATUS, row);
+}
+
 /* A live non-tool batch keyed to message `idx` with this hash and a row. */
 static int live_batch_matches(const CmdBatch *b, int idx, uint32_t hash)
 {
@@ -171,11 +201,13 @@ static int live_batch_matches(const CmdBatch *b, int idx, uint32_t hash)
 
 /* What carries the commands of assistant turn `i`: *has_record, a record of
  * the run log matches it (status-only ones included); *card_rows, a record
- * with command rows or a live batch matches it; *live_card, a live batch does.
+ * with command rows or a live batch matches it; *live_card, a live batch does;
+ * *no_card, a matching record says the reply was answered without a card.
  * Returns the turn's hash. */
 static uint32_t turn_cards(const AiConversation *conv, int i,
                            const CmdRunLog *rlog, const CmdBatchSet *batches,
-                           int *has_record, int *card_rows, int *live_card)
+                           int *has_record, int *card_rows, int *live_card,
+                           int *no_card)
 {
     const AiMessage *msg = &conv->messages[i];
     const AiToolCall *calls = msg->tool_calls;
@@ -184,11 +216,12 @@ static uint32_t turn_cards(const AiConversation *conv, int i,
      * builder keyed the record with. */
     const uint32_t hash = cmd_run_log_reply_hash(
         ai_msg_content(msg), msg->content_len, calls, n_calls);
-    *has_record = *card_rows = *live_card = 0;
+    *has_record = *card_rows = *live_card = *no_card = 0;
     for (int ri = 0; rlog && ri < rlog->count; ri++) {
         if (!cmd_run_record_matches_hash(rlog->rec[ri], i, 1, hash)) continue;
         *has_record = 1;
         if (rlog->rec[ri]->n > 0) *card_rows = 1;
+        if (rlog->rec[ri]->no_card) *no_card = 1;
     }
     for (int bi = 0; batches && bi < batches->count; bi++)
         if (live_batch_matches(batches->b[bi], i, hash)) *live_card = 1;
@@ -224,8 +257,8 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
     memset(earlier, 0, sizeof(earlier));
     for (int j = 2; j < conv->msg_count && j < AI_MAX_MESSAGES; j++) {
         if (conv->messages[j].role != AI_ROLE_ASSISTANT) continue;
-        int hr, cr, lc;
-        (void)turn_cards(conv, j, rlog, batches, &hr, &cr, &lc);
+        int hr, cr, lc, nc;
+        (void)turn_cards(conv, j, rlog, batches, &hr, &cr, &lc, &nc);
         if (hr || lc) mark_earlier_rounds(conv, j, earlier);
     }
 
@@ -251,10 +284,10 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
         const int n_calls = calls ? msg->n_tool_calls : 0;
         /* What carries this reply's commands: records of the displayed
          * session's run log, and live batches (a card still up). */
-        int has_record, card_rows, live_card;
+        int has_record, card_rows, live_card, no_card;
         const uint32_t turn_hash = turn_cards(conv, i, rlog, batches,
                                               &has_record, &card_rows,
-                                              &live_card);
+                                              &live_card, &no_card);
 
         /* The results turn answering this one, when it is the next message. */
         const AiMessage *tm = (i + 1 < conv->msg_count &&
@@ -262,12 +295,17 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
                             ? &conv->messages[i + 1] : NULL;
 
         /* Each call's row, then the result that answers it. A run_command
-         * call with a command is drawn by its card instead (once). */
+         * call with a command is drawn by its card instead (once), or, when
+         * the card showed no line for it, by its status row (the record's or
+         * the live batch's). A reply answered without a card drew none of its
+         * run_command calls live (no_card): neither does the rebuild. */
         for (int ci = 0; ci < n_calls; ci++) {
             const AiToolCall *call = &calls[ci];
-            const int covered = card_rows &&
-                                strcmp(call->name, "run_command") == 0 &&
-                                runcmd_describe(call->input_json, NULL, 0);
+            const int is_runcmd = strcmp(call->name, "run_command") == 0;
+            const int covered = is_runcmd &&
+                                ((card_rows &&
+                                  runcmd_describe(call->input_json, NULL, 0)) ||
+                                 no_card);
             if (!covered) {
                 char row[CALL_ROW_MAX];
                 chat_rebuild_call_text(call, row, sizeof(row));
@@ -309,14 +347,21 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
             }
         }
 
-        /* Recorded command rows, then the status rows, which live come after
-         * the results. */
+        /* Recorded command rows, each followed by the rows of the calls its
+         * card did not show, then the status rows, which live come after the
+         * results, then the quoted markers no card took (live, after the
+         * status row of a reply answered without a card). */
         for (int ri = 0; rlog && ri < rlog->count; ri++)
-            if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1, turn_hash))
+            if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1, turn_hash)) {
                 append_record_rows(list, rlog->rec[ri], -(ri + 1));
+                append_record_after(list, rlog->rec[ri]);
+            }
         for (int ri = 0; rlog && ri < rlog->count; ri++)
             if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1, turn_hash))
                 append_record_status(list, rlog->rec[ri]);
+        for (int ri = 0; rlog && ri < rlog->count; ri++)
+            if (cmd_run_record_matches_hash(rlog->rec[ri], i, 1, turn_hash))
+                append_record_quoted(list, rlog->rec[ri]);
 
         if (tm) i++;   /* the results turn is drawn */
     }
@@ -325,6 +370,8 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
      * first -- the interleaving with earlier turns is not reconstructed (see
      * docs/superpowers/specs/2026-09-09-pending-command-batches.md, "Session
      * switch"). */
-    for (int bi = 0; batches && bi < batches->count; bi++)
+    for (int bi = 0; batches && bi < batches->count; bi++) {
         chat_msg_append_batch_items(list, batches->b[bi]);
+        append_batch_after(list, batches->b[bi]);
+    }
 }

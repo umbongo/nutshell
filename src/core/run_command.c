@@ -1157,3 +1157,61 @@ int runcmd_age_results(AiConversation *conv)
     }
     return aged;
 }
+
+/* ---- Rows for what a reply's card does not show (fix round 3, H3) ---- */
+
+/* out = pre + command, cut on a UTF-8 boundary of the command to fit cap - 1
+ * bytes. Returns the length written. */
+static size_t row_cut(char *out, size_t cap, const char *pre, const char *command)
+{
+    const size_t pn = strlen(pre);
+    if (pn >= cap) {
+        /* the prefix alone does not fit: cut it (ASCII) */
+        memcpy(out, pre, cap - 1);
+        out[cap - 1] = '\0';
+        return cap - 1;
+    }
+    memcpy(out, pre, pn);
+    size_t room = cap - 1 - pn;
+    size_t cn = strlen(command);
+    if (cn > room) {
+        cn = room;
+        while (cn > 0 && ((unsigned char)command[cn] & 0xC0u) == 0x80u) cn--;
+    }
+    memcpy(out + pn, command, cn);
+    out[pn + cn] = '\0';
+    return pn + cn;
+}
+
+size_t runcmd_unqueued_note(const RunCmdCall *c, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!c) return 0;
+    NoteBuf nb = { out, cap, 0 };
+    if (c->kind == RUNCMD_KIND_OVER_CAP)
+        note_part_n(&nb, "not run (too many commands in one reply; at most ",
+                    (size_t)RUNCMD_SLOT_MAX, ")");
+    else if (c->kind == RUNCMD_KIND_SLOT && c->entry < 0)
+        note_part(&nb, "not run (refused by the approval queue)");
+    return nb.len;
+}
+
+size_t runcmd_unqueued_row(const RunCmdCall *c, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    char note[160];
+    out[0] = '\0';
+    if (runcmd_unqueued_note(c, note, sizeof(note)) == 0) return 0;
+    char pre[200];
+    snprintf(pre, sizeof(pre), "%s: ", note);
+    return row_cut(out, cap, pre, c->command);
+}
+
+size_t runcmd_quoted_row(const char *command, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!command) return 0;
+    return row_cut(out, cap, "quoted, not run: ", command);
+}

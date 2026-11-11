@@ -44,6 +44,16 @@ typedef struct {
 #define CMD_RUN_STATUS_ROWS 2
 #define CMD_RUN_STATUS_MAX  200
 
+/* Rows of a reply the card did not show (fix round 3, H3). A record may also
+ * carry: after_rows, the status rows of a card's calls that are on no card
+ * line (runcmd_unqueued_row: an OVER_CAP call, a call the queue refused),
+ * drawn right after the record's command rows; and quoted, the commands of
+ * the markers a run_command chat showed as "quoted, not run" rows that landed
+ * on no card (runcmd_quoted_row), drawn after the status rows. At most
+ * CMD_RUN_QUOTED_MAX of them (the reply's markers). A record made before this
+ * change has none of these and no_card 0, and rebuilds as it always did. */
+#define CMD_RUN_QUOTED_MAX 16
+
 typedef struct {
     int reply_msg;                       /* CmdBatch.reply_msg */
     uint32_t turn_hash;                  /* cmd_run_log_turn_hash() of that reply */
@@ -51,6 +61,12 @@ typedef struct {
     CmdRunRow rows[APPROVAL_MAX_CMDS];
     int n_status;                        /* status rows: 0 for a batch's record */
     char status[CMD_RUN_STATUS_ROWS][CMD_RUN_STATUS_MAX];
+    int no_card;                         /* 1: the reply was answered without a
+                                          * card, and the live view drew none of
+                                          * its run_command calls (only the
+                                          * status row): the rebuild draws none */
+    char **after_rows; int n_after;      /* heap, owned by the record */
+    char **quoted;     int n_quoted;     /* heap commands, owned by the record */
 } CmdRunRecord;
 
 typedef struct {
@@ -93,7 +109,8 @@ uint32_t cmd_run_log_reply_hash(const char *text, size_t len,
 void cmd_run_row_from_entry(const ApprovalEntry *e, int batch_ending,
                             CmdRunRow *out);
 
-/* Record `batch`'s queue as a new record at the end of the log, with the
+/* Record `batch`'s queue as a new record at the end of the log, also keeping
+ * the batch's runcmd rows no card line shows (after_rows), with the
  * batch's reply_msg and `turn_hash` (the caller, which can see the
  * conversation, hashes the reply at batch->reply_msg). Returns 0 when
  * recorded; -1, with nothing recorded and the log unchanged, for a NULL log
@@ -108,12 +125,23 @@ int cmd_run_log_record(CmdRunLog *log, const CmdBatch *batch, uint32_t turn_hash
  * CMD_RUN_STATUS_ROWS) non-empty texts, each cut to CMD_RUN_STATUS_MAX - 1
  * bytes, keyed to `reply_msg` with `turn_hash` (cmd_run_log_reply_hash of the
  * stored turn) like any record, so Retry's cmd_run_log_forget() and the
- * oldest-dropped rule treat it the same. Returns 0 when recorded; -1, nothing
- * recorded and the log unchanged, for a NULL log or texts, n_texts outside the
- * range, an empty text or an allocation failure (the row is then just not
- * kept). */
+ * oldest-dropped rule treat it the same. `no_card` is stored in the record
+ * (see CmdRunRecord): 1 when the reply was answered without a card, 0 for the
+ * store of a card's results. Returns 0 when recorded; -1, nothing recorded and
+ * the log unchanged, for a NULL log or texts, n_texts outside the range, an
+ * empty text or an allocation failure (the row is then just not kept). */
 int cmd_run_log_record_status(CmdRunLog *log, int reply_msg, uint32_t turn_hash,
-                              const char *const *texts, int n_texts);
+                              const char *const *texts, int n_texts, int no_card);
+
+/* Record the markers a run_command chat showed as "quoted, not run" rows: a
+ * record with no command rows and no status, `n_cmds` (1 to CMD_RUN_QUOTED_MAX)
+ * non-empty commands copied whole, keyed like any record. The rebuild draws
+ * them as runcmd_quoted_row() rows after the reply's status rows, and splits
+ * the reply's text at its first marker, as the live view did. Returns 0, or -1
+ * with nothing recorded and the log unchanged for a NULL log or cmds, n_cmds
+ * outside the range, an empty command or an allocation failure. */
+int cmd_run_log_record_quoted(CmdRunLog *log, int reply_msg, uint32_t turn_hash,
+                              const char *const *cmds, int n_cmds);
 
 /* The rebuild's rule: 1 when `rec` belongs to message `msg_index`, i.e. its
  * reply_msg == msg_index, that message is an assistant turn (`is_assistant`)

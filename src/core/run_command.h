@@ -408,6 +408,29 @@ typedef enum {
  * not run. */
 int runcmd_status_text(RunCmdStatusRow kind, int n, char *buf, size_t cap);
 
+/* The rows a reply's card does not show (fix round 3, H3): a status row for a
+ * call that is on no card line, drawn live under the card and rebuilt the
+ * same from the batch or its record. RUNCMD_ROW_TEXT_MAX is a buffer that
+ * holds any of them. */
+#define RUNCMD_ROW_TEXT_MAX 1200
+
+/* The note of a call with no approval-queue entry on its card: an OVER_CAP
+ * call ("not run (too many commands in one reply; at most 16)") or a SLOT call
+ * the queue refused, entry -1 ("not run (refused by the approval queue)").
+ * The same text runcmd_build_results gives that call as its note. Returns the
+ * length written; 0 with out[0] = NUL (cap > 0) for any other call, a NULL
+ * argument or a cap too small. */
+size_t runcmd_unqueued_note(const RunCmdCall *c, char *out, size_t cap);
+
+/* The status row for such a call: "<note>: <command>", cut on a UTF-8 boundary
+ * to fit `cap`. 0 and "" when runcmd_unqueued_note gives nothing. */
+size_t runcmd_unqueued_row(const RunCmdCall *c, char *out, size_t cap);
+
+/* The row of a marker a run_command chat showed but never ran:
+ * "quoted, not run: <command>", cut to fit `cap`. 0 and "" for a NULL
+ * command or out, or cap 0. */
+size_t runcmd_quoted_row(const char *command, char *out, size_t cap);
+
 /* An estimate of the request body in bytes, before the results are added:
  * the summed JSON-escaped length of every stored message's content and of
  * every results part's content and note, plus what the tool turns add around

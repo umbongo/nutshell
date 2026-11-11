@@ -1,6 +1,7 @@
 /* src/core/cmd_run_log.c */
 #include "cmd_run_log.h"
 #include "chat_msg.h"
+#include "run_command.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -88,11 +89,53 @@ void cmd_run_row_from_entry(const ApprovalEntry *e, int batch_ending,
     }
 }
 
+static void free_list(char **list, int n)
+{
+    if (!list) return;
+    for (int i = 0; i < n; i++) free(list[i]);
+    free(list);
+}
+
 static void free_record(CmdRunRecord *r)
 {
     if (!r) return;
     for (int i = 0; i < r->n; i++) free(r->rows[i].command);
+    free_list(r->after_rows, r->n_after);
+    free_list(r->quoted, r->n_quoted);
     free(r);
+}
+
+/* A heap copy of `len` bytes of `s`, NULL when the allocation fails. */
+static char *copy_str(const char *s, size_t len)
+{
+    char *p = g_alloc(len + 1);
+    if (!p) return NULL;
+    memcpy(p, s, len);
+    p[len] = '\0';
+    return p;
+}
+
+/* The status rows of a card's calls that are on no card line (runcmd_unqueued_row),
+ * into r->after_rows. 0 on success (also when there are none); -1 on an
+ * allocation failure, with r's list as far as it got (free_record frees it). */
+static int copy_after_rows(CmdRunRecord *r, const RunCmdReply *rc)
+{
+    if (!rc || rc->n_calls <= 0 || !rc->calls) return 0;
+    char row[RUNCMD_ROW_TEXT_MAX];
+    int n = 0;
+    for (int i = 0; i < rc->n_calls; i++)
+        if (runcmd_unqueued_row(&rc->calls[i], row, sizeof(row)) > 0) n++;
+    if (n == 0) return 0;
+    r->after_rows = g_alloc((size_t)n * sizeof(*r->after_rows));
+    if (!r->after_rows) return -1;
+    for (int i = 0; i < rc->n_calls && r->n_after < n; i++) {
+        const size_t len = runcmd_unqueued_row(&rc->calls[i], row, sizeof(row));
+        if (len == 0) continue;
+        r->after_rows[r->n_after] = copy_str(row, len);
+        if (!r->after_rows[r->n_after]) return -1;
+        r->n_after++;
+    }
+    return 0;
 }
 
 /* Append a complete record; the 17th drops the oldest first. */
@@ -138,13 +181,45 @@ int cmd_run_log_record(CmdRunLog *log, const CmdBatch *batch, uint32_t turn_hash
         r->rows[i].command = copy;
         r->n = i + 1;
     }
+    if (copy_after_rows(r, batch->runcmd) != 0) {
+        free_record(r);
+        return -1;
+    }
 
     push_record(log, r);
     return 0;
 }
 
+int cmd_run_log_record_quoted(CmdRunLog *log, int reply_msg, uint32_t turn_hash,
+                              const char *const *cmds, int n_cmds)
+{
+    if (!log || !cmds || n_cmds < 1 || n_cmds > CMD_RUN_QUOTED_MAX) return -1;
+    for (int i = 0; i < n_cmds; i++)
+        if (!cmds[i] || !cmds[i][0]) return -1;
+    CmdRunRecord *r = g_alloc(sizeof(*r));
+    if (!r) return -1;
+    memset(r, 0, sizeof(*r));
+    r->reply_msg = reply_msg;
+    r->turn_hash = turn_hash;
+    r->quoted = g_alloc((size_t)n_cmds * sizeof(*r->quoted));
+    if (!r->quoted) {
+        free_record(r);
+        return -1;
+    }
+    for (int i = 0; i < n_cmds; i++) {
+        r->quoted[i] = copy_str(cmds[i], strlen(cmds[i]));
+        if (!r->quoted[i]) {
+            free_record(r);
+            return -1;
+        }
+        r->n_quoted = i + 1;
+    }
+    push_record(log, r);
+    return 0;
+}
+
 int cmd_run_log_record_status(CmdRunLog *log, int reply_msg, uint32_t turn_hash,
-                              const char *const *texts, int n_texts)
+                              const char *const *texts, int n_texts, int no_card)
 {
     if (!log || !texts || n_texts < 1 || n_texts > CMD_RUN_STATUS_ROWS) return -1;
     for (int i = 0; i < n_texts; i++)
@@ -154,6 +229,7 @@ int cmd_run_log_record_status(CmdRunLog *log, int reply_msg, uint32_t turn_hash,
     memset(r, 0, sizeof(*r));
     r->reply_msg = reply_msg;
     r->turn_hash = turn_hash;
+    r->no_card = no_card ? 1 : 0;
     for (int i = 0; i < n_texts; i++) {
         size_t len = strlen(texts[i]);
         if (len > CMD_RUN_STATUS_MAX - 1) len = CMD_RUN_STATUS_MAX - 1;

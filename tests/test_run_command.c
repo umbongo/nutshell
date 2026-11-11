@@ -3958,3 +3958,92 @@ int test_runcmd_estimate_counts_gemini_signature(void)
     free(c);
     TEST_END();
 }
+
+/* ---- H3: the rows of a call that is on no card line ---- */
+
+int test_runcmd_unqueued_rows(void)
+{
+    TEST_BEGIN();
+    AiToolCall *c = calloc(17, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    for (int i = 0; i < 17; i++) set_cmd_call(&c[i], i);
+    RunCmdReply *r = runcmd_plan(c, 17, 1);
+    ASSERT_NOT_NULL(r);
+    char out[RUNCMD_ROW_TEXT_MAX];
+
+    /* A queued SLOT call is on the card: no row. */
+    r->calls[0].entry = 0;
+    ASSERT_EQ((int)runcmd_unqueued_note(&r->calls[0], out, sizeof(out)), 0);
+    ASSERT_STR_EQ(out, "");
+    ASSERT_EQ((int)runcmd_unqueued_row(&r->calls[0], out, sizeof(out)), 0);
+    ASSERT_STR_EQ(out, "");
+
+    /* A SLOT call the queue refused (entry -1). */
+    ASSERT_EQ(r->calls[1].entry, -1);
+    ASSERT_TRUE(runcmd_unqueued_note(&r->calls[1], out, sizeof(out)) > 0);
+    ASSERT_STR_EQ(out, "not run (refused by the approval queue)");
+    ASSERT_TRUE(runcmd_unqueued_row(&r->calls[1], out, sizeof(out)) > 0);
+    ASSERT_STR_EQ(out, "not run (refused by the approval queue): echo 1");
+
+    /* The 17th call is OVER_CAP. */
+    ASSERT_EQ(r->calls[16].kind, RUNCMD_KIND_OVER_CAP);
+    runcmd_unqueued_row(&r->calls[16], out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "not run (too many commands in one reply; at most 16): echo 16");
+
+    /* The note is the one runcmd_build_results gives the call. */
+    AiToolResult res[17];
+    ASSERT_EQ(runcmd_build_results(r, NULL, RUNCMD_CAUSE_SETTLED, res), 17);
+    char note[160];
+    runcmd_unqueued_note(&r->calls[16], note, sizeof(note));
+    ASSERT_STR_EQ(res[16].tool_note, note);
+    runcmd_unqueued_note(&r->calls[1], note, sizeof(note));
+    ASSERT_STR_EQ(res[1].tool_note, note);
+    for (int i = 0; i < 17; i++) free(res[i].content);
+
+    /* An INVALID call and an OTHER_TOOL call have no such row. */
+    r->calls[2].kind = RUNCMD_KIND_INVALID;
+    ASSERT_EQ((int)runcmd_unqueued_row(&r->calls[2], out, sizeof(out)), 0);
+    r->calls[2].kind = RUNCMD_KIND_OTHER_TOOL;
+    ASSERT_EQ((int)runcmd_unqueued_row(&r->calls[2], out, sizeof(out)), 0);
+
+    /* The command is cut on a UTF-8 boundary to the buffer. */
+    snprintf(r->calls[16].command, sizeof(r->calls[16].command),
+             "\xC3\xA9\xC3\xA9\xC3\xA9");
+    char small[58];   /* the 54-byte prefix, then room for 3 bytes: one e-acute */
+    size_t n = runcmd_unqueued_row(&r->calls[16], small, sizeof(small));
+    ASSERT_EQ((int)n, 56);
+    ASSERT_EQ((int)strlen(small), 56);
+    ASSERT_TRUE(utf8_whole(small));
+
+    /* NULL and zero capacity. */
+    ASSERT_EQ((int)runcmd_unqueued_row(NULL, out, sizeof(out)), 0);
+    ASSERT_STR_EQ(out, "");
+    ASSERT_EQ((int)runcmd_unqueued_row(&r->calls[16], NULL, 10), 0);
+    ASSERT_EQ((int)runcmd_unqueued_row(&r->calls[16], out, 0), 0);
+    runcmd_reply_free(r);
+    free(c);
+    TEST_END();
+}
+
+int test_runcmd_quoted_row(void)
+{
+    TEST_BEGIN();
+    char out[RUNCMD_ROW_TEXT_MAX];
+    ASSERT_EQ((int)runcmd_quoted_row("ls -la", out, sizeof(out)), 23);
+    ASSERT_STR_EQ(out, "quoted, not run: ls -la");
+    /* A 1023-byte command fits whole. */
+    char big[1024];
+    memset(big, 'x', 1023);
+    big[1023] = '\0';
+    ASSERT_EQ((int)runcmd_quoted_row(big, out, sizeof(out)), 17 + 1023);
+    /* A small buffer cuts, on a UTF-8 boundary. */
+    char small[22];
+    runcmd_quoted_row("\xC3\xA9\xC3\xA9\xC3\xA9", small, sizeof(small));
+    ASSERT_STR_EQ(small, "quoted, not run: \xC3\xA9\xC3\xA9");
+    ASSERT_EQ((int)runcmd_quoted_row(NULL, out, sizeof(out)), 0);
+    ASSERT_STR_EQ(out, "");
+    ASSERT_EQ((int)runcmd_quoted_row("ls", NULL, 10), 0);
+    ASSERT_EQ((int)runcmd_quoted_row("ls", out, 0), 0);
+    TEST_END();
+}

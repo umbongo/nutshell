@@ -4,6 +4,7 @@
 #include "chat_rebuild.h"
 #include "ai_agentic.h"
 #include "ui_demo.h"
+#include "run_command.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -561,7 +562,7 @@ int test_rebuild_replay_status_record_follows_the_reply(void) {
     const char *texts[1] = { "[reply too large: results reduced]" };
     ASSERT_EQ(cmd_run_log_record_status(&log, idx,
         cmd_run_log_reply_hash(ai_msg_content(m), m->content_len, m->tool_calls,
-                               m->n_tool_calls), texts, 1), 0);
+                               m->n_tool_calls), texts, 1, 0), 0);
 
     ChatMsgList list;
     chat_msg_list_init(&list);
@@ -918,5 +919,288 @@ int test_rebuild_call_text_web_fetch_url_cut_like_live(void) {
      * them, as the live row does (the display form may be shorter still). */
     ASSERT_TRUE(strlen(out) > 24);
     ASSERT_TRUE(strlen(out) <= 24 + 159);
+    TEST_END();
+}
+
+/* ---- H3: a reply answered without a card, and a card's calls it did not show ---- */
+
+static uint32_t reply_hash_of(const AiConversation *conv, int idx)
+{
+    const AiMessage *m = &conv->messages[idx];
+    return cmd_run_log_reply_hash(ai_msg_content(m), m->content_len,
+                                  m->tool_calls, m->n_tool_calls);
+}
+
+/* A run_command reply with one INVALID call and an [EXEC] marker in its text,
+ * answered without a card (NO_SLOT). Live it shows the text up to the marker,
+ * the status row, and "quoted, not run: ls"; after a tab switch the rebuild
+ * shows the same rows, and no "using tool" row for the call. */
+int test_rebuild_replay_no_card_reply_shows_the_live_rows(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    AiToolCall call;
+    set_call(&call, "r1", "run_command", "{}");
+    AiToolResult res;
+    set_result(&res, "r1", "run_command needs a \"command\" string", NULL, 0);
+    int idx = add_tool_round(&conv, "Try: [EXEC]ls[/EXEC] then more", &call, &res, 1);
+    free_results(&res, 1);
+
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const uint32_t h = reply_hash_of(&conv, idx);
+    const char *status[1] = {
+        "[no command in this reply could run: 1 refused; type a message to carry on]" };
+    ASSERT_EQ(cmd_run_log_record_status(&log, idx, h, status, 1, 1), 0);
+    const char *quoted[1] = { "ls" };
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, idx, h, quoted, 1), 0);
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    char out[1024];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "U:go\n"
+        "A:Try: \n"
+        "S:[no command in this reply could run: 1 refused; type a message to carry on]\n"
+        "S:quoted, not run: ls\n");
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* A reply with markers and no run_command call at all (a plain reply in a
+ * run_command chat): only the quoted record is kept, and it splits the text. */
+int test_rebuild_replay_quoted_only_reply_is_split_with_its_rows(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT,
+                "Run [EXEC]uptime[/EXEC] and [EXEC]df -h[/EXEC] after");
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *quoted[2] = { "uptime", "df -h" };
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 2, reply_hash_of(&conv, 2), quoted, 2), 0);
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    char out[1024];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "U:go\n"
+        "A:Run \n"
+        "S:quoted, not run: uptime\n"
+        "S:quoted, not run: df -h\n");
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* A quoted record of another reply at the same index shows nothing. */
+int test_rebuild_replay_quoted_record_of_another_reply_is_skipped(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "plain answer");
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *quoted[1] = { "ls" };
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 2, 12345u, quoted, 1), 0);
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    char out[256];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out, "U:go\nA:plain answer\n");
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* A reply of calls in a batch: queue them, leave `refuse_at` unqueued, keep
+ * the planner's state on the batch. */
+static CmdBatch *runcmd_card(CmdBatchSet *set, AiConversation *conv,
+                             int n_calls, int refuse_at, int *idx_out)
+{
+    AiToolCall *calls = calloc((size_t)n_calls, sizeof(*calls));
+    AiToolResult *res = calloc((size_t)n_calls, sizeof(*res));
+    for (int i = 0; i < n_calls; i++) {
+        char id[16], in[64];
+        snprintf(id, sizeof(id), "c%d", i);
+        snprintf(in, sizeof(in), "{\"command\":\"cmd%d\"}", i);
+        set_call(&calls[i], id, "run_command", in);
+    }
+    *idx_out = add_tool_round(conv, "", calls, NULL, n_calls);
+    (void)res;
+    RunCmdReply *r = runcmd_plan(calls, n_calls, 1);
+    cmd_batch_set_init(set);
+    CmdBatch *b = cmd_batch_add(set, NULL, NULL);
+    for (int i = 0; i < r->n_calls; i++) {
+        RunCmdCall *c = &r->calls[i];
+        if (c->kind != RUNCMD_KIND_SLOT || i == refuse_at) continue;
+        c->entry = chat_approval_add_session(&b->q, c->command, CMD_PLATFORM_LINUX, 0);
+    }
+    b->runcmd = r;
+    b->reply_msg = *idx_out;
+    b->reply_hash = reply_hash_of(conv, *idx_out);
+    free(calls);
+    free(res);
+    return b;
+}
+
+/* (b) The 17th call of a reply with a card is OVER_CAP: it is on no card
+ * line, and the rebuild shows its row after the card's rows (live batch). */
+int test_rebuild_replay_over_cap_call_is_shown_with_the_live_card(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    CmdBatchSet set;
+    int idx;
+    CmdBatch *b = runcmd_card(&set, &conv, 17, -1, &idx);
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->q.count, 16);
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, NULL, &set);
+    char out[2048];
+    dump(&list, out, sizeof(out));
+    ASSERT_TRUE(strstr(out, "K:cmd15\n"
+        "S:not run (too many commands in one reply; at most 16): cmd16\n") != NULL);
+    ASSERT_TRUE(strstr(out, "C:using tool") == NULL);
+    ASSERT_EQ(list.count, 1 + 16 + 1);
+    ASSERT_EQ(list.tail->type, CHAT_ITEM_STATUS);
+    chat_msg_list_clear(&list);
+    cmd_batch_set_free(&set);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* (b), after the card ended: the record keeps the same row, before the
+ * reply's status rows. */
+int test_rebuild_replay_over_cap_call_is_shown_with_the_record(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    CmdBatchSet set;
+    int idx;
+    CmdBatch *b = runcmd_card(&set, &conv, 17, -1, &idx);
+    ASSERT_NOT_NULL(b);
+    for (int i = 0; i < b->q.count; i++) b->q.entries[i].status = APPROVE_COMPLETED;
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, b->reply_hash, 0), 0);
+    const char *status[1] = { "[results reduced]" };
+    ASSERT_EQ(cmd_run_log_record_status(&log, idx, b->reply_hash, status, 1, 0), 0);
+    cmd_batch_set_free(&set);
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    char out[2048];
+    dump(&list, out, sizeof(out));
+    const char *tail = strstr(out, "K:cmd15\n");
+    ASSERT_NOT_NULL(tail);
+    ASSERT_STR_EQ(tail,
+        "K:cmd15\n"
+        "S:not run (too many commands in one reply; at most 16): cmd16\n"
+        "S:[results reduced]\n");
+    ASSERT_TRUE(strstr(out, "C:using tool") == NULL);
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* (c) A call the approval queue refused (entry -1), live batch and record. */
+int test_rebuild_replay_refused_call_is_shown_with_the_card(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    CmdBatchSet set;
+    int idx;
+    CmdBatch *b = runcmd_card(&set, &conv, 3, 1, &idx);   /* call 1 refused */
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->q.count, 2);
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, NULL, &set);
+    char out[1024];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "U:go\n"
+        "K:cmd0\n"
+        "K:cmd2\n"
+        "S:not run (refused by the approval queue): cmd1\n");
+    chat_msg_list_clear(&list);
+
+    for (int i = 0; i < b->q.count; i++) b->q.entries[i].status = APPROVE_COMPLETED;
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, b->reply_hash, 0), 0);
+    cmd_batch_set_free(&set);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "U:go\n"
+        "K:cmd0\n"
+        "K:cmd2\n"
+        "S:not run (refused by the approval queue): cmd1\n");
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* (d) A record made before this change (none of the new fields) rebuilds as
+ * it did: the call keeps its row and note, the text is split, the status row
+ * follows. */
+int test_rebuild_replay_record_without_the_new_fields_rebuilds_as_before(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    AiToolCall call;
+    set_call(&call, "r1", "run_command", "{}");
+    AiToolResult res;
+    set_result(&res, "r1", "run_command needs a \"command\" string", NULL, 0);
+    int idx = add_tool_round(&conv, "Try: [EXEC]ls[/EXEC] then more", &call, &res, 1);
+    free_results(&res, 1);
+
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    CmdRunRecord *old = calloc(1, sizeof(*old));
+    ASSERT_NOT_NULL(old);
+    old->reply_msg = idx;
+    old->turn_hash = reply_hash_of(&conv, idx);
+    old->n_status = 1;
+    snprintf(old->status[0], sizeof(old->status[0]), "[old status row]");
+    log.rec[log.count++] = old;
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, &log, NULL);
+    char out[1024];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out,
+        "U:go\n"
+        "C:using tool: run_command\n"
+        "S:run_command needs a \"command\" string\n"
+        "A:Try: \n"
+        "S:[old status row]\n");
+    chat_msg_list_clear(&list);
+    cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
     TEST_END();
 }

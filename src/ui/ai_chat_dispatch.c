@@ -163,12 +163,15 @@ static void owner_status_row(AiChatData *d, const AiSessionState *owner,
  * results are stored. Each row is shown when the owner is displayed and, with
  * the turn kept, recorded in the owner's run log keyed to that reply (R64), so
  * a rebuild or a background owner's later display draws it under its reply.
+ * `no_card` is 1 for a reply answered without a card (the record then says the
+ * live view drew none of its run_command calls, and the rebuild draws none),
+ * 0 for the results of a card's batch.
  * The caller frees `res` and each content. Returns the store's return (0, 1,
  * -1, -2). */
 static int runcmd_store_results(AiChatData *d, AiSessionState *owner,
                                 AiToolResult *res, int n,
                                 RunCmdStatusRow cause_row, int cause_n,
-                                int keep_free)
+                                int keep_free, int no_card)
 {
     AiConversation *conv = ai_chat_owner_conv(d, owner);
     const AiMessage *turn = ai_conv_open_tool_turn(conv);
@@ -211,7 +214,7 @@ static int runcmd_store_results(AiChatData *d, AiSessionState *owner,
     /* With the turn gone (a negative return) there is no reply to key to. */
     if (rc >= 0 && nt > 0)
         (void)cmd_run_log_record_status(&owner->run_log, reply_msg, reply_hash,
-                                        texts, nt);
+                                        texts, nt, no_card);
     return rc;
 }
 
@@ -243,7 +246,7 @@ void ai_chat_runcmd_answer_reply(AiChatData *d, AiSessionState *owner,
     else if (cause == RUNCMD_CAUSE_SET_FULL) row = RUNCMD_ROW_SET_FULL;
     else if (cause == RUNCMD_CAUSE_NO_SLOT) row = RUNCMD_ROW_NO_SLOT;
     /* "N refused" counts every call of the reply: none of them could run. */
-    (void)runcmd_store_results(d, owner, res, n, row, n, 0);
+    (void)runcmd_store_results(d, owner, res, n, row, n, 0, 1);
     free_results(res, n);
     runcmd_reply_free(r);
 }
@@ -264,7 +267,7 @@ void ai_chat_runcmd_answer_oom(AiChatData *d, AiSessionState *owner)
             owner_status_row(d, owner, row);
         return;
     }
-    (void)runcmd_store_results(d, owner, res, n, RUNCMD_ROW_PLANNER_OOM, n, 0);
+    (void)runcmd_store_results(d, owner, res, n, RUNCMD_ROW_PLANNER_OOM, n, 0, 1);
     free_results(res, n);
 }
 
@@ -320,7 +323,7 @@ void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch
         if (res && runcmd_build_results(r, &batch->q, cause, res) == n) {
             const int rc = runcmd_store_results(d, owner, res, n,
                                                 RUNCMD_ROW_NONE, 0,
-                                                runcmd_cause_keep_free(cause));
+                                                runcmd_cause_keep_free(cause), 0);
             stored = (rc >= 0);
         } else {
             /* No answer could be built: the one that needs no plan, else the

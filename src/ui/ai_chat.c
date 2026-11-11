@@ -164,9 +164,55 @@ static CmdBatch *reply_batch_build(AiChatData *d, AiSessionState *owner,
         }
         for (int qi = 0; qi < batch->q.count; qi++)
             reply_batch_append_row(d, batch, qi);
+        /* A call that is on no card line (over the cap, refused by the
+         * queue) gets its status row; the rebuild draws the same row from
+         * the batch, or from its record once it ended (chat_rebuild.c). */
+        for (int ci = 0; runcmd && ci < runcmd->n_calls; ci++) {
+            char row[RUNCMD_ROW_TEXT_MAX];
+            if (runcmd_unqueued_row(&runcmd->calls[ci], row, sizeof(row)) > 0)
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, row);
+        }
     }
     if (runcmd) batch->runcmd = runcmd;
     return batch;
+}
+
+/* The markers a run_command chat showed as "quoted, not run" rows and that
+ * landed in no batch (mk->landed 0), for the displayed owner's list: the rows
+ * themselves (runcmd_quoted_row, the one text the rebuild draws too). */
+static void reply_quoted_rows(AiChatData *d, const ReplyMarkers *mk)
+{
+    for (int ci = 0; ci < mk->n; ci++) {
+        if (mk->landed[ci]) continue;
+        char qrow[RUNCMD_ROW_TEXT_MAX];
+        (void)runcmd_quoted_row(mk->cmds[ci], qrow, sizeof(qrow));
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, qrow);
+    }
+}
+
+/* Record those same markers in the owner's run log, keyed to the reply at
+ * `reply_msg` (-1, or a turn that is gone: nothing), so a rebuild or a
+ * background owner's later display shows the rows live showed and splits the
+ * reply's text at its first marker. Not stored on an allocation failure; the
+ * live rows are unaffected. */
+static void reply_record_quoted(AiChatData *d, AiSessionState *owner,
+                                int reply_msg, const ReplyMarkers *mk)
+{
+    if (!owner || reply_msg < 0) return;
+    const AiConversation *conv = ai_chat_owner_conv(d, owner);
+    if (reply_msg >= conv->msg_count ||
+        conv->messages[reply_msg].role != AI_ROLE_ASSISTANT)
+        return;
+    const char *cmds[CMD_RUN_QUOTED_MAX];
+    int n = 0;
+    for (int ci = 0; ci < mk->n && n < CMD_RUN_QUOTED_MAX; ci++)
+        if (!mk->landed[ci]) cmds[n++] = mk->cmds[ci];
+    if (n == 0) return;
+    const AiMessage *rm = &conv->messages[reply_msg];
+    (void)cmd_run_log_record_quoted(&owner->run_log, reply_msg,
+        cmd_run_log_reply_hash(ai_msg_content(rm), rm->content_len,
+                               rm->tool_calls, rm->n_tool_calls),
+        cmds, n);
 }
 
 /* A reply that stopped the stream at run_command calls (took_calls): plan the
@@ -175,13 +221,15 @@ static CmdBatch *reply_batch_build(AiChatData *d, AiSessionState *owner,
  * calls are read from the stored assistant turn, never from the response's
  * own copy (an id the provider left empty is stored as call_<n>). Returns the
  * batch (the displayed caller settles or dispatches it), or NULL when the
- * reply was answered here or there was nothing open to answer. */
+ * reply was answered here or there was nothing open to answer. *turn_msg (may
+ * be NULL) is the stored turn's index, -1 when nothing was open. */
 static CmdBatch *runcmd_reply_take(AiChatData *d, AiSessionState *owner,
                                    int displayed, int fetch_registered,
-                                   ReplyMarkers *mk)
+                                   ReplyMarkers *mk, int *turn_msg)
 {
     AiConversation *conv = ai_chat_owner_conv(d, owner);
     const AiMessage *turn = ai_conv_open_tool_turn(conv);
+    if (turn_msg) *turn_msg = turn ? (int)(turn - conv->messages) : -1;
     if (!turn) return NULL;
     /* B13 stops only at a reply that holds a run_command call. If one did not,
      * nobody could answer its calls: take the turn back out, as every other
@@ -1513,12 +1561,13 @@ next_coalesce:;
                 if (inert)
                     for (int qi = 0; qi < ncmds; qi++) mk.quoted[qi] = 1;
 
+                int quoted_msg = -1;   /* the reply the quoted rows belong to */
                 if (took_calls) {
                     /* The stored tool turn is this reply: plan its calls and
                      * build the one batch, or answer them. Never a request. */
                     (void)runcmd_reply_take(d, src, 0, rmsg->fetch_registered,
-                                            &mk);
-                } else if (ncmds > 0 && !inert) {
+                                            &mk, &quoted_msg);
+                } else {
                     /* The reply is the last message here, before any NOTE
                      * below is added: reply_msg names it, not conv_mark - 1
                      * (the run log's key, cmd_run_log.h). */
@@ -1532,9 +1581,14 @@ next_coalesce:;
                     const int reply_msg = cmd_run_reply_index(
                         rmsg->reply_stored, src->conv.msg_count,
                         last && last->role == AI_ROLE_ASSISTANT);
-                    (void)reply_batch_build(d, src, 0, reply_msg, NULL, &mk,
-                                            NULL);
+                    quoted_msg = reply_msg;
+                    if (ncmds > 0 && !inert)
+                        (void)reply_batch_build(d, src, 0, reply_msg, NULL,
+                                                &mk, NULL);
                 }
+                /* The markers shown but not run, for the rebuild this tab
+                 * will get (no list to draw into while it is hidden). */
+                if (inert) reply_record_quoted(d, src, quoted_msg, &mk);
                 /* Notes queued while the stream ran follow the reply (spec
                  * decision 19), after the batch above took its reply's
                  * index; the slots for a continue text and its reply stay
@@ -1771,11 +1825,12 @@ next_coalesce:;
              * 2026-09-09-pending-command-batches.md). No settle-all here. */
 
             CmdBatch *batch = NULL;
+            int quoted_msg = reply_msg;   /* the reply the quoted rows belong to */
             if (took_calls) {
                 /* The calls are the stored tool turn's, planned and answered
                  * or batched here; nothing starts a request of its own. */
                 batch = runcmd_reply_take(d, src, 1, rmsg->fetch_registered,
-                                          &mk);
+                                          &mk, &quoted_msg);
             } else if (ncmds > 0 && !inert && d->active_state) {
                 batch = reply_batch_build(d, d->active_state, 1, reply_msg,
                                           NULL, &mk, NULL);
@@ -1815,11 +1870,9 @@ next_coalesce:;
              * call, one answered without a batch, or an entry the queue
              * refused) is a status row, never a card: a quoted-only batch
              * never settles and would fill the set (spec decision 3). */
-            for (int ci = 0; inert && ci < ncmds; ci++) {
-                if (mk.landed[ci]) continue;
-                char qrow[1100];
-                snprintf(qrow, sizeof(qrow), "quoted, not run: %s", mk.cmds[ci]);
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, qrow);
+            if (inert) {
+                reply_quoted_rows(d, &mk);
+                reply_record_quoted(d, src, quoted_msg, &mk);
             }
 
             if (batch) {
