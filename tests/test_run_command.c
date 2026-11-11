@@ -1183,6 +1183,7 @@ int test_runcmd_capture_probe_matches_dup(void)
 
 #include "ai_agentic.h"
 #include "ai_conv_guard.h"
+#include "ai_data_block.h"
 #include "tool_decision.h"
 
 #define NOTE_OTHER_TOOL \
@@ -1336,7 +1337,6 @@ int test_runcmd_results_executing_each_cause(void)
     ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_RETRY, res), 2);
     ASSERT_STR_EQ(res[0].tool_note,
         "ran; the panel stopped waiting; the command may still be running (the user retried)");
-    ASSERT_TRUE(strncmp(res[0].tool_note, "ran; the panel stopped waiting", 30) == 0);
     ASSERT_STR_EQ(res[0].content, "partial");
     ASSERT_STR_EQ(res[1].tool_note, "not run (the user retried)");
     free_results(res, 2);
@@ -1419,6 +1419,41 @@ int test_runcmd_results_whole_reply(void)
     runcmd_reply_free(r);
 
     ASSERT_EQ(runcmd_build_results(NULL, NULL, RUNCMD_CAUSE_SETTLED, res), -1);
+    TEST_END();
+}
+
+int test_runcmd_results_no_queue(void)
+{
+    TEST_BEGIN();
+    RunCmdReply *r = plan_runs(2);
+    ASSERT_NOT_NULL(r);
+    AiToolResult res[2];
+    /* no queue: a SLOT call has nothing to be looked up in, under any ordinary cause */
+    static const RunCmdCause causes[] = { RUNCMD_CAUSE_SETTLED, RUNCMD_CAUSE_TYPED,
+                                          RUNCMD_CAUSE_STOP, RUNCMD_CAUSE_NO_SLOT };
+    for (size_t k = 0; k < sizeof(causes) / sizeof(causes[0]); k++) {
+        r->calls[0].entry = 0;
+        r->calls[1].entry = -1;
+        ASSERT_EQ(runcmd_build_results(r, NULL, causes[k], res), 2);
+        ASSERT_STR_EQ(res[0].tool_note, "not run (refused by the approval queue)");
+        ASSERT_STR_EQ(res[1].tool_note, "not run (refused by the approval queue)");
+        ASSERT_EQ(res[0].is_error, 0);
+        ASSERT_NULL(res[0].content);
+    }
+    /* an entry past the queue's count is the same */
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.count = 1;
+    q.entries[0].status = APPROVE_DENIED;
+    r->calls[0].entry = 0;
+    r->calls[1].entry = 1;
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_SETTLED, res), 2);
+    ASSERT_STR_EQ(res[0].tool_note, "not run (denied)");
+    ASSERT_STR_EQ(res[1].tool_note, "not run (refused by the approval queue)");
+    r->calls[1].entry = 99;
+    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_TYPED, res), 2);
+    ASSERT_STR_EQ(res[1].tool_note, "not run (refused by the approval queue)");
+    runcmd_reply_free(r);
     TEST_END();
 }
 
@@ -1591,6 +1626,30 @@ int test_runcmd_cause_tables(void)
     TEST_END();
 }
 
+#include "json_validate.h"
+
+#define FRAME_DELIM "----nutshell-data-00000000000000dd"      /* 34 bytes, as ai_delim_make makes */
+
+/* The JSON-escaped size of what the body carries for one result, measured by
+ * building it (runcmd_frame_result with a real delimiter). */
+static size_t emitted_escaped(const AiToolResult *r)
+{
+    AiToolPart p;
+    memset(&p, 0, sizeof(p));
+    snprintf(p.tool_name, sizeof(p.tool_name), RUNCMD_TOOL_NAME);
+    snprintf(p.tool_note, sizeof(p.tool_note), "%s", r->tool_note);
+    p.content = r->content;
+    p.content_len = r->content_len;
+    p.omit_at = r->omit_at;
+    p.omitted_bytes = r->omitted_bytes;
+    size_t n = 0, e = 0;
+    char *f = runcmd_frame_result(&p, FRAME_DELIM, &n);
+    if (!f) return 0;
+    for (size_t i = 0; i < n; i++) e += json_escaped_byte_len((unsigned char)f[i]);
+    free(f);
+    return e;
+}
+
 /* n results of len bytes of 'x' (a line break every 64), uncut. */
 static void fill_results(AiToolResult *res, int n, size_t len)
 {
@@ -1606,11 +1665,9 @@ static void fill_results(AiToolResult *res, int n, size_t len)
 
 static size_t sum_escaped(const AiToolResult *res, int n)
 {
-    size_t s = 0;
-    for (int i = 0; i < n; i++) {
-        s += res[i].content_len + strlen(res[i].tool_note);   /* the fill is plain ASCII */
-    }
-    return s;
+    size_t sum = 0;
+    for (int i = 0; i < n; i++) sum += emitted_escaped(&res[i]);   /* the fill is plain ASCII */
+    return sum;
 }
 
 int test_runcmd_fit_to_notes(void)
@@ -1671,11 +1728,24 @@ int test_runcmd_fit_to_notes(void)
     res[1].omitted_bytes = 100;
     snprintf(res[1].tool_note, sizeof(res[1].tool_note),
              "ran; output cut: 100 bytes omitted from the middle");
-    size_t notes = strlen(res[0].tool_note) + strlen(res[1].tool_note);
     ASSERT_EQ(runcmd_fit(res, 2, 0, budget), 0);
     ASSERT_STR_EQ(res[1].content, "HEADtail");
-    /* one halving brings it within the budget: head "HE", tail "il" */
-    ASSERT_EQ(runcmd_fit(res, 2, budget - (notes + 6), budget), 1);
+    /* one halving brings it within the budget: head "HE", tail "il". The
+     * room is what that state emits (framing and notes included), measured
+     * by building the frame, not by the function under test. */
+    AiToolResult after[2];
+    memset(after, 0, sizeof(after));
+    snprintf(after[0].tool_note, sizeof(after[0].tool_note), "not run (denied)");
+    after[1].content_len = 4;
+    after[1].omit_at = 2;
+    after[1].omitted_bytes = 104;
+    snprintf(after[1].tool_note, sizeof(after[1].tool_note),
+             "ran; output cut: 104 bytes omitted from the middle");
+    char *keep = rc_dup("HEil");
+    after[1].content = keep;
+    size_t room = emitted_escaped(&after[0]) + emitted_escaped(&after[1]);
+    free(keep);
+    ASSERT_EQ(runcmd_fit(res, 2, budget - room, budget), 1);
     ASSERT_STR_EQ(res[0].tool_note, "not run (denied)");     /* no excerpt: no fit note, no change */
     ASSERT_NOT_NULL(res[1].content);
     ASSERT_STR_EQ(res[1].content, "HEil");
@@ -1686,32 +1756,152 @@ int test_runcmd_fit_to_notes(void)
     TEST_END();
 }
 
-int test_runcmd_fit_multibyte(void)
+/* Halve text (unit repeated reps times) down to nothing: every step is whole glyphs. */
+static int fit_whole_glyphs(const char *unit, size_t reps)
 {
-    TEST_BEGIN();
     AiToolResult res[1];
     memset(res, 0, sizeof(res));
-    const size_t chars = 5000;                                 /* 15000 bytes of 3-byte glyphs */
-    res[0].content = (char *)malloc(chars * 3 + 1);
-    for (size_t i = 0; i < chars; i++) memcpy(res[0].content + i * 3, "\xE2\x82\xAC", 3);
-    res[0].content[chars * 3] = '\0';
-    res[0].content_len = chars * 3;
+    size_t ul = strlen(unit), total = ul * reps;
+    res[0].content = (char *)malloc(total + 1);
+    for (size_t i = 0; i < reps; i++) memcpy(res[0].content + i * ul, unit, ul);
+    res[0].content[total] = '\0';
+    res[0].content_len = total;
     snprintf(res[0].tool_note, sizeof(res[0].tool_note), "ran");
-    for (int round = 0; round < 6; round++) {
+    int ok = 1;
+    for (int round = 0; round < 20 && res[0].content; round++) {
         /* a budget one byte under what is there forces a halving */
-        ASSERT_TRUE(runcmd_fit(res, 1, 0, res[0].content_len + strlen(res[0].tool_note) - 1) >= 1);
+        if (runcmd_fit(res, 1, 0, runcmd_result_bytes(&res[0]) - 1) < 1) { ok = 0; break; }
         if (!res[0].content) break;
         char *head = (char *)malloc(res[0].omit_at + 1);
         memcpy(head, res[0].content, res[0].omit_at);
         head[res[0].omit_at] = '\0';
         char *tail = rc_dup(res[0].content + res[0].omit_at);
-        ASSERT_TRUE(utf8_whole(head));
-        ASSERT_TRUE(utf8_whole(tail));
-        ASSERT_TRUE(res[0].content_len % 3 == 0);              /* only whole glyphs are left */
-        ASSERT_EQ((int)(res[0].content_len + res[0].omitted_bytes), (int)(chars * 3));
+        if (!utf8_whole(head) || !utf8_whole(tail)) ok = 0;
+        if (res[0].content_len + res[0].omitted_bytes != total) ok = 0;
         free(head);
         free(tail);
     }
+    free_results(res, 1);
+    return ok;
+}
+
+int test_runcmd_fit_multibyte(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(fit_whole_glyphs("\xE2\x82\xAC", 5000));                  /* 3-byte */
+    ASSERT_TRUE(fit_whole_glyphs("\xC3\xA9", 7001));                       /* 2-byte, odd count */
+    ASSERT_TRUE(fit_whole_glyphs("\xF0\x9F\x98\x80", 3333));              /* 4-byte */
+    ASSERT_TRUE(fit_whole_glyphs("a\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80", 1777));  /* mixed widths */
+    ASSERT_TRUE(fit_whole_glyphs("\xF0\x9F\x98\x80", 1));                /* one glyph: gone, not split */
+    TEST_END();
+}
+
+int test_runcmd_fit_note_near_cap(void)
+{
+    TEST_BEGIN();
+    AiToolResult res[1];
+    memset(res, 0, sizeof(res));
+    /* a note of 490 bytes holding the cut note: its count grows, the note stays under the cap */
+    res[0].content = rc_dup("HEADtailHEADtail");
+    res[0].content_len = 16;
+    res[0].omit_at = 8;
+    res[0].omitted_bytes = 99;
+    char filler[441];
+    memset(filler, 'n', 440);
+    filler[440] = '\0';
+    snprintf(res[0].tool_note, sizeof(res[0].tool_note), "%s; output cut: 99 bytes omitted from the middle", filler);
+    ASSERT_TRUE(runcmd_fit(res, 1, 0, runcmd_result_bytes(&res[0]) - 1) >= 1);
+    ASSERT_TRUE(strlen(res[0].tool_note) < AI_TOOL_PART_NOTE_MAX);
+    ASSERT_NOT_NULL(strstr(res[0].tool_note, "; output cut: 1"));   /* 99 grew to three digits */
+    ASSERT_TRUE(strncmp(res[0].tool_note, filler, 440) == 0);
+    /* nothing fits: the content goes, and the fit note replaces the cut note */
+    ASSERT_TRUE(runcmd_fit(res, 1, 100000, 10) >= 1);
+    ASSERT_NULL(res[0].content);
+    ASSERT_NULL(strstr(res[0].tool_note, "output cut"));
+    ASSERT_STR_EQ(res[0].tool_note + 440, "; output dropped: no room left in this conversation");
+    free_results(res, 1);
+
+    /* a note too long for the fit note to be added whole: it is left out, never cut, never overrun */
+    memset(res, 0, sizeof(res));
+    res[0].content = rc_dup("abcdefgh");
+    res[0].content_len = 8;
+    char big[491];
+    memset(big, 'm', 490);
+    big[490] = '\0';
+    snprintf(res[0].tool_note, sizeof(res[0].tool_note), "%s", big);
+    ASSERT_TRUE(runcmd_fit(res, 1, 100000, 10) >= 1);
+    ASSERT_NULL(res[0].content);
+    ASSERT_STR_EQ(res[0].tool_note, big);
+    free_results(res, 1);
+    TEST_END();
+}
+
+int test_runcmd_result_bytes_exact(void)
+{
+    TEST_BEGIN();
+    /* what the fit counts is what the frame emits: uncut, cut (both sides, head
+     * only, tail only), with and without a note, a note alone, newlines in the data */
+    static const struct { const char *content; size_t omit_at, omitted; const char *note; } rows[] = {
+        { "plain output", 0, 0, "ran" },
+        { "plain output", 0, 0, "" },
+        { "a\nb\nc\n", 0, 0, "ran" },
+        { "HEADTAIL", 4, 41213, "ran; output cut: 41213 bytes omitted from the middle" },
+        { "HEADTAIL", 4, 7, "" },
+        { "HEAD", 4, 99, "n" },
+        { "TAIL", 0, 99, "n" },
+        { "HEAD\nTAIL\n", 5, 12, "n" },
+        { NULL, 0, 0, "not run (denied)" },
+        { NULL, 0, 0, "" } };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        AiToolResult r;
+        memset(&r, 0, sizeof(r));
+        if (rows[i].content) {
+            r.content = rc_dup(rows[i].content);
+            r.content_len = strlen(rows[i].content);
+        }
+        r.omit_at = rows[i].omit_at;
+        r.omitted_bytes = rows[i].omitted;
+        snprintf(r.tool_note, sizeof(r.tool_note), "%s", rows[i].note);
+        ASSERT_EQ((int)runcmd_result_bytes(&r), (int)emitted_escaped(&r));
+        /* the meter's unescaped count: the frame's length less the content and the note */
+        if (rows[i].content) {
+            AiToolPart p;
+            memset(&p, 0, sizeof(p));
+            snprintf(p.tool_name, sizeof(p.tool_name), RUNCMD_TOOL_NAME);
+            snprintf(p.tool_note, sizeof(p.tool_note), "%s", rows[i].note);
+            p.content = r.content; p.content_len = r.content_len;
+            p.omit_at = r.omit_at; p.omitted_bytes = r.omitted_bytes;
+            size_t n = 0;
+            char *f = runcmd_frame_result(&p, FRAME_DELIM, &n);
+            ASSERT_NOT_NULL(f);
+            ASSERT_EQ((int)ai_tool_frame_bytes(RUNCMD_TOOL_NAME, r.content_len, r.omit_at,
+                                               r.omitted_bytes, rows[i].note[0] != '\0', 0),
+                      (int)(n - r.content_len - strlen(rows[i].note)));
+            free(f);
+        }
+        free(r.content);
+    }
+    ASSERT_EQ((int)runcmd_result_bytes(NULL), 0);
+    TEST_END();
+}
+
+int test_runcmd_fit_counts_framing(void)
+{
+    TEST_BEGIN();
+    AiToolResult res[1];
+    fill_results(res, 1, 1000);
+    /* 1000 bytes and a 3-byte note fit 1010; the lead, two delimiters and the
+     * newlines that frame them (about 160 bytes) do not */
+    int h = runcmd_fit(res, 1, 0, 1010);
+    ASSERT_TRUE(h >= 1);
+    ASSERT_TRUE(res[0].content_len < 1000);
+    ASSERT_TRUE(runcmd_result_bytes(&res[0]) <= 1010 || res[0].content == NULL);
+    ASSERT_TRUE(emitted_escaped(&res[0]) <= 1010 || res[0].content == NULL);
+    free_results(res, 1);
+    /* room for the framing too: untouched */
+    fill_results(res, 1, 1000);
+    ASSERT_EQ(runcmd_fit(res, 1, 0, 1000 + 3 + 200), 0);
+    ASSERT_EQ((int)res[0].content_len, 1000);
     free_results(res, 1);
     TEST_END();
 }
@@ -1766,6 +1956,41 @@ int test_runcmd_frame_direct(void)
     free(f);
     ASSERT_NULL(runcmd_frame_result(NULL, D, &n));
     free(head);
+    TEST_END();
+}
+
+int test_runcmd_frame_alloc_failure(void)
+{
+    TEST_BEGIN();
+    const char *D = FRAME_DELIM;
+    AiToolPart p;
+    memset(&p, 0, sizeof(p));
+    snprintf(p.tool_name, sizeof(p.tool_name), "run_command");
+    snprintf(p.tool_note, sizeof(p.tool_note), "ran");
+    char *content = rc_dup("HEADTAIL");
+    p.content = content;
+    p.content_len = 8;
+    size_t n = 7;
+    /* the note alone, an uncut unframed result, a cut one with and without a delimiter: the
+     * allocation made here fails, the answer is NULL, nothing leaks (the sanitizer run checks) */
+    struct { const char *delim; size_t omit_at, omitted; int content; } rows[] = {
+        { D, 0, 0, 0 }, { NULL, 0, 0, 1 }, { D, 4, 5, 1 }, { NULL, 4, 5, 1 } };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        p.content = rows[i].content ? content : NULL;
+        p.content_len = rows[i].content ? 8 : 0;
+        p.omit_at = rows[i].omit_at;
+        p.omitted_bytes = rows[i].omitted;
+        runcmd_set_alloc_for_test(plan_failing_alloc);
+        g_plan_alloc_calls = 0;
+        g_plan_alloc_fail_at = 1;
+        char *f = runcmd_frame_result(&p, rows[i].delim, &n);
+        runcmd_set_alloc_for_test(NULL);
+        ASSERT_NULL(f);
+        f = runcmd_frame_result(&p, rows[i].delim, &n);          /* and the same call works */
+        ASSERT_NOT_NULL(f);
+        free(f);
+    }
+    free(content);
     TEST_END();
 }
 
@@ -1895,7 +2120,13 @@ int test_runcmd_estimate_counts_reasoning(void)
     ASSERT_EQ((int)(runcmd_request_estimate(c, NULL, 100, 50)), (int)base);
     ASSERT_EQ((int)(runcmd_request_estimate(c, "anthropic", 100, 50)), (int)base);
     /* content: "hello" + "text" + part "output" + note "ran", tools 100, snapshot twice */
-    ASSERT_EQ((int)base, 5 + 4 + 6 + 3 + 100 + 100);
+    /* ...plus what the tool turns carry: both turns' wrapper, the call's id, name and
+     * escaped input (four quotes), the answer's id, its wrapper and its framing (the
+     * lead, two delimiters, four newlines of two bytes each) */
+    size_t wire = AI_TOOL_WIRE_MSG + (2 + 11 + 16 + 4 + AI_TOOL_WIRE_CALL) +
+                  AI_TOOL_WIRE_MSG + (2 + AI_TOOL_WIRE_PART) +
+                  ai_data_lead_tool("run_command", NULL, 0) + 2 * 34 + 4 * 2;
+    ASSERT_EQ((int)base, (int)(5 + 4 + 6 + 3 + 100 + 100 + wire));
     ASSERT_EQ((int)runcmd_request_estimate(NULL, "moonshot", 7, 3), 7 + 6);
     free(reasoning);
     ai_conv_reset(c);
@@ -1921,7 +2152,6 @@ int test_runcmd_body_bounded_over_rounds(void)
     ai_conv_add(c, AI_ROLE_USER, "keep checking the logs");
     AiBodyFrame frame = { NULL, "----nutshell-data-00000000000000cc" };
     size_t worst = 0;
-    double worst_ratio = 0;
     for (int round = 1; round <= 20; round++) {
         AiToolCall call;
         char id[16];
@@ -1957,13 +2187,7 @@ int test_runcmd_body_bounded_over_rounds(void)
         if (n > worst) worst = n;
         double est_bytes = (double)ai_context_estimate_tokens(c) * 4.0;
         double ratio = est_bytes > (double)n ? est_bytes / (double)n : (double)n / est_bytes;
-        if (ratio > worst_ratio) worst_ratio = ratio;
-        /* The plan asked for 10 %. Measured: the meter counts content and notes
-         * only, so each round's framing, ids and tool_use block (about 330
-         * bytes) goes uncounted and the gap grows with the rounds: 1.05 in
-         * round 1, 1.29 in round 19. Bounded here at what was measured; the
-         * request budget leaves RUNCMD_BODY_HEADROOM for this. */
-        ASSERT_TRUE(ratio <= (round <= 2 ? 1.10 : 1.35));
+        ASSERT_TRUE(ratio <= 1.10);                              /* the meter tracks the body, every round */
     }
     /* the oldest 18 outputs are stubs, the newest 2 hold their excerpts */
     int stubs = 0, kept = 0;
@@ -1976,9 +2200,211 @@ int test_runcmd_body_bounded_over_rounds(void)
     ASSERT_EQ(stubs, 18);
     ASSERT_EQ(kept, 2);
     ASSERT_TRUE(worst < body_max);
-    ASSERT_TRUE(worst_ratio > 1.0);
+    ASSERT_TRUE(worst > 20000);                                  /* the bodies are real: two 16 KiB rounds */
     free(body);
     ai_conv_reset(c);
     free(c);
+    TEST_END();
+}
+
+/* ---- The estimate counts what the body sends (R32, R33, the review) ---------- */
+
+/* A results round for conv: one run_command call "t<round>" with content of len bytes. */
+static void rc_round(AiConversation *c, int round, size_t len, const char *input)
+{
+    AiToolCall call;
+    char id[16];
+    snprintf(id, sizeof(id), "t%d", round);
+    set_call(&call, id, RUNCMD_TOOL_NAME, input);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, &call, 1);
+    AiToolResult r;
+    memset(&r, 0, sizeof(r));
+    snprintf(r.tool_use_id, sizeof(r.tool_use_id), "%s", id);
+    r.content = (char *)malloc(len + 1);
+    memset(r.content, 'q', len);
+    r.content[len] = '\0';
+    r.content_len = len;
+    snprintf(r.tool_note, sizeof(r.tool_note), "ran");
+    agentic_add_tool_results(c, &call, &r, 1);
+    free(r.content);
+}
+
+int test_runcmd_estimate_counts_aged_as_stub(void)
+{
+    TEST_BEGIN();
+    /* conv A: four rounds of 300-byte outputs. conv B: the same, the first three
+     * already the stub. The coming append ages everything with a results turn after it,
+     * so A's estimate equals B's. */
+    AiConversation *a = (AiConversation *)calloc(1, sizeof(*a));
+    AiConversation *b = (AiConversation *)calloc(1, sizeof(*b));
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ai_conv_init(a, "m");
+    ai_conv_init(b, "m");
+    ai_conv_add(a, AI_ROLE_USER, "go");
+    ai_conv_add(b, AI_ROLE_USER, "go");
+    for (int round = 1; round <= 4; round++) {
+        rc_round(a, round, 300, "{\"command\":\"ls\"}");
+        rc_round(b, round, round < 4 ? strlen(RUNCMD_AGED_STUB) : 300, "{\"command\":\"ls\"}");
+    }
+    /* B's stub rounds hold 'q's of the stub's length: the same size */
+    size_t ea = runcmd_request_estimate(a, "anthropic", 0, 0);
+    size_t eb = runcmd_request_estimate(b, "anthropic", 0, 0);
+    ASSERT_EQ((int)ea, (int)eb);
+    /* the newest round counts in full: 100 more bytes there, 100 more in the estimate */
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    for (int round = 1; round <= 4; round++)
+        rc_round(c, round, round < 4 ? 300 : 400, "{\"command\":\"ls\"}");
+    ASSERT_EQ((int)runcmd_request_estimate(c, "anthropic", 0, 0), (int)ea + 100);
+    /* a single round: nothing is old enough, the output counts as it is */
+    AiConversation *one = (AiConversation *)calloc(1, sizeof(*one));
+    ASSERT_NOT_NULL(one);
+    ai_conv_init(one, "m");
+    ai_conv_add(one, AI_ROLE_USER, "go");
+    rc_round(one, 1, 300, "{\"command\":\"ls\"}");
+    ASSERT_TRUE(runcmd_request_estimate(one, "anthropic", 0, 0) > 300);
+    ai_conv_reset(a); ai_conv_reset(b); ai_conv_reset(c); ai_conv_reset(one);
+    free(a); free(b); free(c); free(one);
+    TEST_END();
+}
+
+int test_runcmd_estimate_counts_tool_inputs(void)
+{
+    TEST_BEGIN();
+    /* script-heavy calls: four rounds whose inputs hold 3000 escaped quotes (6000 bytes
+     * raw, 12000 JSON-escaped) each. They are never aged. */
+    AiConversation *plain = (AiConversation *)calloc(1, sizeof(*plain));
+    AiConversation *heavy = (AiConversation *)calloc(1, sizeof(*heavy));
+    ASSERT_NOT_NULL(plain);
+    ASSERT_NOT_NULL(heavy);
+    ai_conv_init(plain, "m");
+    ai_conv_init(heavy, "m");
+    ai_conv_add(plain, AI_ROLE_USER, "go");
+    ai_conv_add(heavy, AI_ROLE_USER, "go");
+    char input[AI_TOOL_INPUT_MAX];
+    size_t w = (size_t)snprintf(input, sizeof(input), "{\"note\":\"");
+    for (int i = 0; i < 1500 && w + 8 < sizeof(input); i++) { input[w++] = '\\'; input[w++] = '"'; }
+    w += (size_t)snprintf(input + w, sizeof(input) - w, "\"}");
+    size_t raw = strlen(input);
+    ASSERT_TRUE(raw > 2900);
+    for (int round = 1; round <= 4; round++) {
+        rc_round(plain, round, 100, "{\"command\":\"ls\"}");
+        rc_round(heavy, round, 100, input);
+    }
+    size_t ep = runcmd_request_estimate(plain, "openai", 0, 0);
+    size_t eh = runcmd_request_estimate(heavy, "openai", 0, 0);
+    /* each input costs its escaped size: every byte of it is a quote or a backslash, so twice its length */
+    size_t added = eh - ep;
+    size_t per = (raw - strlen("{\"command\":\"ls\"}")) * 2;
+    ASSERT_TRUE(added >= 4 * per - 4 * 16);
+    ASSERT_TRUE(added <= 4 * per + 4 * 16);
+    ai_conv_reset(plain); ai_conv_reset(heavy);
+    free(plain); free(heavy);
+    TEST_END();
+}
+
+int test_context_estimate_tool_less_unchanged(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_SYSTEM, "You are an assistant.");        /* 21 */
+    ai_conv_add(c, AI_ROLE_USER, "first question here");              /* 19 */
+    ai_conv_add(c, AI_ROLE_ASSISTANT, "an answer of some length");    /* 24 */
+    ai_conv_add(c, AI_ROLE_USER, "second");                           /* 6 */
+    ASSERT_EQ(ai_context_estimate_tokens(c), (21 + 19 + 24 + 6) / 4);
+    ASSERT_EQ((int)ai_tool_wire_bytes(c, 0, 0), 0);
+    ASSERT_EQ((int)ai_tool_wire_bytes(c, 1, 1), 0);
+    ASSERT_EQ((int)ai_tool_wire_bytes(NULL, 0, 0), 0);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
+/* One scenario of the meter against the body. calls per round: nrc run_command calls
+ * of out_len bytes (cut in the middle when cut) and, when web, one web_search part of
+ * 2000 bytes. Returns the worst ratio of the meter (tokens * 4) to the body over the
+ * rounds, or a negative number when a body failed to build. */
+static double meter_vs_body(const char *provider, int rounds, int nrc, size_t out_len,
+                            int cut, int web)
+{
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    char *body = (char *)malloc(AI_BODY_MAX);
+    char *text = (char *)malloc(out_len + 1);
+    double worst = 1.0;
+    if (!c || !body || !text) { free(c); free(body); free(text); return -1; }
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_SYSTEM, "You are an assistant.");
+    ai_conv_add(c, AI_ROLE_USER, "keep checking the logs");
+    for (size_t i = 0; i < out_len; i++) text[i] = (i % 60 == 59) ? '\n' : (char)('a' + i % 26);
+    text[out_len] = '\0';
+    AiBodyFrame frame = { NULL, FRAME_DELIM };
+    for (int round = 1; round <= rounds; round++) {
+        AiToolCall calls[4];
+        AiToolResult res[4];
+        int n = 0;
+        memset(calls, 0, sizeof(calls));
+        memset(res, 0, sizeof(res));
+        for (int i = 0; i < nrc; i++, n++) {
+            char id[48];
+            snprintf(id, sizeof(id), "call_%d_%d", round, n);
+            set_call(&calls[n], id, RUNCMD_TOOL_NAME, "{\"command\":\"journalctl -u app --since today\",\"note\":\"look\"}");
+            snprintf(res[n].tool_use_id, sizeof(res[n].tool_use_id), "%s", id);
+            res[n].content = rc_dup(text);
+            res[n].content_len = out_len;
+            snprintf(res[n].tool_note, sizeof(res[n].tool_note), "ran");
+            if (cut) {
+                res[n].omit_at = out_len * 3 / 4;
+                res[n].omitted_bytes = 12345;
+                snprintf(res[n].tool_note, sizeof(res[n].tool_note), "ran; output cut: 12345 bytes omitted from the middle");
+            }
+        }
+        if (web) {
+            char id[48];
+            snprintf(id, sizeof(id), "call_%d_w", round);
+            set_call(&calls[n], id, "web_search", "{\"query\":\"kernel oops\"}");
+            snprintf(res[n].tool_use_id, sizeof(res[n].tool_use_id), "%s", id);
+            res[n].content = (char *)malloc(2001);
+            memset(res[n].content, 's', 2000);
+            res[n].content[2000] = '\0';
+            res[n].content_len = 2000;
+            n++;
+        }
+        int ok = agentic_add_assistant_tool_msg_ex(c, "", NULL, calls, n) == 0 &&
+                 agentic_add_tool_results(c, calls, res, n) == 0;
+        for (int i = 0; i < n; i++) free(res[i].content);
+        if (!ok) { worst = -1; break; }
+        runcmd_age_results(c);
+        size_t len = ai_build_request_body_frame(c, NULL, NULL, &frame, body, AI_BODY_MAX, 0, provider);
+        if (len == 0) { worst = -1; break; }
+        double meter = (double)ai_context_estimate_tokens(c) * 4.0;
+        double ratio = meter > (double)len ? meter / (double)len : (double)len / meter;
+        if (ratio > worst) worst = ratio;
+    }
+    ai_conv_reset(c);
+    free(c); free(body); free(text);
+    return worst;
+}
+
+int test_context_meter_tracks_body_every_round(void)
+{
+    TEST_BEGIN();
+    /* the meter counts the calls, ids, framing and JSON the body carries: within 10 % on every round */
+    double w1 = meter_vs_body("anthropic", 20, 1, 16384, 1, 0);       /* one 16 KiB cut output a round */
+    double w2 = meter_vs_body("openai", 20, 1, 16384, 1, 0);
+    double w3 = meter_vs_body("anthropic", 20, 3, 6000, 1, 1);        /* three commands and a web_search */
+    double w4 = meter_vs_body("openai", 20, 3, 6000, 1, 1);
+    double w5 = meter_vs_body("anthropic", 20, 2, 300, 0, 1);         /* small, uncut: the framing dominates */
+    double w6 = meter_vs_body("openai", 20, 2, 300, 0, 1);
+    ASSERT_TRUE(w1 > 0 && w1 <= 1.10);
+    ASSERT_TRUE(w2 > 0 && w2 <= 1.10);
+    ASSERT_TRUE(w3 > 0 && w3 <= 1.10);
+    ASSERT_TRUE(w4 > 0 && w4 <= 1.10);
+    ASSERT_TRUE(w5 > 0 && w5 <= 1.10);
+    ASSERT_TRUE(w6 > 0 && w6 <= 1.10);
     TEST_END();
 }

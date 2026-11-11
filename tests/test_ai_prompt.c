@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "ai_prompt.h"
 #include "ai_agentic.h"
+#include "ai_data_block.h"
 #include "cmd_classify.h"
 #include <string.h>
 #include <stdlib.h>
@@ -3985,9 +3986,16 @@ int test_context_estimate_counts_parts(void)
             /* r[2]: notes only, 80 bytes */
             snprintf(r[2].tool_note, sizeof(r[2].tool_note), "%0*d", 80, 7);
             ASSERT_EQ(agentic_add_tool_results(c, cs, r, 3), 0);
-            /* (40 + 400 + 200 + 40 + 80) / 4 */
-            ASSERT_EQ(ai_context_estimate_tokens(c), 190);
-            ASSERT_EQ(ai_context_estimate_tokens_ex(c, 40), 200);
+            /* The text: 40 + 400 + 200 + 40 + 80. Around it the results turn adds
+             * AI_TOOL_WIRE_MSG, three parts of AI_TOOL_WIRE_PART (their ids are
+             * empty here) and the framing of the two that have content: the lead,
+             * two 34-byte delimiters and three newlines (one more for the note). */
+            size_t wire = AI_TOOL_WIRE_MSG + 3 * AI_TOOL_WIRE_PART +
+                          ai_data_lead_tool("web_fetch", NULL, 0) + 2 * 34 + 3 +
+                          ai_data_lead_tool("web_search", NULL, 0) + 2 * 34 + 4;
+            ASSERT_EQ(ai_tool_wire_bytes(c, 0, 0), wire);
+            ASSERT_EQ(ai_context_estimate_tokens(c), (int)((760 + wire) / 4));
+            ASSERT_EQ(ai_context_estimate_tokens_ex(c, 40), (int)((760 + wire) / 4) + 10);
         }
         free(big); free(mid);
         ai_conv_reset(c);

@@ -508,6 +508,67 @@ int ai_moonshot_output_limit(const char *model)
     return ctx / 2;
 }
 
+static size_t wire_len(const char *s, int escaped)
+{
+    size_t n = 0;
+    if (!s) return 0;
+    if (!escaped) return strlen(s);
+    for (; *s; s++) n += json_escaped_byte_len((unsigned char)*s);
+    return n;
+}
+
+size_t ai_tool_frame_bytes(const char *tool_name, size_t content_len,
+                           size_t omit_at, size_t omitted_bytes, int has_note,
+                           int escaped)
+{
+    if (content_len == 0) return 0;
+    size_t nl = escaped ? 2 : 1;
+    size_t lead = ai_data_lead_tool(tool_name, NULL, 0);
+    size_t dl = strlen(AI_DELIM_PREFIX) + 16;      /* ai_delim_make: prefix and 16 hex digits */
+    int cut = omitted_bytes > 0 && tool_name && strcmp(tool_name, RUNCMD_TOOL_NAME) == 0;
+    if (!cut)                                       /* lead, D, data, D (, note) */
+        return lead + 2 * dl + (size_t)(3 + (has_note ? 1 : 0)) * nl;
+    size_t hl = omit_at < content_len ? omit_at : content_len;
+    size_t tl = content_len - hl;
+    size_t marker = (size_t)snprintf(NULL, 0, RUNCMD_OMIT_MARKER_FMT, omitted_bytes);
+    /* segments: lead, [D head D], marker, [D tail D], [note], joined by newlines */
+    size_t segs = 1u + (hl ? 3u : 0u) + 1u + (tl ? 3u : 0u) + (has_note ? 1u : 0u);
+    return lead + marker + (size_t)((hl ? 2 : 0) + (tl ? 2 : 0)) * dl + (segs - 1) * nl;
+}
+
+size_t ai_tool_wire_bytes(const AiConversation *conv, int escaped, int age_keep)
+{
+    if (!conv) return 0;
+    size_t total = 0;
+    for (int i = 0; i < conv->msg_count; i++) {
+        const AiMessage *m = &conv->messages[i];
+        if (m->tool_calls && m->n_tool_calls > 0) {
+            total += AI_TOOL_WIRE_MSG;
+            for (int k = 0; k < m->n_tool_calls; k++) {
+                const AiToolCall *c = &m->tool_calls[k];
+                total += wire_len(c->id, escaped) + wire_len(c->name, escaped) +
+                         wire_len(c->input_json, escaped) + AI_TOOL_WIRE_CALL;
+            }
+        }
+        if (m->role == AI_ROLE_TOOL && m->parts && m->n_parts > 0) {
+            total += AI_TOOL_WIRE_MSG;
+            for (int k = 0; k < m->n_parts; k++) {
+                const AiToolPart *p = &m->parts[k];
+                size_t clen = p->content ? p->content_len : 0;
+                size_t omit_at = p->omit_at, omitted = p->omitted_bytes;
+                if (age_keep > 0 && runcmd_part_ages(conv, i, p, age_keep)) {
+                    clen = strlen(RUNCMD_AGED_STUB);
+                    omit_at = omitted = 0;
+                }
+                total += wire_len(p->tool_call_id, escaped) + AI_TOOL_WIRE_PART +
+                         ai_tool_frame_bytes(p->tool_name, clen, omit_at, omitted,
+                                             p->tool_note[0] != '\0', escaped);
+            }
+        }
+    }
+    return total;
+}
+
 int ai_context_estimate_tokens(const AiConversation *conv)
 {
     if (!conv) return 0;
@@ -520,6 +581,7 @@ int ai_context_estimate_tokens(const AiConversation *conv)
             total_chars += (int)m->parts[k].content_len +
                            (int)strlen(m->parts[k].tool_note);
     }
+    total_chars += (int)ai_tool_wire_bytes(conv, 0, 0);
     return total_chars / 4;
 }
 

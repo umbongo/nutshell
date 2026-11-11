@@ -227,12 +227,17 @@ int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCau
 
 /* An estimate of the request body in bytes, before the results are added:
  * the summed JSON-escaped length of every stored message's content and of
- * every results part's content and note, plus tools_json_len plus
- * 2 * snapshot_len (the snapshot's stored length, counted twice for its
- * escaping and its block), plus, for "moonshot", every stored assistant
- * turn's escaped reasoning (the only provider sending it back so far;
- * DeepSeek's is added with its request path). NULL conv: tools and snapshot
- * only. provider may be NULL. */
+ * every results part's content and note, plus what the tool turns add around
+ * them (ai_tool_wire_bytes(conv, 1, RUNCMD_AGE_ROUNDS - 1): every call's id,
+ * name and input, every answer's id and framing, the JSON around them), plus
+ * tools_json_len plus 2 * snapshot_len (the snapshot's stored length, counted
+ * twice for its escaping and its block), plus, for "moonshot", every stored
+ * assistant turn's escaped reasoning (the only provider sending it back so
+ * far; DeepSeek's is added with its request path). A run_command part that
+ * the append about to happen will age (a results turn with at least
+ * RUNCMD_AGE_ROUNDS - 1 results turns after it) is counted as the stub, which
+ * is what the next request carries. NULL conv: tools and snapshot only.
+ * provider may be NULL. */
 size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
                                size_t tools_json_len, size_t snapshot_len);
 
@@ -255,6 +260,12 @@ size_t runcmd_budget(size_t body_max, int context_limit_tokens);
  * of halving rounds done (0: it already fit, or nothing to cut). */
 int runcmd_fit(AiToolResult *res, int n, size_t estimate, size_t budget);
 
+/* What one result adds to the body, the sum runcmd_fit tests: its JSON-escaped
+ * content and note plus the framing runcmd_frame_result() puts around them
+ * (the lead sentence, the delimiters, the marker of a cut one, the newlines).
+ * NULL: 0. */
+size_t runcmd_result_bytes(const AiToolResult *r);
+
 /* The text one run_command part is sent as, malloc'd (free it), *out_len its
  * length; NULL on allocation failure or a NULL part.
  *   uncut: trust's one block, ai_data_lead_tool("run_command"), the block, the
@@ -266,7 +277,10 @@ int runcmd_fit(AiToolResult *res, int n, size_t estimate, size_t budget);
  *          no delimiters, so the marker never assumes either side;
  *   no excerpt (content NULL or empty): the note alone, no lead, no block.
  * delim NULL: no lead and no delimiters, the pieces joined the same way
- * (a conversation built without a frame). */
+ * (a conversation built without a frame). The result and the cut layout's
+ * assembly are allocated through the test allocator; the escaped pieces and
+ * trust's block (ai_data_escape_dup, ai_data_block_dup) come from malloc, so
+ * only the allocations made here can be failed by a test. */
 char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out_len);
 
 /* Aging (spec decision 11): the output of a run_command part in a results
@@ -281,6 +295,13 @@ char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out
  * or NULL, or already the stub, is left as it is; its note and its call stay.
  * Other tools' parts are untouched. Returns the number of parts changed. */
 int runcmd_age_results(AiConversation *conv);
+
+/* 1 when part p, which sits in the results turn at message index m of conv, is
+ * a run_command part whose output is at least the stub's size and that has at
+ * least `keep` results turns (AI_ROLE_TOOL messages) after its own: the parts
+ * runcmd_age_results() (keep = RUNCMD_AGE_ROUNDS) replaces by the stub.
+ * keep <= 0: 0. */
+int runcmd_part_ages(const AiConversation *conv, int m, const AiToolPart *p, int keep);
 
 /* Tests only: the allocator the planner and the cut use (NULL restores malloc). */
 void runcmd_set_alloc_for_test(void *(*alloc)(size_t));

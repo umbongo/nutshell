@@ -639,13 +639,16 @@ size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
         total += escaped_len(m->tool_note, strlen(m->tool_note));
         for (int k = 0; m->parts && k < m->n_parts; k++) {
             const AiToolPart *p = &m->parts[k];
-            total += escaped_len(p->content, p->content_len);
+            /* the append that follows ages what is old enough: the stub is what goes out */
+            size_t clen = runcmd_part_ages(conv, i, p, RUNCMD_AGE_ROUNDS - 1)
+                              ? strlen(RUNCMD_AGED_STUB) : p->content_len;
+            total += escaped_len(p->content, clen);
             total += escaped_len(p->tool_note, strlen(p->tool_note));
         }
         if (moonshot && m->role == AI_ROLE_ASSISTANT && m->reasoning)
             total += escaped_len(m->reasoning, strlen(m->reasoning));
     }
-    return total;
+    return total + ai_tool_wire_bytes(conv, 1, RUNCMD_AGE_ROUNDS - 1);
 }
 
 size_t runcmd_budget(size_t body_max, int context_limit_tokens)
@@ -735,6 +738,16 @@ static void halve_result(AiToolResult *r)
     r->content[nlen] = '\0';
 }
 
+size_t runcmd_result_bytes(const AiToolResult *r)
+{
+    if (!r) return 0;
+    size_t clen = r->content ? r->content_len : 0;
+    size_t nlen = strlen(r->tool_note);
+    return escaped_len(r->content, clen) + escaped_len(r->tool_note, nlen) +
+           ai_tool_frame_bytes(RUNCMD_TOOL_NAME, clen, r->omit_at, r->omitted_bytes,
+                               nlen > 0, 1);
+}
+
 int runcmd_fit(AiToolResult *res, int n, size_t estimate, size_t budget)
 {
     if (!res || n <= 0) return 0;
@@ -743,8 +756,7 @@ int runcmd_fit(AiToolResult *res, int n, size_t estimate, size_t budget)
         size_t sum = estimate;
         int any = 0;
         for (int i = 0; i < n; i++) {
-            sum += escaped_len(res[i].content, res[i].content_len) +
-                   escaped_len(res[i].tool_note, strlen(res[i].tool_note));
+            sum += runcmd_result_bytes(&res[i]);
             if (res[i].content && res[i].content_len > 0) any = 1;
         }
         if (sum <= budget || !any) break;
@@ -779,7 +791,7 @@ char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out
     size_t n = 0;
 
     if (clen == 0) {                                    /* no excerpt: the note alone */
-        out = (char *)malloc(nlen + 1);
+        out = (char *)g_alloc(nlen + 1);
         if (!out) return NULL;
         memcpy(out, part->tool_note, nlen + 1);
         if (out_len) *out_len = nlen;
@@ -791,7 +803,7 @@ char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out
 
     if (part->omitted_bytes == 0) {                     /* uncut */
         if (delim) return ai_data_block_dup(lead, delim, content, clen, nlen ? part->tool_note : NULL, out_len);
-        out = (char *)malloc(clen + 1 + nlen + 1);
+        out = (char *)g_alloc(clen + 1 + nlen + 1);
         if (!out) return NULL;
         memcpy(out, content, clen);
         n = clen;
@@ -832,7 +844,7 @@ char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out
 #undef SEG
     size_t total = 0;
     for (int i = 0; i < ns; i++) total += sl[i] + 1;    /* a newline after each, the last is the NUL */
-    out = (char *)malloc(total);
+    out = (char *)g_alloc(total);
     if (out) {
         size_t w = 0;
         for (int i = 0; i < ns; i++) {
@@ -850,19 +862,28 @@ char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out
 
 /* ---- Aging ---- */
 
+int runcmd_part_ages(const AiConversation *conv, int m, const AiToolPart *p, int keep)
+{
+    if (!conv || !p || keep <= 0 || m < 0 || m >= conv->msg_count) return 0;
+    if (strcmp(p->tool_name, RUNCMD_TOOL_NAME) != 0) return 0;
+    if (!p->content || p->content_len < strlen(RUNCMD_AGED_STUB)) return 0;
+    int later = 0;
+    for (int j = m + 1; j < conv->msg_count; j++)
+        if (conv->messages[j].role == AI_ROLE_TOOL) later++;
+    return later >= keep;
+}
+
 int runcmd_age_results(AiConversation *conv)
 {
     if (!conv) return 0;
     const size_t stub_len = strlen(RUNCMD_AGED_STUB);
-    int aged = 0, rounds_seen = 0;
-    for (int m = conv->msg_count - 1; m >= 0; m--) {
+    int aged = 0;
+    for (int m = 0; m < conv->msg_count; m++) {
         AiMessage *msg = &conv->messages[m];
         if (msg->role != AI_ROLE_TOOL) continue;
-        if (++rounds_seen <= RUNCMD_AGE_ROUNDS) continue;
         for (int k = 0; msg->parts && k < msg->n_parts; k++) {
             AiToolPart *p = &msg->parts[k];
-            if (strcmp(p->tool_name, RUNCMD_TOOL_NAME) != 0) continue;
-            if (!p->content || p->content_len < stub_len) continue;
+            if (!runcmd_part_ages(conv, m, p, RUNCMD_AGE_ROUNDS)) continue;
             if (p->content_len == stub_len && memcmp(p->content, RUNCMD_AGED_STUB, stub_len) == 0)
                 continue;                                /* already the stub */
             memcpy(p->content, RUNCMD_AGED_STUB, stub_len);

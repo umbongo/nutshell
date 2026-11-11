@@ -572,8 +572,38 @@ int ai_format_context_tooltip(int actual_in, int actual_out,
  * Returns 0 for unknown models. */
 int ai_model_context_limit(const char *model);
 
-/* Estimate total tokens in a conversation (chars/4 heuristic). */
+/* Estimate total tokens in a conversation (chars/4 heuristic). It counts
+ * what a request body sends: every message's text, and for a conversation
+ * with tool turns also what ai_tool_wire_bytes() adds (the calls' ids, names
+ * and inputs, the answers' ids and framing, the JSON around them). A
+ * conversation with no tool turns counts its text alone, as it always did. */
 int ai_context_estimate_tokens(const AiConversation *conv);
+
+/* The bytes a request body adds around the text of the tool turns, so the
+ * meter (escaped 0) and the run_command fit (escaped 1: the JSON-escaped
+ * size, newlines as two bytes) count one thing. Per assistant turn with tool
+ * calls: AI_TOOL_WIRE_MSG, then per call its id, name and input_json and
+ * AI_TOOL_WIRE_CALL. Per results turn: AI_TOOL_WIRE_MSG, then per part its id,
+ * AI_TOOL_WIRE_PART and ai_tool_frame_bytes() of its stored content. Zero for
+ * a conversation with neither. The turns' content and notes are not counted
+ * here. age_keep > 0: a run_command part that runcmd_part_ages() says is aged
+ * with that many newest results turns kept is counted as the stub (the size
+ * of a request once the coming append has aged it); 0: parts as stored. */
+#define AI_TOOL_WIRE_CALL 64u  /* the JSON around one tool_use / tool_calls entry (the larger form) */
+#define AI_TOOL_WIRE_PART 52u  /* the JSON around one tool_result / "tool" message */
+#define AI_TOOL_WIRE_MSG  32u  /* the message around a tool turn's blocks */
+size_t ai_tool_wire_bytes(const AiConversation *conv, int escaped, int age_keep);
+
+/* What the body adds around one tool answer that has content (0 when it has
+ * none: the note is sent alone): the lead sentence, the delimiters and the
+ * newlines between, and for a cut run_command answer (omitted_bytes > 0) the
+ * marker and the second pair of delimiters, with no block for an empty head
+ * or tail. Exactly what runcmd_frame_result() adds to the content and the
+ * note. has_note: a note follows (one more newline). escaped: newlines count
+ * as the two bytes JSON makes of them. */
+size_t ai_tool_frame_bytes(const char *tool_name, size_t content_len,
+                           size_t omit_at, size_t omitted_bytes, int has_note,
+                           int escaped);
 
 /* The same estimate plus the terminal snapshot the next request carries in
  * its last user turn: ai_context_estimate_tokens(conv) + snapshot_len / 4.
