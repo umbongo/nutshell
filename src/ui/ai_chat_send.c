@@ -616,7 +616,21 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
      * launches, the text rides the relaunch. Full (2): the door's wrapper
      * shows the notice and nothing launches. Failed (-1): nothing launches
      * either, a request without its text would end on the assistant's turn. */
-    if (ai_chat_owner_add_note(d, d->active_state, msg_text, 1) != 0) return;
+    const int note_rc = ai_chat_owner_add_note(d, d->active_state, msg_text, 1);
+    if (note_rc != 0) {
+        if (note_rc < 0) {
+            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                "[the command results could not be stored: Nutshell ran out "
+                "of memory]");
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        }
+        /* Nothing launched, so the stream that would have ended in
+         * ai_chat_maybe_start_next_batch() never runs: an approved batch
+         * waiting behind this one must not be stranded. No-op while a
+         * dispatch runs or a stream is busy. */
+        ai_chat_maybe_start_next_batch(d);
+        return;
+    }
 
     ai_rounds_continue(d->active_state, unattended);
 

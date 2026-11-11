@@ -40,6 +40,10 @@ int ai_chat_owner_add_note(AiChatData *d, AiSessionState *owner,
     const int defer = owner &&
         ai_stream_table_find_owner(&d->streams, owner) != NULL;
     const int rc = ai_conv_add_user_note(conv, q, defer, keep_free, text);
+    if (rc < 0)   /* the note's text is never logged */
+        DLOG(DLOG_AI, DLOG_WARN, 0, "note.door_failed",
+             "rc=%d keep_free=%d defer=%d displayed=%d", rc, keep_free,
+             defer, (!owner || owner == d->active_state) ? 1 : 0);
     if (rc == 2 && (!owner || owner == d->active_state)) {
         /* Nothing was stored or queued: say so, so no note is lost silently
          * (spec decisions 19 and 24). */
