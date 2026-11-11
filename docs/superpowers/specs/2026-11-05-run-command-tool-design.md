@@ -692,7 +692,7 @@ sends the note alone. Trust's 64 KiB cap never cuts a run_command result.
 | PENDING (New Chat, eviction) | "not run (never decided)" | no |
 | OVER_CAP | "not run (too many commands in one reply; at most 16)" | no |
 | Session ended; set full | *(round 2)* "not run (session ended)"; "not run (too many pending cards)" | no |
-| APPROVED never sent, at Stop | "not run: stopped by the user; do not run it again unless the user asks" | no |
+| PENDING or APPROVED never sent, at Stop *(review of B1-B11, 2026-11-11: PENDING added, as the code does)* | "not run: stopped by the user; do not run it again unless the user asks" | no |
 | OTHER_TOOL; INVALID | decision 4's; decision 2's; `is_error` 1 | no |
 
 `<reason>` at Stop reads "stopped by the user; do not run it again unless
@@ -1053,12 +1053,15 @@ block into it, changing its bytes and placing newer screen state before
 the results. Now the snapshot is frozen to the turn it was taken for:
 `AiConversation` gains `char *snapshot; int snapshot_msg;` (-1: none),
 copied, taken and freed with the conversation. A launch whose conversation
-ends on a USER turn (a typed message, an `[EXEC]` continue text, Retry of a
-question) takes a fresh snapshot and freezes it to that turn; a launch
-whose conversation ends on tool results (a run_command resume, Retry from
-results) takes none. Every request attaches the frozen snapshot to
-`messages[snapshot_msg]` while that is the last USER turn, and none
-otherwise. *(critique 2)* The builder keeps reading `AiBodyFrame.snapshot`
+ends on a USER turn the user typed (a typed message, Retry of a question)
+takes a fresh snapshot and freezes it to that turn; a launch whose
+conversation ends on tool results (a run_command resume, Retry from
+results) or on a USER turn Nutshell wrote (a note, an `[EXEC]` continue text,
+see the bullet below) takes none. Every request attaches the frozen snapshot
+to `messages[snapshot_msg]` while that is a typed USER turn and only
+Nutshell's own USER turns follow it, and none otherwise *(review of B1-B11,
+2026-11-11: reworded from "while that is the last USER turn"; the bullet
+below is the rule)*. *(critique 2)* The builder keeps reading `AiBodyFrame.snapshot`
 (trust's tests in `tests/test_ai_body_frame.c` pass unchanged); the frame
 gains `int snapshot_at` (0, the zero value: the last USER message, today's
 rule; k > 0: message k − 1), and the launch fills both from the frozen
@@ -1069,7 +1072,7 @@ today.
 
 - *(review of B1-B11, 2026-11-11)* **The block stays on the question while
   only Nutshell's notes follow.** *The coordinator's ruling; the maintainer
-  can overturn it.* The rule above ("while that is the last USER turn")
+  can overturn it.* The original rule ("while that is the last USER turn", reworded above)
   dropped the block as soon as a note went in after the results, so
   [S, Q (frozen), A(run_command), T, USER "policy raised"] sent Q without its
   block: Q's bytes changed and the prompt-cache prefix broke, and the next

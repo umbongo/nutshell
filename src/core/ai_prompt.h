@@ -183,7 +183,8 @@ int ai_conv_has_snapshot(const AiConversation *conv);
 
 /* Drop the snapshot (free it; snapshot NULL, snapshot_len 0, snapshot_msg -1)
  * when it no longer belongs to a message: snapshot_msg is negative or
- * >= msg_count, or the message there is no longer an AI_ROLE_USER turn.
+ * >= msg_count, or the message there is no longer an AI_ROLE_USER turn the
+ * user typed (it is gone, or it is a Nutshell note: nutshell_note set).
  * A valid snapshot is kept. NULL-safe. EVERY site that pops messages off the
  * end of a conversation (ai_msg_free(&messages[--msg_count])) must call this
  * afterwards, or snapshot_msg is left pointing past the end and a later
@@ -275,8 +276,9 @@ typedef struct {
     const char *delim;     /* this request's delimiter; NULL: no block, tool output unframed */
     /* Which message carries the snapshot (spec decision 22). 0, the zero
      * value: the last AI_ROLE_USER message, as always. k > 0: message k - 1,
-     * and only while it is an AI_ROLE_USER message and every AI_ROLE_USER
-     * message after it has nutshell_note set (a note of Nutshell's own); a
+     * and only while it is an AI_ROLE_USER message that is not itself a
+     * Nutshell note (nutshell_note 0) and every AI_ROLE_USER message after it
+     * has nutshell_note set (a note of Nutshell's own); a
      * typed USER turn after it means no block. A launch with a frozen
      * snapshot passes snapshot_msg + 1. */
     int snapshot_at;
