@@ -1635,6 +1635,13 @@ next_coalesce:;
                     }
                 }
             }
+            /* A background stream that ended in an error: no reply follows to
+             * flush the notes queued while it ran, so they are stored now
+             * (keep_free 0, no launch follows), as for the displayed owner
+             * below. With a tool call open the flush appends nothing, so no
+             * note lands between a tool_use and its results. */
+            if (wParam != 2 && src)
+                (void)ai_conv_flush_notes(&src->conv, &src->notes, 0);
             if (src) {
                 src->busy = 0;
                 src->activity_phase = (int)ACTIVITY_IDLE;
@@ -1940,9 +1947,10 @@ next_coalesce:;
             /* The stream ended in an error, so no reply follows to flush the
              * notes queued while it ran: they go out now, before the next
              * typed message, as they did when they sat in the conversation.
-             * keep_free 0: no launch follows. The owner's own queue, a
-             * background one included. A note that does not fit, or an open
-             * tool call, keeps them queued. */
+             * keep_free 0: no launch follows. The displayed owner's; a
+             * background owner's error is flushed in the block above that
+             * returns early. A note that does not fit, or an open tool call,
+             * keeps them queued. */
             if (src)
                 (void)ai_conv_flush_notes(ai_chat_owner_conv(d, src),
                                           &src->notes, 0);

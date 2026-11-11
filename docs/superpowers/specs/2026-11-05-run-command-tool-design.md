@@ -453,7 +453,12 @@ checks below move ahead of that store, for every tool stop:
   conversation-full notice (decision 24).
   So a conversation at 61 messages whose results turn (62) is followed by two
   queued notes stores the first (63), keeps the second queued, and stores the
-  reply (64).
+  reply (64). *(fix round 3, 2026-11-11)* That example is the flush's own
+  arithmetic once the results are stored, and it is not a case the finish
+  relaunches from: the finish checks room first, with the 61 messages that are
+  stored before the results (the tool turn included). Two queued notes give
+  61 + 2 + 2 = 65, room 0: no relaunch and the row of decision 24. One note
+  gives 64 and a relaunch; none gives 63.
   *(fix round 3, 2026-11-11)* The finish's relaunch check runs with the
   assistant tool turn already stored, so it needs room only for the results
   turn, the reply and the queued notes: `agentic_room_for_finish(conv, q)`
