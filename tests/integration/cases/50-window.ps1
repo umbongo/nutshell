@@ -10,6 +10,7 @@
 # define their own copies here, same pattern as $WM_COMMAND in the driver.
 $IDM_FILE_EXIT       = 2006
 $IDM_VIEW_FULLSCREEN = 2021
+$IDM_EDIT_SETTINGS   = 2013
 
 function Start-NutshellUntilDialogOrWindow {
     <# Launch nutshell.exe directly -- NOT via the module's Start-Nutshell,
@@ -581,6 +582,49 @@ Invoke-Case -Name "help_shortcuts_sheet_fits_the_screen" -Settings @{} -ExtraArg
     $how = if ($bars.Count -gt 0) { "scrolls" } else { "one page" }
     [NutshellNative]::PostMessage($dlg, $WM_KEYDOWN_SHEET, [IntPtr]$VK_ESCAPE_SHEET, [IntPtr]::Zero) | Out-Null
     "sheet {0}x{1} inside the {2}x{3} work area at {4} DPI; {5}" -f ($r.R - $r.L), ($r.B - $r.T), $wa.Width, $wa.Height, $dpi, $how
+}
+
+function Get-NutshellSettingsWindows {
+    param([Parameter(Mandatory)] $Session)
+    return @(Get-NutshellWindows -Session $Session | Where-Object { ($_ -split "`t")[1] -eq "Nutshell_Settings" })
+}
+
+# The Settings dialog's help tips (settings_help.c): one tooltips_class32
+# window holds a tool per labelled control, and the API key eye button keeps
+# its own tip. A tip window is hidden until hovered, and Get-NutshellWindows
+# lists visible windows only, so this walks every top-level window itself.
+# A mismatch in the counts means a control gained or lost a tool. The case
+# also posts Edit > Settings a second time: the re-entry guard must leave
+# exactly one Settings window, the same one.
+Invoke-Case -Name "settings_help_tool_count" -Settings @{} -ExtraArgs @("-nc") -Body {
+    param($s)
+    $dlg = Open-NutshellSettings -Session $s
+    $counts = New-Object System.Collections.ArrayList
+    $after = [IntPtr]::Zero
+    for ($i = 0; $i -lt 500; $i++) {
+        $h = [NutshellNative]::FindWindowEx([IntPtr]::Zero, $after, "tooltips_class32", [IntPtr]::Zero)
+        if ($h -eq [IntPtr]::Zero) { break }
+        $after = $h
+        [uint32]$ownerPid = 0
+        [NutshellNative]::GetWindowThreadProcessId($h, [ref]$ownerPid) | Out-Null
+        if ($ownerPid -ne [uint32]$s.Process.Id) { continue }
+        if ([NutshellNative]::GetParent($h) -ne $dlg) { continue }
+        # TTM_GETTOOLCOUNT (WM_USER + 13)
+        $n = [NutshellNative]::SendMsg($h, 0x040D, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+        [void]$counts.Add($n)
+    }
+    $seen = (@($counts | Sort-Object) -join ", ")
+    Assert-True ($seen -eq "1, 82") "the Settings dialog's tooltip windows hold tools [$seen], expected [1, 82]"
+
+    # A second Edit > Settings while the dialog is open opens nothing more.
+    [NutshellNative]::PostMessage($s.Main, $WM_COMMAND, [IntPtr]$IDM_EDIT_SETTINGS, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 800
+    $open = (Get-NutshellSettingsWindows -Session $s).Count
+    Assert-True ($open -eq 1) "a second Edit > Settings left $open Settings windows open, expected 1"
+    Assert-True ([NutshellNative]::IsWindow($dlg)) "the first Settings window is gone after a second Edit > Settings"
+
+    Close-NutshellDialog -Dialog $dlg -Button Cancel
+    "tooltip windows of the Settings dialog hold [$seen] tools (82 labelled controls, 1 API key eye); a second Edit > Settings left one Settings window"
 }
 
 # The sheet on all four themes, for the eye: --ui-demo=shortcuts opens it over
