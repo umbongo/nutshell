@@ -53,6 +53,49 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
                                              NULL, NULL, calls, n_calls);
 }
 
+/* 1 when `id` is the id of a call in calls[0..n) or of any call or result
+ * stored in the conversation. */
+static int id_in_use(const AiConversation *conv, const AiToolCall *calls,
+                     int n, const char *id)
+{
+    for (int i = 0; i < n; i++)
+        if (strcmp(calls[i].id, id) == 0) return 1;
+    for (int i = 0; i < conv->msg_count; i++) {
+        const AiMessage *m = &conv->messages[i];
+        for (int k = 0; m->tool_calls && k < m->n_tool_calls; k++)
+            if (strcmp(m->tool_calls[k].id, id) == 0) return 1;
+        if (m->role != AI_ROLE_TOOL) continue;
+        if (!m->parts) {
+            if (strcmp(m->tool_call_id, id) == 0) return 1;
+            continue;
+        }
+        for (int k = 0; k < m->n_parts; k++)
+            if (strcmp(m->parts[k].tool_call_id, id) == 0) return 1;
+    }
+    return 0;
+}
+
+/* An empty id, or one an earlier call of the turn already has, is replaced by
+ * call_<n>, n the smallest number from 1 that no id in the turn or the
+ * conversation uses (spec decision 19, review of B1-B11, 2026-11-11). A turn
+ * whose ids are unique and non-empty is left as it is. */
+static void make_ids_unique(const AiConversation *conv, AiToolCall *calls,
+                            int n)
+{
+    int next = 1;
+    for (int i = 0; i < n; i++) {
+        int bad = calls[i].id[0] == '\0';
+        for (int j = 0; !bad && j < i; j++)
+            bad = strcmp(calls[j].id, calls[i].id) == 0;
+        if (!bad) continue;
+        char cand[AI_TOOL_ID_MAX];
+        do {
+            snprintf(cand, sizeof(cand), "call_%d", next++);
+        } while (id_in_use(conv, calls, n, cand));
+        memcpy(calls[i].id, cand, strlen(cand) + 1);
+    }
+}
+
 int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
                                        const char *assistant_text,
                                        const char *reasoning,
@@ -76,6 +119,7 @@ int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
         if (!msg->tool_calls) { ai_msg_free(msg); return -1; }
         memcpy(msg->tool_calls, calls, (size_t)n_calls * sizeof(AiToolCall));
         msg->n_tool_calls = n_calls;
+        make_ids_unique(conv, msg->tool_calls, n_calls);
     }
 
     if (ai_msg_set_reasoning(msg, reasoning) != 0) {
@@ -151,11 +195,16 @@ static void parts_free(AiToolPart *parts, int n)
     free(parts);
 }
 
-/* The fixed fields of part i: ids and note, never content. */
+/* The fixed fields of part i: ids and note, never content. The id is the
+ * stored turn's call at the same position (`stored`, n_stored of them; results
+ * are in call order everywhere), the caller's only when no stored call is
+ * there to pair with. */
 static void part_fill_head(AiToolPart *p, const AiToolCall *calls,
-                           const AiToolResult *r, int i)
+                           const AiToolResult *r, int i,
+                           const AiToolCall *stored, int n_stored)
 {
-    snprintf(p->tool_call_id, sizeof(p->tool_call_id), "%s", r->tool_use_id);
+    snprintf(p->tool_call_id, sizeof(p->tool_call_id), "%s",
+             i < n_stored ? stored[i].id : r->tool_use_id);
     if (calls)
         snprintf(p->tool_name, sizeof(p->tool_name), "%s", calls[i].name);
 }
@@ -163,7 +212,8 @@ static void part_fill_head(AiToolPart *p, const AiToolCall *calls,
 /* One part per result, content capped on a private copy (the caller keeps its
  * results). NULL on an allocation failure, with everything freed. */
 static AiToolPart *parts_from_results(const AiToolCall *calls,
-                                      const AiToolResult *results, int n)
+                                      const AiToolResult *results, int n,
+                                      const AiToolCall *stored, int n_stored)
 {
     AiToolPart *parts = (AiToolPart *)g_alloc((size_t)n * sizeof(AiToolPart));
     if (!parts) return NULL;
@@ -171,7 +221,7 @@ static AiToolPart *parts_from_results(const AiToolCall *calls,
 
     for (int i = 0; i < n; i++) {
         AiToolPart *p = &parts[i];
-        part_fill_head(p, calls, &results[i], i);
+        part_fill_head(p, calls, &results[i], i, stored, n_stored);
         p->is_error = results[i].is_error;
         memcpy(p->tool_note, results[i].tool_note, sizeof(p->tool_note));
         p->tool_note[sizeof(p->tool_note) - 1] = '\0';
@@ -208,13 +258,14 @@ static AiToolPart *parts_from_results(const AiToolCall *calls,
  * content, the static note (spec decision 25). Only the array is allocated.
  * NULL when even that cannot be had. */
 static AiToolPart *parts_notes_only(const AiToolCall *calls,
-                                    const AiToolResult *results, int n)
+                                    const AiToolResult *results, int n,
+                                    const AiToolCall *stored, int n_stored)
 {
     AiToolPart *parts = (AiToolPart *)g_alloc((size_t)n * sizeof(AiToolPart));
     if (!parts) return NULL;
     memset(parts, 0, (size_t)n * sizeof(AiToolPart));
     for (int i = 0; i < n; i++) {
-        part_fill_head(&parts[i], calls, &results[i], i);
+        part_fill_head(&parts[i], calls, &results[i], i, stored, n_stored);
         memcpy(parts[i].tool_note, AGENTIC_OOM_NOTE, sizeof(AGENTIC_OOM_NOTE));
     }
     return parts;
@@ -226,19 +277,38 @@ int agentic_add_tool_results(AiConversation *conv,
 {
     if (!conv || !results) return -1;
     if (n_results <= 0) return 0;
-    if (conv->msg_count + 1 > AI_MAX_MESSAGES) return -1;
+    if (conv->msg_count + 1 > AI_MAX_MESSAGES) {
+        /* Full: nothing is stored, and the open assistant turn goes, so the
+         * conversation passes ai_conv_tool_pairs_well_formed. */
+        ai_conv_drop_open_tool_turn(conv);
+        return -1;
+    }
 
-    AiToolPart *parts = parts_from_results(calls, results, n_results);
+    /* The calls this round answers are the stored turn's, in order. */
+    const AiToolCall *stored = NULL;
+    int n_stored = 0;
+    if (conv->msg_count > 0) {
+        const AiMessage *last = &conv->messages[conv->msg_count - 1];
+        if (last->role == AI_ROLE_ASSISTANT && last->tool_calls) {
+            stored = last->tool_calls;
+            n_stored = last->n_tool_calls;
+        }
+    }
+
+    int rc = 0;
+    AiToolPart *parts = parts_from_results(calls, results, n_results,
+                                           stored, n_stored);
     if (!parts) {
         /* Out of memory: answer every call from static text instead, so no
-         * tool_use is left without its result. If even that array cannot be
-         * had, the open assistant turn is dropped (spec decision 25) so the
-         * conversation stays well-formed, and -1 says no results were stored. */
-        parts = parts_notes_only(calls, results, n_results);
+         * tool_use is left without its result (1). If even that array cannot
+         * be had, the open assistant turn is dropped (spec decision 25) so the
+         * conversation stays well-formed, and -2 says nothing was stored. */
+        parts = parts_notes_only(calls, results, n_results, stored, n_stored);
         if (!parts) {
             ai_conv_drop_open_tool_turn(conv);
-            return -1;
+            return -2;
         }
+        rc = 1;
     }
 
     AiMessage *msg = &conv->messages[conv->msg_count];
@@ -247,7 +317,7 @@ int agentic_add_tool_results(AiConversation *conv,
     msg->parts = parts;
     msg->n_parts = n_results;
     conv->msg_count++;
-    return 0;
+    return rc;
 }
 
 int agentic_truncation_warning(const char *tool_name, size_t omitted_bytes,
@@ -280,8 +350,10 @@ int agentic_sanitize_tool_inputs(AiToolCall *calls, int n)
     return fixed;
 }
 
-int agentic_room_for_tool_round(const AiConversation *conv)
+int agentic_room_for_tool_round(const AiConversation *conv,
+                                const AiNoteQueue *q)
 {
     if (!conv) return 0;
-    return conv->msg_count + 3 <= AI_MAX_MESSAGES;
+    int notes = q && q->count > 0 ? q->count : 0;
+    return conv->msg_count + 3 + notes <= AI_MAX_MESSAGES;
 }

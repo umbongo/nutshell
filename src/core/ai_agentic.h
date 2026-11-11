@@ -30,7 +30,11 @@ void agentic_record_tool_call(AgenticState *state, const char *tool_name);
  * assistant_text: the text content from the assistant response (may be empty).
  * calls: array of tool calls from the response.
  * n_calls: number of tool calls.
- * Returns 0 on success, -1 if conversation is full. */
+ * Returns 0 on success, -1 if conversation is full.
+ * An empty call id, or one repeated within the turn, is stored as call_<n>,
+ * n the smallest number from 1 that no id in the turn or the conversation
+ * uses; a turn whose ids are unique and non-empty is stored byte for byte.
+ * The caller's `calls` are never changed. */
 int agentic_add_assistant_tool_msg(AiConversation *conv,
                                    const char *assistant_text,
                                    const AiToolCall *calls, int n_calls);
@@ -77,9 +81,14 @@ int agentic_cap_tool_result(AiToolResult *r);
  * Out of memory: the round is stored as a notes-only turn instead, one part
  * per call with no content and the note "not run: Nutshell ran out of
  * memory", so no call is left unanswered (spec decision 25).
- * Returns 0 on success, -1 storing nothing when the conversation is full or
- * when even the notes-only array cannot be allocated (the open assistant turn
- * is then the caller's to drop). */
+ * Each part's tool_call_id is the id of the open stored assistant turn's call
+ * at the same position (results are in call order everywhere), not the id in
+ * the caller's array, which is only used when no stored call is there.
+ * Returns 0 when the results are stored; 1 when an allocation failure left only
+ * the notes-only answer stored; -1 when the conversation is full; -2 when even
+ * the notes-only array could not be had. On -1 and -2 nothing is stored and the
+ * open assistant tool turn is dropped (ai_conv_drop_open_tool_turn), so after
+ * any return the conversation passes ai_conv_tool_pairs_well_formed. */
 int agentic_add_tool_results(AiConversation *conv,
                              const AiToolCall *calls,
                              const AiToolResult *results, int n_results);
@@ -108,8 +117,10 @@ int agentic_truncation_warning(const char *tool_name, size_t omitted_bytes,
 int agentic_sanitize_tool_inputs(AiToolCall *calls, int n);
 
 /* 1 when the conversation has room for one tool round (the assistant turn,
- * the results turn and a closing reply): msg_count + 3 <= AI_MAX_MESSAGES.
- * 0 for a NULL conversation. */
-int agentic_room_for_tool_round(const AiConversation *conv);
+ * the results turn and a closing reply) and for the notes queued in `q` (NULL
+ * counts 0), which the settle flushes after the results:
+ * msg_count + 3 + q->count <= AI_MAX_MESSAGES. 0 for a NULL conversation. */
+int agentic_room_for_tool_round(const AiConversation *conv,
+                                const AiNoteQueue *q);
 
 #endif /* NUTSHELL_AI_AGENTIC_H */

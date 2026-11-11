@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "ai_tools.h"
+#include "ai_agentic.h"
 #include "ai_prompt.h"
 #include "chat_approval.h"
 #include "json_parser.h"
@@ -1435,6 +1436,57 @@ int test_tool_stream_index_bounded(void)
         "\"function\":{\"arguments\":\"more\"}}]}}]}");
     ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
     ASSERT_STR_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].input_json, "{}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+/* review of B1-B11, 2026-11-11: a second call arriving on an index whose slot
+ * already holds a different non-empty id must not be spliced onto it (call
+ * B's name with call A's arguments): the slot is overflowed, so its stored
+ * input is "{}"; the rest of the chunk is still processed. */
+int test_tool_stream_index_reuse_overflows(void)
+{
+    TEST_BEGIN();
+    static char chunk[1024];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_A", "run_command",
+            "{\\\"command\\\":\\\"ls\\\"}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+
+    /* the same id again on the same index (a resend) is not a new call */
+    oa_frag(chunk, sizeof chunk, 0, "call_A", "run_command", "");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+
+    /* one chunk: index 0 is reused by call_B, index 1 is a fresh call_C, and
+     * the finish follows */
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"call_B\",\"type\":\"function\",\"function\":"
+        "{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"q\\\"}\"}},"
+        "{\"index\":1,\"id\":\"call_C\",\"type\":\"function\",\"function\":"
+        "{\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://example.org/\\\"}\"}}"
+        "]},\"finish_reason\":\"tool_calls\"}]}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 1);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_A");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "run_command");
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].id, "call_C");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_fetch");
+    ASSERT_EQ(st.pending_tool_calls[1].overflowed, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json,
+                  "{\"url\":\"https://example.org/\"}");
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+
+    /* sanitising turns the poisoned slot into "{}", the other is kept */
+    ASSERT_EQ(agentic_sanitize_tool_inputs(st.pending_tool_calls, 2), 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json,
+                  "{\"url\":\"https://example.org/\"}");
     ai_tools_stream_reset(&st);
     TEST_END();
 }

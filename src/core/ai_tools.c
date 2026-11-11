@@ -752,6 +752,19 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
             state->pending_tool_count = slot + 1;
         }
 
+        /* A different non-empty id on a slot that already has one is a second
+         * call on a reused index. Its name must never run with the first
+         * call's arguments, so the slot is overflowed (INVALID, stored input
+         * "{}") and this delta is not applied; the rest of the chunk still
+         * is (review of B1-B11, 2026-11-11). */
+        {
+            AiToolCall *have = &state->pending_tool_calls[slot];
+            if (id && id[0] && have->id[0] && strcmp(have->id, id) != 0) {
+                have->overflowed = 1;
+                continue;
+            }
+        }
+
         /* First chunk: id and function.name */
         if (id) {
             snprintf(state->pending_tool_calls[slot].id,

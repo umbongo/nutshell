@@ -355,14 +355,14 @@ int test_agentic_room_for_tool_round(void)
     AiConversation conv;
     memset(&conv, 0, sizeof(conv));
     conv.msg_count = 61;
-    ASSERT_EQ(agentic_room_for_tool_round(&conv), 1);
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 1);
     conv.msg_count = 62;
-    ASSERT_EQ(agentic_room_for_tool_round(&conv), 0);
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 0);
     conv.msg_count = 0;
-    ASSERT_EQ(agentic_room_for_tool_round(&conv), 1);
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 1);
     conv.msg_count = AI_MAX_MESSAGES;
-    ASSERT_EQ(agentic_room_for_tool_round(&conv), 0);
-    ASSERT_EQ(agentic_room_for_tool_round(NULL), 0);
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 0);
+    ASSERT_EQ(agentic_room_for_tool_round(NULL, NULL), 0);
     TEST_END();
 }
 
@@ -979,7 +979,7 @@ int test_agentic_results_oom_notes_only(void)
      * with no assistant turn before it */
     ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "go", calls, 5), 0);
     alloc_plan(2, 0);
-    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 1);
     agentic_set_alloc_for_test(NULL);
     ASSERT_EQ(conv.msg_count, 3);
     AiMessage *m = &conv.messages[2];
@@ -1012,7 +1012,7 @@ int test_agentic_results_oom_notes_only(void)
     /* a failure at a later part falls back the same way */
     ai_conv_init(&conv, "m");
     alloc_plan(4, 0);
-    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 1);
     agentic_set_alloc_for_test(NULL);
     ASSERT_EQ(conv.msg_count, 1);
     ASSERT_EQ(conv.messages[0].n_parts, 5);
@@ -1023,14 +1023,14 @@ int test_agentic_results_oom_notes_only(void)
     ai_conv_init(&conv, "m");
     ai_conv_add(&conv, AI_ROLE_USER, "go");
     alloc_plan(0, 1);
-    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -1);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -2);
     agentic_set_alloc_for_test(NULL);
     ASSERT_EQ(conv.msg_count, 1);
 
     /* the parts array comes, the first content does not, and the notes-only
      * array does not either: the partial first array is freed (SAN=1) */
     alloc_plan(0, 2);
-    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -1);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -2);
     agentic_set_alloc_for_test(NULL);
     ASSERT_EQ(conv.msg_count, 1);
     ai_conv_reset(&conv);

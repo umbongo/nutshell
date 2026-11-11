@@ -98,6 +98,12 @@ int ai_conv_tool_pairs_well_formed(const AiConversation *conv)
          * messages (one answer each) may be several */
         if (with_parts && to - from != 1) return 0;
         if (total != m->n_tool_calls) return 0;
+        /* a repeated id within one turn can never be answered unambiguously
+         * (review of B1-B11, 2026-11-11) */
+        for (int k = 0; k < m->n_tool_calls; k++)
+            for (int l = k + 1; l < m->n_tool_calls; l++)
+                if (strcmp(m->tool_calls[k].id, m->tool_calls[l].id) == 0)
+                    return 0;
         for (int k = 0; k < m->n_tool_calls; k++) {
             int n = 0;
             for (int j = from; j < to; j++)
@@ -133,10 +139,17 @@ int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q)
 {
     if (!conv || !q || q->count <= 0) return 0;
     if (ai_conv_tool_calls_open(conv)) return 0;
+    /* In order, up to the first note that cannot be stored; that one and
+     * every later one stay queued (review of B1-B11, 2026-11-11). */
     int appended = 0;
-    for (int i = 0; i < q->count; i++)
-        if (ai_conv_add(conv, AI_ROLE_USER, q->text[i]) == 0) appended++;
-    memset(q, 0, sizeof(*q));
+    while (appended < q->count
+           && ai_conv_add(conv, AI_ROLE_USER, q->text[appended]) == 0)
+        appended++;
+    if (appended == 0) return 0;
+    int left = q->count - appended;
+    memmove(q->text[0], q->text[appended], (size_t)left * sizeof(q->text[0]));
+    memset(q->text[left], 0, (size_t)appended * sizeof(q->text[0]));
+    q->count = left;
     return appended;
 }
 
@@ -152,16 +165,25 @@ int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
         return 1;
     }
 
-    /* earlier notes still waiting go in first, so the order is kept */
+    /* earlier notes still waiting go in first, so the order is kept; one
+     * that could not be stored keeps this note behind it */
     ai_conv_flush_notes(conv, q);
+    if (q && q->count > 0) {
+        if (q->count >= AI_NOTE_QUEUE_MAX) return -1;
+        note_copy(q->text[q->count], text);
+        q->count++;
+        return 1;
+    }
 
     char cut[AI_NOTE_TEXT_MAX];
     note_copy(cut, text);
     return ai_conv_add(conv, AI_ROLE_USER, cut) == 0 ? 0 : -1;
 }
 
-int ai_conv_room_for_send(const AiConversation *conv, int open_batch)
+int ai_conv_room_for_send(const AiConversation *conv, int open_batch,
+                          const AiNoteQueue *q)
 {
     if (!conv) return 0;
-    return conv->msg_count + 2 + (open_batch ? 1 : 0) <= AI_MAX_MESSAGES;
+    int notes = q && q->count > 0 ? q->count : 0;
+    return conv->msg_count + 2 + (open_batch ? 1 : 0) + notes <= AI_MAX_MESSAGES;
 }

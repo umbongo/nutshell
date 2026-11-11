@@ -300,6 +300,13 @@ bidirectional formatting characters: send one single-line command".
   processed; an overflowed call is INVALID, its stored input `{}`. This
   also fixes the shipped `web_fetch` path, whose URL could be spliced the
   same way.
+- *(review of B1-B11, 2026-11-11)* **A reused stream index is overflow too.** If a
+  server sends a second call on an index whose slot already holds a different
+  non-empty id, the OpenAI accumulator marks that slot `overflowed` (stored
+  input `{}` after sanitising) and applies none of that delta, so call B's
+  name never runs with call A's arguments; the rest of the chunk (other
+  calls, the finish reason) is still processed. The same id again on the same
+  index (a resend) is not a new call.
 
 **3. The prompt.** `ai_build_system_prompt_ex` keys the swap on whether the
 registry it is given (trust 1) holds `run_command`, so a provider or endpoint
@@ -367,6 +374,12 @@ checks below move ahead of that store, for every tool stop:
   start a New Chat]" and ends with no calls. The same check guards every
   tool stop: today `agentic_add_tool_results`' refusal is ignored and leaves
   a `tool_use` unanswered; it now ends the loop with that row.
+  *(review of B1-B11, 2026-11-11)* The check counts the notes queued for the
+  session: `agentic_room_for_tool_round(conv, &s->notes)` requires
+  `msg_count + 3 + notes.count <= AI_MAX_MESSAGES` (a NULL queue counts 0),
+  because decision 7's settle flushes the queue right after the results and
+  the flushed notes must not take the slot kept for the reply. The refusal of
+  `agentic_add_tool_results` is told apart by its return value (decision 25).
 - Otherwise it stores the assistant turn
   (`agentic_add_assistant_tool_msg_ex`: text, the reasoning, every
   `tool_use` block), executes no call, asks no tool card, posts no "using
@@ -836,6 +849,28 @@ run_command call never runs under that count.
   after its take when no call is open. A continue text that was queued
   launches nothing; it rides the relaunch. The typed message is not a
   note: it first removes the batch (decision 8), so nothing is open.
+- *(review of B1-B11, 2026-11-11)* **The flush drops nothing.**
+  `ai_conv_flush_notes` appends the queued notes in order and stops at the
+  first one the conversation cannot store; that note and every later one stay
+  queued, in order, and the return value is the number appended. A new note
+  that finds notes still queued after its flush is queued behind them rather
+  than overtaking them.
+- *(review of B1-B11, 2026-11-11)* **Ids.** When a tool-call turn is stored
+  (`agentic_add_assistant_tool_msg_ex`), an empty call id, or one an earlier
+  call of the same turn already has, is replaced by `call_<n>`, `n` the
+  smallest number from 1 that no id in the turn or anywhere in the
+  conversation uses; a turn whose ids are already unique and non-empty is
+  stored byte for byte as before. The caller's calls are not changed.
+  `agentic_add_tool_results` takes each part's `tool_call_id` from the open
+  stored turn's call at the same position (results are in call order
+  everywhere), not from the caller's array, so the answer always names the
+  stored id. Without the made-up id, two `web_search` calls with id `""`
+  stored a turn no provider accepts back, and every request was refused until
+  New Chat.
+- *(review of B1-B11, 2026-11-11)* **The invariant rejects repeated ids.**
+  `ai_conv_tool_pairs_well_formed` returns 0 for an assistant turn whose
+  calls repeat an id (calls a,a answered a,b used to pass, and the provider
+  answered 400).
 - `ai_conv_tool_pairs_well_formed()` (core): every assistant turn with
   tool calls is followed directly by exactly one `AI_ROLE_TOOL` turn whose
   parts answer every call once, ids matching *(critique 2026-11-11: one
@@ -1012,6 +1047,12 @@ runs first; the check moves ahead of it). When it fails the message is
 not sent, the text stays in the input box and a row reads "[conversation full: your message was not
 sent; start a New Chat]". A reply the thread cannot store is shown with
 "[reply not stored: conversation full; start a New Chat]".
+*(review of B1-B11, 2026-11-11)* The check is
+`ai_conv_room_for_send(conv, open_batch, &s->notes)`: it also counts the
+notes queued for the session (`notes.count`; a NULL queue counts 0), since
+the typed message's finish flushes them after the results turn (62 + 2 notes
+= 64 would leave the typed message itself with no slot). A typed message
+that passes the check can always be stored.
 
 **25. No allocation failure leaves a call unanswered** *(critique 2)*.
 Every new heap path (the parts array and each part's content, the frozen
@@ -1024,6 +1065,15 @@ had, the open assistant tool turn is dropped (`ai_conv_drop_open_tool_turn`)
 so the conversation stays well-formed; a reasoning copy that fails sets
 `reasoning_cut`; a run-log or snapshot copy that fails records nothing.
 Each has a native test through the existing allocation-failure hooks.
+
+*(review of B1-B11, 2026-11-11)* **`agentic_add_tool_results` says which.** It
+returns 0 when the results are stored; 1 when an allocation failure left only
+the notes-only answer stored; -1 when the conversation is full; -2 when even
+the notes-only array could not be had. On -1 and -2 nothing is stored and the
+open assistant tool turn is dropped (`ai_conv_drop_open_tool_turn`), so after
+any return the conversation passes `ai_conv_tool_pairs_well_formed` (a full
+conversation used to leave the turn open, an allocation failure used to drop
+it). The caller ends the loop with its row on a negative value.
 
 **26. Token counts on the tool path** *(critique 2)*. The tool-aware chunk
 parser passes NULL for the token counts (`ai_parse_stream_chunk_ex`,
