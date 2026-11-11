@@ -726,6 +726,7 @@ typedef struct {
     const char *content;     /* never NULL */
     size_t content_len;
     int is_error;
+    const AiToolPart *part;  /* the stored part; NULL for a parts-less message */
 } ToolView;
 
 static int tool_view_count(const AiMessage *msg)
@@ -744,6 +745,7 @@ static ToolView tool_view_get(const AiMessage *msg, int k)
         v.content = p->content ? p->content : "";
         v.content_len = p->content ? p->content_len : 0;
         v.is_error = p->is_error;
+        v.part = p;
     } else {
         v.id = msg->tool_call_id;
         v.name = msg->tool_name;
@@ -751,6 +753,7 @@ static ToolView tool_view_get(const AiMessage *msg, int k)
         v.content = ai_msg_content(msg);
         v.content_len = strlen(v.content);
         v.is_error = msg->is_tool_error;
+        v.part = NULL;
     }
     return v;
 }
@@ -759,8 +762,8 @@ static ToolView tool_view_get(const AiMessage *msg, int k)
  * is added (*owned stays NULL), else a malloc'd string the caller frees
  * through *owned. NULL on allocation failure. *out_len is the length. A cut
  * part (omit_at, omitted_bytes) is sent as stored: head and tail run
- * together; framing the two halves is the run_command result builder's job
- * (spec decision 12). */
+ * together, except a run_command part, which runcmd_frame_result() frames
+ * (spec decision 12): every other tool's bytes are as they always were. */
 static const char *frame_tool_text(const ToolView *v, const AiBodyFrame *frame,
                                    char **owned, size_t *out_len)
 {
@@ -770,6 +773,11 @@ static const char *frame_tool_text(const ToolView *v, const AiBodyFrame *frame,
     size_t nlen = strlen(v->note);
     *owned = NULL;
     *out_len = clen;
+
+    if (v->part && strcmp(v->part->tool_name, RUNCMD_TOOL_NAME) == 0) {
+        *owned = runcmd_frame_result(v->part, delim, out_len);
+        return *owned;
+    }
 
     if (nlen == 0) {
         if (!delim || clen == 0) return content;

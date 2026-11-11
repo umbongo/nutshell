@@ -1,5 +1,7 @@
 #include "run_command.h"
+#include "ai_data_block.h"
 #include "json_parser.h"
+#include "json_validate.h"
 #include "paste_filter.h"
 #include "term_extract.h"
 #include "tool_decision.h"
@@ -405,4 +407,471 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
     runcmd_cut(text, len, cap, c);
     free(text);
     return 1;
+}
+
+/* ---- Results, notes, fit, framing and aging (spec decisions 4, 11 to 13, 15) ---- */
+
+int runcmd_cause_relaunches(RunCmdCause c)
+{
+    return c == RUNCMD_CAUSE_SETTLED || c == RUNCMD_CAUSE_TIMEOUT || c == RUNCMD_CAUSE_RETRY;
+}
+
+int runcmd_cause_appends(RunCmdCause c)
+{
+    return c != RUNCMD_CAUSE_NEW_CHAT && c != RUNCMD_CAUSE_SESSION_CLOSED;
+}
+
+#define NOTE_RAN            "ran"
+#define NOTE_OTHER_TOOL \
+    "not run: a reply that calls run_command may call no other tool; call it again in a reply of its own"
+#define NOTE_STOP_REASON    "stopped by the user: do not run it again unless the user asks"
+#define NOTE_SCREEN \
+    "the screen changed while the command ran; this is the screen as it ended"
+#define NOTE_SCROLLED       "the start of the output scrolled out of the terminal's history"
+#define NOTE_NO_OUTPUT      "no output on the screen"
+#define NOTE_OOM_DROPPED    "output dropped: Nutshell ran out of memory"
+#define NOTE_FIT_DROPPED    "output dropped: no room left in this conversation"
+#define NOTE_CUT_FMT        "output cut: %zu bytes omitted from the middle"
+#define NOTE_CUT_PRE        "output cut: "
+#define NOTE_CUT_POST       " bytes omitted from the middle"
+
+/* What a cause calls itself inside "(...)": the reason a command stopped or
+ * never went. The whole-reply causes have none. */
+static const char *cause_reason(RunCmdCause c)
+{
+    switch (c) {
+    case RUNCMD_CAUSE_TIMEOUT:       return "the terminal did not show a prompt in time";
+    case RUNCMD_CAUSE_RETRY:         return "the user retried";
+    case RUNCMD_CAUSE_STOP:          return NOTE_STOP_REASON;
+    case RUNCMD_CAUSE_TAB_SWITCH:    return "the user switched tabs";
+    case RUNCMD_CAUSE_SESSION_ENDED: return "the session ended";
+    case RUNCMD_CAUSE_TYPED:         return "the user sent a new message";
+    case RUNCMD_CAUSE_NEW_CHAT:      return "the user started a new chat";
+    case RUNCMD_CAUSE_SESSION_CLOSED: return "the session was closed";
+    case RUNCMD_CAUSE_PANEL_CLOSED:  return "the AI panel was closed";
+    case RUNCMD_CAUSE_EVICTED:       return "the batch was dropped";
+    case RUNCMD_CAUSE_SETTLED:
+    case RUNCMD_CAUSE_DECIDED:
+    default:                         return "the batch finished";
+    }
+}
+
+/* A note under construction: parts joined with "; ", never past cap - 1
+ * bytes (a part that does not fit whole is left out, so no text is cut
+ * mid-sentence). */
+typedef struct { char *buf; size_t cap, len; } NoteBuf;
+
+static void note_part(NoteBuf *nb, const char *text)
+{
+    size_t add = strlen(text) + (nb->len ? 2 : 0);
+    if (nb->len + add >= nb->cap) return;
+    if (nb->len) { memcpy(nb->buf + nb->len, "; ", 2); nb->len += 2; }
+    memcpy(nb->buf + nb->len, text, strlen(text) + 1);
+    nb->len += strlen(text);
+}
+
+/* pre, the number, post: a part with one count in it. */
+static void note_part_n(NoteBuf *nb, const char *pre, size_t n, const char *post)
+{
+    char tmp[160];
+    snprintf(tmp, sizeof(tmp), "%s%zu%s", pre, n, post);
+    note_part(nb, tmp);
+}
+
+/* The notes decision 10 adds for what was read back, then, when there is an
+ * excerpt, the cut note. */
+static void capture_notes(NoteBuf *nb, const RunCmdCapture *cap)
+{
+    if (!cap->captured) return;
+    int has_excerpt = cap->head || cap->tail;
+    if (cap->flags & RUNCMD_CAP_SCREEN)       note_part(nb, NOTE_SCREEN);
+    if (cap->flags & RUNCMD_CAP_SCROLLED_OUT) note_part(nb, NOTE_SCROLLED);
+    if (!has_excerpt) {
+        if (cap->flags & RUNCMD_CAP_EMPTY) note_part(nb, NOTE_NO_OUTPUT);
+        else                               note_part(nb, NOTE_OOM_DROPPED);   /* ruling R31 */
+    } else if (cap->omitted_bytes > 0) {
+        note_part_n(nb, NOTE_CUT_PRE, cap->omitted_bytes, NOTE_CUT_POST);
+    }
+}
+
+/* content = head then tail, from the capture. 0 on allocation failure (the
+ * result is then left without an excerpt). */
+static int excerpt_content(const RunCmdCapture *cap, AiToolResult *res)
+{
+    if (!cap->captured || (!cap->head && !cap->tail)) return 1;
+    size_t hl = cap->head ? cap->head_len : 0, tl = cap->tail ? cap->tail_len : 0;
+    if (hl + tl == 0) return 1;
+    char *p = (char *)g_alloc(hl + tl + 1);
+    if (!p) return 0;
+    if (hl) memcpy(p, cap->head, hl);
+    if (tl) memcpy(p + hl, cap->tail, tl);
+    p[hl + tl] = '\0';
+    res->content = p;
+    res->content_len = hl + tl;
+    if (cap->omitted_bytes > 0) {
+        res->omit_at = hl;
+        res->omitted_bytes = cap->omitted_bytes;
+    }
+    return 1;
+}
+
+/* The note, and whether the call ran with an excerpt, for one SLOT call. */
+static void slot_note(NoteBuf *nb, const RunCmdCall *c, const ApprovalQueue *q,
+                      RunCmdCause cause, int *with_excerpt)
+{
+    char tmp[240];
+    *with_excerpt = 0;
+    if (cause == RUNCMD_CAUSE_SET_FULL)     { note_part(nb, "not run (too many pending cards)"); return; }
+    if (cause == RUNCMD_CAUSE_SESSION_GONE) { note_part(nb, "not run (session ended)"); return; }
+    if (!q || cause == RUNCMD_CAUSE_NO_SLOT || c->entry < 0 || c->entry >= q->count) {
+        note_part(nb, "not run (refused by the approval queue)");
+        return;
+    }
+    const char *reason = cause_reason(cause);
+    switch (q->entries[c->entry].status) {
+    case APPROVE_COMPLETED:
+        note_part(nb, NOTE_RAN);
+        *with_excerpt = 1;
+        break;
+    case APPROVE_EXECUTING:
+        if (cause == RUNCMD_CAUSE_RETRY)
+            snprintf(tmp, sizeof(tmp), "ran; the panel stopped waiting; the command may still be running (%s)", reason);
+        else
+            snprintf(tmp, sizeof(tmp), "the panel stopped waiting; the command may still be running (%s)", reason);
+        note_part(nb, tmp);
+        *with_excerpt = 1;
+        break;
+    case APPROVE_APPROVED:
+        if (cause == RUNCMD_CAUSE_STOP)       note_part(nb, "not run: " NOTE_STOP_REASON);
+        else if (cause == RUNCMD_CAUSE_RETRY) note_part(nb, "not run (the user retried)");
+        else {
+            snprintf(tmp, sizeof(tmp), "cancelled before it was sent (%s)", reason);
+            note_part(nb, tmp);
+        }
+        break;
+    case APPROVE_DENIED:
+        note_part(nb, "not run (denied)");
+        break;
+    case APPROVE_BLOCKED:
+        if (cause == RUNCMD_CAUSE_TYPED)
+            note_part(nb, "not run (the user sent a new message instead)");
+        else
+            note_part(nb, "not run (blocked by policy: above the command policy ceiling)");
+        break;
+    case APPROVE_PENDING:
+    default:
+        if (cause == RUNCMD_CAUSE_TYPED)        note_part(nb, "not run (the user sent a new message instead)");
+        else if (cause == RUNCMD_CAUSE_RETRY)   note_part(nb, "not run (the user retried)");
+        else if (cause == RUNCMD_CAUSE_STOP)    note_part(nb, "not run: " NOTE_STOP_REASON);
+        else if (cause == RUNCMD_CAUSE_SETTLED || cause == RUNCMD_CAUSE_DECIDED)
+            note_part(nb, "not run (the batch finished without it)");
+        else                                    note_part(nb, "not run (never decided)");
+        break;
+    }
+}
+
+int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCause cause,
+                         AiToolResult *out)
+{
+    if (!r || !out || r->n_calls <= 0 || !r->calls) return -1;
+    memset(out, 0, (size_t)r->n_calls * sizeof(*out));
+    for (int i = 0; i < r->n_calls; i++) {
+        const RunCmdCall *c = &r->calls[i];
+        AiToolResult *res = &out[i];
+        NoteBuf nb = { res->tool_note, sizeof(res->tool_note), 0 };
+        int with_excerpt = 0;
+        snprintf(res->tool_use_id, sizeof(res->tool_use_id), "%s", c->tool_use_id);
+        switch (c->kind) {
+        case RUNCMD_KIND_OTHER_TOOL:
+            if (c->fetch_off) {
+                note_part(&nb, tool_fetch_off_note());
+            } else {
+                note_part(&nb, NOTE_OTHER_TOOL);
+                res->is_error = 1;
+            }
+            break;
+        case RUNCMD_KIND_INVALID:
+            note_part(&nb, runcmd_parse_error(c->parse));
+            res->is_error = 1;
+            break;
+        case RUNCMD_KIND_OVER_CAP:
+            note_part_n(&nb, "not run (too many commands in one reply; at most ", (size_t)RUNCMD_SLOT_MAX, ")");
+            break;
+        case RUNCMD_KIND_SLOT:
+        default:
+            slot_note(&nb, c, q, cause, &with_excerpt);
+            break;
+        }
+        if (with_excerpt) {
+            /* an excerpt that cannot be copied is dropped with a note, never
+             * the call left unanswered (spec decision 25) */
+            if (excerpt_content(&c->cap, res)) capture_notes(&nb, &c->cap);
+            else {
+                RunCmdCapture lost = c->cap;
+                lost.head = lost.tail = NULL;
+                capture_notes(&nb, &lost);
+            }
+        }
+    }
+    return r->n_calls;
+}
+
+/* ---- The estimate, the budget and the fit ---- */
+
+static size_t escaped_len(const char *s, size_t len)
+{
+    size_t n = 0;
+    if (!s) return 0;
+    for (size_t i = 0; i < len; i++) n += json_escaped_byte_len((unsigned char)s[i]);
+    return n;
+}
+
+size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
+                               size_t tools_json_len, size_t snapshot_len)
+{
+    size_t total = tools_json_len + 2 * snapshot_len;
+    if (!conv) return total;
+    int moonshot = provider && strcmp(provider, "moonshot") == 0;
+    for (int i = 0; i < conv->msg_count; i++) {
+        const AiMessage *m = &conv->messages[i];
+        const char *content = ai_msg_content(m);
+        total += escaped_len(content, strlen(content));
+        total += escaped_len(m->tool_note, strlen(m->tool_note));
+        for (int k = 0; m->parts && k < m->n_parts; k++) {
+            const AiToolPart *p = &m->parts[k];
+            total += escaped_len(p->content, p->content_len);
+            total += escaped_len(p->tool_note, strlen(p->tool_note));
+        }
+        if (moonshot && m->role == AI_ROLE_ASSISTANT && m->reasoning)
+            total += escaped_len(m->reasoning, strlen(m->reasoning));
+    }
+    return total;
+}
+
+size_t runcmd_budget(size_t body_max, int context_limit_tokens)
+{
+    size_t room = body_max;
+    if (context_limit_tokens > 0) {
+        size_t by_context = (size_t)context_limit_tokens * 3;
+        if (by_context < room) room = by_context;
+    }
+    return room > RUNCMD_BODY_HEADROOM ? room - RUNCMD_BODY_HEADROOM : 0;
+}
+
+/* The span of the cut note ("output cut: N bytes omitted from the middle") in
+ * a note: [*from, *to) with the digits at [*digits, *to - strlen(POST)). 1 when found. */
+static int find_cut_note(const char *note, size_t *from, size_t *digits, size_t *to)
+{
+    const char *p = strstr(note, NOTE_CUT_PRE);
+    if (!p) return 0;
+    const char *d = p + strlen(NOTE_CUT_PRE);
+    const char *e = d;
+    while (*e >= '0' && *e <= '9') e++;
+    if (e == d || strncmp(e, NOTE_CUT_POST, strlen(NOTE_CUT_POST)) != 0) return 0;
+    *from = (size_t)(p - note);
+    *digits = (size_t)(d - note);
+    *to = (size_t)(e - note) + strlen(NOTE_CUT_POST);
+    return 1;
+}
+
+/* Replace the cut note's count in step with omitted_bytes, or add the cut
+ * note when there was none (an uncut result that has just been halved). */
+static void note_set_cut(char *note, size_t cap, size_t omitted)
+{
+    char num[40];
+    snprintf(num, sizeof(num), "%zu", omitted);
+    size_t from, digits, to;
+    char tail[AI_TOOL_PART_NOTE_MAX];
+    if (find_cut_note(note, &from, &digits, &to)) {
+        snprintf(tail, sizeof(tail), "%s", note + to);
+        if (digits + strlen(num) + strlen(NOTE_CUT_POST) + strlen(tail) < cap)
+            snprintf(note + digits, cap - digits, "%s%s%s", num, NOTE_CUT_POST, tail);
+        return;
+    }
+    char add[96];
+    snprintf(add, sizeof(add), NOTE_CUT_FMT, omitted);
+    size_t len = strlen(note), sep = len ? 2 : 0;
+    if (len + sep + strlen(add) < cap)
+        snprintf(note + len, cap - len, "%s%s", sep ? "; " : "", add);
+}
+
+/* Drop the cut note (and the separator before it), then add the fit note. */
+static void note_set_dropped(char *note, size_t cap)
+{
+    size_t from, digits, to;
+    if (find_cut_note(note, &from, &digits, &to)) {
+        char rest[AI_TOOL_PART_NOTE_MAX];
+        snprintf(rest, sizeof(rest), "%s", note + to);
+        const char *r = rest;
+        if (from >= 2 && note[from - 2] == ';' && note[from - 1] == ' ') from -= 2;
+        else if (r[0] == ';' && r[1] == ' ') r += 2;
+        snprintf(note + from, cap - from, "%s", r);
+    }
+    size_t len = strlen(note), sep = len ? 2 : 0;
+    if (len + sep + strlen(NOTE_FIT_DROPPED) < cap)
+        snprintf(note + len, cap - len, "%s%s", sep ? "; " : "", NOTE_FIT_DROPPED);
+}
+
+/* A UTF-8 continuation byte. */
+static int is_cont(unsigned char c) { return (c & 0xC0u) == 0x80u; }
+
+/* Halve one excerpt in place. */
+static void halve_result(AiToolResult *r)
+{
+    size_t len = r->content_len;
+    size_t hl = r->omitted_bytes > 0 ? (r->omit_at < len ? r->omit_at : len) : (len * 3) / 4;
+    if (r->omitted_bytes == 0)
+        while (hl > 0 && hl < len && is_cont((unsigned char)r->content[hl])) hl--;
+    size_t tl = len - hl;
+    size_t nh = hl / 2, nt = tl / 2;
+    while (nh > 0 && nh < hl && is_cont((unsigned char)r->content[nh])) nh--;
+    size_t tstart = hl + (tl - nt);                    /* the tail keeps its end */
+    while (nt > 0 && is_cont((unsigned char)r->content[tstart])) { tstart++; nt--; }
+    if (nt > 0) memmove(r->content + nh, r->content + tstart, nt);
+    size_t nlen = nh + nt;
+    r->omitted_bytes += len - nlen;
+    r->omit_at = nh;
+    r->content_len = nlen;
+    r->content[nlen] = '\0';
+}
+
+int runcmd_fit(AiToolResult *res, int n, size_t estimate, size_t budget)
+{
+    if (!res || n <= 0) return 0;
+    int rounds = 0;
+    for (;;) {
+        size_t sum = estimate;
+        int any = 0;
+        for (int i = 0; i < n; i++) {
+            sum += escaped_len(res[i].content, res[i].content_len) +
+                   escaped_len(res[i].tool_note, strlen(res[i].tool_note));
+            if (res[i].content && res[i].content_len > 0) any = 1;
+        }
+        if (sum <= budget || !any) break;
+        for (int i = 0; i < n; i++) {
+            AiToolResult *r = &res[i];
+            if (!r->content || r->content_len == 0) continue;
+            halve_result(r);
+            if (r->content_len == 0) {
+                free(r->content);
+                r->content = NULL;
+                r->omit_at = 0;
+                r->omitted_bytes = 0;
+                note_set_dropped(r->tool_note, sizeof(r->tool_note));
+            } else {
+                note_set_cut(r->tool_note, sizeof(r->tool_note), r->omitted_bytes);
+            }
+        }
+        rounds++;
+    }
+    return rounds;
+}
+
+/* ---- Framing ---- */
+
+char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out_len)
+{
+    if (!part) return NULL;
+    size_t nlen = strlen(part->tool_note);
+    const char *content = part->content;
+    size_t clen = content ? part->content_len : 0;
+    char *out = NULL;
+    size_t n = 0;
+
+    if (clen == 0) {                                    /* no excerpt: the note alone */
+        out = (char *)malloc(nlen + 1);
+        if (!out) return NULL;
+        memcpy(out, part->tool_note, nlen + 1);
+        if (out_len) *out_len = nlen;
+        return out;
+    }
+
+    char lead[160];
+    if (delim) (void)ai_data_lead_tool(RUNCMD_TOOL_NAME, lead, sizeof(lead));
+
+    if (part->omitted_bytes == 0) {                     /* uncut */
+        if (delim) return ai_data_block_dup(lead, delim, content, clen, nlen ? part->tool_note : NULL, out_len);
+        out = (char *)malloc(clen + 1 + nlen + 1);
+        if (!out) return NULL;
+        memcpy(out, content, clen);
+        n = clen;
+        if (nlen) { out[n++] = '\n'; memcpy(out + n, part->tool_note, nlen); n += nlen; }
+        out[n] = '\0';
+        if (out_len) *out_len = n;
+        return out;
+    }
+
+    /* cut: lead, head block, marker, tail block, note, joined by newlines;
+     * a side with nothing in it has no block, so neither is assumed */
+    size_t hl = part->omit_at < clen ? part->omit_at : clen, tl = clen - hl;
+    char marker[96];
+    snprintf(marker, sizeof(marker), RUNCMD_OMIT_MARKER_FMT, part->omitted_bytes);
+    char *eh = NULL, *et = NULL;
+    size_t ehl = 0, etl = 0;
+    if (delim) {
+        if (hl) { eh = ai_data_escape_dup(content, hl, &ehl); if (!eh) return NULL; }
+        if (tl) { et = ai_data_escape_dup(content + hl, tl, &etl);
+                  if (!et) { free(eh); return NULL; } }
+    }
+    const char *seg[10];
+    size_t sl[10];
+    int ns = 0;
+    size_t dl = delim ? strlen(delim) : 0;
+#define SEG(p, l) do { seg[ns] = (p); sl[ns] = (l); ns++; } while (0)
+    if (delim) SEG(lead, strlen(lead));
+    if (hl) {
+        if (delim) { SEG(delim, dl); SEG(eh, ehl); SEG(delim, dl); }
+        else SEG(content, hl);
+    }
+    SEG(marker, strlen(marker));
+    if (tl) {
+        if (delim) { SEG(delim, dl); SEG(et, etl); SEG(delim, dl); }
+        else SEG(content + hl, tl);
+    }
+    if (nlen) SEG(part->tool_note, nlen);
+#undef SEG
+    size_t total = 0;
+    for (int i = 0; i < ns; i++) total += sl[i] + 1;    /* a newline after each, the last is the NUL */
+    out = (char *)malloc(total);
+    if (out) {
+        size_t w = 0;
+        for (int i = 0; i < ns; i++) {
+            if (i) out[w++] = '\n';
+            memcpy(out + w, seg[i], sl[i]);
+            w += sl[i];
+        }
+        out[w] = '\0';
+        if (out_len) *out_len = w;
+    }
+    free(eh);
+    free(et);
+    return out;
+}
+
+/* ---- Aging ---- */
+
+int runcmd_age_results(AiConversation *conv)
+{
+    if (!conv) return 0;
+    const size_t stub_len = strlen(RUNCMD_AGED_STUB);
+    int aged = 0, rounds_seen = 0;
+    for (int m = conv->msg_count - 1; m >= 0; m--) {
+        AiMessage *msg = &conv->messages[m];
+        if (msg->role != AI_ROLE_TOOL) continue;
+        if (++rounds_seen <= RUNCMD_AGE_ROUNDS) continue;
+        for (int k = 0; msg->parts && k < msg->n_parts; k++) {
+            AiToolPart *p = &msg->parts[k];
+            if (strcmp(p->tool_name, RUNCMD_TOOL_NAME) != 0) continue;
+            if (!p->content || p->content_len < stub_len) continue;
+            if (p->content_len == stub_len && memcmp(p->content, RUNCMD_AGED_STUB, stub_len) == 0)
+                continue;                                /* already the stub */
+            memcpy(p->content, RUNCMD_AGED_STUB, stub_len);
+            if (p->content_len > stub_len) p->content[stub_len] = '\0';
+            p->content_len = stub_len;
+            p->omit_at = 0;
+            p->omitted_bytes = 0;
+            aged++;
+        }
+    }
+    return aged;
 }

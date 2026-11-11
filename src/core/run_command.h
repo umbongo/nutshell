@@ -1,6 +1,7 @@
 #ifndef NUTSHELL_RUN_COMMAND_H
 #define NUTSHELL_RUN_COMMAND_H
 
+#include "ai_prompt.h"
 #include "ai_tools.h"
 #include "chat_approval.h"
 #include "term.h"
@@ -173,6 +174,113 @@ void runcmd_capture_start(RunCmdCapture *c, const Terminal *t);
  * spaces. Returns 1. */
 int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command,
                         size_t cap);
+
+/* ---- Results: one per call, their notes, the fit and the framing (spec decisions 4, 11 to 13, 15) ---- */
+
+/* Why the batch is being answered. The first group is a batch that existed;
+ * the second answers a whole reply with no batch (built with q == NULL). */
+typedef enum {
+    RUNCMD_CAUSE_SETTLED, RUNCMD_CAUSE_DECIDED, RUNCMD_CAUSE_TIMEOUT, RUNCMD_CAUSE_RETRY, RUNCMD_CAUSE_STOP,
+    RUNCMD_CAUSE_TAB_SWITCH, RUNCMD_CAUSE_SESSION_ENDED, RUNCMD_CAUSE_TYPED,
+    RUNCMD_CAUSE_NEW_CHAT, RUNCMD_CAUSE_SESSION_CLOSED, RUNCMD_CAUSE_PANEL_CLOSED,
+    RUNCMD_CAUSE_EVICTED,
+    /* whole-reply answers, built with q == NULL */
+    RUNCMD_CAUSE_NO_SLOT, RUNCMD_CAUSE_SESSION_GONE, RUNCMD_CAUSE_SET_FULL
+} RunCmdCause;
+
+/* 1 when the batch's removal continues the conversation with a request:
+ * SETTLED (the tick's end), TIMEOUT, RETRY. 0 for every other cause: DECIDED
+ * (a Deny or Deny all that left nothing runnable), NO_SLOT, STOP, the tab
+ * switch, session and panel causes, TYPED (the typed message continues), NEW_CHAT
+ * and EVICTED (spec decision 8's table and the governing principle: no
+ * request without a user action that would start one today). */
+int runcmd_cause_relaunches(RunCmdCause c);
+
+/* 0 for NEW_CHAT and SESSION_CLOSED (the conversation is cleared or its
+ * session gone: the results are not stored); 1 for every other cause. */
+int runcmd_cause_appends(RunCmdCause c);
+
+/* The text between the head and the tail of a cut result. */
+#define RUNCMD_OMIT_MARKER_FMT "[\xE2\x80\xA6 %zu bytes omitted \xE2\x80\xA6]"
+
+/* Build one result per call of r, in call order, into out[r->n_calls] (the
+ * caller's array; every element is zeroed first, then filled): tool_use_id,
+ * is_error (1 only for an OTHER_TOOL call without fetch_off and an INVALID
+ * call), tool_note (decision 13's table and decision 10's capture notes,
+ * parts joined with "; ", always under AI_TOOL_PART_NOTE_MAX) and, for a call
+ * that ran (COMPLETED, or EXECUTING with rows read), content, the malloc'd
+ * head then tail of its capture, omit_at = head length and omitted_bytes the
+ * capture's when cut (both 0 when uncut). Content is NULL when there is no
+ * excerpt. q is the batch's approval queue; the entry of a SLOT call indexes
+ * it. A SLOT call with no entry in q, or q NULL under a cause that is not a
+ * whole-reply one, is "not run (refused by the approval queue)"; under
+ * SET_FULL and SESSION_GONE every SLOT call gets that cause's note. OVER_CAP,
+ * INVALID and OTHER_TOOL calls keep their own rows under every cause. A
+ * capture whose excerpt was lost to an allocation failure (captured, no
+ * head or tail, no EMPTY) says "output dropped: Nutshell ran out of memory".
+ * An excerpt that cannot be copied (the allocation fails) is dropped with the
+ * same note and the call is still answered, so no allocation failure leaves a
+ * call without a result (spec decision 25). Returns r->n_calls, or -1 for a
+ * NULL r or out, or no calls. Free each out[i].content. */
+int runcmd_build_results(const RunCmdReply *r, const ApprovalQueue *q, RunCmdCause cause,
+                         AiToolResult *out);
+
+/* An estimate of the request body in bytes, before the results are added:
+ * the summed JSON-escaped length of every stored message's content and of
+ * every results part's content and note, plus tools_json_len plus
+ * 2 * snapshot_len (the snapshot's stored length, counted twice for its
+ * escaping and its block), plus, for "moonshot", every stored assistant
+ * turn's escaped reasoning (the only provider sending it back so far;
+ * DeepSeek's is added with its request path). NULL conv: tools and snapshot
+ * only. provider may be NULL. */
+size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
+                               size_t tools_json_len, size_t snapshot_len);
+
+#define RUNCMD_BODY_HEADROOM  32768
+#define RUNCMD_TOOLS_ESTIMATE 8192
+
+/* The room for results: min(body_max, 3 bytes per token of the model's
+ * context when context_limit_tokens > 0) less RUNCMD_BODY_HEADROOM, and 0
+ * when that is not above the headroom (a small context gets notes only). */
+size_t runcmd_budget(size_t body_max, int context_limit_tokens);
+
+/* Make the results fit: while estimate plus the summed escaped content and
+ * note of res[0, n) exceeds budget, halve every excerpt, head keeping its
+ * start and tail its end, both cut on UTF-8 boundaries (an uncut excerpt is
+ * first split like runcmd_cut does, 3/4 and 1/4), omitted_bytes growing and
+ * the "output cut: N bytes omitted from the middle" note kept in step. A
+ * result with nothing left has content NULL, omit_at and omitted_bytes 0 and
+ * "output dropped: no room left in this conversation" appended to its note.
+ * Shrinks in place: it never allocates and never fails. Returns the number
+ * of halving rounds done (0: it already fit, or nothing to cut). */
+int runcmd_fit(AiToolResult *res, int n, size_t estimate, size_t budget);
+
+/* The text one run_command part is sent as, malloc'd (free it), *out_len its
+ * length; NULL on allocation failure or a NULL part.
+ *   uncut: trust's one block, ai_data_lead_tool("run_command"), the block, the
+ *          note after the closing delimiter (as ai_data_block_dup);
+ *   cut:   spec decision 12's layout: the lead, the head block, the marker
+ *          (RUNCMD_OMIT_MARKER_FMT) as Nutshell text between delimiters, the
+ *          tail block, the note, all joined by "\n". A head or tail that is
+ *          empty (omit_at 0, or the head runs to the end) has no block and
+ *          no delimiters, so the marker never assumes either side;
+ *   no excerpt (content NULL or empty): the note alone, no lead, no block.
+ * delim NULL: no lead and no delimiters, the pieces joined the same way
+ * (a conversation built without a frame). */
+char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out_len);
+
+/* Aging (spec decision 11): the output of a run_command part in a results
+ * turn older than the newest RUNCMD_AGE_ROUNDS results turns is replaced by
+ * the stub. */
+#define RUNCMD_AGE_ROUNDS 2
+#define RUNCMD_AGED_STUB "[output dropped to save room; run the command again if you need it]"
+
+/* Write the stub over such a part's content in place (no allocation, the
+ * part keeps owning its heap block; content_len becomes the stub's length;
+ * omit_at and omitted_bytes 0). A part whose content is shorter than the stub
+ * or NULL, or already the stub, is left as it is; its note and its call stay.
+ * Other tools' parts are untouched. Returns the number of parts changed. */
+int runcmd_age_results(AiConversation *conv);
 
 /* Tests only: the allocator the planner and the cut use (NULL restores malloc). */
 void runcmd_set_alloc_for_test(void *(*alloc)(size_t));
