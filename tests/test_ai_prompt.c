@@ -4964,7 +4964,7 @@ int test_body_moonshot_pinned_snapshot(void)
         ai_conv_set_system(c3, "You are a test.");
         ai_conv_add(c3, AI_ROLE_USER, "remove the build cache");
         ai_conv_add(c3, AI_ROLE_ASSISTANT, "I will clear it.\n[EXEC]rm -rf build[/EXEC]");
-        ASSERT_EQ(ai_conv_add_user_note(c3, NULL, 0,
+        ASSERT_EQ(ai_conv_add_user_note(c3, NULL, 0, 0,
                       "NOTE: 1 [EXEC] command(s) were NOT run because they exceed "
                       "the command policy ceiling."), 0);
         ASSERT_EQ(c3->messages[c3->msg_count - 1].nutshell_note, 1);

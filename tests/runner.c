@@ -3214,6 +3214,8 @@ int test_conv_room_counts_queued_notes(void);
 int test_agentic_room_counts_queued_notes(void);
 int test_conv_flush_keeps_what_does_not_fit(void);
 int test_conv_flush_leaves_the_reply_slot(void);
+int test_conv_note_door_keeps_the_reply_slot(void);
+int test_conv_note_door_keep_free_values(void);
 int test_conv_flush_keep_free_values(void);
 int test_results_pair_by_id(void);
 int test_results_out_of_place_fail_the_pair_check(void);
@@ -8563,6 +8565,8 @@ int main(void) {
         failed += test_agentic_room_counts_queued_notes();
         failed += test_conv_flush_keeps_what_does_not_fit();
     failed += test_conv_flush_leaves_the_reply_slot();
+    failed += test_conv_note_door_keeps_the_reply_slot();
+    failed += test_conv_note_door_keep_free_values();
     failed += test_conv_flush_keep_free_values();
     failed += test_results_pair_by_id();
     failed += test_results_out_of_place_fail_the_pair_check();

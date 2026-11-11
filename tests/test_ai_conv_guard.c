@@ -303,7 +303,7 @@ int test_conv_note_queued_while_open(void)
     if (c) {
         ASSERT_EQ(add_asst(c, 1, calls), 0);
         int before = c->msg_count;
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "policy raised"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "policy raised"), 1);
         ASSERT_EQ(c->msg_count, before);
         ASSERT_EQ(q.count, 1);
         /* flush does nothing while open */
@@ -330,8 +330,8 @@ int test_conv_note_deferred_while_busy(void)
     ASSERT_NOT_NULL(c);
     if (c) {
         int before = c->msg_count;
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "first"), 1);
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "second"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "first"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "second"), 1);
         ASSERT_EQ(c->msg_count, before);
         ASSERT_EQ(q.count, 2);
         ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 2);
@@ -340,18 +340,18 @@ int test_conv_note_deferred_while_busy(void)
         ASSERT_STR_EQ(c->messages[before + 1].content, "second");
         ASSERT_EQ(q.count, 0);
         /* closed and not busy: appended at once */
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "direct"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "direct"), 0);
         ASSERT_EQ(c->msg_count, before + 3);
         ASSERT_EQ(q.count, 0);
         /* a queued note is never overtaken by a later direct one */
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "queued"), 1);
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "later"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "queued"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "later"), 0);
         ASSERT_EQ(q.count, 0);
         ASSERT_STR_EQ(c->messages[c->msg_count - 2].content, "queued");
         ASSERT_STR_EQ(c->messages[c->msg_count - 1].content, "later");
         /* NULL queue: appended when it can be, refused when it cannot queue */
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "no queue"), 0);
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 1, "no queue"), -1);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "no queue"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 1, 0, "no queue"), -1);
     }
     free_conv(c);
     TEST_END();
@@ -365,12 +365,12 @@ int test_conv_note_refusals(void)
     memset(&q, 0, sizeof(q));
     ASSERT_NOT_NULL(c);
     if (c) {
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, NULL), -1);
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, ""), -1);
-        ASSERT_EQ(ai_conv_add_user_note(NULL, &q, 0, "x"), -1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, NULL), -1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, ""), -1);
+        ASSERT_EQ(ai_conv_add_user_note(NULL, &q, 0, 0, "x"), -1);
         for (int i = 0; i < AI_NOTE_QUEUE_MAX; i++)
-            ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "n"), 1);
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "fifth"), -1);
+            ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "n"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "fifth"), -1);
         ASSERT_EQ(q.count, AI_NOTE_QUEUE_MAX);
 
         /* a full conversation refuses a direct note */
@@ -379,11 +379,11 @@ int test_conv_note_refusals(void)
             ai_conv_add(c, AI_ROLE_USER, "fill");
         AiNoteQueue q2;
         memset(&q2, 0, sizeof(q2));
-        ASSERT_EQ(ai_conv_add_user_note(c, &q2, 0, "no room"), -1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q2, 0, 0, "no room"), 2);   /* full: neither stored nor queued (R54) */
         ASSERT_EQ(c->msg_count, AI_MAX_MESSAGES);
         ASSERT_EQ(q2.count, 0);
         /* queued notes that no longer fit stay queued (review of B1-B11) */
-        ASSERT_EQ(ai_conv_add_user_note(c, &q2, 1, "queued"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q2, 1, 0, "queued"), 1);
         ASSERT_EQ(ai_conv_flush_notes(c, &q2, 0), 0);
         ASSERT_EQ(q2.count, 1);
         ASSERT_STR_EQ(q2.text[0], "queued");
@@ -420,14 +420,14 @@ int test_conv_note_long_text_cut(void)
         /* 4095 bytes fit whole */
         memset(text, 'x', 4095);
         text[4095] = '\0';
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, text), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, text), 1);
         ASSERT_EQ(strlen(q.text[0]), 4095);
         ASSERT_STR_EQ(q.text[0], text);
 
         /* 5000 bytes are cut, with the marker, still fitting a slot */
         memset(text, 'y', 5000);
         text[5000] = '\0';
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, text), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, text), 1);
         size_t n = strlen(q.text[1]);
         ASSERT_TRUE(n < (size_t)AI_NOTE_TEXT_MAX);
         const char *marker = " [\xE2\x80\xA6 cut]";
@@ -440,7 +440,7 @@ int test_conv_note_long_text_cut(void)
             memcpy(text + i, "\xE2\x82\xAC", 3);   /* the euro sign */
         text[4998] = 'z'; text[4999] = 'z';
         text[5000] = '\0';
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, text), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, text), 1);
         ASSERT_TRUE(utf8_valid(q.text[2]));
         n = strlen(q.text[2]);
         ASSERT_STR_EQ(q.text[2] + n - strlen(marker), marker);
@@ -450,7 +450,7 @@ int test_conv_note_long_text_cut(void)
         memset(&q2, 0, sizeof(q2));
         memset(text, 'q', 5000);
         text[5000] = '\0';
-        ASSERT_EQ(ai_conv_add_user_note(c, &q2, 0, text), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q2, 0, 0, text), 0);
         const AiMessage *m = &c->messages[c->msg_count - 1];
         ASSERT_TRUE(m->content_len < (size_t)AI_NOTE_TEXT_MAX);
         ASSERT_TRUE(strstr(m->content, "cut]") != NULL);
@@ -726,13 +726,16 @@ int test_conv_flush_keeps_what_does_not_fit(void)
         /* nothing more fits: nothing more moves */
         ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 0);
         ASSERT_EQ(q.count, 2);
-        /* a new note queues behind them rather than overtaking */
+        /* a new note never overtakes them, and is not queued behind them
+         * either: the conversation is full (2), the queue keeps its two (C0, R54) */
         ai_conv_reset(c);
         ai_conv_add(c, AI_ROLE_USER, "x");
         while (c->msg_count < AI_MAX_MESSAGES) ai_conv_add(c, AI_ROLE_USER, "x");
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "later"), 1);
-        ASSERT_EQ(q.count, 3);
-        ASSERT_STR_EQ(q.text[2], "later");
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "later"), 2);
+        ASSERT_EQ(q.count, 2);
+        ASSERT_STR_EQ(q.text[0], "note3");
+        ASSERT_STR_EQ(q.text[1], "note4");
+        ASSERT_EQ(c->msg_count, AI_MAX_MESSAGES);
     }
     free_conv(c);
     TEST_END();
@@ -754,8 +757,8 @@ int test_conv_flush_leaves_the_reply_slot(void)
         while (c->msg_count < 60) ai_conv_add(c, AI_ROLE_USER, "x");
         ASSERT_EQ(add_asst(c, 1, calls), 0);
         ASSERT_EQ(c->msg_count, 61);
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "note1"), 1);
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "note2"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "note1"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "note2"), 1);
         ASSERT_EQ(q.count, 2);
         ASSERT_EQ(add_results(c, calls, 0, 1), 0);
         ASSERT_EQ(c->msg_count, 62);
@@ -784,12 +787,110 @@ int test_conv_flush_leaves_the_reply_slot(void)
         while (c->msg_count < 60) ai_conv_add(c, AI_ROLE_USER, "x");
         ASSERT_EQ(add_asst(c, 1, calls), 0);
         memset(&q, 0, sizeof(q));
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, "only"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "only"), 1);
         ASSERT_EQ(add_results(c, calls, 0, 1), 0);     /* 62 */
         ASSERT_EQ(ai_conv_flush_notes(c, &q, 1), 1);   /* 63 */
         ASSERT_EQ(q.count, 0);
         ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);
         ASSERT_EQ(c->msg_count, 64);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+/* The real sequence at 61 messages (C0, R54; review of the fix wave's door
+ * experiment): a system turn and 60 USER turns, two notes queued while a
+ * stream ran, then the [EXEC] continue text through the door. The text that
+ * launches a request passes keep_free 1: the door's own flush leaves the
+ * text's slot and the reply's, so the reply is never the message that fails
+ * to store. When the notes and the text cannot all be stored that way, no
+ * text is stored and the door says full (2). */
+int test_conv_note_door_keeps_the_reply_slot(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiNoteQueue q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ai_conv_add(c, AI_ROLE_SYSTEM, "S");
+        while (c->msg_count < 61) ai_conv_add(c, AI_ROLE_USER, "x");
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "note1"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "note2"), 1);
+        ASSERT_EQ(q.count, 2);
+
+        /* the text launches (keep_free 1): note1 fits with two slots left, note2
+         * would take the text's, so the text is not stored: full */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "[EXEC] continue text"), 2);
+        ASSERT_EQ(c->msg_count, 62);
+        ASSERT_STR_EQ(c->messages[61].content, "note1");
+        ASSERT_EQ(q.count, 1);                         /* note2 still waits, in order */
+        ASSERT_STR_EQ(q.text[0], "note2");
+        ASSERT_TRUE(AI_MAX_MESSAGES - c->msg_count >= 1);
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);   /* a reply would fit */
+
+        /* the text does not launch (keep_free 0): both notes then the text, in order */
+        ai_conv_reset(c);
+        ai_conv_add(c, AI_ROLE_SYSTEM, "S");
+        while (c->msg_count < 61) ai_conv_add(c, AI_ROLE_USER, "x");
+        memset(&q, 0, sizeof(q));
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "note1"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "note2"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "[EXEC] continue text"), 0);
+        ASSERT_EQ(c->msg_count, 64);
+        ASSERT_STR_EQ(c->messages[61].content, "note1");
+        ASSERT_STR_EQ(c->messages[62].content, "note2");
+        ASSERT_STR_EQ(c->messages[63].content, "[EXEC] continue text");
+        ASSERT_EQ(c->messages[63].nutshell_note, 1);
+        ASSERT_EQ(q.count, 0);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+/* The door's other outcomes with keep_free: no queued notes, the text alone;
+ * deferring still queues on a full conversation; refusals are still -1. */
+int test_conv_note_door_keep_free_values(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    AiNoteQueue q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ai_conv_add(c, AI_ROLE_SYSTEM, "S");
+        while (c->msg_count < 62) ai_conv_add(c, AI_ROLE_USER, "x");
+        /* 62 messages: a launching text stores and leaves the reply's slot */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "launch"), 0);
+        ASSERT_EQ(c->msg_count, 63);
+        /* 63 messages: a launching text would take the reply's slot: full, nothing stored */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, "launch again"), 2);
+        ASSERT_EQ(c->msg_count, 63);
+        ASSERT_EQ(q.count, 0);                         /* and not queued */
+        /* a text that does not launch takes the last slot */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "plain"), 0);
+        ASSERT_EQ(c->msg_count, 64);
+        /* 64: nothing stores, whatever keep_free says; a negative value counts as 0 */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "full"), 2);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, -3, "full"), 2);
+        ASSERT_EQ(c->msg_count, 64);
+        ASSERT_EQ(q.count, 0);
+        /* deferring on a full conversation still queues (1): the queue is not the conversation */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "later"), 1);
+        ASSERT_EQ(q.count, 1);
+        /* with that note queued and no room, the next text is full, never queued behind it */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 0, "next"), 2);
+        ASSERT_EQ(q.count, 1);
+        ASSERT_STR_EQ(q.text[0], "later");
+        /* bad arguments are -1 whatever keep_free is */
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, NULL), -1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 0, 1, ""), -1);
+        ASSERT_EQ(ai_conv_add_user_note(NULL, &q, 0, 1, "x"), -1);
+        /* NULL queue: the text alone, same room rule */
+        ai_conv_reset(c);
+        while (c->msg_count < 63) ai_conv_add(c, AI_ROLE_USER, "x");
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 1, "launch"), 2);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "plain"), 0);
     }
     free_conv(c);
     TEST_END();

@@ -834,7 +834,7 @@ int test_snapshot_note_keeps_it_on_question(void)
         ASSERT_EQ(count_of(b1, "screen1"), 1);
 
         /* the note goes in through the door, after the results */
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "policy raised"), 0);
         ASSERT_EQ(c->messages[c->msg_count - 1].nutshell_note, 1);
         ASSERT_EQ(c->snapshot_msg, 1);
 
@@ -863,7 +863,7 @@ int test_snapshot_note_keeps_it_on_question(void)
         ASSERT_TRUE(strstr(b2, "screen1") < strstr(b2, "policy raised"));
 
         /* a second note changes nothing for the question either */
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "another note"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "another note"), 0);
         f = frozen_frame(c);
         ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, b2, BODY_CAP, 1, "openai") > 0);
         ASSERT_EQ(count_of(b2, "screen1"), 1);
@@ -883,7 +883,7 @@ int test_snapshot_pointing_at_note_is_invalid(void)
     char *buf = (char *)malloc(BODY_CAP);
     ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
     if (c && buf) {
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "policy raised"), 0);
         int note_at = c->msg_count - 1;
         ASSERT_EQ(c->messages[note_at].nutshell_note, 1);
 
@@ -915,7 +915,7 @@ int test_snapshot_typed_turn_after_results_drops_it(void)
     ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
     if (c && buf) {
         /* a note and then a typed turn: the typed turn takes the block's place */
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "policy raised"), 0);
         ai_conv_add(c, AI_ROLE_USER, "typed question");
         AiBodyFrame f = frozen_frame(c);
         ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
@@ -931,7 +931,7 @@ int test_snapshot_typed_turn_after_results_drops_it(void)
         ASSERT_TRUE(strstr(buf, "screen2") < strstr(buf, "typed question"));
 
         /* a note after the typed turn leaves the block on the typed turn */
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "later note"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "later note"), 0);
         f = frozen_frame(c);
         ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
         ASSERT_EQ(count_of(buf, "screen2"), 1);
@@ -949,7 +949,7 @@ int test_snapshot_freeze_refused_on_note(void)
     AiConversation *c = frozen_after_round();
     ASSERT_NOT_NULL(c);
     if (c) {
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "policy raised"), 0);
         /* the last message is Nutshell's note: nothing changes */
         ASSERT_EQ(ai_conv_freeze_snapshot(c, "screen2", 7, 1), 1);
         ASSERT_NOT_NULL(c->snapshot);
@@ -998,7 +998,7 @@ int test_snapshot_switch_offers_runcmd(void)
     char *buf = (char *)malloc(BODY_CAP);
     ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
     if (c && buf) {
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "policy raised"), 0);
         ASSERT_EQ(c->messages[c->msg_count - 1].nutshell_note, 1);
         AiBodyFrame f = frozen_frame(c);          /* snapshot_at 2: the question */
         for (int p = 0; p < 2; p++) {
@@ -1072,10 +1072,10 @@ int test_snapshot_note_flag_door_copy_take(void)
         ASSERT_EQ(c->messages[1].nutshell_note, 0);
 
         /* the door's direct append and the flush both mark; a typed add does not */
-        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "direct"), 0);
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, 0, "direct"), 0);
         AiNoteQueue q;
         memset(&q, 0, sizeof(q));
-        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, "queued"), 1);
+        ASSERT_EQ(ai_conv_add_user_note(c, &q, 1, 0, "queued"), 1);
         ASSERT_EQ(ai_conv_flush_notes(c, &q, 0), 1);
         ai_conv_add(c, AI_ROLE_USER, "typed again");
         ASSERT_EQ(c->msg_count, 5);

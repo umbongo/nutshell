@@ -166,7 +166,7 @@ int ai_conv_flush_notes(AiConversation *conv, AiNoteQueue *q, int keep_free)
 }
 
 int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
-                          const char *text)
+                          int keep_free, const char *text)
 {
     if (!conv || !text || !text[0]) return -1;
 
@@ -177,15 +177,15 @@ int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
         return 1;
     }
 
-    /* earlier notes still waiting go in first, so the order is kept; one
-     * that could not be stored keeps this note behind it */
-    ai_conv_flush_notes(conv, q, 0);
-    if (q && q->count > 0) {
-        if (q->count >= AI_NOTE_QUEUE_MAX) return -1;
-        note_copy(q->text[q->count], text);
-        q->count++;
-        return 1;
-    }
+    if (keep_free < 0) keep_free = 0;
+    /* Earlier notes waiting go in first, so the order is kept, and each leaves
+     * the text's own slot and keep_free more (the reply's, when the text
+     * launches a request): the flush is the door's, not the caller's. A note
+     * that cannot be stored under that rule stays queued with every later one
+     * (C0, R54). */
+    ai_conv_flush_notes(conv, q, keep_free + 1);
+    if (q && q->count > 0) return 2;                  /* never ahead of a queued note */
+    if (conv->msg_count + 1 + keep_free > AI_MAX_MESSAGES) return 2;
 
     char cut[AI_NOTE_TEXT_MAX];
     note_copy(cut, text);

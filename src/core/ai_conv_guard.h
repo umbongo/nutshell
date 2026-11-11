@@ -15,18 +15,24 @@
 int ai_conv_tool_calls_open(const AiConversation *conv);
 
 /* Append a USER turn with `text`, the only way Nutshell's own notes enter a
- * session's conversation. Returns 0 when appended. When `defer` is non-zero
- * (the owner is busy) or ai_conv_tool_calls_open(conv) is 1, a copy is queued
- * in `q` instead and 1 is returned; ai_conv_flush_notes() appends it later.
- * A note that finds earlier notes still queued while nothing holds it back
- * flushes them first, so notes keep their order; if some of them cannot be
- * stored the note is queued behind them (1).
+ * session's conversation. `keep_free` is the number of slots the caller needs
+ * left free once the text is stored: 1 when the text launches a request (its
+ * reply must fit), 0 otherwise; a negative value counts as 0. Returns:
+ *   0  appended;
+ *   1  queued: `defer` is non-zero (the owner is busy) or
+ *      ai_conv_tool_calls_open(conv) is 1, so a copy waits in `q` and
+ *      ai_conv_flush_notes() appends it later (nothing else queues a text);
+ *   2  the conversation is full: the text is neither stored nor queued. The
+ *      queued notes that fit with the text's slot and keep_free more left free
+ *      were flushed first (in order, so notes keep their order); the rest stay
+ *      queued, in order, and the text is never stored ahead of a queued note.
+ *      The caller shows the conversation-full notice (spec decision 24);
+ *   -1 a NULL conv or text, an empty text, a full queue or a NULL queue when
+ *      one is needed (the caller shows a row), or the allocation failed.
  * A text of AI_NOTE_TEXT_MAX bytes or more is cut on a UTF-8 boundary and
- * ends " [\xE2\x80\xA6 cut]" (both ways of storing it).
- * Returns -1 for a NULL conv or text, an empty text, a full queue (the caller
- * shows a row), a NULL queue when one is needed, or a full conversation. */
+ * ends " [\xE2\x80\xA6 cut]" (both ways of storing it). */
 int ai_conv_add_user_note(AiConversation *conv, AiNoteQueue *q, int defer,
-                          const char *text);
+                          int keep_free, const char *text);
 
 /* 1 when a typed message can be stored with its reply:
  * msg_count + 2 (+ 1 when a run_command batch is open, since the typed
@@ -39,7 +45,9 @@ int ai_conv_room_for_send(const AiConversation *conv, int open_batch,
 /* While no tool call is open, append the queued notes in order and return how
  * many were appended, leaving `keep_free` slots of the conversation free: a
  * flush that precedes a relaunch passes 1 (the reply), one before a typed
- * message and its reply passes 2, any other 0. A note the conversation cannot
+ * message and its reply passes 2, any other 0. (A launching [EXEC] continue
+ * text does not call this itself: ai_conv_add_user_note(..., keep_free 1, ...)
+ * flushes with the text's slot added, C0.) A note the conversation cannot
  * store without taking one of those slots stops the flush: it and every later
  * note stay queued, in order, at the front of `q`, for the next flush; nothing
  * is dropped. While a call is open, return 0 and leave `q` alone. A negative

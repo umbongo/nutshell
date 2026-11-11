@@ -440,6 +440,12 @@ checks below move ahead of that store, for every tool stop:
   the typed message's finish leaves 2 (the typed message and its reply), a
   flush that precedes nothing 0. A note that does not fit stays queued, in
   order, for the next flush; nothing is dropped, a note waits a round longer.
+  *(C0, 2026-11-11, R54)* The launching `[EXEC]` continue text is not
+  preceded by a flush of the caller's: it goes through the note door
+  (decision 19) with `keep_free` 1, and the door's own flush leaves the
+  text's slot and the reply's; when they cannot all be stored the door
+  returns "full" (2), nothing launches and the caller shows the
+  conversation-full notice (decision 24).
   So a conversation at 61 messages whose results turn (62) is followed by two
   queued notes stores the first (63), keeps the second queued, and stores the
   reply (64).
@@ -979,14 +985,36 @@ run_command call never runs under that count.
   `ai_conv_flush_notes` appends the queued notes in order and stops at the
   first one the conversation cannot store; that note and every later one stay
   queued, in order, and the return value is the number appended. A new note
-  that finds notes still queued after its flush is queued behind them rather
-  than overtaking them. *(review of the fix wave, 2026-11-11, R47)* The flush
+  that finds notes still queued after its flush never overtakes them.
+  *(C0, 2026-11-11, R54: it used to be queued behind them, a note that
+  waited for room a full conversation never gives; it now stores no text and
+  reports "full", below.)* *(review of the fix wave, 2026-11-11, R47)* The flush
   takes a number of slots to leave free, `ai_conv_flush_notes(conv, q,
   keep_free)`: it stops at the first note that would take one of them, so a
   flush that precedes a relaunch (`keep_free` 1) never takes the reply's slot,
   the typed message's finish (2) never takes the typed message's or its
   reply's, and any other flush passes 0. The notes it stops at stay queued,
   in order, for the next flush (decision 4).
+- *(C0, 2026-11-11, R54)* **The door takes the slot it must leave free.**
+  `ai_conv_add_user_note(conv, q, defer, keep_free, text)`: `keep_free` is
+  the number of slots the caller needs left free once the text is stored, 1
+  when the text launches a request (the launching `[EXEC]` continue text),
+  0 for every other note. The door flushes the queued notes itself, leaving
+  the text's slot and `keep_free` more, then stores the text. It returns 0
+  stored; 1 queued (`defer`, or a run_command turn open: unchanged); **2
+  conversation full**: when the queued notes and the text cannot all be
+  stored with `keep_free` left free it stores and queues no text (queued
+  notes that fit may have been flushed, the rest stay queued in order; the
+  text is never stored ahead of a queued note); -1 bad arguments or a full
+  note queue. A full conversation used to return -1 and a text behind
+  queued notes used to be queued (1): one meaning per value now. A caller
+  that gets 2 for the launching text launches nothing and shows
+  "[conversation full: ...; start a New Chat]" like a typed message
+  (decision 24); the reply is never the message that fails to store. The
+  sequence that showed it: 61 messages, two notes queued during a stream,
+  then the continue text: a separate flush leaving 2 stored the first note
+  (62), the door's own flush (it passed 0) then stored the second (63), the
+  text took the 64th, and the reply had no slot.
 - *(review of B1-B11, 2026-11-11)* **Ids.** When a tool-call turn is stored
   (`agentic_add_assistant_tool_msg_ex`), an empty call id, or one an earlier
   call of the same turn already has, is replaced by `call_<n>`, `n` the
