@@ -12,6 +12,11 @@
 #define AI_TOOL_SCHEMA_MAX     2048
 #define AI_TOOL_NOTE_MAX       256   /* Nutshell's own text about a result */
 
+/* Most tool calls one streamed reply can carry. A call at or past this index
+ * (OpenAI "index", or the 65th tool_use block of an Anthropic reply) is not
+ * accumulated: the server's own number must not size an allocation. */
+#define AI_TOOL_STREAM_CALLS_MAX 64
+
 #define AI_TOOL_LOOP_MAX       5
 #define AI_TOOL_SEARCH_MAX     3
 

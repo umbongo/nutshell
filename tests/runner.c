@@ -2985,6 +2985,8 @@ int test_provider_runcmd_modes(void);
 int test_runcmd_reject_hint(void);
 int test_runcmd_serialized_both_formats(void);
 int test_runcmd_stub_is_error(void);
+int test_tool_stream_index_bounded(void);
+int test_tool_stream_anthropic_blocks_bounded(void);
 int test_ai_stream_chunk_error_object_message(void);
 int test_ai_stream_chunk_error_string_form(void);
 int test_ai_stream_chunk_error_not_an_error(void);
@@ -6934,6 +6936,8 @@ int main(void) {
     failed += test_runcmd_reject_hint();
     failed += test_runcmd_serialized_both_formats();
     failed += test_runcmd_stub_is_error();
+    failed += test_tool_stream_index_bounded();
+    failed += test_tool_stream_anthropic_blocks_bounded();
     failed += test_ai_stream_chunk_error_object_message();
     failed += test_ai_stream_chunk_error_string_form();
     failed += test_ai_stream_chunk_error_not_an_error();

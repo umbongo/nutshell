@@ -581,6 +581,9 @@ static int stream_commit_tool(AiToolStreamState *state)
 {
     if (!state) return -1;
 
+    /* Past the bound the call is dropped; the stream goes on. */
+    if (state->pending_tool_count >= AI_TOOL_STREAM_CALLS_MAX) return 0;
+
     /* Grow array if needed — initial cap 4, double on overflow */
     if (state->pending_tool_count >= state->pending_tool_cap) {
         int new_cap = (state->pending_tool_cap == 0) ? 4 : state->pending_tool_cap * 2;
@@ -717,8 +720,18 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
                                        : c->name[0] != '\0';
                 if (differs) slot = state->pending_tool_count;
             }
+        } else if (idx_d >= (double)AI_TOOL_STREAM_CALLS_MAX) {
+            continue;   /* not accumulated; the rest of the chunk still counts */
         } else {
             slot = (int)idx_d;
+        }
+        /* The id-split path of an index-less delta can also reach the bound.
+         * Its later id-less fragments would continue the last kept call, so
+         * that call is marked overflowed (INVALID) rather than spliced. */
+        if (slot >= AI_TOOL_STREAM_CALLS_MAX) {
+            if (state->pending_tool_count > 0)
+                state->pending_tool_calls[state->pending_tool_count - 1].overflowed = 1;
+            continue;
         }
 
         /* Grow pending_tool_calls array if needed to accommodate this slot */

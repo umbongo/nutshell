@@ -1385,6 +1385,79 @@ int test_tool_stream_overflow_keeps_rest_of_chunk(void)
     TEST_END();
 }
 
+int test_tool_stream_index_bounded(void)
+{
+    TEST_BEGIN();
+    static char chunk[1024];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    /* one chunk: a huge index, a valid call 0, then the finish */
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":500000,\"id\":\"bad\",\"function\":{\"name\":\"run_command\",\"arguments\":\"{}\"}},"
+        "{\"index\":1e300,\"function\":{\"arguments\":\"{}\"}},"
+        "{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"run_command\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}"
+        "]},\"finish_reason\":\"tool_calls\"}]}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 1);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_TRUE(st.pending_tool_cap <= AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_1");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{\"command\":\"ls\"}");
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+    ai_tools_stream_reset(&st);
+
+    /* the boundary: 63 accepted, 64 refused */
+    ai_tools_stream_init(&st);
+    oa_frag(chunk, sizeof chunk, AI_TOOL_STREAM_CALLS_MAX - 1, "c63", "run_command", "{}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_STR_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].id, "c63");
+    oa_frag(chunk, sizeof chunk, AI_TOOL_STREAM_CALLS_MAX, "c64", "run_command", "{}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ai_tools_stream_reset(&st);
+
+    /* index-less deltas with a new id each: the split path stops at the bound */
+    ai_tools_stream_init(&st);
+    for (int i = 0; i < AI_TOOL_STREAM_CALLS_MAX + 6; i++) {
+        snprintf(chunk, sizeof chunk,
+            "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"i%d\","
+            "\"function\":{\"name\":\"run_command\",\"arguments\":\"{}\"}}]}}]}", i);
+        ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    }
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_STR_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].id, "i63");
+    /* the refused 65th call's id-less fragments must not splice onto call 63 */
+    ASSERT_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].overflowed, 1);
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"more\"}}]}}]}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].input_json, "{}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_anthropic_blocks_bounded(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    for (int i = 0; i < AI_TOOL_STREAM_CALLS_MAX + 3; i++) {
+        ASSERT_EQ(ai_parse_tool_stream_anthropic(
+            "{\"type\":\"content_block_start\",\"content_block\":"
+            "{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"run_command\"}}", &st), 0);
+        ASSERT_EQ(ai_parse_tool_stream_anthropic(
+            "{\"type\":\"content_block_stop\"}", &st), 0);
+    }
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}", &st), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
 int test_tool_stream_anthropic_overflow_sticky(void)
 {
     TEST_BEGIN();
