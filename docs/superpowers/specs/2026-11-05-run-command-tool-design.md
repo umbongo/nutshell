@@ -670,27 +670,27 @@ cursor, while `active_term` exists.
   row out, as before; that is the only case where output with no final
   newline can still be lost. At the take, the cursor row's text left of the
   cursor is compared with the recorded prompt **as raw text** (the prompt's
-  trailing space counts; trimming comes after) *(rules and order: review of
-  the fix wave, 2026-11-11, ruling R49)*: ending with the recorded prompt, the
-  part before it is added (equal: nothing); otherwise, when
-  `shell_prompt_line()` (`shell_prompt.h`) takes the text for a prompt (a
-  prompt that changed: a counter, `cd`, a clock), nothing is added, and the
-  result is **not** EMPTY on that ground alone; otherwise the text is added
-  whole. (A prompt recorded as empty, a start row that was blank, never
-  matches the first rule.) What is added has its trailing blanks trimmed and
-  follows the range text after one newline. EMPTY only when the final text
-  is empty and no prompt row was left out: when one was, the capture carries
-  `RUNCMD_CAP_PROMPT` instead and B8's note is the plain "ran" (neither "no
-  output on the screen", which the changed prompt does not prove, nor the
-  allocation-failure note, which an empty capture without EMPTY would
-  otherwise read as). The screen path is unchanged (it already includes the
+  trailing space counts; trimming comes after): ending with the recorded
+  prompt, the part before it is added (equal: nothing); otherwise the text is
+  added whole. *(C0, 2026-11-11, replacing the fix wave's ruling R49: a third
+  rule used to drop a row that `shell_prompt_line()` took for a prompt, and
+  marked the result `RUNCMD_CAP_PROMPT`. Both are gone, with the flag.)* **A
+  prompt that changed since the command started is included as the last line
+  of the output**, because dropping it lost output that had no trailing
+  newline (`cd /tmp && printf foo` under `u@h:~$ ` leaves `foou@h:/tmp$`; a
+  progress line `progress 50%` is kept) and hid a change of host (`ssh web1`
+  leaves `deploy@web1:~$`) or a REPL (`python3` leaves `Python 3.12.1` then
+  `>>>`) from the model. A status prompt (`[0] $` then `[1] $`) shows as
+  `[1] $`; the model reads it as the shell's answer. (A prompt recorded as
+  empty, a start row that was blank, never matches the first rule.) What is
+  added has its trailing blanks trimmed and follows the range text after one
+  newline. EMPTY whenever the final text is empty. The screen path is unchanged (it already includes the
   prompt row). A `RunCmdCapture` must be zero-initialised before its first
   `runcmd_capture_start` (`run_command.h`); `runcmd_plan` zeroes the ones it
   makes.
-- *(review of the fix wave, 2026-11-11)* **Limits of the cursor-row rule**,
-  known and accepted: output without a final newline that reads like a
-  prompt (its last non-blank character is one of `$ # % >`: `printf '50%'`)
-  is dropped as a prompt; a prompt wrapped over two rows leaves its first
+- *(review of the fix wave, 2026-11-11; C0 removed its first limit)*
+  **Limits of the cursor-row rule**, known and accepted: a prompt wrapped
+  over two rows leaves its first
   row's fragment in the output when the first row differs from the recorded
   one; a progress line that returns to column 0 and is not finished shows as
   the last line; and a take before the echo's CR (the command line still

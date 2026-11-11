@@ -2925,15 +2925,15 @@ int test_runcmd_capture_prompt_rules(void)
     cap_free(&d);
     term_free(t);
 
-    /* a prompt that changed (cd) is a prompt, not output (shell_prompt_line):
-     * nothing is added, and the result is not EMPTY on that ground alone */
+    /* a prompt that changed (cd) is included as the last line (C0: dropping it
+     * lost output that had no newline and hid a change of host from the model) */
     Terminal *u = term_init(10, 60, 100);
     RunCmdCapture e;
     memset(&e, 0, sizeof e);
     rc_feed(u, "user@h:~$ ");
     cap_run(u, &e, "cd /tmp", "cd /tmp\r\nuser@h:/tmp$ ");
-    ASSERT_NULL(e.head);
-    ASSERT_EQ((int)e.flags, 32);
+    ASSERT_HEAD(e, "user@h:/tmp$");
+    ASSERT_EQ((int)e.flags, 0);
     cap_free(&e);
     term_free(u);
 
@@ -2957,42 +2957,41 @@ int test_runcmd_capture_prompt_rules(void)
     TEST_END();
 }
 
-/* Rule order for the cursor row's text (ruling R49): ends with the recorded
- * prompt -> strip it, keep the rest; equals it -> nothing; else when
- * shell_prompt_line() calls it a prompt -> nothing, and no EMPTY on that
- * ground alone; else the whole text. Expected values are literals. */
+/* The cursor row's text (C0, replacing R49's prompt fallback): ends with the
+ * recorded prompt -> strip it, keep the rest; equals it -> nothing; else the
+ * whole text, last. A prompt that changed is therefore output, never dropped:
+ * a change of host or a REPL shows, and so does output with no final newline.
+ * Expected values are literals. */
 int test_runcmd_capture_changing_prompt(void)
 {
     TEST_BEGIN();
-    /* `false` under a prompt that counts: no stray prompt line, no EMPTY.
-     * The flag (32) says "the cursor row was a changed prompt and the text is
-     * empty", so B8's note stays the plain "ran". */
+    /* `false` under a prompt that counts: the new prompt is the last line */
     Terminal *t = term_init(10, 40, 100);
     RunCmdCapture c;
     memset(&c, 0, sizeof c);
     rc_feed(t, "[0] $ ");
     cap_run(t, &c, "false", "false\r\n[1] $ ");
-    ASSERT_NULL(c.head);
+    ASSERT_HEAD(c, "[1] $");
     ASSERT_NULL(c.tail);
     ASSERT_EQ((int)c.omitted_bytes, 0);
-    ASSERT_EQ((int)c.flags, 32);                 /* not 8 (EMPTY), not 0 (a drop) */
+    ASSERT_EQ((int)c.flags, 0);
     ASSERT_EQ(c.captured, 1);
 
     /* the next command starts from the prompt as it now is */
     RunCmdCapture d;
     memset(&d, 0, sizeof d);
     cap_run(t, &d, "false", "false\r\n[2] $ ");
-    ASSERT_NULL(d.head);
-    ASSERT_EQ((int)d.flags, 32);
+    ASSERT_HEAD(d, "[2] $");
+    ASSERT_EQ((int)d.flags, 0);
 
-    /* with output, the changed prompt adds nothing to it and no flag shows */
+    /* with output, the changed prompt follows it as the last line */
     RunCmdCapture e;
     memset(&e, 0, sizeof e);
     cap_run(t, &e, "ls", "ls\r\nout1\r\nout2\r\n[3] $ ");
     ASSERT_EQ((int)e.flags, 0);
-    ASSERT_HEAD(e, "out1\nout2");
+    ASSERT_HEAD(e, "out1\nout2\n[3] $");
 
-    /* an unchanged prompt is still EMPTY, never 32 */
+    /* an unchanged prompt is still EMPTY */
     RunCmdCapture f;
     memset(&f, 0, sizeof f);
     cap_run(t, &f, "true", "true\r\n[3] $ ");
@@ -3022,47 +3021,95 @@ int test_runcmd_capture_changing_prompt(void)
     ASSERT_HEAD(h, "foo");
     cap_free(&h);
 
-    /* output without a newline that happens to read like a prompt is dropped
-     * (a known limit, spec section 10): printf '#1 >' under a changed prompt */
+    /* output without a newline that reads like a prompt is kept */
     RunCmdCapture k;
     memset(&k, 0, sizeof k);
     cap_run(u, &k, "x", "x\r\n#1 > ");
-    ASSERT_NULL(k.head);
-    ASSERT_EQ((int)k.flags, 32);
+    ASSERT_HEAD(k, "#1 >");
+    ASSERT_EQ((int)k.flags, 0);
     cap_free(&k);
 
-    /* the same limit for a progress line that ends in '%' (a zsh prompt
-     * character): "progress 50%" on the cursor row is dropped, flags 32 */
+    /* and a progress line ending in '%' (a zsh prompt character) */
     RunCmdCapture m;
     memset(&m, 0, sizeof m);
     cap_run(u, &m, "run", "run\r\nprogress 50%");
-    ASSERT_NULL(m.head);
-    ASSERT_EQ((int)m.flags, 32);
+    ASSERT_HEAD(m, "progress 50%");
+    ASSERT_EQ((int)m.flags, 0);
     cap_free(&m);
     term_free(u);
     TEST_END();
 }
 
-/* The note B8 builds for that capture: the plain "ran", neither "no output on
- * the screen" nor the allocation-failure note an empty capture without EMPTY
- * would read as. */
-int test_runcmd_results_prompt_only_note(void)
+/* The cases that made the old fallback lose output (C0): every capture's final
+ * text, literal. */
+int test_runcmd_capture_no_prompt_fallback(void)
 {
     TEST_BEGIN();
-    RunCmdReply *r = plan_runs(2);
-    ASSERT_NOT_NULL(r);
-    const ApprovalStatus st[2] = { APPROVE_COMPLETED, APPROVE_COMPLETED };
-    ApprovalQueue q;
-    queue_of(&q, r, st, 2);
-    cap_excerpt(&r->calls[0], NULL, NULL, 0, 32);                       /* a changed prompt only */
-    cap_excerpt(&r->calls[1], NULL, NULL, 0, 0);                        /* the read failed */
-    AiToolResult res[2];
-    ASSERT_EQ(runcmd_build_results(r, &q, RUNCMD_CAUSE_SETTLED, res), 2);
-    ASSERT_STR_EQ(res[0].tool_note, "ran");
-    ASSERT_NULL(res[0].content);
-    ASSERT_STR_EQ(res[1].tool_note, "ran; output dropped: Nutshell ran out of memory");
-    free_results(res, 2);
-    runcmd_reply_free(r);
+    Terminal *t = term_init(10, 60, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    /* ssh to another host, no banner: the remote prompt is the answer */
+    rc_feed(t, "u@local:~$ ");
+    cap_run(t, &c, "ssh web1", "ssh web1\r\ndeploy@web1:~$ ");
+    ASSERT_HEAD(c, "deploy@web1:~$");
+    ASSERT_EQ((int)c.flags, 0);
+    cap_free(&c);
+    term_free(t);
+
+    /* a REPL: its banner, then its prompt */
+    Terminal *u = term_init(10, 60, 100);
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    rc_feed(u, "$ ");
+    cap_run(u, &d, "python3", "python3\r\nPython 3.12.1\r\n>>> ");
+    ASSERT_HEAD(d, "Python 3.12.1\n>>>");
+    ASSERT_EQ((int)d.flags, 0);
+    cap_free(&d);
+    term_free(u);
+
+    /* output with no final newline, and the directory changed */
+    Terminal *v = term_init(10, 60, 100);
+    RunCmdCapture e;
+    memset(&e, 0, sizeof e);
+    rc_feed(v, "u@h:~$ ");
+    cap_run(v, &e, "cd /tmp && printf foo", "cd /tmp && printf foo\r\nfoou@h:/tmp$ ");
+    ASSERT_HEAD(e, "foou@h:/tmp$");
+    ASSERT_EQ((int)e.flags, 0);
+    cap_free(&e);
+    term_free(v);
+
+    /* the same output, prompt unchanged: the prompt is stripped */
+    Terminal *w = term_init(10, 60, 100);
+    RunCmdCapture f;
+    memset(&f, 0, sizeof f);
+    rc_feed(w, "u@h:~$ ");
+    cap_run(w, &f, "printf foo", "printf foo\r\nfoou@h:~$ ");
+    ASSERT_HEAD(f, "foo");
+    ASSERT_EQ((int)f.flags, 0);
+    cap_free(&f);
+    term_free(w);
+
+    /* `false` under a prompt that shows the status */
+    Terminal *x = term_init(10, 60, 100);
+    RunCmdCapture g;
+    memset(&g, 0, sizeof g);
+    rc_feed(x, "[0] $ ");
+    cap_run(x, &g, "false", "false\r\n[1] $ ");
+    ASSERT_HEAD(g, "[1] $");
+    ASSERT_EQ((int)g.flags, 0);
+    cap_free(&g);
+    term_free(x);
+
+    /* a progress line left on the cursor row */
+    Terminal *y = term_init(10, 60, 100);
+    RunCmdCapture h;
+    memset(&h, 0, sizeof h);
+    rc_feed(y, "$ ");
+    cap_run(y, &h, "run", "run\r\nprogress 50%");
+    ASSERT_HEAD(h, "progress 50%");
+    ASSERT_EQ((int)h.flags, 0);
+    cap_free(&h);
+    term_free(y);
     TEST_END();
 }
 

@@ -86,10 +86,7 @@ typedef enum {
                                        * home, or an empty or inverted range: clear; ls, cls) and
                                        * the screen has content. Never set for the alternate screen,
                                        * a reflow or a region scroll. */
-#define RUNCMD_CAP_PROMPT       32u   /* primary range: the final text is empty, and the cursor row was
-                                       * left out because it is a prompt that changed (a counter, a
-                                       * cd; ruling R49). Instead of EMPTY, which would claim "no
-                                       * output on the screen": B8's note for it is the plain "ran". */
+                                      /* (32 was RUNCMD_CAP_PROMPT, withdrawn in C0: no flag for a changed prompt) */
 
 #define RUNCMD_PROMPT_MAX 256   /* buffer size: a prompt is recorded up to 255 bytes */
 
@@ -97,8 +94,6 @@ typedef enum {
  *   head != NULL                      an excerpt (tail != NULL: cut in the middle,
  *                                     omitted_bytes between head and tail);
  *   head == NULL, EMPTY               nothing to show: "no output on the screen";
- *   head == NULL, PROMPT              the output was empty but for a changed prompt: the
- *                                     plain "ran", neither of the other two notes;
  *   head == NULL, neither flag, captured
  *                                     the output could not be read or kept (an
  *                                     allocation failed): say it was dropped, never
@@ -204,21 +199,19 @@ void runcmd_capture_start(RunCmdCapture *c, const Terminal *t);
  *    start has gone from the ring; then the cursor row's own text, which the
  *    range excludes: the text left of the cursor, compared with the recorded
  *    prompt as raw text (no trimming, so the prompt's trailing space counts):
- *    in this order (ruling R49):
+ *    in this order (C0, replacing R49):
  *      ending with the prompt        the part before it is added (equal: nothing);
- *      else a prompt by              nothing (a prompt that changed: a counter, a
- *      shell_prompt_line()           cd, a clock); with an empty final text the
- *                                    result is PROMPT, not EMPTY;
- *      anything else                 all of it is added;
+ *      anything else                 all of it is added, a prompt that changed
+ *                                    since the start (a counter, a cd, another
+ *                                    host, a REPL's) included, as the last line;
  *    trailing blanks of what is added are trimmed, and it follows the range
  *    text after a '\n' (alone when the range is empty). With prompt_long the
- *    cursor row is left out. Known limits: output without a final newline that
- *    reads like a prompt (ends in $ # % >) is dropped; a prompt wrapped over
- *    two rows leaves its first row's fragment; a progress line that returns to
- *    column 0 shows as the last line; a take before the echo's CR (the command
- *    line still being written) adds that line.
- * EMPTY whenever the final text is empty, except PROMPT above; a failed read
- * or copy sets neither (see RunCmdCapture). Text never holds a control byte
+ *    cursor row is left out. Known limits: a prompt wrapped over two rows
+ *    leaves its first row's fragment; a progress line that returns to column
+ *    0 shows as the last line; a take before the echo's CR (the command line
+ *    still being written) adds that line.
+ * EMPTY whenever the final text is empty; a failed read or copy sets neither
+ * (see RunCmdCapture). Text never holds a control byte
  * (C0 but the row separator, DEL, C1): term_extract writes those cells as
  * spaces. Returns 1. */
 int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command,
@@ -315,8 +308,7 @@ RunCmdPathPlan runcmd_path_plan(RunCmdPath p);
  * SET_FULL and SESSION_GONE every SLOT call gets that cause's note. OVER_CAP,
  * INVALID and OTHER_TOOL calls keep their own rows under every cause. A
  * capture whose excerpt was lost to an allocation failure (captured, no
- * head or tail, no EMPTY, no PROMPT) says "output dropped: Nutshell ran out of
- * memory"; a PROMPT capture (the same shape) says the plain "ran".
+ * head or tail, no EMPTY) says "output dropped: Nutshell ran out of memory".
  * A COMPLETED or EXECUTING call whose capture never ran (captured 0) ends its
  * note with "output not captured" ("ran; output not captured"), never a bare
  * "ran". The Stop reason reads "stopped by the user; do not run it again

@@ -3050,7 +3050,7 @@ int test_runcmd_capture_home_erase_below(void);
 int test_runcmd_capture_transient_prompt_not_clear(void);
 int test_runcmd_capture_prompt_decorations(void);
 int test_runcmd_capture_changing_prompt(void);
-int test_runcmd_results_prompt_only_note(void);
+int test_runcmd_capture_no_prompt_fallback(void);
 int test_runcmd_capture_cursor_up_inside_range(void);
 int test_runcmd_capture_no_final_newline(void);
 int test_runcmd_capture_partial_row_at_cancel(void);
@@ -7192,7 +7192,7 @@ int main(void) {
     failed += test_runcmd_capture_transient_prompt_not_clear();
     failed += test_runcmd_capture_prompt_decorations();
     failed += test_runcmd_capture_changing_prompt();
-    failed += test_runcmd_results_prompt_only_note();
+    failed += test_runcmd_capture_no_prompt_fallback();
     failed += test_runcmd_capture_cursor_up_inside_range();
     failed += test_runcmd_capture_no_final_newline();
     failed += test_runcmd_capture_partial_row_at_cancel();

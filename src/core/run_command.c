@@ -3,7 +3,6 @@
 #include "json_parser.h"
 #include "json_validate.h"
 #include "paste_filter.h"
-#include "shell_prompt.h"
 #include "term_extract.h"
 #include "tool_decision.h"
 
@@ -379,18 +378,17 @@ void runcmd_capture_start(RunCmdCapture *c, const Terminal *t)
 }
 
 /* The part of the cursor's row the command wrote: its text left of the
- * cursor, by these rules in order (ruling R49): ending with the recorded
- * prompt, the part before it; equal to it, nothing; otherwise, when
- * shell_prompt_line() takes the text for a prompt (a prompt that changed: a
- * counter, a cd, a clock), nothing, and *prompt_row_out says so; otherwise all
- * of it. Trailing blanks trimmed. Heap text with its length in *len_out ("" length
- * 0 when there is none); NULL only when the allocation fails. A prompt that was
- * too long to record (prompt_long) leaves the row out. */
-static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *len_out,
-                             int *prompt_row_out)
+ * cursor, by these rules (C0, replacing ruling R49's prompt fallback): ending
+ * with the recorded prompt, the part before it; equal to it, nothing;
+ * otherwise all of it. A prompt that changed since the command started (a
+ * counter, a cd, another host, a REPL's) is therefore the output's last line:
+ * dropping it lost output that had no final newline and hid the change from
+ * the model. Trailing blanks trimmed. Heap text with its length in *len_out
+ * ("" length 0 when there is none); NULL only when the allocation fails. A
+ * prompt that was too long to record (prompt_long) leaves the row out. */
+static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *len_out)
 {
     *len_out = 0;
-    *prompt_row_out = 0;
     size_t full = c->prompt_long ? 0 : term_extract_cursor_prefix(t, NULL, 0);
     char *row = (char *)g_alloc(full + 1);
     if (!row) return NULL;
@@ -401,9 +399,6 @@ static char *cursor_row_rest(const RunCmdCapture *c, const Terminal *t, size_t *
     if (c->prompt_len > 0 && n >= c->prompt_len &&
         memcmp(row + n - c->prompt_len, c->prompt, c->prompt_len) == 0) {
         n -= c->prompt_len;
-    } else if (shell_prompt_line(row)) {
-        n = 0;
-        *prompt_row_out = 1;
     }
     while (n > 0 && row[n - 1] == ' ') n--;
     row[n] = '\0';
@@ -438,7 +433,7 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
      * for a blank screen too, so a one-row probe (it fills a tiny buffer from
      * the same rows, writing at least a byte exactly when any row has
      * content) tells the two apart. */
-    int oom = 0, prompt_row = 0;
+    int oom = 0;
     if (screen) {
         flags |= RUNCMD_CAP_SCREEN;
         text = term_extract_last_n_dup(t, t->rows, &len);
@@ -458,7 +453,7 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
          * it (output with no final newline, a progress line at a cancel). */
         if (text) {
             size_t rest_len = 0;
-            char *rest = cursor_row_rest(c, t, &rest_len, &prompt_row);
+            char *rest = cursor_row_rest(c, t, &rest_len);
             if (!rest) {
                 oom = 1;
             } else if (rest_len > 0) {
@@ -489,10 +484,8 @@ int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command
         c->flags = flags;
         return 1;
     }
-    /* Nothing left: "no output on the screen", except that a cursor row left
-     * out as a changed prompt is not evidence of that (ruling R49): that is
-     * the PROMPT flag instead, and the note stays "ran". */
-    if (!text || len == 0) flags |= prompt_row ? RUNCMD_CAP_PROMPT : RUNCMD_CAP_EMPTY;
+    /* Nothing left: "no output on the screen". */
+    if (!text || len == 0) flags |= RUNCMD_CAP_EMPTY;
     c->flags = flags;
     runcmd_cut(text, len, cap, c);
     free(text);
@@ -621,9 +614,8 @@ static void capture_notes(NoteBuf *nb, const RunCmdCapture *cap)
     if (cap->flags & RUNCMD_CAP_SCREEN)       note_part(nb, NOTE_SCREEN);
     if (cap->flags & RUNCMD_CAP_SCROLLED_OUT) note_part(nb, NOTE_SCROLLED);
     if (!has_excerpt) {
-        if (cap->flags & RUNCMD_CAP_EMPTY)       note_part(nb, NOTE_NO_OUTPUT);
-        else if (cap->flags & RUNCMD_CAP_PROMPT) { /* only a changed prompt: the plain "ran" */ }
-        else                                     note_part(nb, NOTE_OOM_DROPPED);   /* ruling R31 */
+        if (cap->flags & RUNCMD_CAP_EMPTY) note_part(nb, NOTE_NO_OUTPUT);
+        else                               note_part(nb, NOTE_OOM_DROPPED);   /* ruling R31 */
     } else if (cap->omitted_bytes > 0) {
         note_part_n(nb, NOTE_CUT_PRE, cap->omitted_bytes, NOTE_CUT_POST);
     }
