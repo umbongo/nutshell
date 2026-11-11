@@ -2822,7 +2822,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * approval for the state's own batch, approval2 for "batches"'s
      * second one -- instead of touching d->approval_q. ai_chat_rebuild_display()
      * below replays every batch still in the set exactly the way a live
-     * session switch does (ai_chat_append_batch_command_items()), so this reuses
+     * session switch does (chat_msg_append_batch_items()), so this reuses
      * the same code path a real reply's cards come from. */
     int any_executing = 0;
     if (d->active_state) {

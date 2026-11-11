@@ -174,7 +174,7 @@ int test_ui_demo_build_executing_counts_and_statuses(void)
 }
 
 /* The "executing" state replayed the way ai_chat.c's
- * append_batch_command_items() rebuilds a card -- one CHAT_ITEM_COMMAND per
+ * chat_msg_append_batch_items() rebuilds a card -- one CHAT_ITEM_COMMAND per
  * queue entry, then chat_msg_batch_sync_run() from that same queue -- must
  * carry the live panel's run states: the COMPLETED command reads "ran", the
  * EXECUTING one "running". Before the 2026-09-23 dispatch-states change a

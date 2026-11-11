@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "cmd_classify.h"
 #include "chat_approval.h"
+#include "cmd_batch.h"
 #include "text_runs.h"
 
 /* Execution state of a command card, synced from the batch's ApprovalQueue
@@ -264,7 +265,7 @@ int chat_card_header_text(const char *noun, int n, int held, int quoted, char *b
  * with an entry), or 0 if `list` or `q` is NULL. Called from every point
  * the queue changes during dispatch (chat_approval_set_executing/
  * _set_completed, batch end, ai_chat_dispatch_cancel before cmd_batch_remove with
- * batch_ending = 1) and from ai_chat_append_batch_command_items() when a display is
+ * batch_ending = 1) and from chat_msg_append_batch_items() when a display is
  * rebuilt from the queue, so a rebuilt view shows the same labels as the
  * live panel. */
 int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
@@ -296,6 +297,28 @@ int chat_msg_batch_counts(const ChatMsgList *list, int batch_id,
  * counts and when it does not fit in cap bytes (the NUL included), buf[0] is
  * set to NUL (when buf is non-NULL and cap > 0) and 0 is returned. */
 int chat_batch_summary_text(const ChatBatchCounts *c, char *buf, size_t cap);
+
+/* Append one CHAT_ITEM_COMMAND per entry in a batch's queue, in order,
+ * tagged with the batch's id (chat_msg_set_batch) -- the inverse of what
+ * WM_AI_RESPONSE builds live, used to rebuild a pending card wherever the
+ * command items themselves are not carried across a rebuild: a session
+ * switch (the rebuild, chat_rebuild_replay()) and --ui-demo's "batches" etc.
+ * states (which build real CmdBatch entries from the canned ApprovalQueue and
+ * let this same replay draw them).
+ * Status maps onto the fields the list view reads: approved follows the click
+ * (APPROVED/EXECUTING/COMPLETED 1, DENIED 0, PENDING/BLOCKED -1, which
+ * chat_msg_set_command already defaults to). Whether the rows are settled
+ * (inline, off the card) is the batch's, not each row's, and not derived from
+ * the queue: the live view settles a batch's rows together
+ * (ai_chat_batch_settle_rows(), which sets CmdBatch.settled), and a ceiling
+ * change moves entries between PENDING and BLOCKED without settling or
+ * unsettling a row, so the queue alone cannot say which the live view shows.
+ * A batch not yet settled comes back as one whole card, its decided rows on
+ * it, and its summary line (needs a settled row) as absent as it was live.
+ * Run state is then synced from the queue (chat_msg_batch_sync_run with
+ * batch_ending 0: a rebuild only replays batches still in the set). NULL list
+ * or batch does nothing. */
+void chat_msg_append_batch_items(ChatMsgList *list, const CmdBatch *batch);
 
 /* If the NUL-terminated string in buf is longer than max-1 bytes, truncate
  * it at the last UTF-8 character boundary that fits in max-1 bytes and

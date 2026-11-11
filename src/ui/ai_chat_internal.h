@@ -655,7 +655,6 @@ int ai_chat_unscale(int px, int dpi);
 int ai_chat_input_h(const AiChatData *d);
 void ai_chat_update_panel_state(AiChatData *d);
 void ai_chat_thinking_history_clear(AiChatData *d);
-void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch);
 
 /* Settle `batch`'s rows in the displayed list (chat_msg_batch_settle) and
  * remember it on the batch (CmdBatch.settled), which a rebuild reads. The one

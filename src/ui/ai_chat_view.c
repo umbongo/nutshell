@@ -113,67 +113,6 @@ void ai_chat_thinking_history_clear(AiChatData *d)
     d->stream_thinking_len = 0;
 }
 
-/* Append one CHAT_ITEM_COMMAND per entry in a batch's queue, in order,
- * tagged with the batch's id (chat_msg_set_batch) -- the inverse of what
- * WM_AI_RESPONSE builds live, used to rebuild a pending card wherever the
- * command items themselves aren't carried across a rebuild: a session
- * switch (ai_chat_rebuild_display, below) and --ui-demo's "batches"/etc.
- * states (ai_chat_apply_demo_extras, which builds real CmdBatch entries
- * from the canned ApprovalQueue and lets this same replay draw them).
- * Status maps onto the fields the list view reads: approved follows the
- * click (APPROVED/EXECUTING/COMPLETED 1, DENIED 0, PENDING/BLOCKED -1, which
- * chat_msg_set_command already defaults to). Whether the rows are settled
- * (inline, off the card) is the batch's, not each row's, and not derived from
- * the queue: the live view settles a batch's rows together
- * (ai_chat_batch_settle_rows(), which sets CmdBatch.settled), and a ceiling
- * change moves entries between PENDING and BLOCKED without settling or
- * unsettling a row, so the queue alone cannot say which the live view shows.
- * A batch not yet settled comes back as one whole card, and its summary line
- * (needs a settled row) as absent as it was live. */
-void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
-{
-    if (!list || !batch) return;
-    const int settled = batch->settled;
-    for (int i = 0; i < batch->q.count; i++) {
-        const ApprovalEntry *e = &batch->q.entries[i];
-        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
-        if (!item) continue;
-        chat_msg_set_command(item, e->command, e->safety,
-                             e->status == APPROVE_BLOCKED);
-        chat_msg_set_quoted(item, e->quoted);
-        chat_msg_set_reason(item, e->reason);
-        chat_msg_set_batch(item, batch->id);
-        chat_msg_set_note(item, e->note);
-        /* A tool call's row (outcome PENDING until its slot is answered). */
-        if (e->tool) chat_msg_set_tool(item, 1);
-        /* Approved/denied as the click left them (APPROVED, EXECUTING and
-         * COMPLETED read approved, DENIED denied), whether or not the card
-         * is still up. */
-        switch (e->status) {
-        case APPROVE_APPROVED:
-        case APPROVE_EXECUTING:
-        case APPROVE_COMPLETED:
-            item->u.cmd.approved = 1;
-            break;
-        case APPROVE_DENIED:
-            item->u.cmd.approved = 0;
-            break;
-        case APPROVE_PENDING:
-        case APPROVE_BLOCKED:
-        default:
-            break;
-        }
-        item->u.cmd.settled = settled;
-    }
-
-    /* Run state comes from the same queue, so a rebuilt display (session
-     * switch, --ui-demo=executing) shows "running"/"ran" exactly where the
-     * live panel does instead of falling back to "queued". The batch is
-     * alive here by definition -- a rebuild only ever replays batches still
-     * in the set -- hence batch_ending = 0. */
-    chat_msg_batch_sync_run(list, batch->id, &batch->q, 0);
-}
-
 /* Append a recorded batch (cmd_run_log.h) as settled CHAT_ITEM_COMMAND rows,
  * tagged with `batch_id` (negative: live batch ids start at 1, so no
  * chat_msg_batch_sync_run() or settle ever touches a replayed row). The
@@ -316,7 +255,7 @@ void ai_chat_rebuild_display(AiChatData *d)
      * 2026-09-09-pending-command-batches.md, "Session switch"). */
     if (d->active_state) {
         for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            ai_chat_append_batch_command_items(&d->msg_list,
+            chat_msg_append_batch_items(&d->msg_list,
                                                d->active_state->batches.b[bi]);
     }
 

@@ -511,3 +511,47 @@ size_t utf8_cut_at(char *buf, size_t max)
     buf[cut] = '\0';
     return cut;
 }
+
+void chat_msg_append_batch_items(ChatMsgList *list, const CmdBatch *batch)
+{
+    if (!list || !batch) return;
+    const int settled = batch->settled;
+    for (int i = 0; i < batch->q.count; i++) {
+        const ApprovalEntry *e = &batch->q.entries[i];
+        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
+        if (!item) continue;
+        chat_msg_set_command(item, e->command, e->safety,
+                             e->status == APPROVE_BLOCKED);
+        chat_msg_set_quoted(item, e->quoted);
+        chat_msg_set_reason(item, e->reason);
+        chat_msg_set_batch(item, batch->id);
+        chat_msg_set_note(item, e->note);
+        /* A tool call's row (outcome PENDING until its slot is answered). */
+        if (e->tool) chat_msg_set_tool(item, 1);
+        /* Approved/denied as the click left them (APPROVED, EXECUTING and
+         * COMPLETED read approved, DENIED denied), whether or not the card
+         * is still up. */
+        switch (e->status) {
+        case APPROVE_APPROVED:
+        case APPROVE_EXECUTING:
+        case APPROVE_COMPLETED:
+            item->u.cmd.approved = 1;
+            break;
+        case APPROVE_DENIED:
+            item->u.cmd.approved = 0;
+            break;
+        case APPROVE_PENDING:
+        case APPROVE_BLOCKED:
+        default:
+            break;
+        }
+        item->u.cmd.settled = settled;
+    }
+
+    /* Run state comes from the same queue, so a rebuilt display (session
+     * switch, --ui-demo=executing) shows "running"/"ran" exactly where the
+     * live panel does instead of falling back to "queued". The batch is
+     * alive here by definition -- a rebuild only ever replays batches still
+     * in the set -- hence batch_ending = 0. */
+    chat_msg_batch_sync_run(list, batch->id, &batch->q, 0);
+}

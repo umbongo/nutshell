@@ -2,6 +2,7 @@
 #include "test_framework.h"
 #include "chat_msg.h"
 #include "tool_decision.h"
+#include "cmd_batch.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -1445,5 +1446,150 @@ int test_chat_msg_batch_counts_rows(void) {
             ran++;
     ASSERT_EQ(ran, c3.ran);
     chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* ---- chat_msg_append_batch_items: the rebuild's replay of a live batch
+ * (moved from src/ui/ai_chat_view.c; Part A's review items 2, R60) ---- */
+
+/* A batch of `n` commands ("c0", "c1", ...) in `set`, every row PENDING. */
+static CmdBatch *replay_batch(CmdBatchSet *set, int n)
+{
+    CmdBatch *b = cmd_batch_add(set, NULL, NULL);
+    if (!b) return NULL;
+    for (int i = 0; i < n; i++) {
+        char cmd[16];
+        snprintf(cmd, sizeof(cmd), "c%d", i);
+        if (chat_approval_add(&b->q, cmd, CMD_PLATFORM_LINUX) < 0) return NULL;
+        b->q.entries[i].status = APPROVE_PENDING;
+    }
+    return b;
+}
+
+int test_chat_batch_items_settled_survives_ceiling_raise(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = replay_batch(&set, 3);
+    ASSERT_NOT_NULL(b);
+    /* Settled with one denied, one still held by the ceiling, one ran. */
+    b->q.entries[0].status = APPROVE_DENIED;
+    b->q.entries[1].status = APPROVE_BLOCKED;
+    b->q.entries[2].status = APPROVE_COMPLETED;
+    b->settled = 1;
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append_batch_items(&list, b);
+    ASSERT_EQ(list.count, 3);
+    for (ChatMsgItem *it = list.head; it; it = it->next) {
+        ASSERT_EQ(it->u.cmd.settled, 1);
+        ASSERT_EQ(it->u.cmd.batch, b->id);
+    }
+    ASSERT_EQ(list.head->u.cmd.approved, 0);
+    ASSERT_EQ(list.head->next->u.cmd.blocked, 1);
+    chat_msg_list_clear(&list);
+
+    /* The ceiling is raised: the held row turns PENDING. The batch is still
+     * settled, so the rebuild still draws every row inline. */
+    b->q.entries[1].status = APPROVE_PENDING;
+    chat_msg_append_batch_items(&list, b);
+    ASSERT_EQ(list.count, 3);
+    for (ChatMsgItem *it = list.head; it; it = it->next)
+        ASSERT_EQ(it->u.cmd.settled, 1);
+    ASSERT_EQ(list.head->next->u.cmd.blocked, 0);
+    ASSERT_EQ(list.head->next->u.cmd.approved, -1);
+    chat_msg_list_clear(&list);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_chat_batch_items_card_survives_ceiling_drop(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = replay_batch(&set, 2);
+    ASSERT_NOT_NULL(b);
+    /* The ceiling dropped below both rows: every row BLOCKED, card still up
+     * (never settled). Not mistaken for a decided batch. */
+    b->q.entries[0].status = APPROVE_BLOCKED;
+    b->q.entries[1].status = APPROVE_BLOCKED;
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append_batch_items(&list, b);
+    ASSERT_EQ(list.count, 2);
+    for (ChatMsgItem *it = list.head; it; it = it->next) {
+        ASSERT_EQ(it->u.cmd.settled, 0);
+        ASSERT_EQ(it->u.cmd.blocked, 1);
+        ASSERT_EQ(it->u.cmd.approved, -1);
+    }
+    ChatBatchCounts c;
+    ASSERT_EQ(chat_msg_batch_counts(&list, b->id, &c), 2);
+    ASSERT_EQ(c.held, 2);
+    ASSERT_EQ(c.decided, 0);
+    char line[64];
+    ASSERT_EQ(chat_batch_summary_text(&c, line, sizeof(line)), 0);
+    chat_msg_list_clear(&list);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_chat_batch_items_half_decided_card(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = replay_batch(&set, 3);
+    ASSERT_NOT_NULL(b);
+    /* One row approved, one denied, one still asking: the card is up. */
+    b->q.entries[0].status = APPROVE_APPROVED;
+    b->q.entries[1].status = APPROVE_DENIED;
+    b->q.entries[2].status = APPROVE_PENDING;
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append_batch_items(&list, b);
+    ASSERT_EQ(list.count, 3);
+    ChatMsgItem *r0 = list.head, *r1 = r0->next, *r2 = r1->next;
+    ASSERT_EQ(r0->u.cmd.approved, 1);
+    ASSERT_EQ(r1->u.cmd.approved, 0);
+    ASSERT_EQ(r2->u.cmd.approved, -1);
+    ASSERT_EQ(r0->u.cmd.settled, 0);       /* decided rows stay on the card */
+    ASSERT_EQ(r1->u.cmd.settled, 0);
+    ASSERT_EQ(r2->u.cmd.settled, 0);
+    ASSERT_STR_EQ(r0->u.cmd.command, "c0");
+    ASSERT_STR_EQ(r2->u.cmd.command, "c2");
+    ChatBatchCounts c;
+    ASSERT_EQ(chat_msg_batch_counts(&list, b->id, &c), 3);
+    ASSERT_EQ(c.decided, 0);               /* no summary line yet */
+    chat_msg_list_clear(&list);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_chat_batch_items_run_state_and_note(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = replay_batch(&set, 2);
+    ASSERT_NOT_NULL(b);
+    b->q.entries[0].status = APPROVE_COMPLETED;
+    b->q.entries[1].status = APPROVE_EXECUTING;
+    chat_approval_set_note(&b->q, 0, "list the files");
+    b->settled = 1;
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append_batch_items(&list, b);
+    ASSERT_EQ(list.count, 2);
+    ASSERT_EQ(list.head->u.cmd.run, CHAT_RUN_DONE);
+    ASSERT_EQ(list.head->next->u.cmd.run, CHAT_RUN_RUNNING);
+    ASSERT_STR_EQ(list.head->u.cmd.note, "list the files");
+    /* NULL arguments change nothing. */
+    chat_msg_append_batch_items(NULL, b);
+    chat_msg_append_batch_items(&list, NULL);
+    ASSERT_EQ(list.count, 2);
+    chat_msg_list_clear(&list);
+    cmd_batch_set_free(&set);
     TEST_END();
 }

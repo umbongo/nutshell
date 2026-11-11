@@ -2581,6 +2581,10 @@ int test_chat_batch_summary_no_line(void);
 int test_chat_batch_summary_head(void);
 int test_chat_batch_summary_cap(void);
 int test_chat_msg_batch_counts_rows(void);
+int test_chat_batch_items_settled_survives_ceiling_raise(void);
+int test_chat_batch_items_card_survives_ceiling_drop(void);
+int test_chat_batch_items_half_decided_card(void);
+int test_chat_batch_items_run_state_and_note(void);
 
 /* test_ai_stream.c */
 int test_ai_conv_take_moves_overflow_and_clears_source(void);
@@ -6819,6 +6823,10 @@ int main(void) {
     failed += test_chat_batch_summary_head();
     failed += test_chat_batch_summary_cap();
     failed += test_chat_msg_batch_counts_rows();
+    failed += test_chat_batch_items_settled_survives_ceiling_raise();
+    failed += test_chat_batch_items_card_survives_ceiling_drop();
+    failed += test_chat_batch_items_half_decided_card();
+    failed += test_chat_batch_items_run_state_and_note();
 
     printf("\n--- Pending command batches: cmd_batch ---\n");
     failed += test_cmd_batch_set_init_empty();

@@ -561,7 +561,7 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
     }
 
     if (displayed) {
-        ai_chat_append_batch_command_items(&d->msg_list, b);
+        chat_msg_append_batch_items(&d->msg_list, b);
         chat_activity_set_phase(&d->activity, ACTIVITY_WAITING,
                                 (float)GetTickCount() / 1000.0f);
         if (d->hChatList) chat_listview_reset_cmd_expand(d->hChatList);
