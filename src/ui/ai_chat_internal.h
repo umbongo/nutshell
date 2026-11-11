@@ -532,6 +532,20 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch);
 /* The conversation `owner` reads and writes: the panel's working copy for
  * the displayed session, the session's own otherwise. */
 AiConversation *ai_chat_owner_conv(AiChatData *d, AiSessionState *owner);
+/* The one way a Nutshell-written USER turn (a NOTE, the policy notes, the
+ * [EXEC] continue text) enters a conversation: ai_conv_add_user_note() on the
+ * owner's conversation and note queue, with `defer` = a stream owned by
+ * `owner` is still registered (its thread works on a copy of the
+ * conversation, so a turn stored now would be lost by the take; inside
+ * WM_AI_RESPONSE the stream is already finished and nothing defers).
+ * `keep_free` is 1 when the text launches a request (the continue text), 0
+ * otherwise. `owner` NULL means the panel's own conversation with no queue.
+ * Returns the door's result (0 stored, 1 queued, 2 conversation full, -1
+ * failed). On 2 a row is shown when `owner` is the displayed session: the
+ * conversation-full notice for a launching text, "a Nutshell note was not
+ * stored" otherwise; a background owner's list is not drawn. */
+int ai_chat_owner_add_note(AiChatData *d, AiSessionState *owner,
+                           const char *text, int keep_free);
 /* Record a command batch in `owner`'s run log (cmd_run_log.h), then remove it
  * from the owner's set and free it: the one way a command batch leaves the
  * set, so a rebuilt display can show what ran (spec 2026-11-05 run-command

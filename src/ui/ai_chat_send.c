@@ -611,10 +611,14 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
     if (!d || !d->active_state || d->active_state->busy) return;
     if (!msg_text || !msg_text[0]) return;
 
+    /* Through the door like every Nutshell USER turn, leaving the reply's
+     * slot (keep_free 1). Queued behind an open run_command turn (1): nothing
+     * launches, the text rides the relaunch. Full (2): the door's wrapper
+     * shows the notice and nothing launches. Failed (-1): nothing launches
+     * either, a request without its text would end on the assistant's turn. */
+    if (ai_chat_owner_add_note(d, d->active_state, msg_text, 1) != 0) return;
+
     ai_rounds_continue(d->active_state, unattended);
-
-    ai_conv_add(&d->conv, AI_ROLE_USER, msg_text);
-
 
     ai_chat_start_indicator(d, "continuing");
 

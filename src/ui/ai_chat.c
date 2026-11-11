@@ -3,6 +3,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "ai_conv_guard.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -524,6 +525,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     cmd_batch_set_free(&d->active_state->batches);
                     cmd_batch_set_init(&d->active_state->batches);
                     cmd_run_log_free(&d->active_state->run_log);
+                    memset(&d->active_state->notes, 0,
+                           sizeof(d->active_state->notes));   /* queued notes belong to the old chat */
                 }
                 d->indicator_pos = -1;
                 d->pending_request[0] = '\0';
@@ -1168,9 +1171,20 @@ next_coalesce:;
          * thread wrote is lost. When the tool loop stopped at its limit or
          * on a failed rebuild it ends on the tool results instead -- the
          * same as before this conversation was the thread's own. */
-        if (src != d->active_state && wParam == 2) {
-            ai_conv_take(&src->conv, &resp_stream->conv);
-            src->valid = 1;
+        /* A run_command reply (calls handed over: spec decision 16) is taken
+         * in both branches: the stored tool turn is the reply, and the
+         * displayed session's working copy takes it too, since the thread's
+         * conversation is the only one that holds it. Every other reply of
+         * the displayed session is stored below, as it always was. */
+        const int took_calls = wParam == 2 && rmsg->n_calls > 0;
+        if (wParam == 2 && (src != d->active_state || took_calls)) {
+            AiConversation *oc = ai_chat_owner_conv(d, src);
+            ai_conv_take(oc, &resp_stream->conv);
+            if (src != d->active_state) src->valid = 1;
+            /* A flush that precedes a relaunch leaves the reply's slot. The
+             * turn is still open, so it queues nothing until the results are
+             * stored; notes that do not fit stay queued, in order. */
+            if (took_calls) (void)ai_conv_flush_notes(oc, &src->notes, 1);
         }
         /* The done/error message is the thread's last: drop our reference. */
         ai_stream_table_finish(&d->streams, rmsg->stream_id);
@@ -1266,6 +1280,11 @@ next_coalesce:;
                         }
                     }
                 }
+                /* Notes queued while the stream ran follow the reply (spec
+                 * decision 19), after the batch above took its reply's
+                 * index; the slots for a continue text and its reply stay
+                 * free. A taken run_command turn is still open: no-op. */
+                (void)ai_conv_flush_notes(&src->conv, &src->notes, 2);
                 if (rejected_long > 0) {
                     char lnote[256];
                     snprintf(lnote, sizeof(lnote),
@@ -1274,7 +1293,7 @@ next_coalesce:;
                         "block. Do not claim they ran. Break the work into "
                         "smaller steps (write a file a few lines at a time) "
                         "and send them again.", rejected_long, 1023);
-                    ai_conv_add(&src->conv, AI_ROLE_USER, lnote);
+                    (void)ai_chat_owner_add_note(d, src, lnote, 0);
                 }
                 if (rejected > 0) {
                     char note[256];
@@ -1284,7 +1303,7 @@ next_coalesce:;
                         "escape, etc.) or bidirectional text formatting "
                         "characters. Put exactly one single-line command "
                         "in each EXEC block.", rejected);
-                    ai_conv_add(&src->conv, AI_ROLE_USER, note);
+                    (void)ai_chat_owner_add_note(d, src, note, 0);
                 }
                 if (nquoted > 0) {
                     char qnote[256];
@@ -1292,7 +1311,7 @@ next_coalesce:;
                         "NOTE: %d [EXEC] marker(s) were inside a code block "
                         "or inline code and were NOT run. Put each marker on "
                         "its own line, outside any code fence.", nquoted);
-                    ai_conv_add(&src->conv, AI_ROLE_USER, qnote);
+                    (void)ai_chat_owner_add_note(d, src, qnote, 0);
                 }
             }
             if (src) {
@@ -1324,8 +1343,11 @@ next_coalesce:;
 
             /* The thread committed the assistant message to src->conv.
              * Sync d->conv (the working copy) so it includes the response. */
-            const int reply_stored =
-                text && ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text) == 0;
+            /* A taken run_command reply is already in d->conv (its stored
+             * tool turn, above): adding the text again would put a plain
+             * assistant turn after an unanswered call. */
+            const int reply_stored = took_calls ||
+                (text && ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text) == 0);
             /* The reply's index, taken now: the NOTEs added below make
              * conv_mark - 1 a user turn, and the run log keys a batch to
              * the reply that produced it (cmd_run_log.h). A full
@@ -1337,10 +1359,16 @@ next_coalesce:;
                     d->conv.messages[d->conv.msg_count - 1].role ==
                         AI_ROLE_ASSISTANT);
 
-            /* Save thinking for this assistant message in history. */
-            if (d->stream_thinking_len > 0 &&
-                d->conv.msg_count > 0) {
-                int idx = d->conv.msg_count - 1;
+            /* Save thinking for this assistant message in history: the last
+             * message, or after a take the last assistant turn (the tool
+             * turn that carries the calls). */
+            int think_idx = d->conv.msg_count - 1;
+            if (took_calls)
+                while (think_idx >= 0 &&
+                       d->conv.messages[think_idx].role != AI_ROLE_ASSISTANT)
+                    think_idx--;
+            if (d->stream_thinking_len > 0 && think_idx >= 0) {
+                int idx = think_idx;
                 free(d->thinking_history[idx]);
                 d->thinking_history[idx] =
                     _strdup(d->stream_thinking);
@@ -1374,14 +1402,19 @@ next_coalesce:;
                 } else {
                     chat_msg_set_text(d->stream_ai_item, text);
                 }
-                if (d->thinking_history[d->conv.msg_count - 1])
+                if (think_idx >= 0 && d->thinking_history[think_idx])
                     chat_msg_set_thinking(d->stream_ai_item,
-                        d->thinking_history[d->conv.msg_count - 1]);
+                        d->thinking_history[think_idx]);
                 d->stream_ai_item->u.ai.thinking_complete = 1;
             }
             d->stream_ai_item = NULL;
             d->stream_display_start = -1;
             d->stream_phase = 0;
+
+            /* Notes queued while the stream ran follow the reply (spec
+             * decision 19); the slots for a continue text and its reply stay
+             * free. A taken run_command turn is still open: no-op. */
+            (void)ai_conv_flush_notes(&d->conv, &src->notes, 2);
 
             /* C1: tell both the user and the model when one or more
              * [EXEC] blocks were dropped for containing control
@@ -1408,7 +1441,7 @@ next_coalesce:;
                     "claim they ran. Break the work into smaller steps (write "
                     "a file a few lines at a time) and send them again.",
                     rejected_long, 1023);
-                ai_conv_add(&d->conv, AI_ROLE_USER, long_note);
+                (void)ai_chat_owner_add_note(d, src, long_note, 0);
             }
 
             if (rejected > 0) {
@@ -1426,7 +1459,7 @@ next_coalesce:;
                     "etc.) or bidirectional text formatting characters. "
                     "Put exactly one single-line command in each EXEC "
                     "block.", rejected);
-                ai_conv_add(&d->conv, AI_ROLE_USER, rej_note);
+                (void)ai_chat_owner_add_note(d, src, rej_note, 0);
             }
 
             /* A marker the model wrote inside a code block or inline code
@@ -1439,7 +1472,7 @@ next_coalesce:;
                     "NOTE: %d [EXEC] marker(s) were inside a code block or "
                     "inline code and were NOT run. Put each marker on its "
                     "own line, outside any code fence.", nquoted);
-                ai_conv_add(&d->conv, AI_ROLE_USER, quote_note);
+                (void)ai_chat_owner_add_note(d, src, quote_note, 0);
             }
 
             /* Pending command batches: earlier cards are never touched by
@@ -1558,7 +1591,8 @@ next_coalesce:;
                             }
                             char bmsg[2048];
                             if (ai_build_policy_blocked_note(list, bmsg, sizeof(bmsg)) > 0) {
-                                ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
+                                (void)ai_chat_owner_add_note(d, d->active_state,
+                                                             bmsg, 0);
                             }
                         }
                     }
@@ -2510,6 +2544,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
      * right after this call returns). */
     cmd_batch_set_free(&state->batches);
     cmd_run_log_free(&state->run_log);
+    memset(&state->notes, 0, sizeof(state->notes));
 
     if (d->active_state == state) {
         d->active_state = NULL;
@@ -2571,6 +2606,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         cmd_batch_set_free(&d->active_state->batches);
         cmd_batch_set_init(&d->active_state->batches);
         cmd_run_log_free(&d->active_state->run_log);
+        memset(&d->active_state->notes, 0, sizeof(d->active_state->notes));
 
         const ApprovalQueue *queues[2] = { approval, approval2 };
         for (int qi = 0; qi < 2; qi++) {

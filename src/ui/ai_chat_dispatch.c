@@ -6,6 +6,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "ai_conv_guard.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -28,6 +29,29 @@ CmdBatch *ai_chat_resolve_batch(AiChatData *d, LPARAM lParam)
 AiConversation *ai_chat_owner_conv(AiChatData *d, AiSessionState *owner)
 {
     return (owner == d->active_state) ? &d->conv : &owner->conv;
+}
+
+int ai_chat_owner_add_note(AiChatData *d, AiSessionState *owner,
+                           const char *text, int keep_free)
+{
+    if (!d || !text) return -1;
+    AiConversation *conv = owner ? ai_chat_owner_conv(d, owner) : &d->conv;
+    AiNoteQueue *q = owner ? &owner->notes : NULL;
+    const int defer = owner &&
+        ai_stream_table_find_owner(&d->streams, owner) != NULL;
+    const int rc = ai_conv_add_user_note(conv, q, defer, keep_free, text);
+    if (rc == 2 && (!owner || owner == d->active_state)) {
+        /* Nothing was stored or queued: say so, so no note is lost silently
+         * (spec decisions 19 and 24). */
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            keep_free > 0
+                ? "[conversation full: the command results were not sent; "
+                  "start a New Chat]"
+                : "[conversation full: a Nutshell note was not stored; "
+                  "start a New Chat]");
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    }
+    return rc;
 }
 
 /* Record a command batch's rows in the owner's run log. A tool batch, an
