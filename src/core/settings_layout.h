@@ -101,7 +101,8 @@ int settings_page_height(int rows, const SettingsMetrics *m);
  *   client_h = max(min_h, min(target_h, work_h - nc_h - 2 * margin))
  *   client_w = max(min_w, min(760 scaled, work_w - nc_w - 2 * margin))
  * where margin is SP_XL scaled to the dpi. work_* is the monitor work area,
- * nc_* the non-client size from AdjustWindowRect. The window (client plus nc)
+ * nc_* the window's non-client size at its own monitor's DPI (measured from
+ * the hidden window, not AdjustWindowRect). The window (client plus nc)
  * is centred in the work area, then moved so its far edge is inside it, then
  * so its near edge is inside it: top-left wins when it cannot fit. Writes the
  * client size and the window's top-left, in the work area's coordinates. */

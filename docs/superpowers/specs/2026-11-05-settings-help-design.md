@@ -578,8 +578,13 @@ client_w  = max(m.min_w, min(ns_scale(760, dpi), work_w - nc_w - 2 * ns_scale(SP
   plus the title row, so a row added to Behaviour later is counted.
 - `work_*` is the work area of the owner's monitor
   (`MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST)`, `rcWork`).
-  `nc_w`/`nc_h` come from `AdjustWindowRect` on the dialog's style, as
-  today. The window is centred on that work area and moved to lie inside
+  `nc_w`/`nc_h` are measured from the hidden window once it exists
+  (`GetWindowRect` minus `GetClientRect`), not from `AdjustWindowRect`:
+  that gives the frame at the system DPI, while the client is laid out at
+  the owner monitor's DPI. On mixed DPI (Nutshell on a 150 % monitor with
+  a 100 % primary) the window opened about 18 px short and Behaviour
+  scrolled. `AdjustWindowRect` stays for the provisional creation size and
+  as the fallback if either call fails. The window is centred on that work area and moved to lie inside
   it, with top-left winning when it cannot fit. This replaces
   `CW_USEDEFAULT`, whose cascade could push the taller window past the
   bottom of the screen.
@@ -613,7 +618,8 @@ Not required, but stated so nobody is surprised:
 /* Initial client size and window position for the Settings dialog: the
  * rule above. target_rows is the row count (title included) of the page
  * that must open without scrolling (Behaviour); work_* the monitor work
- * area; nc_* the non-client size from AdjustWindowRect. Writes the client
+ * area; nc_* the window's non-client size at its own monitor's DPI
+ * (measured from the hidden window). Writes the client
  * size and the window's top-left. */
 void settings_initial_placement(const SettingsMetrics *m, int target_rows,
                                 int work_x, int work_y, int work_w, int work_h,

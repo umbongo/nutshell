@@ -2321,8 +2321,17 @@ static int settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
         }
         SettingsMetrics pm;
         settings_metrics_init(&pm, d->dpi);
+        /* AdjustWindowRect gives the frame at the system DPI, but the
+         * client is laid out at d->dpi (the owner monitor's). The window
+         * exists, hidden, on that monitor: measure its real frame, and keep
+         * the AdjustWindowRect size only if a call fails. */
         int ncw = (int)(wr.right - wr.left) - client_w;
         int nch = (int)(wr.bottom - wr.top) - client_h;
+        RECT fw, fc;
+        if (GetWindowRect(hwnd, &fw) && GetClientRect(hwnd, &fc)) {
+            ncw = (int)((fw.right - fw.left) - (fc.right - fc.left));
+            nch = (int)((fw.bottom - fw.top) - (fc.bottom - fc.top));
+        }
         int cw = 0, ch = 0, wx = 0, wy = 0;
         settings_initial_placement(&pm, target_rows,
                                    (int)mi.rcWork.left, (int)mi.rcWork.top,

@@ -651,5 +651,7 @@ int test_sl_initial_negative_origin(void) {
     ASSERT_TRUE(wx + cw + 16 <= 0);
     ASSERT_TRUE(wy >= -200);
     ASSERT_TRUE(wy + ch + 39 <= 832);
+    ASSERT_EQ(wx, -1348);
+    ASSERT_EQ(wy, -76);
     TEST_END();
 }
