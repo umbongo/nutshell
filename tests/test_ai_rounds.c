@@ -282,3 +282,28 @@ int test_tool_rounds_pause_row_text(void) {
     ai_tool_pause_row(buf, 0, 3);
     TEST_END();
 }
+
+/* A run_command batch relaunches through the same counter as [EXEC]
+ * (run_command spec decision 14): three unattended rounds, then the fourth
+ * batch is built attended. Pins existing behaviour; no code of its own. */
+int test_ai_rounds_runcmd_fourth_attended(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    CmdPolicy p = auto_policy(CMD_WRITE);
+    ai_rounds_user_message(&s);
+    for (int i = 0; i < AI_AUTO_ROUNDS_MAX; i++) {
+        CmdPolicy q = ai_rounds_batch_policy(&s, p);
+        ASSERT_EQ(q.unattended, p.unattended);     /* batches 1 to 3 keep the policy */
+        ai_rounds_continue(&s, 1);
+    }
+    ASSERT_EQ(s.auto_rounds, 3);
+    CmdPolicy fourth = ai_rounds_batch_policy(&s, p);
+    ASSERT_EQ(fourth.unattended, POLICY_NONE);     /* the fourth is attended */
+    ASSERT_EQ(fourth.allowed, p.allowed);
+    ASSERT_EQ(ai_rounds_paused(&s, p), 1);
+    /* a Stop or a typed message (reset_rounds) starts the count over */
+    ai_rounds_user_message(&s);
+    ASSERT_EQ(ai_rounds_batch_policy(&s, p).unattended, p.unattended);
+    TEST_END();
+}

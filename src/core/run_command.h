@@ -200,6 +200,55 @@ int runcmd_cause_relaunches(RunCmdCause c);
  * session gone: the results are not stored); 1 for every other cause. */
 int runcmd_cause_appends(RunCmdCause c);
 
+/* ---- Retry and the removal paths (spec decisions 8, 9 and 14) ---- */
+
+/* What the Retry button does (IDC_ACTIVITY_RETRY). */
+typedef enum {
+    RUNCMD_RETRY_CANCEL_BATCH,    /* a run_command batch exists: cancel it with its own cause,
+                                   * append the results, relaunch from them */
+    RUNCMD_RETRY_POP_ASSISTANT,   /* pop the last (plain assistant) message, relaunch */
+    RUNCMD_RETRY_RELAUNCH         /* pop nothing, relaunch from the conversation as it stands */
+} RunCmdRetry;
+
+/* has_runcmd_batch: CANCEL_BATCH. Else POP_ASSISTANT only when the last
+ * message is an assistant turn with n_tool_calls == 0 (its content may be
+ * empty); an assistant turn that holds tool calls is never popped, and a
+ * conversation ending on results, on a user turn, an empty one or a NULL one
+ * relaunches. Reads the conversation, changes nothing. */
+RunCmdRetry runcmd_retry_plan(const AiConversation *conv, int has_runcmd_batch);
+
+/* The ways a run_command batch leaves (spec decision 8's table). */
+typedef enum {
+    RUNCMD_PATH_TICK_END,         /* the tick's settle branch: every entry done */
+    RUNCMD_PATH_DECIDED,          /* Run, Deny or Deny all that left nothing runnable */
+    RUNCMD_PATH_TIMEOUT,          /* the ambiguous-prompt timeout */
+    RUNCMD_PATH_STOP,             /* Send while dispatching */
+    RUNCMD_PATH_SESSION_ENDED,    /* the tick finds the session ended */
+    RUNCMD_PATH_TAB_SWITCH,       /* do_session_switch */
+    RUNCMD_PATH_RETRY,            /* IDC_ACTIVITY_RETRY with a batch */
+    RUNCMD_PATH_TYPED,            /* a typed message while the batch is unsettled */
+    RUNCMD_PATH_NEW_CHAT,
+    RUNCMD_PATH_SESSION_CLOSED,   /* ai_chat_notify_session_closed, session free */
+    RUNCMD_PATH_PANEL_CLOSED,     /* WM_DESTROY while dispatching */
+    RUNCMD_PATH_COUNT             /* not a path */
+} RunCmdPath;
+
+/* What src/ui does on a path: it asks and writes no such condition of its own.
+ * cause: the RunCmdCause the results are built with. capture: 1 where the
+ * session's terminal may still exist, so an EXECUTING entry's rows are
+ * captured first. append and relaunch are exactly runcmd_cause_appends and
+ * runcmd_cause_relaunches of the cause (one table). reset_rounds: 1 where
+ * today's [EXEC] path calls ai_rounds_user_message (Stop, a typed message);
+ * New Chat does not reset auto_rounds today, so 0 there too. An unknown path
+ * answers the safest plan: nothing captured, appended, relaunched or reset
+ * (cause SETTLED). */
+typedef struct {
+    RunCmdCause cause;
+    int capture, append, relaunch, reset_rounds;
+} RunCmdPathPlan;
+
+RunCmdPathPlan runcmd_path_plan(RunCmdPath p);
+
 /* The text between the head and the tail of a cut result. */
 #define RUNCMD_OMIT_MARKER_FMT "[\xE2\x80\xA6 %zu bytes omitted \xE2\x80\xA6]"
 

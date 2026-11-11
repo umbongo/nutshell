@@ -421,6 +421,47 @@ int runcmd_cause_appends(RunCmdCause c)
     return c != RUNCMD_CAUSE_NEW_CHAT && c != RUNCMD_CAUSE_SESSION_CLOSED;
 }
 
+RunCmdRetry runcmd_retry_plan(const AiConversation *conv, int has_runcmd_batch)
+{
+    if (has_runcmd_batch) return RUNCMD_RETRY_CANCEL_BATCH;
+    if (conv && conv->msg_count > 0) {
+        const AiMessage *last = &conv->messages[conv->msg_count - 1];
+        if (last->role == AI_ROLE_ASSISTANT && last->n_tool_calls == 0)
+            return RUNCMD_RETRY_POP_ASSISTANT;
+    }
+    return RUNCMD_RETRY_RELAUNCH;
+}
+
+RunCmdPathPlan runcmd_path_plan(RunCmdPath p)
+{
+    RunCmdPathPlan r = { RUNCMD_CAUSE_SETTLED, 0, 0, 0, 0 };
+    switch (p) {
+    case RUNCMD_PATH_TICK_END:       r.cause = RUNCMD_CAUSE_SETTLED;        break;
+    case RUNCMD_PATH_DECIDED:        r.cause = RUNCMD_CAUSE_DECIDED;        break;
+    case RUNCMD_PATH_TIMEOUT:        r.cause = RUNCMD_CAUSE_TIMEOUT;        break;
+    case RUNCMD_PATH_STOP:           r.cause = RUNCMD_CAUSE_STOP;           break;
+    case RUNCMD_PATH_SESSION_ENDED:  r.cause = RUNCMD_CAUSE_SESSION_ENDED;  break;
+    case RUNCMD_PATH_TAB_SWITCH:     r.cause = RUNCMD_CAUSE_TAB_SWITCH;     break;
+    case RUNCMD_PATH_RETRY:          r.cause = RUNCMD_CAUSE_RETRY;          break;
+    case RUNCMD_PATH_TYPED:          r.cause = RUNCMD_CAUSE_TYPED;          break;
+    case RUNCMD_PATH_NEW_CHAT:       r.cause = RUNCMD_CAUSE_NEW_CHAT;       break;
+    case RUNCMD_PATH_SESSION_CLOSED: r.cause = RUNCMD_CAUSE_SESSION_CLOSED; break;
+    case RUNCMD_PATH_PANEL_CLOSED:   r.cause = RUNCMD_CAUSE_PANEL_CLOSED;   break;
+    default: return r;
+    }
+    r.append = runcmd_cause_appends(r.cause);
+    r.relaunch = runcmd_cause_relaunches(r.cause);
+    /* The terminal is still there except when the chat is cleared or the
+     * session is gone (the results are not stored then either). */
+    r.capture = (p != RUNCMD_PATH_NEW_CHAT && p != RUNCMD_PATH_SESSION_CLOSED);
+    /* Today's [EXEC] path resets auto_rounds on Stop (ai_chat.c, the
+     * IDC_CHAT_SEND handler's ai_rounds_user_message) and on a typed message
+     * (ai_chat_send_user_message). New Chat calls neither and ai_conv_reset
+     * leaves auto_rounds alone. */
+    r.reset_rounds = (p == RUNCMD_PATH_STOP || p == RUNCMD_PATH_TYPED);
+    return r;
+}
+
 #define NOTE_RAN            "ran"
 #define NOTE_OTHER_TOOL \
     "not run: a reply that calls run_command may call no other tool; call it again in a reply of its own"

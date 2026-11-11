@@ -2408,3 +2408,162 @@ int test_context_meter_tracks_body_every_round(void)
     ASSERT_TRUE(w6 > 0 && w6 <= 1.10);
     TEST_END();
 }
+
+/* ---- The Retry plan and the removal table (spec decisions 8 and 9) ---- */
+
+/* A conversation of n messages: system, user, then the given tail kinds
+ * ('a' plain assistant, 'e' empty assistant, 't' assistant with a tool call,
+ * 'r' its results, 'u' user). */
+static AiConversation *retry_conv(const char *tail)
+{
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    if (!c) return NULL;
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_SYSTEM, "You are an assistant.");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    int round = 0;
+    for (const char *p = tail; *p; p++) {
+        if (*p == 'a') ai_conv_add(c, AI_ROLE_ASSISTANT, "an answer");
+        else if (*p == 'e') ai_conv_add(c, AI_ROLE_ASSISTANT, "");
+        else if (*p == 'u') ai_conv_add(c, AI_ROLE_USER, "more");
+        else if (*p == 't' || *p == 'r') {
+            const char *names[1] = { RUNCMD_TOOL_NAME };
+            const char *contents[1] = { "out" };
+            if (*p == 't') {
+                AiToolCall call;
+                memset(&call, 0, sizeof(call));
+                snprintf(call.id, sizeof(call.id), "t%d", ++round);
+                snprintf(call.name, sizeof(call.name), "%s", RUNCMD_TOOL_NAME);
+                snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
+                agentic_add_assistant_tool_msg_ex(c, "", NULL, &call, 1);
+            } else {
+                /* a whole round: call and results (add_round) */
+                add_round(c, ++round, 1, names, contents);
+            }
+        }
+    }
+    return c;
+}
+
+static RunCmdRetry plan_for(const char *tail, int has_batch)
+{
+    AiConversation *c = retry_conv(tail);
+    RunCmdRetry r = runcmd_retry_plan(c, has_batch);
+    ai_conv_reset(c);
+    free(c);
+    return r;
+}
+
+int test_runcmd_retry_plan(void)
+{
+    TEST_BEGIN();
+    /* a batch: cancel it, whatever the conversation ends on */
+    ASSERT_EQ(plan_for("a", 1), RUNCMD_RETRY_CANCEL_BATCH);
+    ASSERT_EQ(plan_for("", 1), RUNCMD_RETRY_CANCEL_BATCH);
+    ASSERT_EQ(runcmd_retry_plan(NULL, 1), RUNCMD_RETRY_CANCEL_BATCH);
+    /* no batch: a plain assistant turn is popped */
+    ASSERT_EQ(plan_for("a", 0), RUNCMD_RETRY_POP_ASSISTANT);
+    ASSERT_EQ(plan_for("ua", 0), RUNCMD_RETRY_POP_ASSISTANT);
+    ASSERT_EQ(plan_for("ra", 0), RUNCMD_RETRY_POP_ASSISTANT);
+    /* a conversation ending on results, or on a user turn, relaunches */
+    ASSERT_EQ(plan_for("r", 0), RUNCMD_RETRY_RELAUNCH);
+    ASSERT_EQ(plan_for("", 0), RUNCMD_RETRY_RELAUNCH);          /* ends on the user turn "go" */
+    ASSERT_EQ(plan_for("u", 0), RUNCMD_RETRY_RELAUNCH);
+    /* an empty assistant turn without calls is still a plain turn */
+    ASSERT_EQ(plan_for("e", 0), RUNCMD_RETRY_POP_ASSISTANT);
+    TEST_END();
+}
+
+int test_runcmd_retry_plan_degenerate(void)
+{
+    TEST_BEGIN();
+    /* NULL conversation, no batch: nothing to pop, relaunch */
+    ASSERT_EQ(runcmd_retry_plan(NULL, 0), RUNCMD_RETRY_RELAUNCH);
+    /* an empty conversation, and one holding only the system turn */
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ASSERT_EQ(c->msg_count, 0);
+    ASSERT_EQ(runcmd_retry_plan(c, 0), RUNCMD_RETRY_RELAUNCH);
+    ai_conv_add(c, AI_ROLE_SYSTEM, "You are an assistant.");
+    ASSERT_EQ(runcmd_retry_plan(c, 0), RUNCMD_RETRY_RELAUNCH);
+    ASSERT_EQ(runcmd_retry_plan(c, 1), RUNCMD_RETRY_CANCEL_BATCH);
+    /* the plan reads the conversation and changes nothing */
+    ASSERT_EQ(c->msg_count, 1);
+    ai_conv_reset(c);
+    free(c);
+    /* a full conversation ending on a plain assistant turn */
+    c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    while (c->msg_count < AI_MAX_MESSAGES - 1) ai_conv_add(c, AI_ROLE_USER, "x");
+    ai_conv_add(c, AI_ROLE_ASSISTANT, "last");
+    ASSERT_EQ(c->msg_count, AI_MAX_MESSAGES);
+    ASSERT_EQ(runcmd_retry_plan(c, 0), RUNCMD_RETRY_POP_ASSISTANT);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
+int test_runcmd_retry_never_pops_tool_turn(void)
+{
+    TEST_BEGIN();
+    /* the last message is an assistant turn with a tool call (the tool_use a
+     * running command answers): never popped, with or without its batch */
+    AiConversation *c = retry_conv("t");
+    ASSERT_NOT_NULL(c);
+    ASSERT_EQ(c->messages[c->msg_count - 1].role, AI_ROLE_ASSISTANT);
+    ASSERT_EQ(c->messages[c->msg_count - 1].n_tool_calls, 1);
+    ASSERT_EQ(runcmd_retry_plan(c, 0), RUNCMD_RETRY_RELAUNCH);
+    ASSERT_EQ(runcmd_retry_plan(c, 1), RUNCMD_RETRY_CANCEL_BATCH);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
+int test_runcmd_path_plan_table(void)
+{
+    TEST_BEGIN();
+    /* spec decision 8: cause, capture, append, relaunch, reset_rounds. Capture
+     * is 1 where active_term may still exist (not New Chat or a closed
+     * session); reset_rounds is 1 only where today's [EXEC] path calls
+     * ai_rounds_user_message (Stop, a typed message). */
+    static const struct {
+        RunCmdPath p; RunCmdCause cause; int capture, append, relaunch, reset;
+    } t[] = {
+        { RUNCMD_PATH_TICK_END,       RUNCMD_CAUSE_SETTLED,       1, 1, 1, 0 },
+        { RUNCMD_PATH_DECIDED,        RUNCMD_CAUSE_DECIDED,       1, 1, 0, 0 },
+        { RUNCMD_PATH_TIMEOUT,        RUNCMD_CAUSE_TIMEOUT,       1, 1, 1, 0 },
+        { RUNCMD_PATH_STOP,           RUNCMD_CAUSE_STOP,          1, 1, 0, 1 },
+        { RUNCMD_PATH_SESSION_ENDED,  RUNCMD_CAUSE_SESSION_ENDED, 1, 1, 0, 0 },
+        { RUNCMD_PATH_TAB_SWITCH,     RUNCMD_CAUSE_TAB_SWITCH,    1, 1, 0, 0 },
+        { RUNCMD_PATH_RETRY,          RUNCMD_CAUSE_RETRY,         1, 1, 1, 0 },
+        { RUNCMD_PATH_TYPED,          RUNCMD_CAUSE_TYPED,         1, 1, 0, 1 },
+        { RUNCMD_PATH_NEW_CHAT,       RUNCMD_CAUSE_NEW_CHAT,      0, 0, 0, 0 },
+        { RUNCMD_PATH_SESSION_CLOSED, RUNCMD_CAUSE_SESSION_CLOSED, 0, 0, 0, 0 },
+        { RUNCMD_PATH_PANEL_CLOSED,   RUNCMD_CAUSE_PANEL_CLOSED,  1, 1, 0, 0 } };
+    ASSERT_EQ((int)(sizeof(t) / sizeof(t[0])), (int)RUNCMD_PATH_COUNT);
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        RunCmdPathPlan pl = runcmd_path_plan(t[i].p);
+        ASSERT_EQ((int)pl.cause, (int)t[i].cause);
+        ASSERT_EQ(pl.capture, t[i].capture);
+        ASSERT_EQ(pl.append, t[i].append);
+        ASSERT_EQ(pl.relaunch, t[i].relaunch);
+        ASSERT_EQ(pl.reset_rounds, t[i].reset);
+        /* one table of append and relaunch: the cause's */
+        ASSERT_EQ(pl.append, runcmd_cause_appends(pl.cause));
+        ASSERT_EQ(pl.relaunch, runcmd_cause_relaunches(pl.cause));
+    }
+    /* relaunch only the tick's end, the timeout and Retry */
+    int relaunching = 0;
+    for (int p = 0; p < (int)RUNCMD_PATH_COUNT; p++)
+        relaunching += runcmd_path_plan((RunCmdPath)p).relaunch;
+    ASSERT_EQ(relaunching, 3);
+    /* an out-of-range path answers the safest plan: no capture, no append, no relaunch, no reset */
+    RunCmdPathPlan bad = runcmd_path_plan((RunCmdPath)99);
+    ASSERT_EQ(bad.capture, 0);
+    ASSERT_EQ(bad.append, 0);
+    ASSERT_EQ(bad.relaunch, 0);
+    ASSERT_EQ(bad.reset_rounds, 0);
+    TEST_END();
+}
