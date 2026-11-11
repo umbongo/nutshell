@@ -1,6 +1,7 @@
 #include "run_command.h"
 #include "json_parser.h"
 #include "paste_filter.h"
+#include "term_extract.h"
 #include "tool_decision.h"
 
 #include <stdio.h>
@@ -270,4 +271,120 @@ int runcmd_reply_has_call(const AiToolCall *calls, int n_calls)
     for (int i = 0; i < n_calls; i++)
         if (strncmp(calls[i].name, RUNCMD_TOOL_NAME, AI_TOOL_NAME_MAX) == 0) return 1;
     return 0;
+}
+
+/* ---- Cap, cut and capture (spec decisions 10 and 11) ---- */
+
+#define RUNCMD_CAP_MAX 16384u
+#define RUNCMD_CAP_BUDGET 65536u
+
+size_t runcmd_cap_bytes(int n_slot)
+{
+    if (n_slot <= 0) return RUNCMD_CAP_MAX;
+    size_t share = RUNCMD_CAP_BUDGET / (size_t)n_slot;
+    if (share > RUNCMD_CAP_MAX) share = RUNCMD_CAP_MAX;
+    return share ? share : 1;
+}
+
+static void cap_clear_excerpt(RunCmdCapture *c)
+{
+    free(c->head);
+    free(c->tail);
+    c->head = c->tail = NULL;
+    c->head_len = c->tail_len = 0;
+    c->omitted_bytes = 0;
+}
+
+/* A NUL-terminated copy of text[0, n) through the planner's allocator. */
+static char *cut_copy(const char *text, size_t n)
+{
+    char *p = (char *)g_alloc(n + 1);
+    if (!p) return NULL;
+    memcpy(p, text, n);
+    p[n] = '\0';
+    return p;
+}
+
+void runcmd_cut(const char *text, size_t len, size_t cap, RunCmdCapture *c)
+{
+    if (!c) return;
+    cap_clear_excerpt(c);
+    if (!text || len == 0) return;
+
+    if (len <= cap) {
+        c->head = cut_copy(text, len);
+        if (!c->head) { c->omitted_bytes = len; return; }
+        c->head_len = len;
+        return;
+    }
+
+    size_t tail_want = cap / 4;
+    size_t head_want = tail_want * 3 + (cap % 4) * 3 / 4;
+    size_t head_len = head_want;
+    while (head_len > 0 && ((unsigned char)text[head_len] & 0xC0u) == 0x80u)
+        head_len--;
+    size_t tail_start = len - tail_want;
+    while (tail_start < len && ((unsigned char)text[tail_start] & 0xC0u) == 0x80u)
+        tail_start++;
+    size_t tail_len = len - tail_start;
+
+    char *head = NULL, *tail = NULL;
+    if (head_len > 0) {
+        head = cut_copy(text, head_len);
+        if (!head) { c->omitted_bytes = len; return; }
+    }
+    if (tail_len > 0) {
+        tail = cut_copy(text + tail_start, tail_len);
+        if (!tail) { free(head); c->omitted_bytes = len; return; }
+    }
+    c->head = head;
+    c->head_len = head_len;
+    c->tail = tail;
+    c->tail_len = tail_len;
+    c->omitted_bytes = len - head_len - tail_len;
+}
+
+void runcmd_capture_start(RunCmdCapture *c, const Terminal *t)
+{
+    if (!c || !t) return;
+    c->start_line = term_abs_cursor_line(t);
+    c->start_reflow_seq = t->reflow_seq;
+    c->start_region_seq = t->region_scroll_seq;
+    c->start_alt = t->alt_screen_active ? 1 : 0;
+    c->started = 1;
+}
+
+int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command,
+                        size_t cap)
+{
+    if (!c || !t || !c->started || c->captured) return 0;
+    c->captured = 1;
+
+    unsigned flags = 0;
+    size_t len = 0;
+    char *text = NULL;
+    uint64_t end = term_abs_cursor_line(t);
+
+    int screen = c->start_alt || t->alt_screen_active ||
+                 t->reflow_seq != c->start_reflow_seq ||
+                 t->region_scroll_seq != c->start_region_seq;
+    int redrawn = 0;
+    if (!screen && end <= c->start_line) screen = redrawn = 1;
+
+    if (screen) {
+        flags |= RUNCMD_CAP_SCREEN;
+        text = term_extract_last_n_dup(t, t->rows, &len);
+        if (redrawn && text && len > 0) flags |= RUNCMD_CAP_REDRAWN;
+    } else {
+        unsigned range_flags = 0;
+        text = term_extract_abs_range_dup(t, c->start_line, end, command, &len,
+                                          &range_flags);
+        if (range_flags & TERM_RANGE_START_RECYCLED) flags |= RUNCMD_CAP_SCROLLED_OUT;
+    }
+
+    if (!text || len == 0) flags |= RUNCMD_CAP_EMPTY;
+    c->flags = flags;
+    runcmd_cut(text, len, cap, c);
+    free(text);
+    return 1;
 }

@@ -3,6 +3,7 @@
 
 #include "ai_tools.h"
 #include "chat_approval.h"
+#include "term.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -70,12 +71,26 @@ typedef enum {
     RUNCMD_KIND_OTHER_TOOL    /* any other tool in a reply that calls run_command */
 } RunCmdKind;
 
-#define RUNCMD_CAP_SCREEN        1u   /* screen rows: alt screen, reflow, region scroll, or empty/inverted range */
-#define RUNCMD_CAP_SCROLLED_OUT  4u
-#define RUNCMD_CAP_EMPTY         8u   /* nothing readable at all */
-#define RUNCMD_CAP_REDRAWN      16u   /* screen rows: empty or inverted range, screen has content */
+#define RUNCMD_CAP_SCREEN        1u   /* the excerpt is the screen rows, not the command's own range:
+                                       * the alternate screen was on at the start or the take, the
+                                       * terminal reflowed, a scroll region scrolled, or the range
+                                       * was empty or inverted. Set on every screen-rows result,
+                                       * empty ones included; B8's one note ("the screen changed
+                                       * while the command ran; this is the screen as it ended"). */
+#define RUNCMD_CAP_SCROLLED_OUT  4u   /* primary range: the start scrolled out of the terminal's history */
+#define RUNCMD_CAP_EMPTY         8u   /* the final text, after the echo drop and the blank-row trim,
+                                       * is empty (on either path): "no output on the screen" */
+#define RUNCMD_CAP_REDRAWN      16u   /* with SCREEN: the cause was an empty or inverted range (clear;
+                                       * ls, cls, reset) and the screen has content. Never set for the
+                                       * alternate screen, a reflow or a region scroll. */
 
-/* What was read back from the terminal for one call (filled by later tasks). */
+/* What was read back from the terminal for one call. Reading a capture:
+ *   head != NULL                      an excerpt (tail != NULL: cut in the middle,
+ *                                     omitted_bytes between head and tail);
+ *   head == NULL, EMPTY               nothing to show: "no output on the screen";
+ *   head == NULL, no EMPTY, captured  the output could not be read or kept (an
+ *                                     allocation failed): say it was dropped;
+ *                                     omitted_bytes is its size when known, else 0. */
 typedef struct {
     int      started, captured;      /* captured: spec section 10's once-only flag */
     uint64_t start_line;  uint32_t start_reflow_seq, start_region_seq;  int start_alt;
@@ -118,7 +133,44 @@ RunCmdCall *runcmd_call_for_entry(RunCmdReply *r, int entry);
 /* 1 when any of the calls is named run_command. */
 int runcmd_reply_has_call(const AiToolCall *calls, int n_calls);
 
-/* Tests only: the allocator the planner uses (NULL restores malloc). */
+/* ---- Capture: where a call's output starts and what it reads back ---- */
+
+/* The most bytes of one command's output kept: min(16384, 65536 / n_slot), n
+ * the batch's SLOT calls; n <= 0 gives 16384. */
+size_t runcmd_cap_bytes(int n_slot);
+
+/* Store text[0, len) in c as the excerpt, replacing (and freeing) any
+ * already there. len <= cap: all of it as head, tail NULL, omitted_bytes 0.
+ * Longer: head the first 3/4 of cap bytes and tail the last 1/4, each cut on
+ * a UTF-8 boundary (head backs up, tail moves forward), omitted_bytes the
+ * rest, so head_len + tail_len + omitted_bytes == len. The marker is never
+ * stored. A piece of 0 bytes is NULL; an empty text leaves no excerpt. When
+ * an allocation fails the capture is left well-formed: head and tail NULL,
+ * omitted_bytes == len (the output was dropped). Flags are not touched.
+ * NULL c does nothing; NULL text is empty. */
+void runcmd_cut(const char *text, size_t len, size_t cap, RunCmdCapture *c);
+
+/* Record where a call's output starts, before the command's first write:
+ * the cursor's absolute line, reflow_seq, region_scroll_seq and whether the
+ * alternate screen is on, then started = 1. Does nothing for NULL c or t. */
+void runcmd_capture_start(RunCmdCapture *c, const Terminal *t);
+
+/* Read the call's output back, once (spec decision 10). Returns 0, touching
+ * nothing, unless started && !captured && t. Otherwise sets captured = 1 and
+ * stores the excerpt (through runcmd_cut with cap) and the flags:
+ *  - alternate screen on at the start or now, reflow_seq or region_scroll_seq
+ *    moved: the visible screen rows, SCREEN;
+ *  - else the primary range [start_line, cursor line) is empty or inverted:
+ *    the screen rows, SCREEN | REDRAWN (just SCREEN when the screen is blank);
+ *  - else that range with the echo (command) dropped; SCROLLED_OUT when its
+ *    start has gone from the ring.
+ * EMPTY whenever the final text is empty. Text never holds a control byte
+ * (C0 but the row separator, DEL, C1): term_extract writes those cells as
+ * spaces. Returns 1. */
+int runcmd_capture_take(RunCmdCapture *c, const Terminal *t, const char *command,
+                        size_t cap);
+
+/* Tests only: the allocator the planner and the cut use (NULL restores malloc). */
 void runcmd_set_alloc_for_test(void *(*alloc)(size_t));
 
 #endif

@@ -1,6 +1,8 @@
 #include "test_framework.h"
 #include "run_command.h"
 #include "ai_prompt.h"
+#include "term.h"
+#include "term_extract.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -494,5 +496,573 @@ int test_runcmd_reply_has_call(void)
     ASSERT_EQ(runcmd_reply_has_call(c, 2), 1);
     ASSERT_EQ(runcmd_reply_has_call(c, 0), 0);
     ASSERT_EQ(runcmd_reply_has_call(NULL, 2), 0);
+    TEST_END();
+}
+
+/* ---- The cap, the cut and the capture (spec decisions 10 and 11) ---- */
+
+int test_runcmd_cap_bytes(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)runcmd_cap_bytes(1), 16384);
+    ASSERT_EQ((int)runcmd_cap_bytes(2), 16384);
+    ASSERT_EQ((int)runcmd_cap_bytes(3), 16384);   /* 65536 / 3 = 21845, capped */
+    ASSERT_EQ((int)runcmd_cap_bytes(4), 16384);
+    ASSERT_EQ((int)runcmd_cap_bytes(5), 13107);
+    ASSERT_EQ((int)runcmd_cap_bytes(8), 8192);
+    ASSERT_EQ((int)runcmd_cap_bytes(16), 4096);
+    ASSERT_EQ((int)runcmd_cap_bytes(0), 16384);
+    ASSERT_EQ((int)runcmd_cap_bytes(-4), 16384);
+    ASSERT_TRUE(runcmd_cap_bytes(1000000) >= 1);  /* never 0 */
+    TEST_END();
+}
+
+int test_runcmd_cut_uncut(void)
+{
+    TEST_BEGIN();
+    char text[101];
+    memset(text, 'x', 100);
+    text[100] = '\0';
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    runcmd_cut(text, 100, 4096, &c);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_EQ((int)c.head_len, 100);
+    ASSERT_STR_EQ(c.head, text);
+    ASSERT_NULL(c.tail);
+    ASSERT_EQ((int)c.tail_len, 0);
+    ASSERT_EQ((int)c.omitted_bytes, 0);
+
+    /* exactly the cap is still uncut; one more is cut (the cut replaces) */
+    runcmd_cut(text, 100, 100, &c);
+    ASSERT_EQ((int)c.head_len, 100);
+    ASSERT_NULL(c.tail);
+    runcmd_cut(text, 100, 99, &c);
+    ASSERT_NOT_NULL(c.tail);
+    ASSERT_EQ((int)(c.head_len + c.tail_len + c.omitted_bytes), 100);
+    free(c.head);
+    free(c.tail);
+    TEST_END();
+}
+
+int test_runcmd_cut_head_tail(void)
+{
+    TEST_BEGIN();
+    char *text = (char *)malloc(20001);
+    ASSERT_NOT_NULL(text);
+    memset(text, 'a', 20000);
+    for (int i = 0; i < 3072; i++) text[i] = 'h';
+    for (int i = 20000 - 1024; i < 20000; i++) text[i] = 't';
+    text[20000] = '\0';
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    runcmd_cut(text, 20000, 4096, &c);
+    ASSERT_EQ((int)c.head_len, 3072);
+    ASSERT_EQ((int)c.tail_len, 1024);
+    ASSERT_EQ((int)c.omitted_bytes, 15904);
+    ASSERT_EQ((int)strlen(c.head), 3072);
+    ASSERT_EQ((int)strlen(c.tail), 1024);
+    ASSERT_TRUE(c.head[0] == 'h' && c.head[3071] == 'h');
+    ASSERT_TRUE(c.tail[0] == 't' && c.tail[1023] == 't');
+    ASSERT_EQ((int)c.flags, 0);                    /* the cut sets no flag */
+    free(c.head);
+    free(c.tail);
+    free(text);
+    TEST_END();
+}
+
+int test_runcmd_cut_multibyte(void)
+{
+    TEST_BEGIN();
+    /* "a" then 7000 euro signs (3 bytes each): both cut points fall inside a
+     * character. */
+    size_t n = 7000, len = 1 + 3 * n;
+    char *text = (char *)malloc(len + 1);
+    ASSERT_NOT_NULL(text);
+    text[0] = 'a';
+    for (size_t i = 0; i < n; i++) memcpy(text + 1 + 3 * i, "\xE2\x82\xAC", 3);
+    text[len] = '\0';
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    runcmd_cut(text, len, 4096, &c);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_NOT_NULL(c.tail);
+    ASSERT_TRUE(c.head_len < 3072 && c.head_len > 3072 - 4);   /* stepped back */
+    ASSERT_TRUE(c.tail_len < 1024 && c.tail_len > 1024 - 4);   /* stepped forward */
+    ASSERT_TRUE(utf8_whole(c.head));
+    ASSERT_TRUE(utf8_whole(c.tail));
+    ASSERT_EQ((int)(c.head_len + c.tail_len + c.omitted_bytes), (int)len);
+    ASSERT_EQ((int)strlen(c.head), (int)c.head_len);
+    ASSERT_EQ((int)strlen(c.tail), (int)c.tail_len);
+    free(c.head);
+    free(c.tail);
+
+    /* a four-byte character at both cut points, cap 100: 75 / 25 */
+    char four[401];
+    for (int i = 0; i < 100; i++) memcpy(four + 4 * i, "\xF0\x9F\x98\x80", 4);
+    four[400] = '\0';
+    memset(&c, 0, sizeof c);
+    runcmd_cut(four, 400, 100, &c);
+    ASSERT_TRUE(utf8_whole(c.head) && utf8_whole(c.tail));
+    ASSERT_EQ((int)c.head_len, 72);
+    ASSERT_EQ((int)c.tail_len, 24);
+    ASSERT_EQ((int)(c.head_len + c.tail_len + c.omitted_bytes), 400);
+    free(c.head);
+    free(c.tail);
+    free(text);
+    TEST_END();
+}
+
+int test_runcmd_cut_replaces_and_edges(void)
+{
+    TEST_BEGIN();
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    char big[501];
+    memset(big, 'b', 500);
+    big[500] = '\0';
+    runcmd_cut(big, 500, 100, &c);                 /* head and tail, heap */
+    ASSERT_NOT_NULL(c.tail);
+    runcmd_cut("short", 5, 100, &c);               /* replaces; SAN checks the frees */
+    ASSERT_STR_EQ(c.head, "short");
+    ASSERT_NULL(c.tail);
+    ASSERT_EQ((int)c.tail_len, 0);
+    ASSERT_EQ((int)c.omitted_bytes, 0);
+    runcmd_cut("", 0, 100, &c);                    /* empty text: no excerpt */
+    ASSERT_NULL(c.head);
+    ASSERT_EQ((int)c.head_len, 0);
+    runcmd_cut(NULL, 7, 100, &c);                  /* NULL text is empty text */
+    ASSERT_NULL(c.head);
+    ASSERT_EQ((int)c.omitted_bytes, 0);
+    runcmd_cut("x", 1, 100, NULL);                 /* NULL capture: nothing */
+
+    /* a cap of 0 omits it all, with no excerpt */
+    runcmd_cut("abc", 3, 0, &c);
+    ASSERT_NULL(c.head);
+    ASSERT_NULL(c.tail);
+    ASSERT_EQ((int)c.omitted_bytes, 3);
+    /* a tiny cap: tail 0, head the cap's three quarters */
+    runcmd_cut("abcdefgh", 8, 3, &c);
+    ASSERT_EQ((int)(c.head_len + c.tail_len + c.omitted_bytes), 8);
+    free(c.head);
+    free(c.tail);
+    TEST_END();
+}
+
+int test_runcmd_cut_oom(void)
+{
+    TEST_BEGIN();
+    char *text = (char *)malloc(20001);
+    ASSERT_NOT_NULL(text);
+    memset(text, 'z', 20000);
+    text[20000] = '\0';
+    /* the cut allocates head then tail (uncut: one block); fail each in turn */
+    for (int at = 1; at <= 2; at++) {
+        RunCmdCapture c;
+        memset(&c, 0, sizeof c);
+        runcmd_cut("old", 3, 100, &c);             /* an excerpt to replace */
+        runcmd_set_alloc_for_test(plan_failing_alloc);
+        g_plan_alloc_calls = 0;
+        g_plan_alloc_fail_at = at;
+        runcmd_cut(text, 20000, 4096, &c);
+        runcmd_set_alloc_for_test(NULL);
+        ASSERT_NULL(c.head);                       /* well-formed: no excerpt... */
+        ASSERT_NULL(c.tail);
+        ASSERT_EQ((int)c.head_len, 0);
+        ASSERT_EQ((int)c.tail_len, 0);
+        ASSERT_EQ((int)c.omitted_bytes, 20000);    /* ...and the size says dropped */
+        ASSERT_EQ((int)c.flags, 0);
+    }
+    RunCmdCapture u;
+    memset(&u, 0, sizeof u);
+    runcmd_set_alloc_for_test(plan_failing_alloc);
+    g_plan_alloc_calls = 0;
+    g_plan_alloc_fail_at = 1;
+    runcmd_cut(text, 100, 4096, &u);               /* the uncut path */
+    runcmd_set_alloc_for_test(NULL);
+    ASSERT_NULL(u.head);
+    ASSERT_EQ((int)u.omitted_bytes, 100);
+    free(text);
+    TEST_END();
+}
+
+/* Feed text to a terminal. */
+static void rc_feed(Terminal *t, const char *s)
+{
+    term_process(t, s, strlen(s));
+}
+
+static void cap_free(RunCmdCapture *c)
+{
+    free(c->head);
+    free(c->tail);
+    c->head = c->tail = NULL;
+}
+
+int test_runcmd_capture_normal(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    ASSERT_EQ(c.started, 1);
+    ASSERT_EQ((int)c.start_line, 0);
+    ASSERT_EQ(c.start_alt, 0);
+    rc_feed(t, "ls\r\nout1\r\nout2\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    ASSERT_EQ(c.captured, 1);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_STR_EQ(c.head, "out1\nout2");
+    ASSERT_EQ((int)c.head_len, 9);
+    ASSERT_NULL(c.tail);
+    ASSERT_EQ((int)c.omitted_bytes, 0);
+    ASSERT_EQ((int)c.flags, 0);
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_once(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "ls\r\nout1\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    char *first = c.head;
+    ASSERT_STR_EQ(first, "out1");
+    rc_feed(t, "typed\r\nmore output\r\n$ ");     /* keystrokes move the cursor */
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 0);
+    ASSERT_TRUE(c.head == first);
+    ASSERT_STR_EQ(c.head, "out1");
+    ASSERT_EQ((int)c.flags, 0);
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_reflowed(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "ls\r\nout1\r\nout2\r\n$ ");
+    ASSERT_TRUE(term_resize(t, 10, 30));
+    ASSERT_TRUE(t->reflow_seq != c.start_reflow_seq);
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)RUNCMD_CAP_SCREEN);
+    size_t want_len = 0;
+    char *want = term_extract_last_n_dup(t, t->rows, &want_len);
+    ASSERT_NOT_NULL(want);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_STR_EQ(c.head, want);                   /* the screen rows, echo kept */
+    ASSERT_TRUE(strstr(c.head, "out1") != NULL);
+    free(want);
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_alt_round_trip(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "less f\r\nout1\r\n");
+    rc_feed(t, "\x1b[?1049h");
+    ASSERT_TRUE(t->alt_screen_active);
+    rc_feed(t, "pager text");
+    rc_feed(t, "\x1b[?1049l");
+    ASSERT_TRUE(!t->alt_screen_active);
+    rc_feed(t, "out2\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "less f", 4096), 1);
+    ASSERT_EQ((int)c.flags, 0);                    /* the primary range, no flag */
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_STR_EQ(c.head, "out1\nout2");
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_inside_alt(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "\x1b[?1049h");                     /* tmux: already on the alternate screen */
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    ASSERT_EQ(c.start_alt, 1);
+    rc_feed(t, "ls\r\nout\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)RUNCMD_CAP_SCREEN);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_TRUE(strstr(c.head, "out") != NULL);
+    ASSERT_TRUE(strstr(c.head, "$ ls") != NULL);   /* the visible rows as they are */
+    cap_free(&c);
+
+    /* and the alternate screen turned on during the command */
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    Terminal *u = term_init(10, 40, 100);
+    rc_feed(u, "$ ");
+    runcmd_capture_start(&d, u);
+    ASSERT_EQ(d.start_alt, 0);
+    rc_feed(u, "vi\r\n\x1b[?1049hfile text");
+    ASSERT_EQ(runcmd_capture_take(&d, u, "vi", 4096), 1);
+    ASSERT_EQ((int)d.flags, (int)RUNCMD_CAP_SCREEN);
+    ASSERT_TRUE(d.head && strstr(d.head, "file text") != NULL);
+    cap_free(&d);
+    term_free(u);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_region_scroll(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(6, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "\x1b[1;3r\x1b[3;1H");              /* DECSTBM rows 1-3, cursor to row 3 */
+    rc_feed(t, "a\r\nb\r\nc\r\nd\r\n");            /* scrolls the region in place */
+    ASSERT_TRUE(t->region_scroll_seq != c.start_region_seq);
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)RUNCMD_CAP_SCREEN);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_TRUE(strstr(c.head, "d") != NULL);
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_cursor_up(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "L0\r\nL1\r\n$ ");
+    runcmd_capture_start(&c, t);
+    ASSERT_EQ((int)c.start_line, 2);
+    rc_feed(t, "clear; ls\r\n\x1b[2J\x1b[Hout");   /* clear, then the listing from row 0 */
+    ASSERT_TRUE(term_abs_cursor_line(t) <= c.start_line);   /* end <= start */
+    ASSERT_EQ(runcmd_capture_take(&c, t, "clear; ls", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_REDRAWN));
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_TRUE(strstr(c.head, "out") != NULL);
+    cap_free(&c);
+    term_free(t);
+
+    /* the same on a blank screen: SCREEN and EMPTY, no REDRAWN (nothing there) */
+    Terminal *u = term_init(8, 40, 100);
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    rc_feed(u, "L0\r\nL1\r\n$ ");
+    runcmd_capture_start(&d, u);
+    rc_feed(u, "\x1b[2J\x1b[H");
+    ASSERT_EQ(runcmd_capture_take(&d, u, "cls", 4096), 1);
+    ASSERT_EQ((int)d.flags, (int)(RUNCMD_CAP_SCREEN | RUNCMD_CAP_EMPTY));
+    ASSERT_NULL(d.head);
+    cap_free(&d);
+    term_free(u);
+    TEST_END();
+}
+
+int test_runcmd_capture_scrolled_out(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 40, 50);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "seq 200\r\n");
+    char b[32];
+    for (int i = 0; i < 200; i++) {
+        int k = snprintf(b, sizeof b, "o%d\r\n", i);
+        term_process(t, b, (size_t)k);
+    }
+    rc_feed(t, "$ ");
+    ASSERT_TRUE(t->lines_recycled > 0);
+    ASSERT_EQ(runcmd_capture_take(&c, t, "seq 200", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)RUNCMD_CAP_SCROLLED_OUT);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_TRUE(strstr(c.head, "o199") != NULL);
+    ASSERT_TRUE(strstr(c.head, "o0\n") == NULL);   /* the start is gone */
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_empty(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "true\r\n$ ");                      /* the echo, no output */
+    ASSERT_EQ(runcmd_capture_take(&c, t, "true", 4096), 1);
+    ASSERT_EQ((int)c.flags, (int)RUNCMD_CAP_EMPTY);
+    ASSERT_NULL(c.head);
+    ASSERT_NULL(c.tail);
+    ASSERT_EQ((int)c.omitted_bytes, 0);
+    term_free(t);
+
+    /* blank rows after the echo are trimmed: still EMPTY */
+    Terminal *u = term_init(10, 40, 100);
+    RunCmdCapture d;
+    memset(&d, 0, sizeof d);
+    rc_feed(u, "$ ");
+    runcmd_capture_start(&d, u);
+    rc_feed(u, "echo\r\n\r\n\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&d, u, "echo", 4096), 1);
+    ASSERT_EQ((int)d.flags, (int)RUNCMD_CAP_EMPTY);
+    ASSERT_NULL(d.head);
+    term_free(u);
+    TEST_END();
+}
+
+/* The same session with the view scrolled back at start and take. */
+static char *scrolled_session(int offset)
+{
+    Terminal *t = term_init(5, 40, 50);
+    char b[16];
+    for (int i = 0; i < 12; i++) {
+        int k = snprintf(b, sizeof b, "L%d\r\n", i);
+        term_process(t, b, (size_t)k);
+    }
+    rc_feed(t, "$ ");
+    t->scrollback_offset = offset;
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "ls\r\nout1\r\nout2\r\n$ ");
+    t->scrollback_offset = offset;
+    (void)runcmd_capture_take(&c, t, "ls", 4096);
+    char *r = c.head ? strdup(c.head) : NULL;
+    unsigned f = c.flags;
+    cap_free(&c);
+    term_free(t);
+    if (f != 0u) { free(r); return NULL; }
+    return r;
+}
+
+int test_runcmd_capture_scrolled_view(void)
+{
+    TEST_BEGIN();
+    char *at0 = scrolled_session(0);
+    char *at3 = scrolled_session(3);
+    ASSERT_NOT_NULL(at0);
+    ASSERT_NOT_NULL(at3);
+    ASSERT_STR_EQ(at0, "out1\nout2");
+    ASSERT_STR_EQ(at3, at0);
+    free(at0);
+    free(at3);
+    TEST_END();
+}
+
+int test_runcmd_capture_not_started(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ls\r\nout\r\n$ ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 0);   /* before start */
+    ASSERT_EQ(c.captured, 0);
+    ASSERT_NULL(c.head);
+    ASSERT_EQ(c.flags, 0u);
+
+    runcmd_capture_start(&c, NULL);                         /* no terminal: not started */
+    ASSERT_EQ(c.started, 0);
+    runcmd_capture_start(NULL, t);                          /* NULL-safe */
+    runcmd_capture_start(&c, t);
+    ASSERT_EQ(c.started, 1);
+    ASSERT_EQ(runcmd_capture_take(&c, NULL, "ls", 4096), 0);   /* no terminal */
+    ASSERT_EQ(c.captured, 0);
+    ASSERT_EQ(runcmd_capture_take(NULL, t, "ls", 4096), 0);
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);      /* and it still can */
+    ASSERT_EQ(c.captured, 1);
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+/* A cell never yields a control byte, so the capture needs no strip of its
+ * own: term_extract writes C0, DEL and C1 cells as spaces. */
+int test_runcmd_capture_control_cells(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(6, 40, 100);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "ls\r\nabcdefgh\r\n$ ");
+    /* write control codepoints straight into the output row's cells */
+    int logical = 1;
+    TermRow *row = t->lines[(t->lines_start + logical) % t->lines_capacity];
+    ASSERT_NOT_NULL(row);
+    row->cells[1].codepoint = 0x01u;
+    row->cells[2].codepoint = 0x1Bu;
+    row->cells[3].codepoint = 0x7Fu;
+    row->cells[4].codepoint = 0x85u;
+    row->cells[5].codepoint = 0x9Fu;
+    ASSERT_EQ(runcmd_capture_take(&c, t, "ls", 4096), 1);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_STR_EQ(c.head, "a     gh");
+    for (const unsigned char *p = (const unsigned char *)c.head; *p; p++)
+        ASSERT_TRUE(*p == '\n' || (*p >= 0x20 && *p != 0x7F));
+    cap_free(&c);
+    term_free(t);
+    TEST_END();
+}
+
+int test_runcmd_capture_cut_applied(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 200, 5000);
+    RunCmdCapture c;
+    memset(&c, 0, sizeof c);
+    rc_feed(t, "$ ");
+    runcmd_capture_start(&c, t);
+    rc_feed(t, "big\r\n");
+    char b[32];
+    size_t total = 0;
+    for (int i = 0; i < 400; i++) {
+        int k = snprintf(b, sizeof b, "line %04d\r\n", i);
+        term_process(t, b, (size_t)k);
+        total += (size_t)k - 1;                    /* the \n between rows, the \r is not stored */
+    }
+    rc_feed(t, "$ ");
+    ASSERT_EQ(runcmd_capture_take(&c, t, "big", 1000), 1);
+    ASSERT_EQ((int)c.flags, 0);
+    ASSERT_NOT_NULL(c.head);
+    ASSERT_NOT_NULL(c.tail);
+    ASSERT_EQ((int)c.head_len, 750);
+    ASSERT_EQ((int)c.tail_len, 250);
+    ASSERT_TRUE(c.omitted_bytes > 0);
+    ASSERT_TRUE(strncmp(c.head, "line 0000\n", 10) == 0);
+    ASSERT_TRUE(strstr(c.tail, "line 0399") != NULL);
+    ASSERT_EQ((int)(c.head_len + c.tail_len + c.omitted_bytes), (int)(total - 1));
+    cap_free(&c);
+    term_free(t);
     TEST_END();
 }
