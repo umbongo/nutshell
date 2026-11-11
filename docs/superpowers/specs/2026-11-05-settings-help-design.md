@@ -461,6 +461,10 @@ re-entry guard).
     figure grows as the buffer fills, by roughly columns x 20 bytes per
     line (about 200 MB for a 200-column tab), and further output adds
     nothing more.
+13. Mixed scaling, if a second monitor is to hand: with the primary display
+    at 100 % and Nutshell on a monitor at 150 %, open Settings. AI Assistant >
+    Behaviour shows no page scrollbar when the work area has room (before the
+    frame was measured from the window itself it opened about 18 px short).
 
 ### 5. Non-goals
 

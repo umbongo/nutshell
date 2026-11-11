@@ -361,7 +361,7 @@ Read the spec first: "Layout and behaviour changes", items A and B.
 - [ ] **Step 4: Wire `settings_dlg_run()`.**
   - Create the window **without** `WS_VISIBLE`, at the owner monitor's `rcWork` top-left (`MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST)`, `GetMonitorInfo`), using today's provisional size. This puts the window on the owner's monitor, so `d->dpi` is that monitor's DPI.
   - Then use `d->dpi` and `settings_metrics_init`. Sum `target_rows = 1 + Σ rows` of the `d->ctrls[]` entries on `SETTINGS_PAGE_AI_BEHAVIOUR`, counting the `rows` field whether or not the entry is visible.
-  - Get `nc_w`/`nc_h` from `AdjustWindowRect` on the style, as today.
+  - Get `nc_w`/`nc_h` by measuring the hidden window (`GetWindowRect` minus `GetClientRect`), so the frame is the one for the monitor's DPI; `AdjustWindowRect` on the style is only the fallback.
   - Call `settings_initial_placement`, then `SetWindowPos` the window to the result and `ShowWindow(hwnd, SW_SHOW)`.
   - Remove `CW_USEDEFAULT` and the fixed 760x560.
   - Hold `d` before the message loop: `WM_DESTROY` frees it.
