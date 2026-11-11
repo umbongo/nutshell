@@ -538,11 +538,6 @@ void ai_chat_send_user_message(AiChatData *d)
     if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
         return;
 
-    /* The user is talking again: the unattended-round count starts over
-     * (guard-rails spec 2026-11-04 section 1). */
-    ai_rounds_user_message(d->active_state);
-    ai_tool_rounds_reset(d->active_state);   /* ... and so are the tool rounds */
-
     char *input = input_text_utf8(d->hInput);
     if (!input) return;
     /* The text as read: the prefix strip below shortens the string, but the
@@ -567,14 +562,15 @@ void ai_chat_send_user_message(AiChatData *d)
         return;
     }
 
-    /* A run_command batch still open (a card nobody ran) ends with this
-     * message (spec decisions 8 and 24): its results go in first, then the
-     * typed turn. Without room for the results turn, the typed turn and the
-     * reply, nothing is sent and the text stays in the box. */
+    /* Room for the typed message and its reply (spec decision 24), checked on
+     * every typed message before anything is changed: an open run_command
+     * batch (a card nobody ran) also needs a slot for the results turn its
+     * finish stores first, and the queued notes the finish flushes count too.
+     * Without room nothing is sent, the text stays in the box and the round
+     * counters stay as they were. */
     CmdBatch *runcmd_batch = cmd_batch_runcmd(&d->active_state->batches);
     const int ends_runcmd_batch = (runcmd_batch != NULL);   /* the finish frees it */
-    if (ends_runcmd_batch &&
-        !ai_conv_room_for_send(&d->conv, ends_runcmd_batch,
+    if (!ai_conv_room_for_send(&d->conv, ends_runcmd_batch,
                                &d->active_state->notes)) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
             "[conversation full: your message was not sent; start a New Chat]");
@@ -584,14 +580,23 @@ void ai_chat_send_user_message(AiChatData *d)
         }
         secure_zero(input, input_len);
         free(input);
+        /* Nothing launched: an approved batch waiting must not be stranded
+         * (a no-op while a dispatch runs or a stream is busy). */
+        ai_chat_maybe_start_next_batch(d);
         return;
     }
 
+    /* The user is talking again: the unattended-round count starts over
+     * (guard-rails spec 2026-11-04 section 1). */
+    ai_rounds_user_message(d->active_state);
+    ai_tool_rounds_reset(d->active_state);   /* ... and so are the tool rounds */
+
     SetWindowText(d->hInput, "");
 
-    /* The finish leaves two slots free (this message's and its reply's, R47)
-     * and settles the card above the typed message. It relaunches nothing:
-     * the typed message does. */
+    /* An open run_command batch ends with this message (spec decision 8): its
+     * results go in first, then the typed turn. The finish leaves two slots
+     * free (this message's and its reply's, R47) and settles the card above
+     * the typed message. It relaunches nothing: the typed message does. */
     if (ends_runcmd_batch)
         ai_chat_runcmd_finish(d, d->active_state, runcmd_batch,
                               runcmd_path_plan(RUNCMD_PATH_TYPED).cause);

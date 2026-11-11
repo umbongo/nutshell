@@ -2658,7 +2658,7 @@ static void do_session_switch(AiChatData *d,
      * that the switch away cancelled was removed by ai_chat_dispatch_cancel(), so
      * only batches still holding approved, unrun rows start here. Showing a
      * tab starts no model request, run_command conversation or not (spec
-     * decision 7): the rebuilt view shows the stored rows and any waiting
+     * decision 5): the rebuilt view shows the stored rows and any waiting
      * card, and the user continues by Run on the card or a typed message.
      * The TAB_SWITCH finish above relaunches nothing
      * (runcmd_cause_relaunches), and this call only dispatches a command the
