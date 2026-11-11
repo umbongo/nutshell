@@ -119,4 +119,14 @@ void ai_conv_snapshot_frame(const AiConversation *conv, AiBodyFrame *frame);
  * Static strings, never freed. */
 const char *ai_body_failure_text(const AiConversation *conv);
 
+/* The same for a request to `provider` with `tools_json` (NULL or "" for none):
+ * between the pairing cause and the generic one, a DeepSeek request with tools
+ * that holds an assistant turn whose reasoning was cut
+ * (ai_body_refuses_cut_reasoning) reads "[request not sent: a reply's
+ * reasoning was too long to send back whole; start a New Chat, or set Commands
+ * as tool calls to Off]" (spec decision 23). ai_body_failure_text(conv) is this
+ * with no provider and no tools. */
+const char *ai_body_failure_text_for(const AiConversation *conv,
+                                     const char *provider,
+                                     const char *tools_json);
 #endif /* NUTSHELL_AI_CONV_GUARD_H */

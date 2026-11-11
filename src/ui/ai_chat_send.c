@@ -269,8 +269,14 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     free(launch_reg);
 
     if (s->body_len == 0) {
+        /* pairing, a reply's reasoning too long for DeepSeek, overflow or
+         * allocation: the row says which (a static string, read before the
+         * discard frees the stream's provider and tools) */
+        const char *why = ai_body_failure_text_for(
+            &d->conv, s->provider,
+            s->has_tools && s->tools_json[0] ? s->tools_json : NULL);
         ai_stream_discard(s);
-        launch_failed(d, ai_body_failure_text(&d->conv));
+        launch_failed(d, why);
         return;
     }
     {

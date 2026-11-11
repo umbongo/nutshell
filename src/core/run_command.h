@@ -414,9 +414,10 @@ int runcmd_status_text(RunCmdStatusRow kind, int n, char *buf, size_t cap);
  * them (ai_tool_wire_bytes(conv, 1, RUNCMD_AGE_ROUNDS - 1): every call's id,
  * name and input, every answer's id and framing, the JSON around them), plus
  * tools_json_len plus 2 * snapshot_len (the snapshot's stored length, counted
- * twice for its escaping and its block), plus, for "moonshot", every stored
- * assistant turn's escaped reasoning (the only provider sending it back so
- * far; DeepSeek's is added with its request path). A run_command part that
+ * twice for its escaping and its block), plus the escaped reasoning the
+ * request sends back: for "moonshot" a tool-call turn's, for "deepseek" every
+ * assistant turn's, and only when tools_json_len > 0 (spec decision 23); no
+ * other provider sends any. This is the one place reasoning is counted. A run_command part that
  * the append about to happen will age (a command round with at least
  * RUNCMD_AGE_ROUNDS - 1 command rounds after it) is counted as the stub, which
  * is what the next request carries (the append being a command round). NULL conv: tools and snapshot only.

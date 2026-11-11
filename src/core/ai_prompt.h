@@ -89,15 +89,25 @@ typedef struct {
     AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */
     int n_tool_calls;         /* 0 means normal text message */
 
-    /* The reasoning the model streamed alongside this assistant turn's tool
-     * calls, kept so a provider that demands it back (Moonshot's thinking
-     * models: a 400 without it) gets it in the follow-up request. Heap, at
-     * most AI_REASONING_MAX - 1 bytes, NULL when the turn had none. Only the
-     * OpenAI-format builder reads it, and only for provider "moonshot"; the
+    /* The reasoning the model streamed alongside this assistant turn (tool
+     * calls or plain text), kept so a provider that demands it back gets it in
+     * the follow-up request. Heap, at most AI_REASONING_MAX - 1 bytes, NULL
+     * when the turn had none. Only the OpenAI-format builder reads it: for
+     * provider "moonshot" on a tool-call turn (a 400 without it), for
+     * "deepseek" on every assistant turn of a request that carries tools; the
      * Anthropic path and every other provider ignore it. Owned by the
      * message: ai_msg_free() frees it, ai_conv_copy() duplicates it, and
      * ai_conv_take() moves it with the rest. */
     char *reasoning;
+
+    /* 1 when the reasoning stored for this assistant turn is not the whole of
+     * what the model streamed: the stream dropped some (its 16 KiB), the
+     * AI_REASONING_MAX cap cut it, or its copy failed to allocate. DeepSeek
+     * wants every turn's reasoning "fully passed back", so a conversation with
+     * a cut turn is not sent to it with tools (spec decision 23). Set by
+     * ai_msg_set_reasoning and by the stream thread; cleared by ai_conv_add and
+     * ai_msg_free; a struct copy carries it. */
+    int reasoning_cut;
 
     /* For ROLE_ASSISTANT messages that contain tool calls: the provider and
      * the model that produced them, "" when unknown (older callers, tests).
@@ -609,8 +619,25 @@ int ai_msg_set_content(AiMessage *msg, const char *data, size_t len);
 
 /* Store `text` as msg's reasoning (see AiMessage), replacing any earlier one.
  * Kept to AI_REASONING_MAX - 1 bytes, cut on a UTF-8 boundary. NULL or ""
- * clears it. Returns 0, or -1 on allocation failure (reasoning cleared). */
+ * clears it. Returns 0, or -1 on allocation failure (reasoning cleared). Sets
+ * msg->reasoning_cut when the cap cut the text or the copy failed; a call
+ * that cuts nothing clears it. */
 int ai_msg_set_reasoning(AiMessage *msg, const char *text);
+
+/* Move src's reasoning and reasoning_cut to dst, freeing dst's own and leaving
+ * src with none: no allocation, so it cannot fail. The panel uses it to carry a
+ * reply's reasoning from the stream thread's copy of the conversation to the
+ * working copy that stores the reply again. NULL or dst == src: no-op. */
+void ai_msg_move_reasoning(AiMessage *dst, AiMessage *src);
+
+/* 1 when a request to `provider` with `tools_json` (NULL or "" for none) holds
+ * an assistant turn with reasoning_cut that the request would send structured:
+ * provider "deepseek" with a tools array sends every assistant turn's
+ * reasoning_content, and DeepSeek wants it whole, so the builder returns 0 for
+ * such a request (spec decision 23). A turn that goes out as text counts for
+ * nothing. Any other provider, or no tools: 0. */
+int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provider,
+                                  const char *tools_json);
 
 /* Frees dynamic resources (content_overflow, tool_calls, reasoning,
  * attachment). */

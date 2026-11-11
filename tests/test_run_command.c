@@ -2166,6 +2166,45 @@ int test_runcmd_age_results(void)
     TEST_END();
 }
 
+int test_runcmd_estimate_reasoning_rules(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "hello");
+    AiToolCall call;
+    set_call(&call, "t1", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
+    agentic_add_assistant_tool_msg_ex(c, "", "aaaaaaaaaa", NULL, NULL, &call, 1);   /* 10 */
+    AiToolResult res;
+    memset(&res, 0, sizeof(res));
+    snprintf(res.tool_use_id, sizeof(res.tool_use_id), "t1");
+    res.content = rc_dup("out");
+    res.content_len = 3;
+    agentic_add_tool_results(c, &call, &res, 1);
+    free(res.content);
+    ai_conv_add(c, AI_ROLE_ASSISTANT, "done");
+    ai_msg_set_reasoning(&c->messages[c->msg_count - 1], "bbbbb");            /* 5 */
+    ai_conv_add(c, AI_ROLE_ASSISTANT, "again");                               /* none */
+
+    size_t base = runcmd_request_estimate(c, "openai", 100, 0);
+    /* moonshot: the tool-call turn's only; a plain turn's is never sent */
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "moonshot", 100, 0) - base), 10);
+    /* deepseek with tools: every assistant turn's */
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "deepseek", 100, 0) - base), 15);
+    /* deepseek without tools: none, and no tools is the length 0 */
+    size_t base0 = runcmd_request_estimate(c, "openai", 0, 0);
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "deepseek", 0, 0) - base0), 0);
+    /* the other providers: none */
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "anthropic", 100, 0) - base), 0);
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "gemini", 100, 0) - base), 0);
+    ASSERT_EQ((int)(runcmd_request_estimate(c, "custom", 100, 0) - base), 0);
+    ASSERT_EQ((int)(runcmd_request_estimate(c, NULL, 100, 0) - base), 0);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
 int test_runcmd_estimate_counts_reasoning(void)
 {
     TEST_BEGIN();

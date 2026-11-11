@@ -22,6 +22,7 @@ typedef struct {
     size_t content_len;
     char full_thinking[AI_MSG_MAX];  /* accumulated full thinking */
     size_t thinking_len;
+    int thinking_cut;        /* 1 once any reasoning of this reply was dropped (spec 23) */
     int in_thinking;         /* 1 while receiving thinking chunks */
     int header_sent;         /* bitmask: 1=thinking header, 2=content header */
     /* Tool streaming state (NULL when no tools registered) */
@@ -134,6 +135,21 @@ static void stream_pin_fetch_host(AiStream *s, const AiToolCall *call)
     json_free(input);
 }
 
+/* Store a reply as a plain assistant turn together with its reasoning (every
+ * turn's is kept, spec decision 23: only DeepSeek's builder reads a plain
+ * turn's). The turn is marked reasoning_cut when the accumulator dropped some,
+ * the AI_REASONING_MAX cap cut it or its copy failed. Touches only `conv`, the
+ * stream's own. Returns 1 when the reply was stored (ai_conv_add took it). */
+static int store_plain_reply(AiConversation *conv, const StreamContext *ctx)
+{
+    if (ai_conv_add(conv, AI_ROLE_ASSISTANT, ctx->full_content) != 0)
+        return 0;
+    AiMessage *turn = &conv->messages[conv->msg_count - 1];
+    (void)ai_msg_set_reasoning(turn, ctx->full_thinking);   /* -1 sets the flag itself */
+    if (ctx->thinking_cut) turn->reasoning_cut = 1;
+    return 1;
+}
+
 /* Process a single SSE line from the stream */
 static void stream_process_line(StreamContext *ctx, const char *line, size_t len)
 {
@@ -220,7 +236,15 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
             memcpy(ctx->full_thinking + ctx->thinking_len, thinking_delta, dlen);
             ctx->thinking_len += dlen;
             ctx->full_thinking[ctx->thinking_len] = '\0';
+        } else {
+            /* DeepSeek's reasoning goes back whole or not at all: note that
+             * this reply's is no longer whole (the turn is marked below) */
+            ctx->thinking_cut = 1;
         }
+        /* a delta that filled its buffer to the brim may have been cut by the
+         * parser */
+        if (dlen >= sizeof(thinking_delta) - 1)
+            ctx->thinking_cut = 1;
         /* Post to UI for realtime display */
         stream_post_text(ctx->stream, WM_AI_STREAM, 0, thinking_delta);
     }
@@ -265,6 +289,8 @@ static int stream_callback(const char *data, size_t len, void *userdata)
         } else {
             if (ctx->line_len < sizeof(ctx->line_buf) - 1)
                 ctx->line_buf[ctx->line_len++] = c;
+            else
+                ctx->thinking_cut = 1;   /* a line cut short may have held reasoning */
         }
     }
     return 0;
@@ -593,7 +619,8 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
 
             /* Add assistant message with tool_use blocks */
             /* ctx.full_thinking is this turn's reasoning; the builder sends it
-             * back with the tool calls for provider "moonshot" only. It makes
+             * back with the tool calls for provider "moonshot" and, with every
+             * turn's, for "deepseek". It makes
              * up an empty or repeated call id (call_<n>): read ids from the
              * stored turn, never from `pending`. */
             AgenticStep turn_step = AGENTIC_STEP_FULL;
@@ -618,8 +645,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                  * empty one is not: no provider takes an empty turn). */
                 char full_row[128];
                 if (ctx.full_content[0])
-                    reply_stored = ai_conv_add(&s->conv, AI_ROLE_ASSISTANT,
-                                               ctx.full_content) == 0;
+                    reply_stored = store_plain_reply(&s->conv, &ctx);
                 (void)agentic_full_row(n_calls, full_row, sizeof(full_row));
                 DLOG(DLOG_AI, DLOG_WARN, 0, "stream.round_full",
                      "stream=%u iter=%d calls=%d stage=turn", stream_id,
@@ -628,6 +654,11 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 loop_done = 1;
                 continue;
             }
+
+            /* The turn is stored: say so when its reasoning is not the whole
+             * of what the model streamed (the accumulator dropped some). */
+            if (ctx.thinking_cut && s->conv.msg_count > 0)
+                s->conv.messages[s->conv.msg_count - 1].reasoning_cut = 1;
 
             /* A run_command call ends the stream: nothing runs here, no card
              * is asked and no "using tool" row is posted. The stored turn's
@@ -897,7 +928,9 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                     if (s->body_len == 0) {
                         /* pairing, overflow or allocation: the row says which */
                         post_tool_msg(s, CHAT_ITEM_STATUS,
-                                      ai_body_failure_text(&s->conv));
+                                      ai_body_failure_text_for(&s->conv,
+                                                               s->provider,
+                                                               s->tools_json));
                         loop_done = 1;
                     } else if (!json_validate(s->body, s->body_len, json_err,
                                               sizeof(json_err))) {
@@ -911,8 +944,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         } else {
             /* Normal end (no tool-use stop) — add assistant message and exit loop */
             loop_done = 1;
-            reply_stored = ai_conv_add(&s->conv, AI_ROLE_ASSISTANT,
-                                       ctx.full_content) == 0;
+            reply_stored = store_plain_reply(&s->conv, &ctx);
             if (!reply_stored)   /* the reply stays on screen, but not in the conversation */
                 post_tool_msg(s, CHAT_ITEM_STATUS,
                               "[reply not stored: conversation full; start a New Chat]");

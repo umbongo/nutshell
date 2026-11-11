@@ -3139,6 +3139,7 @@ int test_runcmd_age_counts_command_rounds(void);
 int test_runcmd_estimate_follows_command_rounds(void);
 int test_runcmd_body_bounded_over_rounds(void);
 int test_runcmd_estimate_counts_reasoning(void);
+int test_runcmd_estimate_reasoning_rules(void);
 int test_runcmd_results_no_queue(void);
 int test_runcmd_fit_note_near_cap(void);
 int test_runcmd_result_bytes_exact(void);
@@ -3293,6 +3294,7 @@ int test_launch_snapshot_exec_after_note_is_fresh(void);
 int test_launch_snapshot_alloc_failure_attaches_none(void);
 int test_launch_snapshot_edges(void);
 int test_body_failure_text_names_cause(void);
+int test_body_failure_text_reasoning_cut(void);
 int test_launch_tools_json_matches_runcmd_predicate(void);
 
 /* test_agentic_loop.c */
@@ -3330,6 +3332,14 @@ int test_ai_reasoning_absent_emits_nothing(void);
 int test_ai_reasoning_escaped_in_body(void);
 int test_ai_reasoning_capped(void);
 int test_ai_reasoning_copy_take_compact(void);
+int test_ai_reasoning_deepseek_tools_every_turn(void);
+int test_ai_reasoning_deepseek_no_tools_none(void);
+int test_ai_reasoning_deepseek_cut_not_sent(void);
+int test_ai_reasoning_deepseek_foreign_turn_as_text(void);
+int test_ai_reasoning_oom_sets_cut(void);
+int test_ai_reasoning_moonshot_unchanged(void);
+int test_ai_reasoning_cut_survives_copy(void);
+int test_ai_reasoning_move_between_messages(void);
 int test_ai_moonshot_max_completion_tokens(void);
 int test_ai_stream_chunk_cut_off(void);
 int test_ai_moonshot_output_limit_per_model(void);
@@ -7349,6 +7359,7 @@ int main(void) {
     failed += test_runcmd_estimate_follows_command_rounds();
     failed += test_runcmd_body_bounded_over_rounds();
     failed += test_runcmd_estimate_counts_reasoning();
+    failed += test_runcmd_estimate_reasoning_rules();
     failed += test_runcmd_results_no_queue();
     failed += test_runcmd_fit_note_near_cap();
     failed += test_runcmd_result_bytes_exact();
@@ -7494,6 +7505,14 @@ int main(void) {
     failed += test_ai_reasoning_escaped_in_body();
     failed += test_ai_reasoning_capped();
     failed += test_ai_reasoning_copy_take_compact();
+    failed += test_ai_reasoning_deepseek_tools_every_turn();
+    failed += test_ai_reasoning_deepseek_no_tools_none();
+    failed += test_ai_reasoning_deepseek_cut_not_sent();
+    failed += test_ai_reasoning_deepseek_foreign_turn_as_text();
+    failed += test_ai_reasoning_oom_sets_cut();
+    failed += test_ai_reasoning_moonshot_unchanged();
+    failed += test_ai_reasoning_cut_survives_copy();
+    failed += test_ai_reasoning_move_between_messages();
     failed += test_ai_moonshot_max_completion_tokens();
     failed += test_ai_stream_chunk_cut_off();
     failed += test_stream_cut_off_anthropic_max_tokens();
@@ -8709,6 +8728,7 @@ int main(void) {
         failed += test_launch_snapshot_alloc_failure_attaches_none();
         failed += test_launch_snapshot_edges();
         failed += test_body_failure_text_names_cause();
+    failed += test_body_failure_text_reasoning_cut();
         failed += test_launch_tools_json_matches_runcmd_predicate();
     }
 

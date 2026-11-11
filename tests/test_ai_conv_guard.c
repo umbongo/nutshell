@@ -1709,6 +1709,36 @@ int test_body_failure_text_names_cause(void)
     TEST_END();
 }
 
+int test_body_failure_text_reasoning_cut(void)
+{
+    TEST_BEGIN();
+    static const char tools[] =
+        "[{\"type\":\"function\",\"function\":{\"name\":\"web_fetch\"}}]";
+    const char *cut_row =
+        "[request not sent: a reply's reasoning was too long to send back whole; "
+        "start a New Chat, or set Commands as tool calls to Off]";
+    AiConversation *c = new_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_ASSISTANT, "reply"), 0);
+        c->messages[c->msg_count - 1].reasoning_cut = 1;
+        ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", tools), cut_row);
+        /* only for deepseek with tools: otherwise the generic cause */
+        const char *generic = ai_body_failure_text(c);
+        ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", NULL), generic);
+        ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", ""), generic);
+        ASSERT_STR_EQ(ai_body_failure_text_for(c, "moonshot", tools), generic);
+        ASSERT_STR_EQ(ai_body_failure_text_for(c, NULL, tools), generic);
+        /* the pairing cause comes first */
+        AiToolCall calls[1];
+        ASSERT_EQ(add_asst(c, 1, calls), 0);
+        ASSERT_STR_EQ(ai_body_failure_text_for(c, "deepseek", tools),
+            "[request not sent: tool calls and results do not pair up; start a New Chat]");
+    }
+    free_conv(c);
+    TEST_END();
+}
+
 /* The launch's registry: the panel's tools plus run_command exactly when
  * ai_provider_runcmd(provider, mode), serialised for the provider. */
 int test_launch_tools_json_matches_runcmd_predicate(void)

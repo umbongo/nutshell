@@ -3,6 +3,8 @@
 #include "run_command.h"
 #include "ai_conv_guard.h"
 #include "ai_prompt.h"
+#include "json_validate.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -580,8 +582,8 @@ int test_ai_reasoning_other_providers_none(void)
     TEST_BEGIN();
     AiConversation conv;
     reasoning_conv(&conv, "secret thoughts");
-    static const char *const providers[] = {"deepseek", "openai", "gemini",
-                                            "anthropic", NULL};
+    static const char *const providers[] = {"openai", "gemini", "anthropic",
+                                            "custom", NULL};
     for (int i = 0; providers[i]; i++) {
         char buf[16384];
         ASSERT_TRUE(reasoning_body(&conv, providers[i], buf, sizeof(buf)) > 0);
@@ -619,12 +621,15 @@ int test_ai_reasoning_absent_emits_nothing(void)
     ASSERT_NULL(conv.messages[2].reasoning);
 
     /* every other provider still emits nothing */
-    static const char *const others[] = {"deepseek", "openai", "gemini",
-                                         "anthropic", NULL};
+    static const char *const others[] = {"openai", "gemini", "anthropic",
+                                         "custom", NULL};
     for (int i = 0; others[i]; i++) {
         ASSERT_TRUE(reasoning_body(&conv, others[i], buf, sizeof(buf)) > 0);
         ASSERT_NULL(strstr(buf, "reasoning_content"));
     }
+    /* DeepSeek with tools sends the empty field too, like Moonshot */
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"reasoning_content\":\"\",\"tool_calls\":[") != NULL);
     ai_conv_reset(&conv);
     TEST_END();
 }
@@ -675,6 +680,209 @@ int test_ai_reasoning_capped(void)
     ASSERT_EQ(ai_msg_set_reasoning(&m, ""), 0);
     ASSERT_NULL(m.reasoning);
     free(text);
+    TEST_END();
+}
+
+/* ---- DeepSeek: reasoning whole or not at all (spec decision 23) ---------- */
+
+/* sys, user, asst(tool call, reasoning "r1"), tool, asst plain ("r2"), asst
+ * plain (none), user. The tool turn is recorded under `tool_provider`. */
+static void deepseek_conv(AiConversation *conv, const char *tool_provider)
+{
+    reasoning_conv(conv, "r1");
+    AiMessage *tm = &conv->messages[2];
+    snprintf(tm->tool_provider, sizeof(tm->tool_provider), "%s", tool_provider);
+    snprintf(tm->tool_model, sizeof(tm->tool_model), "m");
+    ai_conv_add(conv, AI_ROLE_ASSISTANT, "answer one");
+    ai_msg_set_reasoning(&conv->messages[conv->msg_count - 1], "r2");
+    ai_conv_add(conv, AI_ROLE_ASSISTANT, "answer two");
+    ai_conv_add(conv, AI_ROLE_USER, "next");
+}
+
+static size_t count_substr(const char *hay, const char *needle)
+{
+    size_t n = 0, nl = strlen(needle);
+    for (const char *p = hay; (p = strstr(p, needle)) != NULL; p += nl) n++;
+    return n;
+}
+
+int test_ai_reasoning_deepseek_tools_every_turn(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "deepseek");
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"reasoning_content\":\"r1\",\"tool_calls\":[") != NULL);
+    ASSERT_TRUE(strstr(buf, "{\"role\":\"assistant\",\"content\":\"answer one\","
+                            "\"reasoning_content\":\"r2\"}") != NULL);
+    ASSERT_TRUE(strstr(buf, "{\"role\":\"assistant\",\"content\":\"answer two\","
+                            "\"reasoning_content\":\"\"}") != NULL);
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":"), 3);
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":\"\""), 1);
+    /* a user turn carries none */
+    ASSERT_NULL(strstr(buf, "\"content\":\"next\",\"reasoning_content\""));
+    char err[128] = "";
+    ASSERT_TRUE(json_validate(buf, strlen(buf), err, sizeof(err)));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_no_tools_none(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "");
+    char buf[16384];
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, NULL, buf, sizeof(buf), 1,
+                                            "deepseek") > 0);
+    ASSERT_NULL(strstr(buf, "reasoning_content"));
+    ASSERT_NULL(strstr(buf, "\"r1\""));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_cut_not_sent(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "deepseek");
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+
+    /* a plain turn whose reasoning was cut: the request is not sent */
+    conv.messages[4].reasoning_cut = 1;
+    ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
+    ASSERT_STR_EQ(ai_body_failure_text_for(&conv, "deepseek", REASON_TOOLS),
+        "[request not sent: a reply's reasoning was too long to send back whole; "
+        "start a New Chat, or set Commands as tool calls to Off]");
+    /* without tools the field is not sent, so nothing is refused */
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, NULL, buf, sizeof(buf), 1,
+                                            "deepseek") > 0);
+    /* Moonshot sends only the tool-call turn's: a cut plain turn is no matter */
+    ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
+    conv.messages[4].reasoning_cut = 0;
+
+    /* the tool-call turn's own cut refuses too */
+    conv.messages[2].reasoning_cut = 1;
+    ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_foreign_turn_as_text(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    /* the tool turn was recorded under anthropic: it goes to deepseek as text,
+     * carries no reasoning_content, and its cut flag refuses nothing */
+    deepseek_conv(&conv, "anthropic");
+    conv.messages[2].reasoning_cut = 1;
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_NULL(strstr(buf, "\"tool_calls\""));
+    ASSERT_NULL(strstr(buf, "\"r1\""));
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":"), 2);   /* the two plain turns */
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+static void *refusing_alloc(size_t n)
+{
+    (void)n;
+    return NULL;
+}
+
+int test_ai_reasoning_oom_sets_cut(void)
+{
+    TEST_BEGIN();
+    AiMessage m;
+    memset(&m, 0, sizeof(m));
+    ai_prompt_set_alloc_for_test(refusing_alloc);
+    ASSERT_EQ(ai_msg_set_reasoning(&m, "some thoughts"), -1);
+    ai_prompt_set_alloc_for_test(NULL);
+    ASSERT_NULL(m.reasoning);
+    ASSERT_EQ(m.reasoning_cut, 1);
+
+    /* a clean set afterwards replaces the text and clears the flag */
+    ASSERT_EQ(ai_msg_set_reasoning(&m, "fine"), 0);
+    ASSERT_STR_EQ(m.reasoning, "fine");
+    ASSERT_EQ(m.reasoning_cut, 0);
+
+    /* the 16 KiB cap sets it; nothing cut does not */
+    size_t big = (size_t)AI_REASONING_MAX + 10;
+    char *text = (char *)malloc(big + 1);
+    ASSERT_NOT_NULL(text);
+    memset(text, 'a', big);
+    text[big] = '\0';
+    ASSERT_EQ(ai_msg_set_reasoning(&m, text), 0);
+    ASSERT_EQ(m.reasoning_cut, 1);
+    ASSERT_EQ(ai_msg_set_reasoning(&m, NULL), 0);
+    ASSERT_EQ(m.reasoning_cut, 0);
+    free(text);
+    ai_msg_free(&m);
+    ASSERT_EQ(m.reasoning_cut, 0);
+    TEST_END();
+}
+
+int test_ai_reasoning_moonshot_unchanged(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "moonshot");
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
+    /* the tool-call turn only: no plain turn carries it, "r2" is never sent */
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":"), 1);
+    ASSERT_TRUE(strstr(buf, "\"reasoning_content\":\"r1\",\"tool_calls\":[") != NULL);
+    ASSERT_NULL(strstr(buf, "r2"));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_move_between_messages(void)
+{
+    TEST_BEGIN();
+    AiMessage a, b;
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    ASSERT_EQ(ai_msg_set_reasoning(&a, "from a"), 0);
+    a.reasoning_cut = 1;
+    ASSERT_EQ(ai_msg_set_reasoning(&b, "old b"), 0);
+
+    ai_msg_move_reasoning(&b, &a);
+    ASSERT_STR_EQ(b.reasoning, "from a");
+    ASSERT_EQ(b.reasoning_cut, 1);
+    ASSERT_NULL(a.reasoning);
+    ASSERT_EQ(a.reasoning_cut, 0);
+
+    /* an empty source clears the destination; NULL and self are no-ops */
+    ai_msg_move_reasoning(&b, &a);
+    ASSERT_NULL(b.reasoning);
+    ASSERT_EQ(b.reasoning_cut, 0);
+    ASSERT_EQ(ai_msg_set_reasoning(&b, "kept"), 0);
+    ai_msg_move_reasoning(&b, &b);
+    ai_msg_move_reasoning(NULL, &b);
+    ai_msg_move_reasoning(&b, NULL);
+    ASSERT_STR_EQ(b.reasoning, "kept");
+    ai_msg_free(&a);
+    ai_msg_free(&b);
+    TEST_END();
+}
+
+/* the copy keeps the flag */
+int test_ai_reasoning_cut_survives_copy(void)
+{
+    TEST_BEGIN();
+    AiConversation a, b;
+    deepseek_conv(&a, "deepseek");
+    a.messages[4].reasoning_cut = 1;
+    ai_conv_init(&b, "m");
+    ASSERT_EQ(ai_conv_copy(&b, &a), 0);
+    ASSERT_EQ(b.messages[4].reasoning_cut, 1);
+    ASSERT_EQ(b.messages[2].reasoning_cut, 0);
+    ai_conv_reset(&a);
+    ai_conv_reset(&b);
     TEST_END();
 }
 

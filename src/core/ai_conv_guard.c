@@ -256,11 +256,22 @@ void ai_conv_snapshot_frame(const AiConversation *conv, AiBodyFrame *frame)
     }
 }
 
-const char *ai_body_failure_text(const AiConversation *conv)
+const char *ai_body_failure_text_for(const AiConversation *conv,
+                                     const char *provider,
+                                     const char *tools_json)
 {
     if (!ai_conv_tool_pairs_well_formed(conv))
         return "[request not sent: tool calls and results do not pair up; "
                "start a New Chat]";
+    if (ai_body_refuses_cut_reasoning(conv, provider, tools_json))
+        return "[request not sent: a reply's reasoning was too long to send "
+               "back whole; start a New Chat, or set Commands as tool calls "
+               "to Off]";
     return "[request not sent: the conversation does not fit in one request, "
            "or Nutshell ran out of memory; start a New Chat]";
+}
+
+const char *ai_body_failure_text(const AiConversation *conv)
+{
+    return ai_body_failure_text_for(conv, NULL, NULL);
 }

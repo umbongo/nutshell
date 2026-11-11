@@ -131,6 +131,7 @@ void ai_msg_free(AiMessage *msg)
         free(msg->reasoning);
         msg->reasoning = NULL;
     }
+    msg->reasoning_cut = 0;
     if (msg->attachment) {
         ai_attachment_free(&msg->attachment);
     }
@@ -143,22 +144,37 @@ int ai_msg_set_reasoning(AiMessage *msg, const char *text)
         free(msg->reasoning);
         msg->reasoning = NULL;
     }
+    msg->reasoning_cut = 0;
     if (!text || !text[0]) return 0;
 
     size_t len = strlen(text);
     if (len > AI_REASONING_MAX - 1) {
+        msg->reasoning_cut = 1;
         len = AI_REASONING_MAX - 1;
         /* never leave half of a multi-byte character at the cut */
         while (len > 0 && ((unsigned char)text[len] & 0xC0) == 0x80)
             len--;
         if (len == 0) return 0;
     }
-    char *copy = (char *)malloc(len + 1);
-    if (!copy) return -1;
+    char *copy = (char *)g_alloc(len + 1);
+    if (!copy) {
+        msg->reasoning_cut = 1;
+        return -1;
+    }
     memcpy(copy, text, len);
     copy[len] = '\0';
     msg->reasoning = copy;
     return 0;
+}
+
+void ai_msg_move_reasoning(AiMessage *dst, AiMessage *src)
+{
+    if (!dst || !src || dst == src) return;
+    free(dst->reasoning);
+    dst->reasoning = src->reasoning;
+    dst->reasoning_cut = src->reasoning_cut;
+    src->reasoning = NULL;
+    src->reasoning_cut = 0;
 }
 
 void ai_conv_init(AiConversation *conv, const char *model)
@@ -351,6 +367,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->tool_calls = NULL;
     m->n_tool_calls = 0;
     m->reasoning = NULL;
+    m->reasoning_cut = 0;
     m->tool_provider[0] = '\0';
     m->tool_model[0] = '\0';
     m->parts = NULL;
@@ -1119,6 +1136,39 @@ static int turn_as_text(const AiMessage *msg, const char *tools_json,
            strcmp(msg->tool_model, want_m) != 0;
 }
 
+/* 1 when a request to `provider` with `tools_json` would send an assistant turn
+ * whose reasoning was cut (AiMessage.reasoning_cut) and DeepSeek must have it
+ * whole: provider "deepseek" with a tools array, and a turn that goes out
+ * structured (a turn rendered as text carries no reasoning_content). The
+ * builder refuses such a request; ai_body_failure_text_for says why. */
+int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provider,
+                                  const char *tools_json)
+{
+    if (!conv || !provider || strcmp(provider, "deepseek") != 0) return 0;
+    if (!tools_json || tools_json[0] == '\0') return 0;
+    for (int i = 0; i < conv->msg_count; i++) {
+        const AiMessage *m = &conv->messages[i];
+        if (m->role == AI_ROLE_ASSISTANT && m->reasoning_cut &&
+            !turn_as_text(m, tools_json, provider, conv->model))
+            return 1;
+    }
+    return 0;
+}
+
+/* ,"reasoning_content":"<text>" (an empty string for NULL) appended at pos.
+ * Returns the new position, 0 on overflow. */
+static size_t emit_reasoning_field(const char *text, char *buf, size_t buf_size,
+                                   size_t pos)
+{
+    const char *rc_key = ",\"reasoning_content\":";
+    size_t rck_len = strlen(rc_key);
+    if (pos + rck_len >= buf_size) return 0;
+    memcpy(buf + pos, rc_key, rck_len);
+    pos += rck_len;
+    if (!text) text = "";
+    return json_escape_string(text, strlen(text), buf, buf_size, pos, 1);
+}
+
 /* A growing string for the text form. */
 typedef struct { char *p; size_t len, cap; } TextBuf;
 
@@ -1223,6 +1273,13 @@ static size_t build_body_core(const AiConversation *conv,
      * between them is a 400 from every provider: send nothing, the caller
      * shows an error row (spec 2026-11-05 run-command tool, decision 19). */
     if (!ai_conv_tool_pairs_well_formed(conv)) return 0;
+
+    /* DeepSeek's reasoning goes back whole or not at all (spec decision 23):
+     * a request that must carry every turn's reasoning_content and holds a turn
+     * whose reasoning was cut is not sent. */
+    if (ai_body_refuses_cut_reasoning(conv, provider, tools_json)) return 0;
+    const int deepseek_reasoning = provider && strcmp(provider, "deepseek") == 0 &&
+                                   tools_json && tools_json[0] != '\0';
 
     /* The data block goes in the last user message (never a tool result), or
      * in message snapshot_at - 1 while no user-typed message follows it (the
@@ -1554,16 +1611,12 @@ static size_t build_body_core(const AiConversation *conv,
 
             /* Moonshot's thinking models want the turn's reasoning back and
              * answer 400 without it: the field is always there, an empty
-             * string when nothing was streamed. No other provider gets it (a
-             * DeepSeek reasoner rejects it, OpenAI has no such field). */
-            if (is_moonshot) {
-                const char *rc_key = ",\"reasoning_content\":";
-                size_t rck_len = strlen(rc_key);
-                if (pos + rck_len >= buf_size) return 0;
-                memcpy(buf + pos, rc_key, rck_len);
-                pos += rck_len;
-                const char *rtext = msg->reasoning ? msg->reasoning : "";
-                pos = json_escape_string(rtext, strlen(rtext), buf, buf_size, pos, 1);
+             * string when nothing was streamed. DeepSeek gets it on every
+             * assistant turn of a request that carries tools (below and in the
+             * plain-turn branch), whole or not at all. No other provider gets
+             * it (OpenAI has no such field). */
+            if (is_moonshot || deepseek_reasoning) {
+                pos = emit_reasoning_field(msg->reasoning, buf, buf_size, pos);
                 if (pos == 0) return 0;
             }
 
@@ -1671,6 +1724,11 @@ static size_t build_body_core(const AiConversation *conv,
 
             pos = emit_msg_content(msg, frame, i == block_idx, buf, buf_size, pos);
             if (pos == 0) return 0;
+
+            if (deepseek_reasoning && msg->role == AI_ROLE_ASSISTANT) {
+                pos = emit_reasoning_field(msg->reasoning, buf, buf_size, pos);
+                if (pos == 0) return 0;
+            }
 
             if (pos + 1 >= buf_size) return 0;
             buf[pos++] = '}';

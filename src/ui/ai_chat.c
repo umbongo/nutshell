@@ -1446,6 +1446,21 @@ next_coalesce:;
              * stored; notes that do not fit stay queued, in order. */
             if (took_calls) (void)ai_conv_flush_notes(oc, &src->notes, 1);
         }
+        /* The displayed session's plain reply is stored again below, from the
+         * message text, into the working copy; the thread stored it with its
+         * reasoning in its own copy (which is not taken), so carry that across
+         * before the stream is released (spec decision 23: DeepSeek reads
+         * every turn's reasoning). Freed where the reply is added. */
+        AiMessage reply_reasoning;
+        memset(&reply_reasoning, 0, sizeof(reply_reasoning));
+        if (wParam == 2 && src == d->active_state && !took_calls &&
+            rmsg->reply_stored && resp_stream->conv.msg_count > 0 &&
+            resp_stream->conv.messages[resp_stream->conv.msg_count - 1].role ==
+                AI_ROLE_ASSISTANT)
+            ai_msg_move_reasoning(
+                &reply_reasoning,
+                &resp_stream->conv.messages[resp_stream->conv.msg_count - 1]);
+
         /* The done/error message is the thread's last: drop our reference. */
         ai_stream_table_finish(&d->streams, rmsg->stream_id);
         resp_stream = NULL;
@@ -1598,8 +1613,13 @@ next_coalesce:;
             /* A taken run_command reply is already in d->conv (its stored
              * tool turn, above): adding the text again would put a plain
              * assistant turn after an unanswered call. */
-            const int reply_stored = took_calls ||
-                (text && ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text) == 0);
+            const int added_here = !took_calls && text &&
+                ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text) == 0;
+            if (added_here)
+                ai_msg_move_reasoning(&d->conv.messages[d->conv.msg_count - 1],
+                                      &reply_reasoning);
+            ai_msg_free(&reply_reasoning);   /* what was not moved */
+            const int reply_stored = took_calls || added_here;
             /* The reply's index, taken now: the NOTEs added below make
              * conv_mark - 1 a user turn, and the run log keys a batch to
              * the reply that produced it (cmd_run_log.h). A full

@@ -860,6 +860,9 @@ size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
     size_t total = tools_json_len + 2 * snapshot_len;
     if (!conv) return total;
     int moonshot = provider && strcmp(provider, "moonshot") == 0;
+    /* DeepSeek sends every assistant turn's reasoning back, but only on a
+     * request that carries tools */
+    int deepseek = provider && strcmp(provider, "deepseek") == 0 && tools_json_len > 0;
     for (int i = 0; i < conv->msg_count; i++) {
         const AiMessage *m = &conv->messages[i];
         const char *content = ai_msg_content(m);
@@ -873,7 +876,10 @@ size_t runcmd_request_estimate(const AiConversation *conv, const char *provider,
             total += escaped_len(p->content, clen);
             total += escaped_len(p->tool_note, strlen(p->tool_note));
         }
-        if (moonshot && m->role == AI_ROLE_ASSISTANT && m->reasoning)
+        /* Moonshot's goes with a tool-call turn only (a plain turn's stored
+         * reasoning is never sent to it) */
+        if (m->role == AI_ROLE_ASSISTANT && m->reasoning &&
+            ((moonshot && m->n_tool_calls > 0) || deepseek))
             total += escaped_len(m->reasoning, strlen(m->reasoning));
     }
     return total + ai_tool_wire_bytes(conv, 1, RUNCMD_AGE_ROUNDS - 1);
