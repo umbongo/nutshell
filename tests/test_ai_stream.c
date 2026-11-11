@@ -605,29 +605,6 @@ int test_ai_stream_release_frees_conversation(void)
     TEST_END();
 }
 
-/* The terminal snapshot belongs to the stream and goes with it (ASan sees a
- * leak or a double free). */
-int test_ai_stream_snapshot_freed(void)
-{
-    TEST_BEGIN();
-    int live0 = ai_stream_live_count();
-    AiStream *s = ai_stream_new();
-    ASSERT_NOT_NULL(s);
-    ASSERT_NULL(s->snapshot);
-    s->snapshot = strdup("x");
-    ASSERT_NOT_NULL(s->snapshot);
-    ai_stream_discard(s);
-    ASSERT_EQ(ai_stream_live_count(), live0);
-
-    /* Through the two-reference path as well. */
-    s = ai_stream_new();
-    s->snapshot = strdup("terminal text");
-    ai_stream_orphan(s);
-    ai_stream_release(s);
-    ASSERT_EQ(ai_stream_live_count(), live0);
-    TEST_END();
-}
-
 /* A thread whose final message never reached the panel (allocation or
  * PostMessage failure) must not leave its session busy for ever: the panel
  * finds it through ai_stream_table_lost_owner(). */

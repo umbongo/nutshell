@@ -169,6 +169,12 @@ it was.
   - `int ai_provider_runcmd(const char *provider, int mode)`: Off 0; On
     `ai_provider_tools(provider, AI_RUNCMD_ON)`; Automatic
     `ai_runcmd_auto_default(provider)`.
+  - `int ai_provider_tools_note(provider, mode, tools_configured)`
+    *(fix round 3, 2026-11-11)*: the one-time status note a send shows when
+    web tools are configured but the provider is not offered them: none,
+    general (gemini on Automatic or Off, an unknown provider; `main`'s note,
+    reworded to name Anthropic, OpenAI, DeepSeek and Moonshot and Gemini's
+    On) or custom (a Custom endpoint not On). Once per panel life.
   Every UI caller (`ai_chat_send.c` ~16, ~152, ~245, ~515, ~572) passes the
   setting. DeepSeek's and Gemini's handling below is written from their
   documentation and is in the code, reached with On; the help text and

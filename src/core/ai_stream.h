@@ -48,10 +48,6 @@ typedef struct AiStream {
     char   custom_url[256];
     char  *body;               /* AI_BODY_MAX bytes, rebuilt by the tool loop */
     size_t body_len;
-    char  *snapshot;           /* No longer set by the launch (R55): the terminal text the
-                                * request carries is frozen in conv (conv.snapshot,
-                                * ai_conv_snapshot_frame), the one copy every tool-loop
-                                * rebuild reuses. Freed with the stream if ever set. */
 
     /* Tool snapshot: tools[].tool_data points at search/fetch/debug_log below, never
      * at the panel's own copies, so a settings change or a closed panel

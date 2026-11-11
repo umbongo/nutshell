@@ -2166,6 +2166,27 @@ int ai_provider_runcmd(const char *provider, int mode)
     return ai_runcmd_auto_default(provider);
 }
 
+int ai_provider_tools_note(const char *provider, int mode, int tools_configured)
+{
+    if (!tools_configured || ai_provider_tools(provider, mode))
+        return AI_TOOLS_NOTE_NONE;
+    if (provider && strcmp(provider, "custom") == 0)
+        return AI_TOOLS_NOTE_CUSTOM;
+    return AI_TOOLS_NOTE_GENERAL;
+}
+
+const char *ai_provider_tools_note_text(int which)
+{
+    switch (which) {
+    case AI_TOOLS_NOTE_GENERAL:
+        return "[Note: web search/fetch tools are offered to Anthropic, OpenAI, DeepSeek and Moonshot; Gemini gets them with Settings > Provider > Commands as tool calls set to On]";
+    case AI_TOOLS_NOTE_CUSTOM:
+        return "[Note: a Custom endpoint gets tools only with Settings > Provider > Commands as tool calls set to On]";
+    default:
+        return NULL;
+    }
+}
+
 /* The token counts of a chunk the tool parser consumed without handing it to
  * ai_parse_stream_chunk (Anthropic's message_delta that ends a round carries
  * the output count). Only a chunk that mentions "usage" can hold one. */

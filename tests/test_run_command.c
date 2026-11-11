@@ -4047,3 +4047,43 @@ int test_runcmd_quoted_row(void)
     ASSERT_EQ((int)runcmd_quoted_row("ls", out, 0), 0);
     TEST_END();
 }
+
+/* The one-time note: which providers are told web tools are not offered.
+ * main told every provider without tools (gemini, custom, unknown) while
+ * web search was configured; the branch must too, Custom with its own text. */
+int test_provider_tools_note_table(void)
+{
+    TEST_BEGIN();
+    /* mode: 0 Automatic, 1 On, 2 Off. Rows: provider, then the note for
+     * each mode. 0 none, 1 general, 2 custom. */
+    static const struct { const char *p; int want[3]; } t[] = {
+        { "anthropic", { 0, 0, 0 } },
+        { "openai",    { 0, 0, 0 } },
+        { "deepseek",  { 0, 0, 0 } },
+        { "moonshot",  { 0, 0, 0 } },
+        { "gemini",    { 1, 0, 1 } },
+        { "custom",    { 2, 0, 2 } },
+        { "other",     { 1, 1, 1 } },
+    };
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
+        for (int m = 0; m < 3; m++)
+            ASSERT_EQ(ai_provider_tools_note(t[i].p, m, 1), t[i].want[m]);
+
+    /* no web tools configured: never a note */
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
+        for (int m = 0; m < 3; m++)
+            ASSERT_EQ(ai_provider_tools_note(t[i].p, m, 0), 0);
+
+    /* NULL is an unknown provider */
+    ASSERT_EQ(ai_provider_tools_note(NULL, 0, 1), 1);
+    ASSERT_EQ(ai_provider_tools_note(NULL, 0, 0), 0);
+
+    ASSERT_NULL(ai_provider_tools_note_text(0));
+    ASSERT_NULL(ai_provider_tools_note_text(3));
+    ASSERT_NULL(ai_provider_tools_note_text(-1));
+    ASSERT_STR_EQ(ai_provider_tools_note_text(2),
+        "[Note: a Custom endpoint gets tools only with Settings > Provider > Commands as tool calls set to On]");
+    ASSERT_STR_EQ(ai_provider_tools_note_text(1),
+        "[Note: web search/fetch tools are offered to Anthropic, OpenAI, DeepSeek and Moonshot; Gemini gets them with Settings > Provider > Commands as tool calls set to On]");
+    TEST_END();
+}

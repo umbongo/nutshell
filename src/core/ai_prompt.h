@@ -416,6 +416,19 @@ int ai_provider_supports_tools(const char *provider);
  * ai_runcmd_auto_default() says. */
 int ai_provider_runcmd(const char *provider, int mode);
 
+/* Which one-time note a send shows when web tools are configured
+ * (tools_configured: the registry is non-empty) and the provider is not
+ * offered them: AI_TOOLS_NOTE_NONE (the provider gets tools, or none are
+ * configured), AI_TOOLS_NOTE_GENERAL (gemini on Automatic or Off, an
+ * unknown provider, NULL), AI_TOOLS_NOTE_CUSTOM (a Custom endpoint not set
+ * to On). ai_provider_tools() decides who gets tools. */
+enum { AI_TOOLS_NOTE_NONE = 0, AI_TOOLS_NOTE_GENERAL = 1, AI_TOOLS_NOTE_CUSTOM = 2 };
+int ai_provider_tools_note(const char *provider, int mode, int tools_configured);
+
+/* The note's text for a value of that enum (ASCII, shown as a status row);
+ * NULL for AI_TOOLS_NOTE_NONE and for anything out of range. */
+const char *ai_provider_tools_note_text(int which);
+
 /* Output limit sent as "max_completion_tokens" to provider "moonshot" (and
  * only to it). Without one the server's default is far lower, and a thinking
  * model's reasoning counts against it, so a long [EXEC] reply was cut off

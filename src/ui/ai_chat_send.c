@@ -313,15 +313,17 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     s = NULL;   /* the thread may free it from here on; only the id is ours */
     SetTimer(d->hwnd, TIMER_STREAM_REAP, STREAM_REAP_MS, NULL);
 
-    /* One-time notification when tools are configured but a Custom endpoint
-     * has not been told it accepts them (Commands as tool calls not On). */
-    if (d->tool_registry.count > 0 && !provider_tools
-        && strcmp(d->provider, "custom") == 0
-        && !d->tool_support_notified) {
-        d->tool_support_notified = 1;
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-            "[Note: a Custom endpoint gets tools only with Settings > Provider > Commands as tool calls set to On]");
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    /* One-time notification when web tools are configured but this provider
+     * is not offered them (ai_provider_tools_note decides which note). */
+    if (!d->tool_support_notified) {
+        const char *note = ai_provider_tools_note_text(
+            ai_provider_tools_note(d->provider, d->runcmd_mode,
+                                   d->tool_registry.count > 0));
+        if (note) {
+            d->tool_support_notified = 1;
+            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, note);
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        }
     }
 
     /* Allocate per-session stream accumulators */
