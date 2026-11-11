@@ -50,12 +50,13 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
                                     const AiToolCall *calls, int n_calls)
 {
     return agentic_add_assistant_tool_msg_ex(conv, assistant_text, NULL,
-                                             calls, n_calls);
+                                             NULL, NULL, calls, n_calls);
 }
 
 int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
                                        const char *assistant_text,
                                        const char *reasoning,
+                                       const char *provider, const char *model,
                                        const AiToolCall *calls, int n_calls)
 {
     if (!conv) return -1;
@@ -81,6 +82,8 @@ int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
         ai_msg_free(msg);
         return -1;
     }
+    snprintf(msg->tool_provider, sizeof(msg->tool_provider), "%s", provider ? provider : "");
+    snprintf(msg->tool_model, sizeof(msg->tool_model), "%s", model ? model : "");
 
     conv->msg_count++;
     return 0;

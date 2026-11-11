@@ -37,10 +37,15 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
 
 /* The same, keeping `reasoning` (the thinking the model streamed with the
  * tool calls; NULL or "" for none) on the message, capped at
- * AI_REASONING_MAX - 1 bytes. Only provider "moonshot" sends it back. */
+ * AI_REASONING_MAX - 1 bytes. Only provider "moonshot" sends it back.
+ * provider and model (NULL or "" for unknown) are recorded on the message as
+ * AiMessage.tool_provider / tool_model, cut to their fields: the request
+ * builder sends the turn's ids and reasoning only to that provider and model,
+ * and renders the turn as text to any other (spec decision 16). */
 int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
                                       const char *assistant_text,
                                       const char *reasoning,
+                                      const char *provider, const char *model,
                                       const AiToolCall *calls, int n_calls);
 
 /* A stored tool result is at most this many bytes once JSON-escaped (the size

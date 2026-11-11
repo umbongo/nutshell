@@ -143,6 +143,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         AiBodyFrame frame;
         frame.snapshot = s->snapshot;
         frame.delim = delim;
+        frame.snapshot_at = 0;       /* the last user turn (B12 freezes it) */
         int last_msg = d->conv.msg_count - 1;
         const AiAttachment *att = (last_msg >= 0)
             ? d->conv.messages[last_msg].attachment : NULL;

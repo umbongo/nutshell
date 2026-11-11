@@ -528,6 +528,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             if (agentic_add_assistant_tool_msg_ex(&s->conv,
                                                   ctx.full_content,
                                                   ctx.full_thinking,
+                                                  s->provider, s->conv.model,
                                                   tool_stream_ptr->pending_tool_calls,
                                                   tool_stream_ptr->pending_tool_count) != 0) {
                 /* Results must never go out without their tool-call turn. */
@@ -728,6 +729,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 AiBodyFrame frame2;
                 frame2.snapshot = s->snapshot;
                 frame2.delim = delim2;
+                frame2.snapshot_at = 0;
                 s->body_len = ai_build_request_body_frame(
                     &s->conv, att2,
                     s->tools_json[0] ? s->tools_json : NULL,

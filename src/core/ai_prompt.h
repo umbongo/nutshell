@@ -98,6 +98,15 @@ typedef struct {
      * message: ai_msg_free() frees it, ai_conv_copy() duplicates it, and
      * ai_conv_take() moves it with the rest. */
     char *reasoning;
+
+    /* For ROLE_ASSISTANT messages that contain tool calls: the provider and
+     * the model that produced them, "" when unknown (older callers, tests).
+     * Ids, reasoning and signatures are sent back only to the issuer: the
+     * body builder renders a turn recorded under another provider or model
+     * as text (spec 2026-11-05 run-command decision 16). Set by
+     * agentic_add_assistant_tool_msg_ex, copied with the message. */
+    char tool_provider[16];
+    char tool_model[64];
 } AiMessage;
 
 /* Cap on a stored reasoning text, terminating NUL included: the same 16 KiB
@@ -108,6 +117,17 @@ typedef struct {
     char model[64];
     AiMessage messages[AI_MAX_MESSAGES];
     int msg_count;
+
+    /* The terminal text the launch took for one user turn, frozen to it
+     * (spec decision 22): heap, snapshot_len bytes, NULL and 0 when none;
+     * snapshot_msg is the index of that user turn, -1 when none. ai_conv_init
+     * and ai_conv_reset free it and set -1, ai_conv_copy duplicates it (a copy
+     * that cannot allocate carries none, spec decision 25), ai_conv_take moves
+     * it. Nothing in the builder reads these: the launch copies them into
+     * AiBodyFrame. */
+    char *snapshot;
+    size_t snapshot_len;
+    int snapshot_msg;
 } AiConversation;
 
 /* Initialize a conversation (zeroes and sets model). */
@@ -135,6 +155,15 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src);
  * (the array and each part's content; default malloc, NULL restores it), so a
  * test can fail one allocation. Not for product code. */
 void ai_prompt_set_alloc_for_test(void *(*alloc)(size_t));
+
+/* Freeze `text` (len bytes) as the conversation's snapshot, attached to the
+ * LAST message when that is AI_ROLE_USER: any older snapshot is freed, then
+ * the new one is stored with snapshot_msg = msg_count - 1 and 0 is returned.
+ * When the last message is not a user turn (or conv is NULL) nothing changes
+ * and 1 is returned. A NULL or empty text leaves no snapshot (0). An
+ * allocation failure leaves none either and returns -1: a snapshot that
+ * cannot be kept is recorded as absent, never half there. */
+int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len);
 
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
@@ -219,6 +248,11 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
 typedef struct {
     const char *snapshot;  /* terminal text for the last user turn; NULL or "": no block */
     const char *delim;     /* this request's delimiter; NULL: no block, tool output unframed */
+    /* Which message carries the snapshot (spec decision 22). 0, the zero
+     * value: the last AI_ROLE_USER message, as always. k > 0: message k - 1,
+     * and only while that is the last AI_ROLE_USER message; otherwise no
+     * block. A launch with a frozen snapshot passes snapshot_msg + 1. */
+    int snapshot_at;
 } AiBodyFrame;
 
 /* The full builder behind ai_build_request_body_ex and _tools.
@@ -231,7 +265,15 @@ typedef struct {
  * AI_ROLE_TOOL message part is sent as a data block labelled with its tool
  * name, its tool_note after the closing delimiter (an empty result with a note
  * sends the note alone). A results turn of K parts goes out as one user turn
- * of K tool_result blocks (Anthropic) or K "tool" messages (the OpenAI form). conv is never modified. Anthropic's "system" is sent as an
+ * of K tool_result blocks (Anthropic) or K "tool" messages (the OpenAI form).
+ * A tool turn is instead sent as text (the assistant turn's text then
+ * "\nran: <command>" per run_command call and "\ncalled <tool>" per other
+ * call; its results as one user message "output:\n" and each framed result)
+ * when the request carries no tools array and the turn is a run_command one
+ * or records a provider, when it holds a run_command call and tools_json has
+ * no "run_command", or when the provider or model it records differs from
+ * this request's provider or conv->model. A turn that records no provider is
+ * judged by the first two rules only. conv is never modified. Anthropic's "system" is sent as an
  * array whose block carries cache_control ephemeral whenever a system message
  * is present, frame or not.
  * Returns bytes written (excluding NUL), or 0 on error (including a buffer

@@ -2026,7 +2026,7 @@ static void add_round(AiConversation *c, int round, int n, const char *const *na
         if (strcmp(names[i], RUNCMD_TOOL_NAME) == 0)
             snprintf(res[i].tool_note, sizeof(res[i].tool_note), "ran");
     }
-    agentic_add_assistant_tool_msg_ex(c, "", NULL, calls, n);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, calls, n);
     agentic_add_tool_results(c, calls, res, n);
     for (int i = 0; i < n; i++) free(res[i].content);
 }
@@ -2103,7 +2103,7 @@ int test_runcmd_estimate_counts_reasoning(void)
     reasoning[10240] = '\0';
     AiToolCall call;
     set_call(&call, "t1", RUNCMD_TOOL_NAME, "{\"command\":\"ls\"}");
-    agentic_add_assistant_tool_msg_ex(c, "text", reasoning, &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "text", reasoning, NULL, NULL, &call, 1);
     AiToolResult res;
     memset(&res, 0, sizeof(res));
     snprintf(res.tool_use_id, sizeof(res.tool_use_id), "t1");
@@ -2150,14 +2150,14 @@ int test_runcmd_body_bounded_over_rounds(void)
     ai_conv_init(c, "m");
     ai_conv_add(c, AI_ROLE_SYSTEM, "You are an assistant.");
     ai_conv_add(c, AI_ROLE_USER, "keep checking the logs");
-    AiBodyFrame frame = { NULL, "----nutshell-data-00000000000000cc" };
+    AiBodyFrame frame = { NULL, "----nutshell-data-00000000000000cc", 0 };
     size_t worst = 0;
     for (int round = 1; round <= 20; round++) {
         AiToolCall call;
         char id[16];
         snprintf(id, sizeof(id), "t%d", round);
         set_call(&call, id, RUNCMD_TOOL_NAME, "{\"command\":\"journalctl\"}");
-        ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, &call, 1), 0);
+        ASSERT_EQ(agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1), 0);
 
         RunCmdReply *r = runcmd_plan(&call, 1, 1);
         ASSERT_NOT_NULL(r);
@@ -2216,7 +2216,7 @@ static void rc_round(AiConversation *c, int round, size_t len, const char *input
     char id[16];
     snprintf(id, sizeof(id), "t%d", round);
     set_call(&call, id, RUNCMD_TOOL_NAME, input);
-    agentic_add_assistant_tool_msg_ex(c, "", NULL, &call, 1);
+    agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1);
     AiToolResult r;
     memset(&r, 0, sizeof(r));
     snprintf(r.tool_use_id, sizeof(r.tool_use_id), "%s", id);
@@ -2342,7 +2342,7 @@ static double meter_vs_body(const char *provider, int rounds, int nrc, size_t ou
     ai_conv_add(c, AI_ROLE_USER, "keep checking the logs");
     for (size_t i = 0; i < out_len; i++) text[i] = (i % 60 == 59) ? '\n' : (char)('a' + i % 26);
     text[out_len] = '\0';
-    AiBodyFrame frame = { NULL, FRAME_DELIM };
+    AiBodyFrame frame = { NULL, FRAME_DELIM, 0 };
     for (int round = 1; round <= rounds; round++) {
         AiToolCall calls[4];
         AiToolResult res[4];
@@ -2374,12 +2374,12 @@ static double meter_vs_body(const char *provider, int rounds, int nrc, size_t ou
             res[n].content_len = 2000;
             n++;
         }
-        int ok = agentic_add_assistant_tool_msg_ex(c, "", NULL, calls, n) == 0 &&
+        int ok = agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, calls, n) == 0 &&
                  agentic_add_tool_results(c, calls, res, n) == 0;
         for (int i = 0; i < n; i++) free(res[i].content);
         if (!ok) { worst = -1; break; }
         runcmd_age_results(c);
-        size_t len = ai_build_request_body_frame(c, NULL, NULL, &frame, body, AI_BODY_MAX, 0, provider);
+        size_t len = ai_build_request_body_frame(c, NULL, "[{\"name\":\"run_command\"}]", &frame, body, AI_BODY_MAX, 0, provider);
         if (len == 0) { worst = -1; break; }
         double meter = (double)ai_context_estimate_tokens(c) * 4.0;
         double ratio = meter > (double)len ? meter / (double)len : (double)len / meter;
@@ -2435,7 +2435,7 @@ static AiConversation *retry_conv(const char *tail)
                 snprintf(call.id, sizeof(call.id), "t%d", ++round);
                 snprintf(call.name, sizeof(call.name), "%s", RUNCMD_TOOL_NAME);
                 snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
-                agentic_add_assistant_tool_msg_ex(c, "", NULL, &call, 1);
+                agentic_add_assistant_tool_msg_ex(c, "", NULL, NULL, NULL, &call, 1);
             } else {
                 /* a whole round: call and results (add_round) */
                 add_round(c, ++round, 1, names, contents);

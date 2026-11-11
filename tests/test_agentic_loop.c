@@ -481,7 +481,7 @@ static void reasoning_conv(AiConversation *conv, const char *reasoning)
     snprintf(call.id, sizeof(call.id), "call_1");
     snprintf(call.name, sizeof(call.name), "web_fetch");
     snprintf(call.input_json, sizeof(call.input_json), "{\"url\":\"https://x.test/\"}");
-    agentic_add_assistant_tool_msg_ex(conv, "", reasoning, &call, 1);
+    agentic_add_assistant_tool_msg_ex(conv, "", reasoning, NULL, NULL, &call, 1);
 
     const char *page = "page text";
     AiToolResult res;
@@ -667,7 +667,7 @@ int test_ai_reasoning_copy_take_compact(void)
     snprintf(call.name, sizeof(call.name), "web_fetch");
     for (int i = 0; i < 4; i++) {
         ai_conv_add(&t, AI_ROLE_USER, "u");
-        agentic_add_assistant_tool_msg_ex(&t, "", i == 3 ? "last" : "old", &call, 1);
+        agentic_add_assistant_tool_msg_ex(&t, "", i == 3 ? "last" : "old", NULL, NULL, &call, 1);
     }
     ASSERT_TRUE(ai_conv_compact(&t, 1) > 0);
     ASSERT_STR_EQ(t.messages[t.msg_count - 1].reasoning, "last");
@@ -1003,8 +1003,8 @@ int test_agentic_results_oom_notes_only(void)
 
     /* the turn answers every call: a well-formed Anthropic body */
     char body[8192];
-    ASSERT_TRUE(ai_build_request_body_ex(&conv, NULL, body, sizeof(body), 0,
-                                         "anthropic") > 0);
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, "[{\"name\":\"run_command\"}]",
+                                            body, sizeof(body), 0, "anthropic") > 0);
     ASSERT_TRUE(strstr(body, "\"tool_use_id\":\"call_4\"") != NULL);
     ASSERT_TRUE(strstr(body, "not run: Nutshell ran out of memory") != NULL);
     ai_conv_reset(&conv);
