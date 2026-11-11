@@ -257,12 +257,15 @@ static AiToolPart *parts_from_results(const AiToolCall *calls,
 /* The result's own note with, when the result had output, the phrase that
  * says it was dropped ("; " after a note, alone after none), in note[cap]. A
  * note too long to take the phrase is cut back on a UTF-8 boundary first, so
- * it is the end of the note that goes, never a part of the phrase. A result
+ * it is the end of the note that goes, never a part of the phrase. A stale
+ * "output cut: N bytes omitted" phrase goes first. A result
  * with no output keeps its note as it is. */
 static void notes_only_note(char *note, size_t cap, const AiToolResult *r)
 {
     snprintf(note, cap, "%s", r->tool_note);
     if (!r->content || r->content_len == 0) return;
+    /* the output is dropped, so a count of bytes omitted from it is stale */
+    runcmd_note_drop_cut(note, cap);
     size_t phrase = strlen(AGENTIC_OUTPUT_DROPPED);
     size_t len = strlen(note);
     if (len == 0) {
@@ -366,6 +369,14 @@ int agentic_sanitize_tool_inputs(AiToolCall *calls, int n)
             JsonNode *root = json_parse_exact(calls[i].input_json);
             bad = !root || root->type != JSON_OBJECT;
             if (root) json_free(root);
+            /* the parser is more tolerant than the strict check every request
+             * body goes through: a raw newline in a string, an unknown escape,
+             * \v or \f around the object, nesting past 128, a bare "-" */
+            if (!bad) {
+                char err[96];
+                bad = !json_validate(calls[i].input_json,
+                                     strlen(calls[i].input_json), err, sizeof(err));
+            }
         }
         if (bad) {
             memcpy(calls[i].input_json, "{}", 3);

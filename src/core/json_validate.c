@@ -232,15 +232,40 @@ int json_validate(const char *buf, size_t len, char *error, size_t error_size)
                     continue;
                 }
                 if (c == '-' || (c >= '0' && c <= '9')) {
-                    /* Consume number */
-                    while (i + 1 < len) {
-                        unsigned char nc = (unsigned char)buf[i + 1];
-                        if ((nc >= '0' && nc <= '9') || nc == '.' ||
-                            nc == 'e' || nc == 'E' || nc == '+' || nc == '-')
-                            i++;
-                        else
-                            break;
+                    /* Consume a number: -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?
+                     * (a bare "-", "1.", "01" or "1e" is not JSON, and a
+                     * provider refuses the body that holds one). */
+                    size_t j = i;
+                    if (buf[j] == '-') j++;
+                    if (j < len && buf[j] == '0') {
+                        j++;
+                    } else if (j < len && buf[j] >= '1' && buf[j] <= '9') {
+                        while (j < len && buf[j] >= '0' && buf[j] <= '9') j++;
+                    } else {
+                        j = 0;   /* no integer part */
                     }
+                    if (j > 0 && j < len && buf[j] == '.') {
+                        size_t k = j + 1;
+                        while (k < len && buf[k] >= '0' && buf[k] <= '9') k++;
+                        j = k > j + 1 ? k : 0;
+                    }
+                    if (j > 0 && j < len && (buf[j] == 'e' || buf[j] == 'E')) {
+                        size_t k = j + 1;
+                        if (k < len && (buf[k] == '+' || buf[k] == '-')) k++;
+                        size_t d = k;
+                        while (k < len && buf[k] >= '0' && buf[k] <= '9') k++;
+                        j = k > d ? k : 0;
+                    }
+                    if (j == 0 || (j < len && ((buf[j] >= '0' && buf[j] <= '9') ||
+                                               buf[j] == '.' || buf[j] == 'e' ||
+                                               buf[j] == 'E' || buf[j] == '+' ||
+                                               buf[j] == '-'))) {
+                        if (error && error_size > 0)
+                            snprintf(error, error_size,
+                                     "Invalid number at byte %zu", i);
+                        return 0;
+                    }
+                    i = j - 1;
                     if (depth > 0) after_comma[depth] = 0;
                     continue;
                 }

@@ -371,6 +371,7 @@ int test_parse_obj_str_type_mismatch(void);
 int test_parse_obj_num_fallback(void);
 int test_json_free_null(void);
 int test_json_parse_exact(void);
+int test_json_string_len_and_nul(void);
 int test_json_depth_256_arrays_parse(void);
 int test_json_depth_256_objects_parse(void);
 int test_json_depth_256_mixed_parse(void);
@@ -2999,6 +3000,7 @@ int test_runcmd_parse_ok(void);
 int test_runcmd_parse_no_command(void);
 int test_runcmd_parse_length(void);
 int test_runcmd_parse_unsafe(void);
+int test_runcmd_parse_nul_escape(void);
 int test_runcmd_parse_note_cut(void);
 int test_runcmd_parse_error_texts(void);
 int test_runcmd_describe(void);
@@ -3070,6 +3072,7 @@ int test_runcmd_age_results(void);
 int test_runcmd_stop_wording_literals(void);
 int test_runcmd_never_captured_notes(void);
 int test_runcmd_age_removes_cut_note(void);
+int test_runcmd_age_cut_note_joins(void);
 int test_runcmd_age_counts_command_rounds(void);
 int test_runcmd_estimate_follows_command_rounds(void);
 int test_runcmd_body_bounded_over_rounds(void);
@@ -3229,6 +3232,8 @@ int test_agentic_truncation_warning_text(void);
 int test_agentic_sanitize_cut_heredoc(void);
 int test_agentic_sanitize_keeps_valid(void);
 int test_agentic_sanitize_exactly_one_object(void);
+int test_agentic_sanitize_json_validate(void);
+int test_agentic_notes_only_drops_cut_note(void);
 int test_agentic_note_copy_keeps_marker(void);
 int test_agentic_room_for_tool_round(void);
 int test_agentic_runcmd_result_not_capped(void);
@@ -3324,6 +3329,7 @@ int test_snapshot_typed_turn_after_results_drops_it(void);
 int test_snapshot_freeze_refused_on_note(void);
 int test_snapshot_note_flag_door_copy_take(void);
 int test_snapshot_has_and_trim(void);
+int test_snapshot_pointing_at_note_is_invalid(void);
 int test_body_foreign_provider_turn_as_text(void);
 int test_body_text_form_neighbours(void);
 int test_body_moonshot_pinned(void);
@@ -3428,6 +3434,7 @@ int test_validate_empty_input(void);
 int test_validate_null_input(void);
 int test_validate_mismatched_brackets(void);
 int test_validate_negative_number(void);
+int test_validate_number_grammar(void);
 int test_validate_array_of_objects(void);
 
 /* test_about_layout.c */
@@ -4635,6 +4642,7 @@ int main(void) {
     failed += test_parse_obj_num_fallback();
     failed += test_json_free_null();
     failed += test_json_parse_exact();
+    failed += test_json_string_len_and_nul();
     failed += test_json_depth_256_arrays_parse();
     failed += test_json_depth_256_objects_parse();
     failed += test_json_depth_256_mixed_parse();
@@ -7120,6 +7128,7 @@ int main(void) {
     failed += test_runcmd_parse_no_command();
     failed += test_runcmd_parse_length();
     failed += test_runcmd_parse_unsafe();
+    failed += test_runcmd_parse_nul_escape();
     failed += test_runcmd_parse_note_cut();
     failed += test_runcmd_parse_error_texts();
     failed += test_runcmd_describe();
@@ -7191,6 +7200,7 @@ int main(void) {
     failed += test_runcmd_stop_wording_literals();
     failed += test_runcmd_never_captured_notes();
     failed += test_runcmd_age_removes_cut_note();
+    failed += test_runcmd_age_cut_note_joins();
     failed += test_runcmd_age_counts_command_rounds();
     failed += test_runcmd_estimate_follows_command_rounds();
     failed += test_runcmd_body_bounded_over_rounds();
@@ -7323,6 +7333,8 @@ int main(void) {
     failed += test_agentic_sanitize_cut_heredoc();
     failed += test_agentic_sanitize_keeps_valid();
     failed += test_agentic_sanitize_exactly_one_object();
+    failed += test_agentic_sanitize_json_validate();
+    failed += test_agentic_notes_only_drops_cut_note();
     failed += test_agentic_note_copy_keeps_marker();
     failed += test_agentic_room_for_tool_round();
     failed += test_agentic_runcmd_result_not_capped();
@@ -7417,6 +7429,7 @@ int main(void) {
     failed += test_snapshot_freeze_refused_on_note();
     failed += test_snapshot_note_flag_door_copy_take();
     failed += test_snapshot_has_and_trim();
+    failed += test_snapshot_pointing_at_note_is_invalid();
     failed += test_body_foreign_provider_turn_as_text();
     failed += test_body_text_form_neighbours();
     failed += test_body_moonshot_pinned();
@@ -7523,6 +7536,7 @@ int main(void) {
     failed += test_validate_null_input();
     failed += test_validate_mismatched_brackets();
     failed += test_validate_negative_number();
+    failed += test_validate_number_grammar();
     failed += test_validate_array_of_objects();
 
     printf("\n--- About Layout ---\n");

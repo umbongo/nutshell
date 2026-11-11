@@ -331,6 +331,46 @@ int test_agentic_sanitize_keeps_valid(void)
     TEST_END();
 }
 
+/* An input is kept only when json_validate accepts it too (review of B1-B11,
+ * 2026-11-11): the tolerant parser takes a raw newline in a string, an unknown
+ * escape, \v and \f around the object, nesting past 128 and a bare "-", and a
+ * kept input like that would make every later request body invalid. */
+int test_agentic_sanitize_json_validate(void)
+{
+    TEST_BEGIN();
+    enum { N = 8 };
+    AiToolCall c[N];
+    memset(c, 0, sizeof(c));
+    strcpy(c[0].input_json, "{\"command\":\"ls\"}");                  /* valid, kept */
+    strcpy(c[1].input_json, "{\"command\":\"a\nb\"}");               /* raw newline in a string */
+    strcpy(c[2].input_json, "{\"command\":\"a\\xb\"}");             /* unknown escape \x */
+    strcpy(c[3].input_json, "{}\v");
+    strcpy(c[4].input_json, "{}\f");
+    strcpy(c[5].input_json, "{\"command\":-}");
+    /* 130 arrays under an object: 131 deep, past json_validate's 128 */
+    size_t n = 0;
+    n += (size_t)snprintf(c[6].input_json + n, sizeof(c[6].input_json) - n, "{\"a\":");
+    for (int i = 0; i < 130; i++) c[6].input_json[n++] = '[';
+    for (int i = 0; i < 130; i++) c[6].input_json[n++] = ']';
+    c[6].input_json[n++] = '}';
+    c[6].input_json[n] = '\0';
+    /* 100 deep is within both limits and is kept */
+    n = 0;
+    n += (size_t)snprintf(c[7].input_json + n, sizeof(c[7].input_json) - n, "{\"a\":");
+    for (int i = 0; i < 100; i++) c[7].input_json[n++] = '[';
+    for (int i = 0; i < 100; i++) c[7].input_json[n++] = ']';
+    c[7].input_json[n++] = '}';
+    c[7].input_json[n] = '\0';
+    char deep_ok[AI_TOOL_INPUT_MAX];
+    strcpy(deep_ok, c[7].input_json);
+
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, N), 6);
+    ASSERT_STR_EQ(c[0].input_json, "{\"command\":\"ls\"}");
+    for (int i = 1; i <= 6; i++) ASSERT_STR_EQ(c[i].input_json, "{}");
+    ASSERT_STR_EQ(c[7].input_json, deep_ok);
+    TEST_END();
+}
+
 /* An input is kept only when it is exactly one JSON object: anything after
  * it would make every later request body invalid. */
 int test_agentic_sanitize_exactly_one_object(void)
@@ -1142,6 +1182,50 @@ int test_agentic_parts_keep_full_note(void)
     ASSERT_EQ(conv.messages[0].n_parts, 1);
     ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, r.tool_note);
     ASSERT_NULL(conv.messages[0].parts[0].content);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* The fallback also takes a stale "output cut: N bytes omitted from the middle"
+ * out of the note: the output is dropped, so a count of what was omitted from
+ * it would say something false (review of FW4, 2026-11-11). */
+int test_agentic_notes_only_drops_cut_note(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    AiToolCall calls[3];
+    AiToolResult res[3];
+    memset(calls, 0, sizeof(calls));
+    memset(res, 0, sizeof(res));
+    static const char *notes[3] = {
+        "ran; output cut: 41213 bytes omitted from the middle",
+        "output cut: 5 bytes omitted from the middle; the screen changed",
+        "ran; output cut: 7 bytes omitted from the middle",
+    };
+    char out[] = "hello";
+    for (int i = 0; i < 3; i++) {
+        snprintf(calls[i].id, sizeof(calls[i].id), "c%d", i);
+        snprintf(calls[i].name, sizeof(calls[i].name), "%s", RUNCMD_TOOL_NAME);
+        snprintf(res[i].tool_use_id, sizeof(res[i].tool_use_id), "c%d", i);
+        snprintf(res[i].tool_note, sizeof(res[i].tool_note), "%s", notes[i]);
+    }
+    res[0].content = out; res[0].content_len = 5;
+    res[1].content = out; res[1].content_len = 5;
+    /* res[2] had no output: its note stays as it was */
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "", calls, 3), 0);
+    alloc_plan(2, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 3), 1);
+    agentic_set_alloc_for_test(NULL);
+    const AiMessage *m = &conv.messages[conv.msg_count - 1];
+    ASSERT_EQ(m->n_parts, 3);
+    if (m->parts && m->n_parts == 3) {
+        ASSERT_STR_EQ(m->parts[0].tool_note, "ran; output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[1].tool_note,
+                      "the screen changed; output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[2].tool_note, "ran; output cut: 7 bytes omitted from the middle");
+    }
     ai_conv_reset(&conv);
     TEST_END();
 }

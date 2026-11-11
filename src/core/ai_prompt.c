@@ -11,7 +11,6 @@
 #include "markdown.h"
 #include "md_table.h"
 #include "exec_scan.h"
-#include "run_command.h"
 #include <stdarg.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -320,8 +319,10 @@ void ai_conv_snapshot_trim(AiConversation *conv)
 {
     if (!conv || !conv->snapshot) return;
     int at = conv->snapshot_msg;
+    /* a note of Nutshell's is never the message a block was taken for */
     if (at >= 0 && at < conv->msg_count &&
-        conv->messages[at].role == AI_ROLE_USER)
+        conv->messages[at].role == AI_ROLE_USER &&
+        !conv->messages[at].nutshell_note)
         return;
     free(conv->snapshot);
     conv->snapshot = NULL;
@@ -1219,11 +1220,13 @@ static size_t build_body_core(const AiConversation *conv,
             for (int k = conv->msg_count - 1; k >= 0; k--)
                 if (conv->messages[k].role == AI_ROLE_USER) { block_idx = k; break; }
         } else {
-            /* message snapshot_at - 1 while it is a USER turn and every USER
-             * turn after it is one Nutshell wrote (a note): only a message the
-             * user typed moves the block (spec decision 22). */
+            /* message snapshot_at - 1 while it is a USER turn the user typed
+             * (a note of Nutshell's is not one) and every USER turn after it
+             * is a note: only a message the user typed moves the block (spec
+             * decision 22). */
             int at = frame->snapshot_at - 1;
-            if (at < conv->msg_count && conv->messages[at].role == AI_ROLE_USER) {
+            if (at < conv->msg_count && conv->messages[at].role == AI_ROLE_USER &&
+                !conv->messages[at].nutshell_note) {
                 block_idx = at;
                 for (int k = at + 1; k < conv->msg_count; k++)
                     if (conv->messages[k].role == AI_ROLE_USER &&

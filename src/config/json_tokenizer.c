@@ -92,6 +92,7 @@ static Token scan_string(Tokenizer *t)
         if (c == '"') {
             /* end of string */
             tok.value[out] = '\0';
+            tok.len = out;
             return tok;
         }
 

@@ -23,6 +23,9 @@ typedef enum {
 
 typedef struct {
     TokenType type;
+    /* TOK_STRING: the decoded length in bytes; it exceeds strlen(value) when a
+     * \u0000 escape put a NUL in the string. */
+    size_t len;
     char value[TOK_VALUE_MAX];
 } Token;
 

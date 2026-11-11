@@ -307,6 +307,18 @@ bidirectional formatting characters: send one single-line command".
   name never runs with call A's arguments; the rest of the chunk (other
   calls, the finish reason) is still processed. The same id again on the same
   index (a resend) is not a new call.
+- *(review of B1-B11, 2026-11-11)* **A `\u0000` escape makes the command
+  NO_COMMAND.** The JSON layer decodes `\u0000` to a NUL byte, which ends the
+  C string: `"rm -rf /home/u\u0000/build"` used to parse as `rm -rf /home/u`,
+  a different command from the one the model wrote. The tokenizer now records
+  each string's decoded length (`Token.len`) and the parser keeps it on the
+  node (`JsonNode.str_len`, the decoded length of a `JSON_STRING`); the parser
+  reads `command` as NO_COMMAND when `str_len` differs from `strlen`, and
+  drops `note` the same way as for any unsafe text (the command still runs
+  without it). An object key with a `\u0000` escape fails the parse (it would
+  be cut short and could equal `command`); a backslash followed by the text
+  `u0000` (`"\\u0000"` in the JSON) is ordinary text and unaffected. No scan of
+  the raw JSON for the six characters is made.
 
 **3. The prompt.** `ai_build_system_prompt_ex` keys the swap on whether the
 registry it is given (trust 1) holds `run_command`, so a provider or endpoint
@@ -366,6 +378,19 @@ checks below move ahead of that store, for every tool stop:
   `tool_use` is valid JSON; a run_command call so replaced is answered
   "run_command needs a \"command\" string" (decision 2). Otherwise every
   later request fails `json_validate` until New Chat.
+  *(review of B1-B11, 2026-11-11)* **The input is kept only if
+  `json_validate` accepts it too.** `agentic_sanitize_tool_inputs` keeps an
+  input only if `json_parse_exact` takes it as one object **and**
+  `json_validate` (`json_validate.h`, the check every request body goes
+  through) takes it; otherwise it becomes `{}` and is counted. The tolerant
+  parser accepts a raw newline in a string, an unknown escape (`\x`), `\v` or
+  `\f` around the object, nesting past 128 and a bare `-` as a number, none of
+  which a provider accepts back. `json_validate`'s number scan was as lax
+  (it took any run of digits, signs, `.` and `e`); it now follows JSON's
+  grammar (`-?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?`), so `-`, `1.`,
+  `01`, `1e` and `1.5.5` are invalid. The fuzz target `runcmd` checks the
+  invariant: every input the sanitiser keeps passes `json_validate`, every
+  one it replaces is exactly `{}`.
 - *(code, critique 2026-11-11)* **Message room.** Unless
   `conv.msg_count + 3 <= AI_MAX_MESSAGES` (the assistant turn, one stored
   results turn for all K calls, decision 11, and the reply that follows),
@@ -1059,8 +1084,11 @@ today.
   append and `ai_conv_flush_notes`), cleared by `ai_conv_add`, carried by
   copy and take (struct copy). An older `[EXEC]` continue text goes through
   the door, so it counts as Nutshell's own. `AiBodyFrame.snapshot_at` k > 0
-  attaches to message k − 1 while it is a USER turn and every USER turn after
-  it has `nutshell_note`; `snapshot_at` 0 keeps trust's last-USER rule
+  attaches to message k − 1 while it is a USER turn that is not itself a note
+  (`nutshell_note` 0: a block is only ever taken for a message the user typed,
+  so an index that points at a note is invalid: `ai_conv_snapshot_trim`
+  clears it and the builder attaches nothing) and every USER turn after it
+  has `nutshell_note`; `snapshot_at` 0 keeps trust's last-USER rule
   unchanged. `ai_conv_freeze_snapshot` refuses (returns 1, nothing changed)
   when the last message is a note, so only a typed USER turn takes a fresh
   snapshot. A body for a conversation with no note in it is byte for byte
@@ -1137,7 +1165,13 @@ own note (already filled without allocating) and `is_error`, and a result that
 had output adds "output dropped: Nutshell ran out of memory": "ran; output
 dropped: Nutshell ran out of memory", or the phrase alone after an empty note;
 a result with no output (DENIED, BLOCKED, INVALID, an empty web result) keeps
-its note unchanged. A note too long for the phrase to fit in the 512-byte note
+its note unchanged. A result that had output also loses its stale "output
+cut: N bytes omitted from the middle" phrase (the same removal aging makes,
+`runcmd_note_drop_cut`, one function in `run_command.c` shared through
+`run_command.h`; joins tidied) before the phrase is added: "ran; output cut:
+41213 bytes omitted from the middle" becomes "ran; output dropped: Nutshell
+ran out of memory", since a count of bytes omitted from output that is gone
+would say something false. A note too long for the phrase to fit in the 512-byte note
 loses its end, cut on a UTF-8 boundary, never the phrase. "not run: Nutshell
 ran out of memory" is reserved for a call that truly did not run (the
 planner-failure path); this fallback no longer writes it. The function returns

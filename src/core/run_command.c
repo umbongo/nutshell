@@ -100,6 +100,12 @@ RunCmdParse runcmd_parse_input(const char *input_json,
         return RUNCMD_PARSE_NO_COMMAND;
     }
     size_t len = strlen(cmd);
+    /* a \u0000 escape ends the C string early: "rm -rf /home/u\u0000/build"
+     * would run "rm -rf /home/u" (decision 2, review of B1-B11) */
+    if (json_obj_get(root, "command")->str_len != len) {
+        json_free(root);
+        return RUNCMD_PARSE_NO_COMMAND;
+    }
     if (len > (size_t)RUNCMD_COMMAND_MAX) {
         json_free(root);
         return RUNCMD_PARSE_TOO_LONG;
@@ -111,7 +117,8 @@ RunCmdParse runcmd_parse_input(const char *input_json,
     memcpy(command, cmd, len + 1);
 
     const char *nt = json_obj_str(root, "note");
-    if (nt) {
+    /* a NUL in the note makes it unsafe text like any other control byte */
+    if (nt && json_obj_get(root, "note")->str_len == strlen(nt)) {
         size_t n = strlen(nt);
         if (n > (size_t)RUNCMD_NOTE_MAX - 1) {
             n = (size_t)RUNCMD_NOTE_MAX - 1;
@@ -815,8 +822,9 @@ static void note_set_cut(char *note, size_t cap, size_t omitted)
 }
 
 /* Drop the cut note and one "; " join beside it (the one before it, else the
- * one after), keeping the rest of the note as it is. */
-static void note_drop_cut(char *note, size_t cap)
+ * one after), keeping the rest of the note as it is. Shared through
+ * run_command.h (the aging, the fit and the notes-only fallback). */
+void runcmd_note_drop_cut(char *note, size_t cap)
 {
     size_t from, digits, to;
     if (!find_cut_note(note, &from, &digits, &to)) return;
@@ -831,7 +839,7 @@ static void note_drop_cut(char *note, size_t cap)
 /* Drop the cut note (and the separator before it), then add the fit note. */
 static void note_set_dropped(char *note, size_t cap)
 {
-    note_drop_cut(note, cap);
+    runcmd_note_drop_cut(note, cap);
     size_t len = strlen(note), sep = len ? 2 : 0;
     if (len + sep + strlen(NOTE_FIT_DROPPED) < cap)
         snprintf(note + len, cap - len, "%s%s", sep ? "; " : "", NOTE_FIT_DROPPED);
@@ -1026,7 +1034,7 @@ int runcmd_age_results(AiConversation *conv)
             p->omitted_bytes = 0;
             /* the stub says the output is gone: the cut note goes with it.
              * (A fit or out-of-memory note never sits beside content.) */
-            note_drop_cut(p->tool_note, sizeof(p->tool_note));
+            runcmd_note_drop_cut(p->tool_note, sizeof(p->tool_note));
             aged++;
         }
     }

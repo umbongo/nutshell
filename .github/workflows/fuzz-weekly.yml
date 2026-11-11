@@ -1,10 +1,11 @@
 name: Fuzz (weekly)
 
-# Mutating fuzz run of the six libFuzzer targets, Mondays 03:00 UTC (or by
-# hand: workflow_dispatch). NOT a pull request check: quality.yml's "Fuzz"
-# job replays the committed seeds deterministically on every pull request;
-# this one mutates for FUZZ_TIME seconds per target (make fuzz-long) and so
-# can find something new on an unchanged tree. Nothing is uploaded.
+# Mutating fuzz run of every libFuzzer target (the Makefile's FUZZ_TARGETS,
+# seven today), Mondays 03:00 UTC (or by hand: workflow_dispatch). NOT a pull
+# request check: quality.yml's "Fuzz" job replays the committed seeds
+# deterministically on every pull request; this one mutates for FUZZ_TIME
+# seconds per target (make fuzz-long) and so can find something new on an
+# unchanged tree. Nothing is uploaded.
 #
 # A red run: whoever sees it opens an issue by hand naming the target and
 # the fault class (read from the run log, which prints the error header, the

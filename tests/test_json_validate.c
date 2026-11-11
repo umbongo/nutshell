@@ -259,6 +259,38 @@ int test_validate_negative_number(void) {
     TEST_END();
 }
 
+/* A number must be JSON's own grammar: a bare "-" and the like were taken as
+ * numbers, and a provider refuses a body holding one (review of B1-B11,
+ * 2026-11-11). */
+int test_validate_number_grammar(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *good[] = {
+        "{\"n\":0}", "{\"n\":-0}", "{\"n\":7}", "{\"n\":-42}", "{\"n\":3.14}",
+        "{\"n\":1e5}", "{\"n\":1E+5}", "{\"n\":-1.5e-3}", "[0,1,-2]", "[1.0 , 2]",
+    };
+    for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
+        if (!json_validate(good[i], strlen(good[i]), err, sizeof(err))) {
+            printf("  good %zu: %s\n", i, good[i]);
+            _tf_local_fail = 1;
+        }
+    }
+    const char *bad[] = {
+        "{\"command\":-}", "{\"n\":-}", "{\"n\":1.}", "{\"n\":.5}", "{\"n\":01}",
+        "{\"n\":-01}", "{\"n\":1e}", "{\"n\":1e+}", "{\"n\":1.5.5}", "{\"n\":1-2}",
+        "{\"n\":+1}", "[--1]",
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        if (json_validate(bad[i], strlen(bad[i]), err, sizeof(err))) {
+            printf("  bad %zu: %s\n", i, bad[i]);
+            _tf_local_fail = 1;
+        }
+    }
+    ASSERT_FALSE(json_validate("{\"n\":-}", 8, err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "Invalid number") != NULL);
+    TEST_END();
+}
+
 int test_validate_array_of_objects(void) {
     TEST_BEGIN();
     char err[256] = "";

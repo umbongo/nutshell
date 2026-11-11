@@ -17,6 +17,9 @@ typedef enum {
 
 typedef struct JsonNode {
     JsonType type;
+    /* JSON_STRING: the decoded length in bytes. It exceeds strlen(str_val)
+     * when the string held a \u0000 escape, which ends the C string early. */
+    size_t str_len;
     union {
         int bool_val;
         double num_val;

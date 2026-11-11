@@ -658,3 +658,51 @@ int test_json_depth_resets_between_siblings(void)
     free(deep);
     TEST_END();
 }
+
+/* A \u0000 escape decodes to a NUL byte, which ends the C string. The string
+ * node keeps its real decoded length so a caller can tell (review of B1-B11,
+ * 2026-11-11); a key with a NUL could match a shorter name, so it fails the
+ * parse. A backslash followed by the text u0000 is ordinary text. */
+int test_json_string_len_and_nul(void)
+{
+    TEST_BEGIN();
+    JsonNode *n = json_parse("\"abc\"");
+    ASSERT_NOT_NULL(n);
+    if (n) {
+        ASSERT_EQ(n->str_len, 3u);
+        json_free(n);
+    }
+
+    n = json_parse("{\"k\":\"a\\u0000b\"}");
+    ASSERT_NOT_NULL(n);
+    if (n) {
+        JsonNode *v = json_obj_get(n, "k");
+        ASSERT_NOT_NULL(v);
+        if (v) {
+            ASSERT_STR_EQ(v->as.str_val, "a");      /* the C string ends at the NUL */
+            ASSERT_EQ(v->str_len, 3u);              /* the decoded string does not */
+        }
+        json_free(n);
+    }
+
+    /* an escaped backslash then the text u0000: eight bytes, no NUL */
+    n = json_parse("{\"k\":\"a\\\\u0000b\"}");
+    ASSERT_NOT_NULL(n);
+    if (n) {
+        JsonNode *v = json_obj_get(n, "k");
+        ASSERT_NOT_NULL(v);
+        if (v) {
+            ASSERT_STR_EQ(v->as.str_val, "a\\u0000b");
+            ASSERT_EQ(v->str_len, 8u);
+        }
+        json_free(n);
+    }
+
+    /* a key that decodes to "k" plus a NUL plus "x" would equal "k" */
+    ASSERT_NULL(json_parse("{\"k\\u0000x\":1}"));
+    ASSERT_NULL(json_parse_exact("{\"k\\u0000x\":1}"));
+    n = json_parse("{\"k\":1}");
+    ASSERT_NOT_NULL(n);
+    json_free(n);
+    TEST_END();
+}

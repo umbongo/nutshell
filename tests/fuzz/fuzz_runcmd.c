@@ -10,8 +10,13 @@
  * After every chunk: no call's input is longer than AI_TOOL_INPUT_MAX - 1
  * bytes, and a call that was overflowed is still overflowed with its input
  * untouched (A1's sticky overflow). The whole input also goes to
- * runcmd_parse_input(). */
+ * runcmd_parse_input(), and, as one call's stored input, to
+ * agentic_sanitize_tool_inputs(): an input it keeps passes json_validate (the
+ * check every request body goes through), one it replaces is exactly "{}".
+ * The calls the accumulators finish are sanitised the same way. */
+#include "ai_agentic.h"
 #include "ai_tools.h"
+#include "json_validate.h"
 #include "run_command.h"
 
 #include <stdint.h>
@@ -28,6 +33,21 @@ typedef struct {
     int       overflowed[FUZZ_TRACK];
     char      input[FUZZ_TRACK][AI_TOOL_INPUT_MAX];
 } Snap;
+
+/* The sanitiser's invariant on one stored input. */
+static void check_sanitised(const char *input)
+{
+    static AiToolCall c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.input_json, sizeof(c.input_json), "%s", input);
+    int fixed = agentic_sanitize_tool_inputs(&c, 1);
+    if (fixed == 0) {
+        char err[96];
+        if (!json_validate(c.input_json, strlen(c.input_json), err, sizeof(err))) abort();
+    } else if (strcmp(c.input_json, "{}") != 0) {
+        abort();
+    }
+}
 
 static void snap_take(Snap *s, const AiToolStreamState *st)
 {
@@ -62,6 +82,8 @@ static void feed(int anthropic, AiToolStreamState *st, const char *chunk)
     if (anthropic) (void)ai_parse_tool_stream_anthropic(chunk, st);
     else           (void)ai_parse_tool_stream_openai(chunk, st);
     check_state(&snap, st);
+    for (int i = 0; i < st->pending_tool_count; i++)
+        check_sanitised(st->pending_tool_calls[i].input_json);
 }
 
 /* data[0..n) as the body of a JSON string. */
@@ -156,6 +178,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         if (p != RUNCMD_PARSE_OK && (command[0] || note[0])) abort();
         char out[32];
         (void)runcmd_describe(text, out, sizeof out);
+        check_sanitised(text);
     }
     free(text);
 

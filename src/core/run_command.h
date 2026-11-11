@@ -382,6 +382,12 @@ char *runcmd_frame_result(const AiToolPart *part, const char *delim, size_t *out
  * Other tools' parts are untouched. Returns the number of parts changed. */
 int runcmd_age_results(AiConversation *conv);
 
+/* Remove the note's "output cut: N bytes omitted from the middle" phrase and
+ * one "; " join beside it (the one before it, else the one after); the rest of
+ * the note stays. A note without the phrase is left as it is. cap is the
+ * note's buffer size. */
+void runcmd_note_drop_cut(char *note, size_t cap);
+
 /* 1 when part p, which sits in the results turn at message index m of conv, is
  * a run_command part whose output is at least the stub's size and that has at
  * least `keep` command rounds (results turns holding a run_command part) after

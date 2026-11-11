@@ -873,6 +873,40 @@ int test_snapshot_note_keeps_it_on_question(void)
     TEST_END();
 }
 
+/* A snapshot index that points at one of Nutshell's own notes is not valid
+ * (review of FW3, 2026-11-11): the block goes only on a message the user
+ * typed. The trim clears it and the builder attaches nothing. */
+int test_snapshot_pointing_at_note_is_invalid(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = frozen_after_round();
+    char *buf = (char *)malloc(BODY_CAP);
+    ASSERT_NOT_NULL(c); ASSERT_NOT_NULL(buf);
+    if (c && buf) {
+        ASSERT_EQ(ai_conv_add_user_note(c, NULL, 0, "policy raised"), 0);
+        int note_at = c->msg_count - 1;
+        ASSERT_EQ(c->messages[note_at].nutshell_note, 1);
+
+        /* the builder, with the frozen index moved onto the note */
+        c->snapshot_msg = note_at;
+        AiBodyFrame f = frozen_frame(c);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "openai") > 0);
+        ASSERT_EQ(count_of(buf, "screen1"), 0);
+        ASSERT_TRUE(ai_build_request_body_frame(c, NULL, k_rc_tools, &f, buf, BODY_CAP, 1, "anthropic") > 0);
+        ASSERT_EQ(count_of(buf, "screen1"), 0);
+
+        /* the trim clears it */
+        ASSERT_EQ(ai_conv_has_snapshot(c), 1);
+        ai_conv_snapshot_trim(c);
+        ASSERT_EQ(ai_conv_has_snapshot(c), 0);
+        ASSERT_NULL(c->snapshot);
+        ASSERT_EQ(c->snapshot_msg, -1);
+    }
+    free(buf);
+    free_conv(c);
+    TEST_END();
+}
+
 int test_snapshot_typed_turn_after_results_drops_it(void)
 {
     TEST_BEGIN();

@@ -141,6 +141,12 @@ static JsonNode *parse_object(Parser *p)
             p->error = 1;
             break;
         }
+        /* a key with a \u0000 escape would be cut short and could equal a
+         * shorter name: refuse it */
+        if (strlen(p->cur.value) != p->cur.len) {
+            p->error = 1;
+            break;
+        }
         char *key = xstrdup(p->cur.value);
         advance(p);
 
@@ -217,6 +223,7 @@ static JsonNode *parse_value(Parser *p)
             node = xcalloc(1u, sizeof(JsonNode));
             node->type = JSON_STRING;
             node->as.str_val = xstrdup(p->cur.value);
+            node->str_len = p->cur.len;
             advance(p);
             return node;
 

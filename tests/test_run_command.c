@@ -138,6 +138,54 @@ int test_runcmd_parse_unsafe(void)
     TEST_END();
 }
 
+/* A \u0000 in the command makes the call NO_COMMAND: the decoded string would
+ * end at the NUL and "rm -rf /home/u\u0000/build" would run "rm -rf /home/u"
+ * (review of B1-B11, 2026-11-11). In the note it drops the note. A backslash
+ * and the text u0000 are ordinary text. */
+int test_runcmd_parse_nul_escape(void)
+{
+    TEST_BEGIN();
+    char cmd[RUNCMD_COMMAND_MAX + 1];
+    char note[RUNCMD_NOTE_MAX];
+
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"rm -rf /home/u\\u0000/build\"}", cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+    ASSERT_STR_EQ(cmd, "");
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"\\u0000ls\"}", cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"ls\\u0000\"}", cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"ls\",\"note\":\"x\"}", cmd, note),
+              RUNCMD_PARSE_OK);
+
+    /* a key that would equal "command" up to a NUL is not "command" */
+    ASSERT_EQ(runcmd_parse_input("{\"command\\u0000x\":\"ls\"}", cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+
+    /* an escaped backslash then u0000 is text: the command keeps all of it */
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"echo \\\\u0000\"}", cmd, note),
+              RUNCMD_PARSE_OK);
+    ASSERT_STR_EQ(cmd, "echo \\u0000");
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"echo u0000\"}", cmd, note),
+              RUNCMD_PARSE_OK);
+    ASSERT_STR_EQ(cmd, "echo u0000");
+
+    /* a NUL in the note drops the note, not the command */
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"ls\",\"note\":\"look\\u0000here\"}", cmd, note),
+              RUNCMD_PARSE_OK);
+    ASSERT_STR_EQ(cmd, "ls");
+    ASSERT_STR_EQ(note, "");
+    /* a note with the text only keeps it */
+    ASSERT_EQ(runcmd_parse_input("{\"command\":\"ls\",\"note\":\"look\\\\u0000here\"}", cmd, note),
+              RUNCMD_PARSE_OK);
+    ASSERT_STR_EQ(note, "look\\u0000here");
+
+    char out[64];
+    ASSERT_EQ(runcmd_describe("{\"command\":\"rm -rf /home/u\\u0000/build\"}", out, sizeof out), 0);
+    ASSERT_STR_EQ(out, "");
+    TEST_END();
+}
+
 int test_runcmd_parse_note_cut(void)
 {
     TEST_BEGIN();
@@ -3063,6 +3111,34 @@ int test_runcmd_age_removes_cut_note(void)
     ASSERT_STR_EQ(c->messages[10].parts[0].tool_note,
                   "ran; output cut: 5000 bytes omitted from the middle");
     ASSERT_EQ(runcmd_age_results(c), 0);
+    ai_conv_reset(c);
+    free(c);
+    TEST_END();
+}
+
+/* The two join shapes of the cut note that the test above does not reach: a
+ * note that is only the cut note ends empty, and a cut note between two
+ * phrases leaves them joined by one "; ". */
+int test_runcmd_age_cut_note_joins(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = (AiConversation *)calloc(1, sizeof(*c));
+    ASSERT_NOT_NULL(c);
+    ai_conv_init(c, "m");
+    ai_conv_add(c, AI_ROLE_USER, "go");
+    char big[201];
+    memset(big, 'o', 200); big[200] = '\0';
+    add_one_round(c, 1, RUNCMD_TOOL_NAME, big, 100, 5000,
+                  "output cut: 5000 bytes omitted from the middle");
+    add_one_round(c, 2, RUNCMD_TOOL_NAME, big, 100, 5000,
+                  "a; output cut: 5000 bytes omitted from the middle; b");
+    add_one_round(c, 3, RUNCMD_TOOL_NAME, big, 0, 0, "ran");
+    add_one_round(c, 4, RUNCMD_TOOL_NAME, big, 0, 0, "ran");
+    ASSERT_EQ(runcmd_age_results(c), 2);
+    ASSERT_STR_EQ(c->messages[2].parts[0].content, RUNCMD_AGED_STUB);
+    ASSERT_STR_EQ(c->messages[2].parts[0].tool_note, "");
+    ASSERT_STR_EQ(c->messages[4].parts[0].content, RUNCMD_AGED_STUB);
+    ASSERT_STR_EQ(c->messages[4].parts[0].tool_note, "a; b");
     ai_conv_reset(c);
     free(c);
     TEST_END();

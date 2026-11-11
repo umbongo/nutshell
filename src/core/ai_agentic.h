@@ -117,7 +117,8 @@ int agentic_truncation_warning(const char *tool_name, size_t omitted_bytes,
  * never be read as a different one) or is not exactly one JSON object
  * followed by nothing but whitespace (a reply cut off mid-call leaves an
  * unterminated string; trailing bytes or a second value would make every
- * later request body invalid) is replaced with "{}". The overflowed flag is left set. Returns how many were replaced. */
+ * later request body invalid), or that json_validate rejects (a raw newline in
+ * a string, an unknown escape, nesting past its limit), is replaced with "{}". The overflowed flag is left set. Returns how many were replaced. */
 int agentic_sanitize_tool_inputs(AiToolCall *calls, int n);
 
 /* 1 when the conversation has room for one tool round (the assistant turn,
