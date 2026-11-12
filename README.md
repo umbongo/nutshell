@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.83 \
+**Version**: v1.2.84 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview

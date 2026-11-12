@@ -96,7 +96,7 @@ TARGET = $(BUILD_DIR)/nutshell.exe
 
 # Test configuration (native gcc on the build host)
 TEST_CC = gcc
-TEST_CFLAGS = -std=c11 -Wall -Wextra -g \
+TEST_CFLAGS = -std=c11 -Wall -Wextra -Werror -g \
               -Isrc -Isrc/core -Isrc/config -Isrc/crypto -Isrc/term -Isrc/ssh -Isrc/ui \
               -D_TEST -Wno-unused-function
 
