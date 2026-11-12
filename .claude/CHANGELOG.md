@@ -32,8 +32,19 @@ Models: claude-opus-5-5 (retrospective); claude-fable-5-2 (brief, session notes)
 - **`.github/workflows/quality.yml`** (comment only). "The six libFuzzer targets"
   became the Makefile's `FUZZ_TARGETS`; there are seven since PR #94. Why: stale
   documentation; nothing the job does changes.
-- No critique was run in this session; the main session sends the process edits
-  above for one, and the dispositions belong in this entry once they exist.
+- **Critique and fixes.** The process-rule edits were critiqued (an Opus critic, nine
+  findings: eight accepted, one declined: checkpoint step 2 stays as the only backstop
+  on request, step 8 covers PR time; the `gh pr checks --watch` early-exit behaviour
+  was left unverified). Changes made: `feature-workflow` step 9 states the maintainer's
+  go-ahead as a condition in every permission mode, before the commands (names `ready`
+  or `merge` and the PR number in this session; a moved head means HOLD until a fresh
+  yes; cloud never merges; classifier note cites MEMORY.md); step 8 puts unrun Windows
+  checks in the Open list at PR open or in a docs-only PR after the merge, never a late
+  push; step 7 carries the wait command itself, chained with `;`, and drops PID and
+  `pgrep -x` waits. `memory/MEMORY.md` pgrep item matched. `repo-status` Known state
+  points at `gh pr list` instead of claiming no open PR. `feature-workflow` (216 to
+  about 185 lines) and `checkpoint` trimmed; history moved to the retrospective's
+  "Rules added"; no rule deleted.
 
 ## 2026-11-05 — the quality checks in the process texts
 

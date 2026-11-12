@@ -237,3 +237,10 @@ No runaway loops and no oversized tool results were found. The `pgrep -f` wait l
 Not measured: the meter is account-wide and the maintainer worked on two repositories at once, the second on another client (no transcripts on `automaton`). A reading of 52% of the 5-hour limit against about 5M weighted tokens used on this machine in the same window shows that this machine was a minority of the bar at that moment (reported, ratio rough). The Claude usage page in account settings is the one place that splits it by client.
 
 Recommendations, not applied (they change CLAUDE.md's delegation rule and the skills): start a fresh session per pull request; do not use long-lived Opus orchestrators (orchestrate from the main session in small hand-offs, or use Sonnet); one task review per task and one Opus review per branch, not one per fix round; keep waits on child agents under five minutes or use the one-hour cache; run the heavy repository's session alone when the bar is high.
+
+## Rules added (moved out of the skills)
+
+- Step 2 of `checkpoint` (read merged PR bodies for unrun checks, follow-ups, deferrals, known limits): on 2026-11-12 eight of eleven `src/` PRs had added nothing to the notes document, and one body said its deferral was in Open when it was not.
+- `feature-workflow` step 7: a wait that worked on every push of PRs #85-#94 was one background `gh pr checks N --watch --interval 30` command, then the `Tests Run` line, then the PR state, acted on at its completion notification. The `pgrep -f` loop that never ended is finding 3.
+- `feature-workflow` step 9: PR #94 was merged after the maintainer's go-ahead in the session; the rule is now that the go-ahead is named (`ready` or `merge` plus the PR number) and renewed when the head moves.
+- Earlier history trimmed from the skills: PR #44 shipped without four unstaged files (hence the `??` rule); PR #80 set the brainstorming, plans, subagent-driven route; a plan written against a stale base named a version `main` had already passed (hence no literal version in plans); stacked-PR retargeting was seen on PRs stacked on unmerged branches.

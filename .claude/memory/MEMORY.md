@@ -64,9 +64,11 @@ Last updated: 2026-11-12 (retrospective of PRs #82-#94: baselines, snapshot `v1.
 - **Never wait with `pgrep -f`.** `while pgrep -f 'make fuzz-long'; do
   sleep 5; done` matches its own `bash -c` command line and never exits:
   one such loop ran from 2026-11-05 to 2026-11-12 and kept a sub-agent
-  "running" until the maintainer noticed (*reported*). Wait on the PID, use
-  `pgrep -x`, or run the job as a background command and take its
-  completion notification.
+  "running" until the maintainer noticed (*reported*). `pgrep -x` matches
+  the process name, not its arguments, and a PID wait fails too (`wait`
+  works only for a child of the same shell, `kill -0` loops risk PID
+  reuse). Run the job as a background command and take its completion
+  notification (or Monitor).
 - **Wine is not Windows.** v1.2.49 to v1.2.59 died at launch on the
   maintainer's Windows 11 24H2 workstation and passed every `wintest`: the
   manifest did not ask for comctl32 v6, and that build's system32 comctl32
