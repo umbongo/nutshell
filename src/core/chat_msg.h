@@ -103,6 +103,8 @@ typedef struct ChatMsgItem {
             int fold;           /* CHAT_FOLD_*, on a finished group's first
                                   * row; derived by chat_msg_fold_refresh() */
             int fold_hidden;    /* 1 = a row of a closed group: not shown */
+            int fold_changed;   /* 1 = this row's fold/fold_hidden changed in
+                                  * the last chat_msg_fold_refresh() call */
             int fold_open;      /* the user's choice on the group's first
                                   * row: 1 = keep it expanded (default 0) */
         } cmd;

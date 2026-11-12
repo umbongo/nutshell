@@ -1214,6 +1214,11 @@ static void recalc_layout(ChatListView *lv)
                         head_k = k;
                     redirect[k] = (it->type == CHAT_ITEM_COMMAND &&
                                    it->u.cmd.fold_hidden) ? head_k : -1;
+                    /* A head whose own fold changed: anchor on itself at 0. */
+                    if (it->type == CHAT_ITEM_COMMAND &&
+                        it->u.cmd.fold != CHAT_FOLD_NONE &&
+                        it->u.cmd.fold_changed)
+                        redirect[k] = k;
                 }
                 int offset = 0;
                 int ai = stick_scroll_pick_anchor(hts, redirect, n,
@@ -4660,6 +4665,13 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         UINT new_dpi = HIWORD(wParam);   /* new DPI value */
         lv->dpi_scale = (float)new_dpi / 96.0f;
         recalc_dpi_constants(lv);
+        /* Finished rows keep their cached height unless marked: every
+         * height and cached Thinking layout is in the old DPI. */
+        for (ChatMsgItem *di = lv->msg_list ? lv->msg_list->head : NULL;
+             di; di = di->next) {
+            di->dirty = 1;
+            if (di->type == CHAT_ITEM_AI_TEXT) di->u.ai.think_cache_len = -1;
+        }
         /* Use the suggested window rect provided by the system */
         RECT *suggested = (RECT *)lParam;
         SetWindowPos(hwnd, NULL,

@@ -49,7 +49,10 @@ int stick_scroll_anchor(int stick, int scroll_y, int old_top, int new_top,
  * command card folding): walk the items of the LAST layout. heights[i] is
  * item i's height then (0 = not shown, no gap), redirect[i] is the index of
  * the item to anchor on instead when item i has just been hidden (its fold
- * group's first row), or -1. gap is the space between items and above the
+ * group's first row), or -1. A group head whose own fold state changed in
+ * this refresh (a tall card that folded to one short row) sets
+ * redirect[i] = i: its old offset would be clamped to the last pixel of the
+ * fold row, so it too anchors at offset 0. gap is the space between items and above the
  * first; scroll_y the position. Returns the first item whose bottom is below
  * scroll_y and stores in *offset how far scroll_y sits into it (negative in
  * the gap above the first item); an item that was just hidden gives its

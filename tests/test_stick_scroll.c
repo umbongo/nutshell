@@ -147,7 +147,7 @@ int test_stick_scroll_pick_anchor_plain_item(void) {
 int test_stick_scroll_pick_anchor_hidden_redirects_to_head_offset_zero(void) {
     TEST_BEGIN();
     /* #0 is a fold head, #1 and #2 were its rows (old heights still set) and
-     * are hidden now; scroll_y lands inside #2: anchor on #0 at offset 0 */
+     * are hidden now; scroll_y (85) is in the gap above #2: anchor on #0 at offset 0 */
     int h[4]  = { 30, 30, 30, 50 };
     int rd[4] = { -1, 0, 0, -1 };
     int off = -99;
@@ -156,6 +156,26 @@ int test_stick_scroll_pick_anchor_hidden_redirects_to_head_offset_zero(void) {
     /* the first row below the hidden group is a plain item again */
     ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 4, 10, 135, &off), 3);
     ASSERT_EQ(off, 135 - 130);
+    TEST_END();
+}
+
+int test_stick_scroll_pick_anchor_head_with_changed_fold_offset_zero(void) {
+    TEST_BEGIN();
+    /* #1 is a tall head (old height 200) that folded in this refresh:
+     * redirect[1] == 1 marks "this row itself changed fold". scroll_y 150
+     * sits 90 px into it; the fold row's top goes to the top of the view. */
+    int h[3]  = { 40, 200, 40 };
+    int rd[3] = { -1, 1, -1 };
+    int off = -99;
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 3, 10, 150, &off), 1);
+    ASSERT_EQ(off, 0);
+    /* the same head whose fold did not change keeps its offset */
+    int rd2[3] = { -1, -1, -1 };
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd2, 3, 10, 150, &off), 1);
+    ASSERT_EQ(off, 90);
+    /* a changed head elsewhere does not affect an unrelated anchor */
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 3, 10, 30, &off), 0);
+    ASSERT_EQ(off, 30 - 10);
     TEST_END();
 }
 

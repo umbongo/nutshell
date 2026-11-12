@@ -1950,6 +1950,7 @@ int test_stick_scroll_anchor_offset_clamped_to_new_height(void);
 int test_stick_scroll_anchor_never_negative(void);
 int test_stick_scroll_pick_anchor_plain_item(void);
 int test_stick_scroll_pick_anchor_hidden_redirects_to_head_offset_zero(void);
+int test_stick_scroll_pick_anchor_head_with_changed_fold_offset_zero(void);
 int test_stick_scroll_pick_anchor_nothing_visible(void);
 int test_stick_scroll_hold_row_keeps_screen_position(void);
 int test_stick_scroll_hold_row_clamps(void);
@@ -6235,6 +6236,7 @@ int main(void) {
     failed += test_stick_scroll_anchor_never_negative();
     failed += test_stick_scroll_pick_anchor_plain_item();
     failed += test_stick_scroll_pick_anchor_hidden_redirects_to_head_offset_zero();
+    failed += test_stick_scroll_pick_anchor_head_with_changed_fold_offset_zero();
     failed += test_stick_scroll_pick_anchor_nothing_visible();
     failed += test_stick_scroll_hold_row_keeps_screen_position();
     failed += test_stick_scroll_hold_row_clamps();

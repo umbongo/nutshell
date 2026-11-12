@@ -557,6 +557,7 @@ int chat_msg_fold_refresh(ChatMsgList *list)
     ChatMsgItem *it = list->head;
     while (it) {
         if (it->type != CHAT_ITEM_COMMAND) { it = it->next; continue; }
+        it->u.cmd.fold_changed = 0;
 
         int want_fold = CHAT_FOLD_NONE;
         int want_hidden = 0;
@@ -580,11 +581,13 @@ int chat_msg_fold_refresh(ChatMsgList *list)
             }
             int group_changed = 0;
             for (ChatMsgItem *m = it; m != end; m = m->next) {
+                m->u.cmd.fold_changed = 0;
                 int f = (m == it) ? want_fold : CHAT_FOLD_NONE;
                 int h = (m == it) ? 0 : want_hidden;
                 if (m->u.cmd.fold != f || m->u.cmd.fold_hidden != h) {
                     m->u.cmd.fold = f;
                     m->u.cmd.fold_hidden = h;
+                    m->u.cmd.fold_changed = 1;
                     changed++;
                     group_changed = 1;
                 }
@@ -601,6 +604,7 @@ int chat_msg_fold_refresh(ChatMsgList *list)
         if (it->u.cmd.fold != CHAT_FOLD_NONE || it->u.cmd.fold_hidden) {
             it->u.cmd.fold = CHAT_FOLD_NONE;
             it->u.cmd.fold_hidden = 0;
+            it->u.cmd.fold_changed = 1;
             it->dirty = 1;
             changed++;
         }
