@@ -291,7 +291,9 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/telnet_io.c src/core/telnet_proto.c src/core/telnet_login.c \
                    src/core/telnet_session.c src/core/telnet_status.c \
                    tests/test_telnet_io_win.c \
-                   src/ui/ns_tip.c tests/test_ns_tip_win.c tests/win_runner.c
+                   src/ui/ns_tip.c tests/test_ns_tip_win.c \
+                   src/core/settings_help.c src/core/settings_layout.c \
+                   tests/test_settings_label_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \

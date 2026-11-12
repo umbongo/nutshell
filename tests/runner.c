@@ -3651,6 +3651,7 @@ int test_sl_metrics_init_null_safe(void);
 int test_sl_metrics_monotonic_with_dpi(void);
 int test_sl_metrics_never_zero_across_dpis(void);
 int test_sl_min_h_fits_full_nav_list(void);
+int test_sl_label_column_width(void);
 int test_sl_nav_count_is_13(void);
 int test_sl_nav_at_oob_null(void);
 int test_sl_nav_headers_well_formed(void);
@@ -7840,6 +7841,7 @@ int main(void) {
     failed += test_sl_metrics_monotonic_with_dpi();
     failed += test_sl_metrics_never_zero_across_dpis();
     failed += test_sl_min_h_fits_full_nav_list();
+    failed += test_sl_label_column_width();
     failed += test_sl_nav_count_is_13();
     failed += test_sl_nav_at_oob_null();
     failed += test_sl_nav_headers_well_formed();

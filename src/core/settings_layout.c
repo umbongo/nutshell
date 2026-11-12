@@ -35,7 +35,7 @@ void settings_metrics_init(SettingsMetrics *m, int dpi)
     m->dpi        = dpi;
     m->nav_w      = ns_scale(168, dpi);
     m->pad        = ns_scale(14, dpi);
-    m->label_w    = ns_scale(150, dpi);
+    m->label_w    = ns_scale(168, dpi);
     m->gap        = ns_scale(10, dpi);
     m->row_h      = ns_scale(30, dpi);
     m->ctrl_h     = ns_scale(22, dpi);
