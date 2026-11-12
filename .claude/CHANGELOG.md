@@ -4,6 +4,23 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-12 — documentation accuracy pass, review fixes
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Models: claude-opus-5-5 (review, these edits); claude-fable-5-2 (rulings).
+
+- **`skills/checkpoint`.** A new retrospective is headed `**Status**: DRAFT
+  until its pull request is merged; the merge is the review.`, a line that
+  stays true after the merge, since nothing edits the file at merge (the
+  review's M3 on the D2 wording; CLAUDE.md matches). Trimmed back to about
+  100 lines.
+- **`memory/MEMORY.md`, `skills/repo-status`.** Open pull requests point to
+  `gh pr list`, naming #97 and #98 as of 2026-11-12, so the text holds
+  whichever merges first; #98 settles the `-Werror` question (D3) rather
+  than this pass.
+- CLAUDE.md: the terminal fonts in `renderer.c` join the `CreateFont`
+  exceptions.
+
 ## 2026-11-12 — documentation accuracy pass (after PR #96)
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.

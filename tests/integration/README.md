@@ -347,7 +347,7 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Start-NutshellLogging -Session [-TimeoutSec]` | File › Start Logging; returns the log file path once it exists |
 | `Get-NutshellLogText -Session` / `Wait-NutshellLog -Session -Pattern [-TimeoutSec]` | the session log's text (read with sharing while the app holds it), and waiting on a regex in it |
 | `Save-NutshellScreenshot -Session -Path [-Hwnd]` | PNG of the main window, or of the window `-Hwnd` |
-| `Open-NutshellSecondTab -Session [-ConnectWaitSec]` | File › Connect: picks the first saved profile in the Session Manager for a second tab |
+| `Open-NutshellSecondTab -Session [-ConnectWaitSec]` | File › Session Manager...: picks the first saved profile in the Session Manager for a second tab |
 | `Open-NutshellAiPanel -Session` / `Get-NutshellAiPanel -Session` | View › AI Assist, returning the docked panel's HWND (throws if it did not appear) / the panel's HWND, Zero when it is not docked |
 | `Send-NutshellAiPrompt -Session -Text` / `Wait-NutshellAiSendIdle -Session [-TimeoutSec]` | put text in the AI input box and press Send / wait for the Send button to go idle again |
 | `Set-NutshellAiPolicy -Session -Allowed Read\|Unknown\|Write\|Critical [-Auto]` / `Get-NutshellAiPolicy -Session` | set the level and Auto-approve (no `-Auto` means off; `-Allowed Critical -Auto` returns with the confirmation box up, for `Close-NutshellDialog`) / read both back as `@{ Allowed; Auto }` |

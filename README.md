@@ -72,7 +72,7 @@ Open the **Session Manager** with **Ctrl+Shift+T** or by clicking the **+** area
 | **Shell command** | Local sessions only: the command line to run, blank for automatic detection |
 | **AI Notes** | Per-session context notes sent to the AI assistant (optional) |
 
-Saved profiles appear in the list on the left. **Double-click** a profile to connect immediately. Use **Save** to store changes, **Delete** to remove a profile.
+Saved profiles appear in the list on the left. **Double-click** a profile to connect immediately. Use **New** to start a blank profile, **Edit** to change the selected one, **Save** to store changes and **Delete** to remove a profile.
 
 On first connection to a new host, a **host key verification** dialog shows the server's fingerprint. Accept to save it; future connections verify against the stored key and warn if it changes.
 
@@ -95,7 +95,7 @@ Each tab shows a **status dot**:
 
 Click a tab's status dot: on a connected tab it asks whether to disconnect; on a lost tab it reconnects with the saved profile. **File > Disconnect** does the same for the active tab.
 
-A **[L]** badge appears when session logging is active for that tab. Click it to start or stop the log for that tab.
+Each tab has an **[L]** button, green while that tab is logging and grey otherwise. Click it to start or stop the log for that tab.
 
 ### Terminal
 
@@ -206,7 +206,7 @@ There is no on/off switch here. Start or stop logging for one tab with **File > 
 
 #### Debugging
 - **Enable debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log). Off by default; with it off only errors and warnings are written
-- **Levels per category** — Rendering, Terminal, AI, SSH, Shell and General, each Off, Errors, Info, Debug or Trace (default: Info)
+- **Levels per category** — Rendering, Terminal, AI Assist, SSH connection, Local shell and General, each Off, Errors, Info, Debug or Trace (default: Info)
 - **Keep recent detail for issue marks** — keeps the last few minutes of detail in a 4 MB memory buffer, at its own level (default: on, at Trace), and writes it to a file when you mark an issue
 - **Save a screenshot with each issue mark** and **Include terminal content** — both off by default
 - **Log folder** — default `logs` beside the exe; **Browse** and **Open** buttons
@@ -224,7 +224,7 @@ There is no on/off switch here. Start or stop logging for one tab with **File > 
 #### AI Assistant > Provider
 - **Provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or Custom
 - **API key** — encrypted at rest with Windows DPAPI, per Windows user (same protection as saved passwords)
-- **Model** — type one, or press the refresh button to fetch the provider's model list. Left empty, each provider uses its own default model; the Custom provider has none, so type the name your server expects
+- **Model** — type one, or press the refresh button to fetch the provider's model list. Left empty, each provider uses its own default model; the Custom provider has none (left empty it sends `deepseek-chat`), so type the name your server expects
 - **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
 - **Commands as tool calls** — Automatic (default), On or Off: how the assistant runs terminal commands, through its `run_command` tool or through `[EXEC]` markers. Automatic is On for Anthropic, OpenAI and Moonshot and Off for DeepSeek, Gemini and Custom; see [Commands as Tool Calls](#commands-as-tool-calls)
 
@@ -333,7 +333,7 @@ runs it without asking. The four categories are the four stops on the policy sca
 the scale, one above Read: with the ceiling at **Read**, an unrecognised command is held back,
 because nothing proved it read-only.
 
-**A local shell is classified by its kind.** PowerShell and cmd sessions (and a custom command Nutshell does not recognise as bash) are locked to the strictest ruleset, the one an unresolved platform uses. A local bash (Git for Windows or MSYS2) uses the Linux rules.
+**A local shell is classified by its kind**, unless the profile's Platform is set, which wins. PowerShell and cmd sessions (and a custom command Nutshell does not recognise as bash) are locked to the strictest ruleset, the one an unresolved platform uses. A local bash (Git for Windows or MSYS2) uses the Linux rules.
 
 **Classification is per-device.** A profile's **Platform** decides which ruleset applies, since
 the same word means different things on different systems — `reload` reboots a Cisco switch,
@@ -379,7 +379,7 @@ Global **System instructions** (Settings > AI Assistant > Behaviour) are include
 A session writes a log file with ANSI escape codes stripped (plain text only). Start it for one tab with **File > Start Logging** (stop with **Stop Logging**) or by clicking the tab's **[L]** button. Setting `"logging_enabled": true` in `nutshell.config` starts a log for every session as it connects; Settings has no control for it.
 
 - Log files are named `<Log Name Format>_<name>.log` under the configured Log Directory — `<name>` is the session's profile name, falling back to its host. Log Name Format is a strftime format string (default: `%Y-%m-%d_%H-%M-%S`, e.g. `2026-09-07_14-30-00_myserver.log`). An empty or invalid format falls back to the default.
-- The **[L]** badge on a tab indicates active logging; click it to start or stop the log for that tab
+- The **[L]** button on a tab is green while that tab is logging and grey otherwise; click it to start or stop the log for that tab
 - Logging status is also shown in tab tooltips
 
 ### Analysing an issue with AI
@@ -734,9 +734,9 @@ Selected files by area, not a full listing.
 │   │   ├── telnet_*.c/.h              #   Telnet protocol, auto-login, session and status text (pure)
 │   │   ├── term_extract.c/.h          #   Terminal text extraction
 │   │   ├── text_lines.c/.h            #   LF <-> CR LF for the message box
-│   │   ├── thinking_mode.c/.h         #   The Thinking row's modes and the Automatic rule
 │   │   ├── text_runs.c/.h             #   Painted word geometry and the hit-test behind chat selection
 │   │   ├── theme.c/.h                 #   Color calculations (luminance, bg detection, per-role contrast)
+│   │   ├── thinking_mode.c/.h         #   The Thinking row's modes and the Automatic rule
 │   │   ├── tooltip.c/.h               #   Connection tooltip formatting
 │   │   ├── ui_demo.c/.h               #   Deterministic demo-state builder for --ui-demo and the gallery
 │   │   ├── ui_theme.c/.h              #   Theme system (4 schemes) + resolved design tokens (ThemeTokens)

@@ -1,7 +1,6 @@
 # Nutshell repository retrospective — 2026-09-21
 
 **Status**: Reviewed (merged)
-
 **Method**: prepared by Claude from the repository state on 2026-09-21. Numbers are measured, judgements are the author's.
 
 ## Scope and method

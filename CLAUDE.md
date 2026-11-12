@@ -26,9 +26,9 @@ ritual, `critique` for a sub-agent second opinion on a decision). All are
 tracked in git. Every change to memory or a
 skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
 file is the record of change. Retrospectives go in `docs/retrospectives/`,
-headed DRAFT until reviewed; merging the retrospective's pull request is
-that review, so the merged file carries no DRAFT marker (my rule of
-2026-11-12). **Whenever a branch has been merged and deleted,
+headed `**Status**: DRAFT until its pull request is merged; the merge is the
+review.` Merging the retrospective's pull request is that review, so nothing
+edits the file at merge (my rule of 2026-11-12). **Whenever a branch has been merged and deleted,
 or its pull request closed unmerged, ask me whether to run a retrospective**
 (the `checkpoint` skill) and run it only on a yes. There is no merge counter
 and no scheduled Routine (my rule of 2026-11-04, replacing "every 10
@@ -144,10 +144,10 @@ other rules are convention, checked only in review:
 - **Never `CreateFont` in `src/ui`.** Use `ns_font(role, dpi)`
   (`src/ui/ns_font.h`), a cache keyed on `(role, dpi, face)`; call
   `ns_font_flush()` after `WM_DPICHANGED` or a font-setting change, not a
-  fresh `CreateFont`. Known exceptions today: the AI chat's zoomable fonts
-  (`CreateFont` in `src/ui/ai_chat.c` and `src/ui/ai_chat_view.c`, which follow
-  Ctrl+/Ctrl- rather than a role) and `CreateFontIndirect` in
-  `src/ui/md_render.c`.
+  fresh `CreateFont`. Known exceptions today: the terminal fonts in
+  `src/ui/renderer.c`, the AI chat's zoomable fonts (`CreateFont` in
+  `src/ui/ai_chat.c` and `src/ui/ai_chat_view.c`, which follow Ctrl+/Ctrl-
+  rather than a role) and `CreateFontIndirect` in `src/ui/md_render.c`.
 - **Sizes and type from `ns_type.h`**: the `SP_*`/`SZ_*` spacing-and-size
   grid, `R_CTRL`/`R_CARD`/`ns_type_pill()` for radii, `STROKE_*` for line
   widths, and the `NsFontRole` ramp (`FONT_CAPTION`/`FONT_BODY`/

@@ -42,7 +42,7 @@ All ten merged with all four checks green on the final head.
 
 **F1. Finished fixes have sat on an unpushed branch for thirteen days.** Worktree
 `~/nutshell-wt/tidy` holds `fix/sgr-codeql-tidy`: two commits from 2026-10-21 (e5a1229,
-359dbe0) (rebased into PR #83, 723ee51) on top of #77's merge. They fix the truncated-SGR leak and all six open CodeQL
+359dbe0; since rebased into PR #83, 723ee51) on top of #77's merge. They fix the truncated-SGR leak and all six open CodeQL
 alerts, including #22, `config_save` creating the config's temp file with a plain
 `fopen()` while it carries the encrypted secrets, with tests. They were never pushed,
 bumped or built, and they merge cleanly with `main` at 94d7ae3. The commits carry

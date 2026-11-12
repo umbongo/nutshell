@@ -57,7 +57,8 @@ not be measured (shallow history) rather than reporting a wrong one.
 ## Known state on 2026-11-12
 
 `main` at v1.2.83 (PR #96, `1a03af5`). Open pull requests: `gh pr list`
-(on 2026-11-12, only Dependabot's actions bump, PR #97). `v1.2.41` (at `7960bd2`)
+(on 2026-11-12: #97, Dependabot's actions bump, and #98, `-Werror` for the
+native test build, v1.2.84). `v1.2.41` (at `7960bd2`)
 and `v1.2.60` (at `0f5bf9a`, the comctl32 fix) are snapshot branches with
 no tag. `v1.0.76`
 and `v1.1.21` are still both a branch and a tag, and `git ls-remote --tags

@@ -5,7 +5,7 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-11-12 (step 2 reads the merged PR bodies' unrun checks and follow-ups). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-12 (a retrospective's merge is its review; step 2 reads the merged PR bodies' unrun checks). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
@@ -17,9 +17,8 @@ Last updated: 2026-11-12 (step 2 reads the merged PR bodies' unrun checks and fo
   `git log --merges --first-parent origin/main <marker>..`.
 - On request: "create a checkpoint", "do a retrospective".
 
-A checkpoint (notes document): compact the todo and memory, delete temp
-files and worktrees, leave the tree ready for a new session; plus the
-record-keeping of 2026-09-21.
+A checkpoint compacts the todo and memory, deletes temp files and
+worktrees and leaves the tree ready for a new session.
 
 ## Files involved
 
@@ -29,7 +28,7 @@ record-keeping of 2026-09-21.
 | `.claude/memory/MEMORY.md` | Durable facts for future sessions. Imported by CLAUDE.md. |
 | `.claude/skills/*/SKILL.md` | Repo procedures. |
 | `.claude/CHANGELOG.md` | Record of every change to memory and skills. |
-| `docs/retrospectives/YYYY-MM-DD-*.md` | Dated retrospectives, marked DRAFT until the maintainer reviews; the merge of its PR is the review. |
+| `docs/retrospectives/YYYY-MM-DD-*.md` | Dated retrospectives; the merge of its PR is the maintainer's review. |
 | `.github/workflows/*.yml`, `.github/scripts/*` | The workflows. Reviewed at every retrospective (see step 5). |
 
 ## Procedure
@@ -40,9 +39,8 @@ record-keeping of 2026-09-21.
    `git log --grep`. Stale items are the most common finding. Also list
    the open CodeQL alerts (`gh api repos/umbongo/nutshell/code-scanning/alerts?state=open`)
    and the last release (`gh release list`); without `gh`, use the
-   `mcp__github__*` equivalents or report them as not measured. Facts handed in by a brief
-   or a previous session are checked against git before they are written
-   down; record the ones git cannot show as reported, not measured.
+   `mcp__github__*` equivalents or report them as not measured. Check facts
+   from a brief or an earlier session against git; mark the rest reported.
    On `automaton`, list never-pushed branches (`repo-status` step 7) and
    report them; one may already fix an Open item. With `make test`
    skipped, take the count from the `Native tests` job of the last PR that
@@ -83,16 +81,13 @@ record-keeping of 2026-09-21.
    writing (the last merge the retrospective covers); the next
    retrospective starts from there, so the retrospective's own merge falls
    in the next one's scope.
-8. **Retrospective (when the maintainer says yes, or asks for one).** Write it under
-   `docs/retrospectives/`, headed `**Status**: DRAFT` (the line becomes
-   `**Status**: Reviewed (merged)` when the maintainer merges its PR;
-   merging is the review, rule of 2026-11-12), with a scope-and-method section,
-   measured numbers in a table, findings ranked by cost of inaction, and
-   recommendations clearly separated from changes made.
-9. **Verify the gate will pass.** Skip `make test` when the change has no code modifications (docs, `.claude/`, retrospectives only; maintainer's instruction, 2026-10-13); run `check-version.sh` regardless. The hosted `Native tests` check still runs on the PR.
-    These files are not build inputs, so no
-   version bump; but `check-version.sh` still runs its consistency check,
-   so never edit the version strings in a checkpoint.
+8. **Retrospective (on a yes, or when asked).** Under `docs/retrospectives/`,
+   headed `**Status**: DRAFT until its pull request is merged; the merge is
+   the review.` (2026-11-12): scope and method, measured numbers in a table,
+   findings ranked by cost of inaction, recommendations apart from changes.
+9. **Verify the gate will pass.** Skip `make test` for a docs, `.claude/` or
+   retrospective-only change (maintainer, 2026-10-13); run `check-version.sh`
+   regardless. No version bump, and never edit the version strings here.
 10. **Clean up.** Remove scratch files and worktrees, then commit on the
    session branch as `docs: checkpoint YYYY-MM-DD — <one line>` (or
    `docs: retrospective YYYY-MM-DD`), push, open a draft PR.

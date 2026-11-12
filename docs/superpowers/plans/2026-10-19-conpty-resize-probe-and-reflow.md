@@ -1,6 +1,6 @@
 # ConPTY Resize: Console Probe and Reflow Fixes Implementation Plan
 
-**Status**: Partly implemented. Slices 1 and 2 (the console probe and the two reflow fixes) shipped in v1.2.42 (PR #70); the probe run is PR #77. Slices 3-6, the top-anchored reflow, are open (the notes' Open list).
+**Status**: Implemented (v1.2.42, PR #70; probe run PR #77). Slices 3-6 of the spec (`2026-10-18-conpty-resize-anchor-design.md`), the top-anchored reflow, are for later plans and are open (the notes' Open list).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

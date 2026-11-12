@@ -513,7 +513,12 @@ Open, in priority order:
       since, as far as the log shows: PR #76's four gate cases, the telnet cases and
       `settings_help_tool_count` (see their own items), `ui_gallery` since the PR #92 token
       changes, and its states added since: `runlist` (PR #94), `thinking-compact` and
-      `thinking-open` (PR #96).
+      `thinking-open` (PR #96). The list-view `wintest` cases added since PR #93 (the
+      four `test_chat_select_win_thinking_*` and `test_settings_label_win_labels_fit_column`)
+      have no recorded run on Windows, only under Wine.
+- [ ] CLAUDE.md says code compiles clean "under both [compilers] with `-Werror`", but the
+      native test build had no `-Werror` (2026-11-12 documentation review). PR #98
+      (v1.2.84) settles it in the Makefile; the documentation pass left the sentence alone.
 - [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.83, which adds telnet, the
       password eye, keyboard-interactive auth, the tool gate, `run_command` and the Thinking
       row modes since then.
