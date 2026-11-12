@@ -73,3 +73,16 @@ unsigned int think_mode_label_colour(const ThemeChatColors *chat, ThinkMode m)
     default:                 return chat->thinking_collapsed;
     }
 }
+
+size_t think_trimmed_len(const char *s, size_t len)
+{
+    if (!s) return 0;
+    while (len > 0) {
+        char c = s[len - 1];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n' &&
+            c != '\f' && c != '\v')
+            break;
+        len--;
+    }
+    return len;
+}

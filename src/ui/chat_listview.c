@@ -323,6 +323,30 @@ static int clv_plain_height(const ChatListView *lv, HDC hdc, const char *text,
                         lv->theme, MD_MODE_PLAIN, 0, 0, NULL, NULL);
 }
 
+/* The first `n` bytes of `text` as a NUL-terminated string for the layouter:
+ * `text` itself when n covers it all, else a malloc'd copy the caller frees
+ * through *owned. NULL on allocation failure. */
+static const char *clv_text_prefix(const char *text, size_t n, char **owned)
+{
+    *owned = NULL;
+    if (strlen(text) <= n) return text;
+    char *c = (char *)malloc(n + 1);
+    if (!c) return NULL;
+    memcpy(c, text, n);
+    c[n] = '\0';
+    *owned = c;
+    return c;
+}
+
+/* The Thinking text a mode shows: compact ends at the last non-blank text
+ * (a reasoning that ends in newlines would otherwise show blank last lines);
+ * the open box shows everything. */
+static size_t clv_think_shown_len(const char *tt, ThinkMode mode)
+{
+    size_t n = strlen(tt);
+    return mode == THINK_MODE_COMPACT ? think_trimmed_len(tt, n) : n;
+}
+
 /* ── Safety tag colour ──────────────────────────────────────────────── */
 
 /* Safety tag chip colours, from ns_tokens() per the design spec's table:
@@ -436,7 +460,8 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
          * hit-tests cost no layout (spec 2026-10-18 section 3). */
         const char *tt = item->u.ai.thinking_text ? item->u.ai.thinking_text
                                                   : "";
-        int tlen = (int)strlen(tt);
+        const size_t shown = clv_think_shown_len(tt, mode);
+        int tlen = (int)shown;   /* the cache key: what is measured */
         int have = 0;   /* full_h is known (cache hit or freshly laid out) */
         if (item->u.ai.think_cache_len == tlen &&
             item->u.ai.think_cache_w == out->body.w &&
@@ -446,13 +471,17 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         } else if (hdc) {
             int tw = out->body.w - ns_scale(SP_XS, dpi);
             if (tw < 1) tw = 1;
-            full_h = clv_plain_height(lv, hdc, tt, tw, clv_font(lv));
+            char *owned = NULL;
+            const char *mt = clv_text_prefix(tt, shown, &owned);
+            if (!mt) mt = "";
+            full_h = clv_plain_height(lv, hdc, mt, tw, clv_font(lv));
             int sb_w = ns_scale(6, dpi);
             if (mode == THINK_MODE_OPEN && full_h > max_body_h &&
                 tw - sb_w >= 1) {
                 tw -= sb_w;
-                full_h = clv_plain_height(lv, hdc, tt, tw, clv_font(lv));
+                full_h = clv_plain_height(lv, hdc, mt, tw, clv_font(lv));
             }
+            free(owned);
             item->u.ai.think_cache_len = tlen;
             item->u.ai.think_cache_w = out->body.w;
             item->u.ai.think_cache_line_h = line_h;
@@ -919,11 +948,15 @@ void chat_listview_set_render_markdown(HWND hwnd, int enabled)
     chat_listview_invalidate(hwnd);
 }
 
+static int  clv_item_top(const ChatListView *lv, const ChatMsgItem *target);
+static void update_scrollbar(ChatListView *lv);
+
 /* Store the pref and make every row measure again (recalc_layout() only
  * remeasures dirty items).  The mode of each row follows from the pref, so
  * the scroll state of the rows is settled here too: a row entering open mode
  * follows the stream again, a row going collapsed forgets its offset. */
-static void clv_apply_thinking_pref(ChatListView *lv, int pref)
+static void clv_apply_thinking_pref(ChatListView *lv, int pref,
+                                    const ChatMsgItem *anchor)
 {
     if (pref < THINK_PREF_AUTO || pref > THINK_PREF_OPEN) pref = THINK_PREF_AUTO;
     lv->thinking_pref = pref;
@@ -934,6 +967,20 @@ static void clv_apply_thinking_pref(ChatListView *lv, int pref)
         if (pref == THINK_PREF_COLLAPSED) it->u.ai.thinking_scroll_y = 0;
         it->dirty = 1;
     }
+    /* A click re-lays out every Thinking row. Not pinned to the bottom, the
+     * clicked row stays at the same screen y (the fold click's rule);
+     * pinned, the view keeps following the bottom. */
+    if (anchor && !lv->stick_to_bottom) {
+        const int screen_y = clv_item_top(lv, anchor) - lv->scroll_y;
+        recalc_layout(lv);
+        const int max_scroll = lv->total_height - lv->viewport_height;
+        lv->scroll_y = stick_scroll_hold_row(
+            screen_y, clv_item_top(lv, anchor), max_scroll);
+        lv->stick_to_bottom =
+            stick_scroll_after_user(lv->scroll_y, max_scroll);
+        update_scrollbar(lv);
+        return;
+    }
     recalc_layout(lv);
 }
 
@@ -943,7 +990,7 @@ void chat_listview_set_thinking_pref(HWND hwnd, int pref)
     if (!lv) return;
     if (pref < THINK_PREF_AUTO || pref > THINK_PREF_OPEN) pref = THINK_PREF_AUTO;
     if (lv->thinking_pref == pref) return;   /* no-op */
-    clv_apply_thinking_pref(lv, pref);
+    clv_apply_thinking_pref(lv, pref, NULL);
     chat_listview_invalidate(hwnd);
 }
 
@@ -1987,9 +2034,13 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
              * measured at (build_thinking_layout's think_cache_text_w,
              * which is this clip's width); a run is recorded only where it
              * shows inside the clip. */
-            const char *tt = item->u.ai.thinking_text;
+            const char *tt_full = item->u.ai.thinking_text;
+            const size_t shown_len = clv_think_shown_len(tt_full, tmode);
+            char *tt_owned = NULL;
+            const char *tt = clv_text_prefix(tt_full, shown_len, &tt_owned);
+            if (!tt) tt = "";
             MdRunCtx trc;
-            clv_run_ctx(lv, &trc, item, TR_PART_THINKING, (int)strlen(tt),
+            clv_run_ctx(lv, &trc, item, TR_PART_THINKING, (int)shown_len,
                         &item->runs, 0,
                         RGB_FROM_THEME(tok->bg_secondary.base));
             trc.clip_top = clip_rc.top;
@@ -2001,6 +2052,7 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
             SelectClipRgn(hdc, NULL);
             DeleteObject(clip_rgn);
+            free(tt_owned);
 
             /* Scrollbar thumb when the open box's content overflows */
             if (scrolls) {
@@ -4069,7 +4121,7 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                 const ThinkMode next =
                     think_mode_next((ThinkMode)item->u.ai.thinking_mode);
                 const ThinkPref npref = think_pref_from_mode(next);
-                clv_apply_thinking_pref(lv, (int)npref);
+                clv_apply_thinking_pref(lv, (int)npref, item);
                 if (parent)
                     PostMessage(parent, WM_COMMAND,
                                 MAKEWPARAM(IDC_CHAT_THINKING_MODE, 0),

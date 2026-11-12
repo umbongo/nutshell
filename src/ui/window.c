@@ -38,6 +38,7 @@
 #include "clipboard.h"
 #include "paste_filter.h"
 #include "ai_chat.h"
+#include "thinking_mode.h"
 #include "ai_chat_testable.h"
 #include "ui_demo.h"
 #include "cmd_policy.h"
@@ -4653,7 +4654,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                      * as the saved choice. --ui-demo keeps it in memory only
                      * (the demo runs on the user's real config). */
                     if (g_config && g_startup_action != CLI_UI_DEMO) {
-                        g_config->settings.ai_thinking_mode = (int)lParam;
+                        int tpref = (int)lParam;
+                        if (tpref < THINK_PREF_AUTO || tpref > THINK_PREF_OPEN)
+                            tpref = THINK_PREF_AUTO;
+                        g_config->settings.ai_thinking_mode = tpref;
                         config_save(g_config, active_config_path());
                     }
                     return 0;

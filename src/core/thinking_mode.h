@@ -1,6 +1,7 @@
 #ifndef NUTSHELL_THINKING_MODE_H
 #define NUTSHELL_THINKING_MODE_H
 
+#include <stddef.h>
 #include "ui_theme.h"
 
 /* How a Thinking row shows the model's reasoning, and the saved preference
@@ -44,6 +45,11 @@ int think_mode_body_cap(ThinkMode m, int line_h, int open_cap);
 
 /* Scroll offset that puts the last lines in view: max(0, full_h - vis_h). */
 int think_compact_offset(int full_h, int vis_h);
+
+/* Length of s[0..len) without trailing whitespace (space, tab, CR, LF, FF,
+ * VT).  The compact box ends at the last visible text, not at blank lines.
+ * NULL gives 0. */
+size_t think_trimmed_len(const char *s, size_t len);
 
 /* The label colour for the mode (compact green, collapsed brown, open grey).
  * An out of range mode picks the collapsed one. */

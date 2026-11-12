@@ -1206,6 +1206,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d && ctl_id == IDC_CHAT_THINKING_MODE) {
                 d->thinking_pref = (int)lParam;
                 HWND owner = GetParent(hwnd);
+                if (!owner) owner = GetWindow(hwnd, GW_OWNER);
                 if (owner)
                     SendMessage(owner, WM_COMMAND,
                                 MAKEWPARAM(IDC_CHAT_THINKING_MODE, 0), lParam);

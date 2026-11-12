@@ -199,6 +199,9 @@ typedef struct {
 
     SettingsCtrl ctrls[MAX_SETTINGS_CTRLS];
     int          n_ctrls;
+    int      think_initial; /* the Thinking display combo's selection when the page was built:
+                             * OK writes it back only if the user changed it, so a click on a
+                             * Thinking row while the dialog is open is not overwritten */
 } SettingsDlgData;
 
 static void relayout(HWND hwnd, SettingsDlgData *d);
@@ -1471,6 +1474,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             int tsel = nd->cfg->settings.ai_thinking_mode;
             if (tsel < THINK_PREF_AUTO || tsel > THINK_PREF_OPEN) tsel = THINK_PREF_AUTO;
             SendMessage(cmb, CB_SETCURSEL, (WPARAM)tsel, 0);
+            nd->think_initial = tsel;
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
         }
         {
@@ -2096,7 +2100,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             {
                 int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_THINKING_MODE,
                                                   CB_GETCURSEL, 0, 0);
-                if (sel >= THINK_PREF_AUTO && sel <= THINK_PREF_OPEN)
+                if (sel >= THINK_PREF_AUTO && sel <= THINK_PREF_OPEN &&
+                    sel != d->think_initial)
                     s->ai_thinking_mode = sel;
             }
 

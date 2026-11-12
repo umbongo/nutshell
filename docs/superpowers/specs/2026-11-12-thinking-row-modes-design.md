@@ -169,10 +169,32 @@ each is open to reversal.
     Automatic.
 16. **A mode change drops the row's wrap cache**, since compact wraps
     without the open box's scrollbar gutter.
-17. **A click does not hold the clicked row's screen position**; the list
-    re-lays out and, if pinned to the bottom, follows the bottom.
+17. **The clicked row keeps its screen position** (reverses the first
+    implementation, which let the re-layout push the row off screen): a
+    click re-lays out every Thinking row, and unless the list is pinned to the
+    bottom the view is put back so the clicked row's top is at the same
+    screen y (the fold click's rule, `stick_scroll_hold_row`). Pinned to the
+    bottom, the view keeps following the bottom.
 18. **The Settings combo sits after "Render AI markdown"** on AI Assistant >
     Behaviour, its items in `ThinkPref` order.
+19. **Compact ends at the last non-blank text**: trailing whitespace and
+    newlines of the reasoning are not measured or painted in compact mode
+    (`think_trimmed_len`), so the four visible lines are never blank; the
+    wrap cache key is the trimmed length. Open mode shows the text as is.
+20. **Settings OK writes the Thinking display only if the combo changed**
+    from the selection it had when the page was built, so a click on a row
+    made while the dialog was open is not overwritten by the stale value.
+21. **A stored pref out of range is clamped to Automatic** by the main window
+    before it is kept (the panel's message carries an int).
+
+## Flagged to the maintainer
+
+- (6) Under Automatic, a click on a streaming (compact) row goes to open, so
+  hiding it takes two clicks (open, then collapsed). This is the specified
+  cycle, not a defect.
+- (7) Save under Automatic never includes the reasoning. Before, opening any
+  row once made Save include it; now Save includes it only when the idle mode
+  under the choice is not collapsed. A behaviour change.
 
 ## Testing
 

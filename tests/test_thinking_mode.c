@@ -118,3 +118,17 @@ int test_thinking_theme_tokens_distinct(void)
     }
     TEST_END();
 }
+
+int test_thinking_trimmed_len(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)think_trimmed_len("abc", 3), 3);
+    ASSERT_EQ((int)think_trimmed_len("abc\n\n", 5), 3);
+    ASSERT_EQ((int)think_trimmed_len("abc \t\r\n\f\v", 9), 3);
+    ASSERT_EQ((int)think_trimmed_len("a b\n c\n", 7), 6);   /* inner kept */
+    ASSERT_EQ((int)think_trimmed_len("  \n\n", 4), 0);      /* all blank */
+    ASSERT_EQ((int)think_trimmed_len("", 0), 0);
+    ASSERT_EQ((int)think_trimmed_len(NULL, 5), 0);
+    ASSERT_EQ((int)think_trimmed_len("abc\n\n", 4), 3);    /* honours len */
+    TEST_END();
+}
