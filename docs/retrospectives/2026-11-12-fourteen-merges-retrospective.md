@@ -219,4 +219,21 @@ Record changes:
 
 ## Session cost
 
-TO BE FILLED BY THE MAIN SESSION
+Maintainer's report, 2026-11-12: the 5-hour allowance went in about an hour and two resets were used. Measured from the Claude Code transcripts on `automaton` (token counts only; the allowance accounting is not in them, and the weights below are assumptions: input 1.0, cache read 0.1, output 5.0, cache write 1.25, Sonnet 1.0, Opus and Fable 1.67).
+
+| Window (UTC) | Weighted tokens | Main session | Sub-agents |
+|---|---|---|---|
+| 2026-11-10 23:00 to 11-11 14:00 (`run_command` build) | 209M, 5,510 calls; worst five hours 77M | 5% | 95% |
+| 2026-11-12 12:00 to 16:00 | about 9M | about a third | about two thirds |
+
+Causes on the heavy day, in order:
+
+1. Five long-running Opus orchestrator sub-agents, 28% of the window: 659 calls with contexts of 280k to 600k tokens, each re-read on every call. The longest ran 289 minutes.
+2. The number of sub-agents: 162 in 15 hours (41 Sonnet implementers, 79 Sonnet reviewers, 9 Opus reviewers), 5,365 calls at an average 158k context.
+3. Cache expiry, about 14%: 45 orchestrator calls came back after more than five minutes idle and re-wrote 300k or more of context each time.
+
+No runaway loops and no oversized tool results were found. The `pgrep -f` wait loop (finding 3) used no tokens. 4 and 5 November had similar five-hour peaks, so 11 November was heavy, not unique. On 12 November the main session's share is larger because each call re-reads about 140k of standing context (nine days of summary, instructions and skills); whether Fable counts for more than Opus against the allowance is not known.
+
+Not measured: the meter is account-wide and the maintainer worked on two repositories at once, the second on another client (no transcripts on `automaton`). A reading of 52% of the 5-hour limit against about 5M weighted tokens used on this machine in the same window shows that this machine was a minority of the bar at that moment (reported, ratio rough). The Claude usage page in account settings is the one place that splits it by client.
+
+Recommendations, not applied (they change CLAUDE.md's delegation rule and the skills): start a fresh session per pull request; do not use long-lived Opus orchestrators (orchestrate from the main session in small hand-offs, or use Sonnet); one task review per task and one Opus review per branch, not one per fix round; keep waits on child agents under five minutes or use the one-hour cache; run the heavy repository's session alone when the bar is high.
