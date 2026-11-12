@@ -532,10 +532,12 @@ Open, in priority order:
 - [ ] **Thinking row: three visual modes** (maintainer, 2026-11-12). Today the row is
       either collapsed (one line) or open (the whole text). Add a compact mode that
       shows only four lines of the streaming text at a time, and make a click on the
-      row cycle through the three: collapsed, compact, open. Needs a short spec first
-      (which mode is the default, what compact shows once the reply has finished, how
-      the session-wide preference from `IDC_CHAT_THINKING_OPENED/CLOSED` maps onto
-      three states).
+      row cycle through the three: collapsed, compact, open. Decided the same day:
+      compact is the default while the text streams; once the reply is idle the row
+      sits fully collapsed; the row's label ("Thinking") changes colour with the
+      mode. Needs a short spec first (which colour token for each mode, how the
+      session-wide preference from `IDC_CHAT_THINKING_OPENED/CLOSED` maps onto three
+      states, whether a mode the user clicked to survives the collapse at idle).
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
