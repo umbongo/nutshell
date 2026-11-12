@@ -443,6 +443,9 @@ int test_config_load_tool_rounds(void);
 int test_config_roundtrip_tool_rounds(void);
 int test_config_load_runcmd_mode(void);
 int test_config_roundtrip_runcmd_mode(void);
+int test_config_load_thinking_mode(void);
+int test_config_roundtrip_thinking_mode(void);
+int test_config_validate_thinking_mode(void);
 int test_config_roundtrip_all_fields(void);
 int test_config_default_ai_font(void);
 int test_config_roundtrip_ai_font(void);
@@ -3653,6 +3656,16 @@ int test_settings_entry_or_keep_huge_unsigned(void);
 int test_settings_scrollback_for_new_tab(void);
 int test_settings_scrollback_agrees_with_validate(void);
 
+/* test_thinking_mode.c */
+int test_thinking_mode_next_cycle(void);
+int test_thinking_mode_effective(void);
+int test_thinking_pref_from_mode(void);
+int test_thinking_pref_name_parse(void);
+int test_thinking_body_cap(void);
+int test_thinking_compact_offset(void);
+int test_thinking_label_colour(void);
+int test_thinking_theme_tokens_distinct(void);
+
 /* test_settings_help.c */
 int test_settings_help_table_matches_enum(void);
 int test_settings_help_get_out_of_range(void);
@@ -4875,6 +4888,9 @@ int main(void) {
     failed += test_config_roundtrip_tool_rounds();
     failed += test_config_load_runcmd_mode();
     failed += test_config_roundtrip_runcmd_mode();
+    failed += test_config_load_thinking_mode();
+    failed += test_config_roundtrip_thinking_mode();
+    failed += test_config_validate_thinking_mode();
     failed += test_config_roundtrip_all_fields();
     failed += test_config_default_ai_font();
     failed += test_config_roundtrip_ai_font();
@@ -7946,6 +7962,14 @@ int main(void) {
     failed += test_settings_entry_or_keep_huge_unsigned();
     failed += test_settings_scrollback_for_new_tab();
     failed += test_settings_scrollback_agrees_with_validate();
+    failed += test_thinking_mode_next_cycle();
+    failed += test_thinking_mode_effective();
+    failed += test_thinking_pref_from_mode();
+    failed += test_thinking_pref_name_parse();
+    failed += test_thinking_body_cap();
+    failed += test_thinking_compact_offset();
+    failed += test_thinking_label_colour();
+    failed += test_thinking_theme_tokens_distinct();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();
     failed += test_settings_help_labels_and_pages();

@@ -26,6 +26,9 @@ typedef struct {
     unsigned int indicator_red;      /* Stalled activity dot */
     unsigned int send_btn;           /* Send button background (pastel blue) */
     unsigned int stop_btn;           /* Stop button background (pastel red) */
+    unsigned int thinking_compact;   /* Thinking label, compact mode (pastel green); text on bg_primary */
+    unsigned int thinking_collapsed; /* Thinking label, collapsed mode (pastel brown) */
+    unsigned int thinking_open;      /* Thinking label, open mode (pastel grey) */
 } ThemeChatColors;
 
 /* Explicit per-theme overrides for a handful of derived tokens.  0 means

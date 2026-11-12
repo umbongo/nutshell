@@ -118,5 +118,6 @@
 #define IDC_DBG_MAX_FILE         3094 /* Max file size (MB) */
 #define IDC_DBG_MAX_TOTAL        3095 /* Keep at most (MB) */
 #define IDC_DBG_CURRENT          3096 /* Current log file (read-only) */
+#define IDC_AI_THINKING_MODE     3097 /* Settings: "Thinking display" combo (Automatic, Always collapsed, Always compact, Always open) */
 
 #endif

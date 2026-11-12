@@ -288,6 +288,18 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "open AI panel changes when you press Save.\nDefault: on.",
       "on",
       0, 0, 0u),
+    E(SH_AI_THINKING_MODE, SETTINGS_PAGE_AI_BEHAVIOUR, SH_KIND_SETTING,
+      "Thinking display:",
+      NULL,
+      "Thinking display:\n\nHow a Thinking row shows the model's reasoning. "
+      "Automatic shows the last four lines while a reply streams and "
+      "collapses the row once it is idle. Always collapsed, Always compact "
+      "and Always open hold that mode for every Thinking row. "
+      "Clicking a Thinking row cycles collapsed, compact, open and saves "
+      "that choice here; choosing Automatic resets it.\n"
+      "Default: Automatic.",
+      "Automatic",
+      0, 0, 0u),
     E(SH_AI_POLICY_ALLOWED, SETTINGS_PAGE_AI_BEHAVIOUR, SH_KIND_SETTING,
       "Allowed:",
       NULL,
