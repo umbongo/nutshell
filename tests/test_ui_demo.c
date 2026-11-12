@@ -41,17 +41,19 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 19);
+    ASSERT_EQ(count, 21);
     ASSERT_STR_EQ(states[count - 1], "all");
     ASSERT_STR_EQ(states[count - 2], "shortcuts");
     ASSERT_STR_EQ(states[count - 3], "policy-compact");
     ASSERT_STR_EQ(states[count - 4], "policy-auto");
     ASSERT_STR_EQ(states[count - 5], "settings-debug");
     ASSERT_STR_EQ(states[count - 6], "cmddetail");
-    ASSERT_STR_EQ(states[count - 7], "thinking");
-    ASSERT_STR_EQ(states[count - 8], "local");
-    ASSERT_STR_EQ(states[count - 9], "ansi");
-    ASSERT_STR_EQ(states[count - 10], "runlist");   /* not part of "all" */
+    ASSERT_STR_EQ(states[count - 7], "thinking-open");
+    ASSERT_STR_EQ(states[count - 8], "thinking-compact");
+    ASSERT_STR_EQ(states[count - 9], "thinking");
+    ASSERT_STR_EQ(states[count - 10], "local");
+    ASSERT_STR_EQ(states[count - 11], "ansi");
+    ASSERT_STR_EQ(states[count - 12], "runlist");   /* not part of "all" */
     TEST_END();
 }
 
@@ -467,6 +469,8 @@ int test_ui_demo_scrolls_to_top_chat_all_and_thinking(void)
     ASSERT_TRUE(ui_demo_scrolls_to_top("chat"));
     ASSERT_TRUE(ui_demo_scrolls_to_top("all"));
     ASSERT_TRUE(ui_demo_scrolls_to_top("thinking"));
+    ASSERT_TRUE(ui_demo_scrolls_to_top("thinking-compact"));
+    ASSERT_TRUE(ui_demo_scrolls_to_top("thinking-open"));
     TEST_END();
 }
 
@@ -478,12 +482,54 @@ int test_ui_demo_scrolls_to_top_false_for_other_states(void)
     for (int i = 0; i < count; i++) {
         const char *s = states[i];
         if (strcmp(s, "chat") == 0 || strcmp(s, "all") == 0 ||
-            strcmp(s, "thinking") == 0)
+            ui_demo_is_thinking_state(s))
             continue;
         ASSERT_TRUE(!ui_demo_scrolls_to_top(s));
     }
     ASSERT_TRUE(!ui_demo_scrolls_to_top("bogus-state"));
     ASSERT_TRUE(!ui_demo_scrolls_to_top(NULL));
+    TEST_END();
+}
+
+/* The two new Thinking states are valid, build "chat"'s turns, and are not
+ * part of "all". */
+int test_ui_demo_thinking_mode_states_match_chat_conversation(void)
+{
+    TEST_BEGIN();
+    static const char *const names[2] = { "thinking-compact", "thinking-open" };
+    for (int n = 0; n < 2; n++) {
+        AiConversation chat_conv, conv;
+        ApprovalQueue approval, approval2;
+        ASSERT_TRUE(ui_demo_state_valid(names[n]));
+        ASSERT_TRUE(ui_demo_is_thinking_state(names[n]));
+        ASSERT_EQ(ui_demo_build("chat", &chat_conv, &approval, &approval2, NULL, 0), 0);
+        ASSERT_EQ(ui_demo_build(names[n], &conv, &approval, &approval2, NULL, 0), 0);
+        ASSERT_EQ(conv.msg_count, chat_conv.msg_count);
+        for (int i = 0; i < chat_conv.msg_count; i++)
+            ASSERT_STR_EQ(conv.messages[i].content, chat_conv.messages[i].content);
+        ai_conv_reset(&chat_conv);
+        ai_conv_reset(&conv);
+    }
+    ASSERT_TRUE(!ui_demo_is_thinking_state("chat"));
+    ASSERT_TRUE(!ui_demo_is_thinking_state("all"));
+    ASSERT_TRUE(!ui_demo_is_thinking_state(NULL));
+    TEST_END();
+}
+
+/* ui_demo_thinking_pref(): the Thinking states force their own mode, chat
+ * and all stay open (their selection crosses the body), everything else
+ * leaves the saved pref alone. */
+int test_ui_demo_thinking_pref_per_state(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ui_demo_thinking_pref("thinking"), THINK_PREF_COLLAPSED);
+    ASSERT_EQ(ui_demo_thinking_pref("thinking-compact"), THINK_PREF_COMPACT);
+    ASSERT_EQ(ui_demo_thinking_pref("thinking-open"), THINK_PREF_OPEN);
+    ASSERT_EQ(ui_demo_thinking_pref("chat"), THINK_PREF_OPEN);
+    ASSERT_EQ(ui_demo_thinking_pref("all"), THINK_PREF_OPEN);
+    ASSERT_EQ(ui_demo_thinking_pref("approval"), -1);
+    ASSERT_EQ(ui_demo_thinking_pref("bogus-state"), -1);
+    ASSERT_EQ(ui_demo_thinking_pref(NULL), -1);
     TEST_END();
 }
 
@@ -540,7 +586,7 @@ static void build_chat_items(ChatMsgList *l, AiConversation *conv)
     ChatMsgItem *ai = chat_msg_append(l, CHAT_ITEM_AI_TEXT,
                                       ai_msg_content(&conv->messages[2]));
     chat_msg_set_thinking(ai, ui_demo_thinking_text());
-    ai->u.ai.thinking_collapsed = 0;
+    ai->u.ai.thinking_mode = THINK_MODE_OPEN;
 }
 
 int test_ui_demo_chat_selection_spans_every_kind(void)

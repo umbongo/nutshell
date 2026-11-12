@@ -3,6 +3,7 @@
 #include "ai_agentic.h"
 #include "cmd_run_log.h"
 #include "ns_scale.h"
+#include "thinking_mode.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -10,7 +11,7 @@
 /* ---------------------------------------------------------------------
  * State names, in the order ui_demo_states() reports them.  "all" is
  * always last and always means "union of the panel states" (not "ansi",
- * "local", "thinking", "cmddetail", "settings-debug", "policy-auto",
+ * "local", "thinking", "thinking-compact", "thinking-open", "cmddetail", "settings-debug", "policy-auto",
  * "policy-compact", "shortcuts" or "runlist", which reuse or swap content,
  * open a modal window or exist to show one thing). "ansi" sits before "local"
  * so the names tests/test_ui_demo.c anchors from the end of the list keep
@@ -19,7 +20,8 @@
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "batches", "runlist", "ansi", "local", "thinking", "cmddetail",
+    "nokey", "nosession", "batches", "runlist", "ansi", "local", "thinking", "thinking-compact", "thinking-open",
+    "cmddetail",
     "settings-debug", "policy-auto", "policy-compact", "shortcuts", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
@@ -45,7 +47,7 @@ int ui_demo_state_valid(const char *state)
  * ai_chat_apply_demo_extras()) -- these need to be pulled back to the top
  * afterwards so the gallery capture actually shows the disclosure instead
  * of scrolling past it. "thinking" shows it collapsed, "chat" and "all"
- * show it expanded (ai_chat_apply_demo_extras() forces that). Every other state
+ * show it open (ui_demo_thinking_pref()). Every other state
  * keeps the bottom scroll, to show its most recent activity.
  *
  * "thinking" was missing from this set until 2026-09-24: left scrolled to
@@ -60,7 +62,29 @@ int ui_demo_scrolls_to_top(const char *state)
     if (!state) return 0;
     return strcmp(state, "chat") == 0 ||
            strcmp(state, "all") == 0 ||
-           strcmp(state, "thinking") == 0;
+           ui_demo_is_thinking_state(state);
+}
+
+/* "thinking", "thinking-compact" and "thinking-open": "chat"'s turns with
+ * the long reasoning block, shown in the named Thinking mode. */
+int ui_demo_is_thinking_state(const char *state)
+{
+    return state && (strcmp(state, "thinking") == 0 ||
+                     strcmp(state, "thinking-compact") == 0 ||
+                     strcmp(state, "thinking-open") == 0);
+}
+
+int ui_demo_thinking_pref(const char *state)
+{
+    if (!state) return -1;
+    if (strcmp(state, "thinking") == 0) return THINK_PREF_COLLAPSED;
+    if (strcmp(state, "thinking-compact") == 0) return THINK_PREF_COMPACT;
+    /* "chat" and "all" showed their reasoning open before the modes existed
+     * (the chat selection crosses the Thinking body); they still do. */
+    if (strcmp(state, "thinking-open") == 0 || strcmp(state, "chat") == 0 ||
+        strcmp(state, "all") == 0)
+        return THINK_PREF_OPEN;
+    return -1;
 }
 
 /* System prompt shared by every state -- index 0 of every conversation,
@@ -666,7 +690,7 @@ int ui_demo_build(const char *state, AiConversation *conv,
      * to the reply afterwards. Deliberately not part of "all": it exists
      * only to demo the 50-line scrollable box, which "all" doesn't need a
      * second copy of. */
-    if (strcmp(state, "thinking") == 0)
+    if (ui_demo_is_thinking_state(state))
         build_chat(conv);
     /* "cmddetail" is "approval" with the command details popup opened on the
      * long row by the win32 side (ai_chat_apply_demo_extras()); like

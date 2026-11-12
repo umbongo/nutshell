@@ -304,6 +304,7 @@ int test_rebuild_replay_thinking_and_empty_reply(void) {
     ASSERT_EQ(list.tail->type, CHAT_ITEM_AI_TEXT);
     ASSERT_STR_EQ(list.tail->u.ai.thinking_text, "because");
     ASSERT_EQ(list.tail->u.ai.thinking_complete, 1);
+    ASSERT_EQ(list.tail->u.ai.thinking_mode, THINK_MODE_COLLAPSED);
     chat_msg_list_clear(&list);
     ai_conv_reset(&conv);
     TEST_END();

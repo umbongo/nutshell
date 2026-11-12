@@ -40,7 +40,7 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
     /* Type-specific defaults */
     if (type == CHAT_ITEM_AI_TEXT) {
         item->u.ai.thinking_text = NULL;
-        item->u.ai.thinking_collapsed = 1;
+        item->u.ai.thinking_mode = THINK_MODE_COLLAPSED;
         item->u.ai.thinking_elapsed = 0.0f;
         item->u.ai.thinking_complete = 0;
         item->u.ai.thinking_scroll_y = 0;

@@ -9,6 +9,7 @@
 #include "tool_decision.h"
 #include "app_font.h"
 #include "config.h"
+#include "thinking_mode.h"
 #include "dlog_types.h"
 
 #include <stdio.h>
@@ -86,7 +87,7 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_SESSION_MGR_STARTUP), N(SH_AUTOCONNECT), N(SH_AUTOCONNECT_SESSION),
     N(SH_AI_PROVIDER), N(SH_AI_KEY), N(SH_AI_MODEL), N(SH_AI_REFRESH), N(SH_AI_BASE_URL),
     N(SH_AI_RUNCMD_MODE),
-    N(SH_AI_CONTEXT_LINES), N(SH_AI_SYSTEM_NOTES), N(SH_AI_MARKDOWN),
+    N(SH_AI_CONTEXT_LINES), N(SH_AI_SYSTEM_NOTES), N(SH_AI_MARKDOWN), N(SH_AI_THINKING_MODE),
     N(SH_AI_POLICY_ALLOWED), N(SH_AI_POLICY_AUTO), N(SH_AI_TOOL_TIMEOUT), N(SH_AI_TOOL_ROUNDS),
     N(SH_AI_WEB_FETCH), N(SH_AI_SEARCH), N(SH_AI_SEARCH_URL), N(SH_AI_MAX_RESULTS),
     N(SH_DBG_ENABLE), N(SH_DBG_LEVEL_RENDER), N(SH_DBG_LEVEL_TERM), N(SH_DBG_LEVEL_AI),
@@ -103,7 +104,7 @@ int test_settings_help_table_matches_enum(void) {
     const SettingsHelp *t = settings_help_table(&n);
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(n, (size_t)SH_COUNT);
-    ASSERT_EQ(SH_COUNT, 47);
+    ASSERT_EQ(SH_COUNT, 48);
     ASSERT_EQ(sizeof(k_names) / sizeof(k_names[0]), (size_t)SH_COUNT);
     ASSERT_NOT_NULL(settings_help_table(NULL));
     if (t != NULL && n == (size_t)SH_COUNT) {
@@ -274,6 +275,14 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     if (id == SH_AI_RUNCMD_MODE) {
         (void)snprintf(out, n, "%s", s->ai_runcmd_mode == AI_RUNCMD_ON ? "On"
                                      : s->ai_runcmd_mode == AI_RUNCMD_OFF ? "Off" : "Automatic");
+        return 1;
+    }
+    if (id == SH_AI_THINKING_MODE) {
+        (void)snprintf(out, n, "%s",
+                       s->ai_thinking_mode == THINK_PREF_COLLAPSED ? "Always collapsed"
+                       : s->ai_thinking_mode == THINK_PREF_COMPACT ? "Always compact"
+                       : s->ai_thinking_mode == THINK_PREF_OPEN ? "Always open"
+                       : "Automatic");
         return 1;
     }
     if (id == SH_AI_POLICY_ALLOWED) {

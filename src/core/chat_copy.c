@@ -353,7 +353,7 @@ int chat_sel_part_range(ChatSelPos a, ChatSelPos b, int msg_id, int part,
 static int thinking_shown(const ChatMsgItem *it)
 {
     return it->type == CHAT_ITEM_AI_TEXT && it->u.ai.thinking_text &&
-           it->u.ai.thinking_text[0] && !it->u.ai.thinking_collapsed;
+           it->u.ai.thinking_text[0] && it->u.ai.thinking_mode != THINK_MODE_COLLAPSED;
 }
 
 /* Append the copy of one part's [s, e) as a "\n\n"-joined piece. */

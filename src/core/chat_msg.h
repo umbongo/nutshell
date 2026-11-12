@@ -7,6 +7,7 @@
 #include "chat_approval.h"
 #include "cmd_batch.h"
 #include "text_runs.h"
+#include "thinking_mode.h"
 
 /* Execution state of a command card, synced from the batch's ApprovalQueue
  * -- never set by hand (see chat_msg_batch_sync_run()). */
@@ -48,15 +49,13 @@ typedef struct ChatMsgItem {
     union {
         struct {
             char *thinking_text;
-            int thinking_collapsed;
+            int thinking_mode;       /* a ThinkMode (thinking_mode.h): how the row shows
+                                       * its text now.  The list view recomputes it from
+                                       * the saved pref at every layout; default collapsed. */
             float thinking_elapsed;
             int thinking_complete;
             int thinking_scroll_y;   /* internal scroll offset for expanded thinking */
             int thinking_autoscroll; /* 1 = auto-scroll to bottom during streaming */
-            int thinking_user_set;   /* 1 = user has manually opened or closed this
-                                       * item's Thinking disclosure; once set, the
-                                       * WM_AI_STREAM handler in ai_chat.c must never
-                                       * change thinking_collapsed on this item again. */
             /* The Thinking body's wrapped height, cached by the list view
              * per (text length, box width, line height) so a hover move
              * costs no layout; think_cache_len = -1 means nothing cached.

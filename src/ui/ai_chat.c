@@ -310,7 +310,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             0, 0, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_NEWCHAT, NULL, NULL);
 
-        nd->show_thinking = 0; /* default: collapsed (user must click '>' to expand) */
+        nd->thinking_pref = THINK_PREF_AUTO;
         nd->hThinkingBtn = NULL; /* Thinking button removed - now inline in chat */
 
         nd->hSaveBtn = CreateWindow("BUTTON", "",
@@ -806,8 +806,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->actual_input_tokens = 0;
                 d->actual_output_tokens = 0;
                 d->last_snapshot_len = 0;   /* an empty conversation carries no snapshot */
-                d->show_thinking = 0;
-                if (d->active_state) d->active_state->show_thinking = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
                 ai_chat_header_invalidate(d);
@@ -831,7 +829,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 char *save_buf = (char *)malloc(AI_BODY_MAX);
                 if (save_buf) {
                     size_t n = ai_build_save_text(&d->conv,
-                        d->thinking_history, d->show_thinking,
+                        d->thinking_history,
+                        think_mode_effective((ThinkPref)d->thinking_pref, 0)
+                            != THINK_MODE_COLLAPSED,
                         save_buf, AI_BODY_MAX);
                     if (n > 0) {
                         char fname[MAX_PATH] = "ai_chat.txt";
@@ -1199,24 +1199,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
 
-            /* IDC_CHAT_THINKING_OPENED → user manually expanded a Thinking
-             * disclosure this session; remember it so a reply-start doesn't
-             * auto-collapse it (see the WM_AI_STREAM handler above). */
-            if (d && ctl_id == IDC_CHAT_THINKING_OPENED) {
-                d->show_thinking = 1;
-                return 0;
-            }
-
-            /* IDC_CHAT_THINKING_CLOSED → user manually collapsed a Thinking
-             * disclosure this session. Clear show_thinking (mirrored into
-             * active_state the way IDC_CHAT_NEWCHAT does above) so a later
-             * reply's block still starts open while it streams -- but the
-             * item the user just closed is protected from re-opening by
-             * its own thinking_user_set flag, set at the click site in
-             * chat_listview.c. */
-            if (d && ctl_id == IDC_CHAT_THINKING_CLOSED) {
-                d->show_thinking = 0;
-                if (d->active_state) d->active_state->show_thinking = 0;
+            /* IDC_CHAT_THINKING_MODE -> a click on a Thinking row cycled the
+             * display (lParam = the new ThinkPref; the list view already
+             * re-laid out). Remember it for Save and hand it to the main
+             * window, which owns the config: it stores and saves it. */
+            if (d && ctl_id == IDC_CHAT_THINKING_MODE) {
+                d->thinking_pref = (int)lParam;
+                HWND owner = GetParent(hwnd);
+                if (!owner) owner = GetWindow(hwnd, GW_OWNER);
+                if (owner)
+                    SendMessage(owner, WM_COMMAND,
+                                MAKEWPARAM(IDC_CHAT_THINKING_MODE, 0), lParam);
                 return 0;
             }
 
@@ -1403,25 +1396,10 @@ next_coalesce:;
             chat_activity_token(&d->activity, now);
 
             if (d->stream_ai_item) {
-                /* Thinking disclosure: starts (and stays) collapsed, even
-                 * while reasoning is still streaming in -- most people
-                 * don't want to see the raw reasoning (maintainer request,
-                 * 2026-09-24). chat_msg_append() already defaults every new
-                 * item's thinking_collapsed to 1, so there is nothing to do
-                 * for that case here. The one exception is a session-wide
-                 * preference: once the user has manually opened a Thinking
-                 * disclosure this session (d->show_thinking), later replies
-                 * open already-expanded too, so they aren't re-clicking the
-                 * same disclosure every turn. A manual per-item toggle
-                 * (thinking_user_set) always wins over this -- once set, it
-                 * must never be touched again from here. */
-                if (d->stream_thinking_len > 0 &&
-                    !d->stream_ai_item->u.ai.thinking_user_set &&
-                    d->show_thinking &&
-                    d->stream_ai_item->u.ai.thinking_collapsed) {
-                    d->stream_ai_item->u.ai.thinking_collapsed = 0;
-                    d->stream_ai_item->dirty = 1;
-                }
+                /* The Thinking row's mode (collapsed, compact, open) is the
+                 * list view's: it derives it from the saved pref and from
+                 * thinking_complete at every layout, so there is nothing to
+                 * open or close here. */
                 /* Always update thinking text if we have any -- the box's
                  * own follow-vs-pinned scroll (stick_scroll_on_layout(),
                  * reused from the outer chat list) is settled inside
@@ -1940,6 +1918,13 @@ next_coalesce:;
             /* Error */
             char *text = rmsg->content;
             d->stream_phase = 0;
+            /* A failed reply stays in the list with whatever reasoning
+             * arrived; it counts as finished, or its Thinking row would
+             * stay "streaming" (compact under Automatic) for good. */
+            if (d->stream_ai_item) {
+                d->stream_ai_item->u.ai.thinking_complete = 1;
+                d->stream_ai_item->dirty = 1;
+            }
             d->stream_ai_item = NULL;
             if (text) {
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
@@ -2567,6 +2552,16 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
+void ai_chat_set_thinking_pref(HWND hwnd, int pref)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->thinking_pref = pref;
+    if (d->hChatList)
+        chat_listview_set_thinking_pref(d->hChatList, pref);
+}
+
 void ai_chat_set_markdown(HWND hwnd, int enabled)
 {
     if (!hwnd || !IsWindow(hwnd)) return;
@@ -2681,11 +2676,10 @@ static void do_session_switch(AiChatData *d,
         d->active_state->valid = 1;
     }
 
-    /* Save policy, show-thinking and activity phase to old session */
+    /* Save policy and activity phase to old session */
     if (d->active_state && d->active_state != new_state) {
         d->active_state->policy = d->approval_q.policy;
         d->active_state->policy_seeded = 1;
-        d->active_state->show_thinking = d->show_thinking;
         d->active_state->activity_phase = (int)d->activity.phase;
     }
 
@@ -2733,18 +2727,16 @@ static void do_session_switch(AiChatData *d,
     d->pending_request[0] = '\0';
     d->stream_phase = 0;
 
-    /* Restore policy, show-thinking and activity phase from new session.
+    /* Restore policy and activity phase from new session.
      * A session that has never had its policy set (fresh tab) is seeded
      * from the configured default first. */
     if (new_state) {
         ai_chat_seed_policy(d, new_state);
         d->approval_q.policy = new_state->policy;
-        d->show_thinking = new_state->show_thinking;
         chat_activity_set_phase(&d->activity,
                                 (ActivityPhase)new_state->activity_phase, 0.0f);
     } else {
         d->approval_q.policy = cmd_policy_default();
-        d->show_thinking = 0;
         chat_activity_reset(&d->activity);
         ai_chat_header_invalidate(d);
     }
@@ -2916,7 +2908,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     /* "thinking": same reply, but with the much longer reasoning block --
      * see ui_demo_thinking_text_long()'s comment for why (the 50-line
      * scrollable Thinking box). */
-    if (state && strcmp(state, "thinking") == 0 &&
+    if (ui_demo_is_thinking_state(state) &&
         d->conv.msg_count > 2 &&
         d->conv.messages[2].role == AI_ROLE_ASSISTANT) {
         free(d->thinking_history[2]);
@@ -3000,24 +2992,15 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     }
     ai_chat_force_state(hwnd, forced);
 
-    /* Gallery: "chat" and "all" show the Thinking disclosure expanded --
-     * "chat" because its selection crosses the Thinking body (spec
-     * 2026-10-18 section 6) -- and "thinking" shows it collapsed, so the
-     * review set still covers both forms per the design spec's "Thought
-     * process" section. Setting the item's own flag (rather than
-     * d->show_thinking) is the smallest change -- ai_chat_rebuild_display()
-     * always creates it collapsed. */
-    if (state && (strcmp(state, "all") == 0 || strcmp(state, "chat") == 0)) {
-        ChatMsgItem *ti = d->msg_list.head;
-        while (ti) {
-            if (ti->type == CHAT_ITEM_AI_TEXT && ti->u.ai.thinking_text &&
-                ti->u.ai.thinking_text[0]) {
-                ti->u.ai.thinking_collapsed = 0;
-                ti->dirty = 1;
-                break;
-            }
-            ti = ti->next;
-        }
+    /* The Thinking row's mode in the gallery: "thinking" collapsed,
+     * "thinking-compact" compact, "thinking-open" open, and "chat" / "all"
+     * open (the chat selection crosses the Thinking body, spec 2026-10-18
+     * section 6). In memory only: the panel's pref is set here, never the
+     * config's, so a demo run saves nothing. Every other state keeps the
+     * saved pref. */
+    {
+        const int demo_pref = ui_demo_thinking_pref(state);
+        if (demo_pref >= 0) ai_chat_set_thinking_pref(hwnd, demo_pref);
     }
 
     float now = (float)GetTickCount() / 1000.0f;

@@ -22,6 +22,8 @@
  * pending command cards from two separate assistant replies, with a user
  * turn in between so the transcript shows the interleaving.
  *
+ * "thinking-compact" and "thinking-open" (2026-11-12) are "thinking" shown
+ * in the other two Thinking modes (see ui_demo_thinking_pref()).
  * "local" (spec 2026-09-22-local-shell-design.md section 5) and "thinking"
  * (2026-09-24, the 50-line scrollable Thinking box) are each a real state
  * but not part of "all": "local" only swaps the terminal transcript, and
@@ -93,6 +95,18 @@ int ui_demo_state_valid(const char *state);
  * scroll back to the top after loading it; 0 (including for NULL) if the
  * state should keep the bottom scroll instead. */
 int ui_demo_scrolls_to_top(const char *state);
+
+/* 1 for "thinking", "thinking-compact" and "thinking-open": "chat"'s turns
+ * with the long reasoning block (ui_demo_thinking_text_long()), each shown in
+ * one Thinking mode. Not part of "all". 0 otherwise, NULL included. */
+int ui_demo_is_thinking_state(const char *state);
+
+/* The ThinkPref (thinking_mode.h) the demo window takes for `state`, set in
+ * memory only (never saved): "thinking" collapsed, "thinking-compact"
+ * compact, "thinking-open" open, and "chat" / "all" open (their selection
+ * crosses the Thinking body). -1 for every other state and NULL: the saved
+ * pref applies. */
+int ui_demo_thinking_pref(const char *state);
 
 /* Every recognised state name, in a stable order ending with "all".
  * *count receives the array length. Never returns NULL. */

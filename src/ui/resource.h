@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.82"
-#define APP_VERSION_BINARY  1,2,82,0
+#define APP_VERSION        "1.2.83"
+#define APP_VERSION_BINARY  1,2,83,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -102,8 +102,7 @@
 #define IDC_AI_TOOL_TIMEOUT      3077 /* Settings: tool approval card timeout, seconds */
 #define IDC_AI_TOOL_ROUNDS       3078 /* Settings: automatic tool rounds before a tool call asks */
 #define IDC_AI_RUNCMD_MODE       3079 /* Settings: "Commands as tool calls" combo (Automatic, On, Off) */
-#define IDC_CHAT_THINKING_OPENED 3074 /* Thinking disclosure manually expanded (chat_listview -> chat panel) */
-#define IDC_CHAT_THINKING_CLOSED 3075 /* Thinking disclosure manually collapsed (chat_listview -> chat panel) */
+#define IDC_CHAT_THINKING_MODE 3074 /* a click cycled the Thinking display; lParam = the new ThinkPref (chat_listview -> chat panel) */
 
 /* Settings > Debugging (spec 2026-10-17-debug-logging-design.md section 9) */
 #define IDC_DBG_ENABLE           3080 /* "Enable debugging" tickbox */
@@ -118,5 +117,6 @@
 #define IDC_DBG_MAX_FILE         3094 /* Max file size (MB) */
 #define IDC_DBG_MAX_TOTAL        3095 /* Keep at most (MB) */
 #define IDC_DBG_CURRENT          3096 /* Current log file (read-only) */
+#define IDC_AI_THINKING_MODE     3097 /* Settings: "Thinking display" combo (Automatic, Always collapsed, Always compact, Always open) */
 
 #endif

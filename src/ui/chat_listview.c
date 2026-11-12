@@ -31,6 +31,7 @@
 #include "ai_prompt.h"
 #include "ns_font.h"
 #include "stick_scroll.h"
+#include "thinking_mode.h"
 #include "chat_exec.h"
 #include "chat_copy.h"
 #include "text_runs.h"
@@ -322,6 +323,30 @@ static int clv_plain_height(const ChatListView *lv, HDC hdc, const char *text,
                         lv->theme, MD_MODE_PLAIN, 0, 0, NULL, NULL);
 }
 
+/* The first `n` bytes of `text` as a NUL-terminated string for the layouter:
+ * `text` itself when n covers it all, else a malloc'd copy the caller frees
+ * through *owned. NULL on allocation failure. */
+static const char *clv_text_prefix(const char *text, size_t n, char **owned)
+{
+    *owned = NULL;
+    if (strlen(text) <= n) return text;
+    char *c = (char *)malloc(n + 1);
+    if (!c) return NULL;
+    memcpy(c, text, n);
+    c[n] = '\0';
+    *owned = c;
+    return c;
+}
+
+/* The Thinking text a mode shows: compact ends at the last non-blank text
+ * (a reasoning that ends in newlines would otherwise show blank last lines);
+ * the open box shows everything. */
+static size_t clv_think_shown_len(const char *tt, ThinkMode mode)
+{
+    size_t n = strlen(tt);
+    return mode == THINK_MODE_COMPACT ? think_trimmed_len(tt, n) : n;
+}
+
 /* ── Safety tag colour ──────────────────────────────────────────────── */
 
 /* Safety tag chip colours, from ns_tokens() per the design spec's table:
@@ -398,7 +423,19 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 {
     int dpi = CLV_DPI(lv);
     NsRect avail = { box_left, content_top, box_right - box_left, 0 };
-    int expanded = !item->u.ai.thinking_collapsed;
+
+    /* The row's mode comes from the saved pref and from whether the reply
+     * has finished (AUTO: compact while it streams, collapsed after).  It is
+     * written back so copy and the wheel handler read the same answer; a
+     * change drops the cached wrap, which depends on the mode (the compact
+     * box has no scrollbar gutter). */
+    ThinkMode mode = think_mode_effective((ThinkPref)lv->thinking_pref,
+                                          !item->u.ai.thinking_complete);
+    if ((int)mode != item->u.ai.thinking_mode) {
+        item->u.ai.thinking_mode = (int)mode;
+        item->u.ai.think_cache_len = -1;
+    }
+    int expanded = mode != THINK_MODE_COLLAPSED;
 
     int line_h = ns_scale(20, dpi);  /* fallback if hdc is unavailable */
     if (hdc) {
@@ -408,7 +445,8 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         line_h = tm.tmHeight;
         SelectObject(hdc, old);
     }
-    int max_body_h = ai_thinking_max_body_h(line_h);
+    int max_body_h = think_mode_body_cap(mode, line_h,
+                                         ai_thinking_max_body_h(line_h));
     if (max_body_h < 1) max_body_h = 1;
 
     thinking_layout(avail, expanded, 0, max_body_h, dpi, out);
@@ -422,7 +460,8 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
          * hit-tests cost no layout (spec 2026-10-18 section 3). */
         const char *tt = item->u.ai.thinking_text ? item->u.ai.thinking_text
                                                   : "";
-        int tlen = (int)strlen(tt);
+        const size_t shown = clv_think_shown_len(tt, mode);
+        int tlen = (int)shown;   /* the cache key: what is measured */
         int have = 0;   /* full_h is known (cache hit or freshly laid out) */
         if (item->u.ai.think_cache_len == tlen &&
             item->u.ai.think_cache_w == out->body.w &&
@@ -432,12 +471,17 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         } else if (hdc) {
             int tw = out->body.w - ns_scale(SP_XS, dpi);
             if (tw < 1) tw = 1;
-            full_h = clv_plain_height(lv, hdc, tt, tw, clv_font(lv));
+            char *owned = NULL;
+            const char *mt = clv_text_prefix(tt, shown, &owned);
+            if (!mt) mt = "";
+            full_h = clv_plain_height(lv, hdc, mt, tw, clv_font(lv));
             int sb_w = ns_scale(6, dpi);
-            if (full_h > max_body_h && tw - sb_w >= 1) {
+            if (mode == THINK_MODE_OPEN && full_h > max_body_h &&
+                tw - sb_w >= 1) {
                 tw -= sb_w;
-                full_h = clv_plain_height(lv, hdc, tt, tw, clv_font(lv));
+                full_h = clv_plain_height(lv, hdc, mt, tw, clv_font(lv));
             }
+            free(owned);
             item->u.ai.think_cache_len = tlen;
             item->u.ai.think_cache_w = out->body.w;
             item->u.ai.think_cache_line_h = line_h;
@@ -470,9 +514,13 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
              * harmless. */
             int vis_h = out->body.h;
             int max_scroll = (full_h > vis_h) ? full_h - vis_h : 0;
-            item->u.ai.thinking_scroll_y = stick_scroll_on_layout(
-                item->u.ai.thinking_autoscroll, item->u.ai.thinking_scroll_y,
-                max_scroll);
+            if (mode == THINK_MODE_COMPACT)
+                item->u.ai.thinking_scroll_y =
+                    think_compact_offset(full_h, vis_h);   /* last lines */
+            else
+                item->u.ai.thinking_scroll_y = stick_scroll_on_layout(
+                    item->u.ai.thinking_autoscroll,
+                    item->u.ai.thinking_scroll_y, max_scroll);
         }
     }
     if (out_full_body_h) *out_full_body_h = full_h;
@@ -753,6 +801,7 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
     lv->theme    = theme;
     lv->dpi_scale = 1.0f;
     lv->render_markdown = 1;
+    lv->thinking_pref = THINK_PREF_AUTO;
     lv->state_id = -1;
     lv->stick_to_bottom = 1;
     ns_hover_init(&lv->hover);
@@ -896,6 +945,52 @@ void chat_listview_set_render_markdown(HWND hwnd, int enabled)
     for (ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL; it;
          it = it->next)
         it->dirty = 1;
+    chat_listview_invalidate(hwnd);
+}
+
+static int  clv_item_top(const ChatListView *lv, const ChatMsgItem *target);
+static void update_scrollbar(ChatListView *lv);
+
+/* Store the pref and make every row measure again (recalc_layout() only
+ * remeasures dirty items).  The mode of each row follows from the pref, so
+ * the scroll state of the rows is settled here too: a row entering open mode
+ * follows the stream again, a row going collapsed forgets its offset. */
+static void clv_apply_thinking_pref(ChatListView *lv, int pref,
+                                    const ChatMsgItem *anchor)
+{
+    if (pref < THINK_PREF_AUTO || pref > THINK_PREF_OPEN) pref = THINK_PREF_AUTO;
+    lv->thinking_pref = pref;
+    for (ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL; it;
+         it = it->next) {
+        if (it->type != CHAT_ITEM_AI_TEXT) continue;
+        if (pref == THINK_PREF_OPEN) it->u.ai.thinking_autoscroll = 1;
+        if (pref == THINK_PREF_COLLAPSED) it->u.ai.thinking_scroll_y = 0;
+        it->dirty = 1;
+    }
+    /* A click re-lays out every Thinking row. Not pinned to the bottom, the
+     * clicked row stays at the same screen y (the fold click's rule);
+     * pinned, the view keeps following the bottom. */
+    if (anchor && !lv->stick_to_bottom) {
+        const int screen_y = clv_item_top(lv, anchor) - lv->scroll_y;
+        recalc_layout(lv);
+        const int max_scroll = lv->total_height - lv->viewport_height;
+        lv->scroll_y = stick_scroll_hold_row(
+            screen_y, clv_item_top(lv, anchor), max_scroll);
+        lv->stick_to_bottom =
+            stick_scroll_after_user(lv->scroll_y, max_scroll);
+        update_scrollbar(lv);
+        return;
+    }
+    recalc_layout(lv);
+}
+
+void chat_listview_set_thinking_pref(HWND hwnd, int pref)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    if (pref < THINK_PREF_AUTO || pref > THINK_PREF_OPEN) pref = THINK_PREF_AUTO;
+    if (lv->thinking_pref == pref) return;   /* no-op */
+    clv_apply_thinking_pref(lv, pref, NULL);
     chat_listview_invalidate(hwnd);
 }
 
@@ -1853,16 +1948,17 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
         int box_left  = rc->left + lv->ai_indent;
         int box_right = rc->right - side_pad;
-        int expanded  = !item->u.ai.thinking_collapsed;
 
         ThinkingLayout tl;
         int full_h = 0;
         build_thinking_layout(lv, hdc, item, box_left, box_right,
                               content_top, &tl, &full_h);
+        const ThinkMode tmode = (ThinkMode)item->u.ai.thinking_mode;
+        const int expanded = tmode != THINK_MODE_COLLAPSED;
 
         COLORREF dim_clr = RGB_FROM_THEME(tok->text_dim);
 
-        /* Chevron: CHEV_RIGHT collapsed, a hand-drawn down "v" expanded --
+        /* Chevron: CHEV_RIGHT collapsed, a hand-drawn down "v" otherwise --
          * no down-pointing icon exists in the icon set. */
         RECT chev_rc = { tl.chevron.x, tl.chevron.y,
                          tl.chevron.x + tl.chevron.w,
@@ -1873,11 +1969,12 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             ns_icon_draw(hdc, NS_ICON_CHEV_RIGHT, &chev_rc, dim_clr,
                         (UINT)(96.0f * lv->dpi_scale));
 
-        /* "Thinking" label (FONT_BODY, text_main) */
+        /* "Thinking" label (FONT_BODY), coloured by the row's mode */
         RECT think_label_rc = { tl.label.x, tl.label.y,
                                 tl.label.x + tl.label.w, tl.label.y + tl.label.h };
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB_FROM_THEME(lv->theme->text_main));
+        SetTextColor(hdc, RGB_FROM_THEME(
+            think_mode_label_colour(&lv->theme->chat, tmode)));
         SelectObject(hdc, lv->hFont ? lv->hFont : GetStockObject(DEFAULT_GUI_FONT));
         DrawTextA(hdc, "Thinking", -1, &think_label_rc,
                   DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
@@ -1916,7 +2013,11 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             DeleteObject(bg_br2);
 
             int vis_h = tl.body.h;
-            int sb_w = (full_h > vis_h) ? ns_scale(6, CLV_DPI(lv)) : 0;
+            /* Only the open box scrolls, so only it has a scrollbar; the
+             * compact box shows its last lines (the offset build_thinking_
+             * layout settled) and reaches the full text width. */
+            const int scrolls = tmode == THINK_MODE_OPEN && full_h > vis_h;
+            int sb_w = scrolls ? ns_scale(6, CLV_DPI(lv)) : 0;
             RECT clip_rc = body_rc;
             clip_rc.left += ns_scale(SP_XS, CLV_DPI(lv));
             clip_rc.right -= sb_w;
@@ -1933,9 +2034,13 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
              * measured at (build_thinking_layout's think_cache_text_w,
              * which is this clip's width); a run is recorded only where it
              * shows inside the clip. */
-            const char *tt = item->u.ai.thinking_text;
+            const char *tt_full = item->u.ai.thinking_text;
+            const size_t shown_len = clv_think_shown_len(tt_full, tmode);
+            char *tt_owned = NULL;
+            const char *tt = clv_text_prefix(tt_full, shown_len, &tt_owned);
+            if (!tt) tt = "";
             MdRunCtx trc;
-            clv_run_ctx(lv, &trc, item, TR_PART_THINKING, (int)strlen(tt),
+            clv_run_ctx(lv, &trc, item, TR_PART_THINKING, (int)shown_len,
                         &item->runs, 0,
                         RGB_FROM_THEME(tok->bg_secondary.base));
             trc.clip_top = clip_rc.top;
@@ -1947,9 +2052,10 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
             SelectClipRgn(hdc, NULL);
             DeleteObject(clip_rgn);
+            free(tt_owned);
 
-            /* Scrollbar thumb when content overflows */
-            if (full_h > vis_h) {
+            /* Scrollbar thumb when the open box's content overflows */
+            if (scrolls) {
                 int sb_x = body_rc.right - sb_w;
                 int track_h = vis_h;
                 int thumb_h = (vis_h * vis_h) / full_h;
@@ -4009,28 +4115,17 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
 
             if (my >= tl.row.y && my < tl.row.y + tl.row.h &&
                 mx >= tl.row.x && mx < tl.row.x + tl.row.w) {
-                item->u.ai.thinking_collapsed =
-                    !item->u.ai.thinking_collapsed;
-                /* A manual click always sticks for this item -- see the
-                 * WM_AI_STREAM handler in ai_chat.c, which must never
-                 * change thinking_collapsed again once this is set. */
-                item->u.ai.thinking_user_set = 1;
-                if (item->u.ai.thinking_collapsed) {
-                    item->u.ai.thinking_scroll_y = 0;
-                    if (parent)
-                        PostMessage(parent, WM_COMMAND,
-                                    MAKEWPARAM(IDC_CHAT_THINKING_CLOSED, 0), 0);
-                } else {
-                    item->u.ai.thinking_autoscroll = 1;
-                    /* The user opened it themselves -- remember for this
-                     * session so a reply-start doesn't auto-collapse it
-                     * (see ai_chat.c's WM_AI_STREAM handler). */
-                    if (parent)
-                        PostMessage(parent, WM_COMMAND,
-                                    MAKEWPARAM(IDC_CHAT_THINKING_OPENED, 0), 0);
-                }
-                item->dirty = 1;
-                recalc_layout(lv);
+                /* The click cycles the one global pref: from the row's
+                 * current mode to the next, pinned as a sticky choice for
+                 * every Thinking row (the panel saves it to the config). */
+                const ThinkMode next =
+                    think_mode_next((ThinkMode)item->u.ai.thinking_mode);
+                const ThinkPref npref = think_pref_from_mode(next);
+                clv_apply_thinking_pref(lv, (int)npref, item);
+                if (parent)
+                    PostMessage(parent, WM_COMMAND,
+                                MAKEWPARAM(IDC_CHAT_THINKING_MODE, 0),
+                                (LPARAM)npref);
                 InvalidateRect(lv->hwnd, NULL, FALSE);
                 return 1;
             }
@@ -4507,7 +4602,8 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         int scroll_amount = ns_scale(40, CLV_DPI(lv));  /* ~3 lines per notch */
 
-        /* Check if cursor is over an expanded thinking region */
+        /* Check if cursor is over an open thinking box (the compact box
+         * has no inner scroll: the wheel goes to the list) */
         {
             POINT pt;
             pt.x = GET_X_LPARAM(lParam);
@@ -4523,7 +4619,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                 if (wh == 0) { wi = wi->next; continue; }
                 if (wi->type == CHAT_ITEM_AI_TEXT && wi->u.ai.thinking_text
                     && wi->u.ai.thinking_text[0]
-                    && !wi->u.ai.thinking_collapsed
+                    && wi->u.ai.thinking_mode == THINK_MODE_OPEN
                     && pt.y >= wy && pt.y < wy + wh) {
                     int side_pad2 = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
                     int box_left = side_pad2 + lv->ai_indent;

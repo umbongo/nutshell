@@ -60,6 +60,7 @@ typedef struct Settings {
     int  ai_max_search_results;      /* 1-20, default 7 */
     int  ai_web_fetch_enabled;       /* 0 = disabled (default), 1 = enabled */
     int  ai_runcmd_mode;             /* "Commands as tool calls": AI_RUNCMD_AUTO 0 (default), AI_RUNCMD_ON 1, AI_RUNCMD_OFF 2 (ai_prompt.h); JSON "automatic"/"on"/"off" */
+    int  ai_thinking_mode;           /* Thinking row display: a ThinkPref (thinking_mode.h), AUTO 0 (default), COLLAPSED 1, COMPACT 2, OPEN 3; JSON "auto"/"collapsed"/"compact"/"open" */
     int  ssh_user_idle_timeout_mins; /* 0 = never; default 0 */
     int  markdown_render_enabled;    /* render AI replies as markdown */
     int  ai_max_context_lines;       /* terminal lines sent to the AI; 1-50000, default 1000 */

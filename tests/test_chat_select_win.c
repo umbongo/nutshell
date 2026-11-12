@@ -21,6 +21,7 @@
 #include "ui_theme.h"
 #include "ns_reduced_motion.h"
 #include "ai_prompt.h"
+#include "resource.h"
 
 /* window.c owns these in the app; this harness links without it. */
 static ThemeTokens g_win_tokens;
@@ -73,8 +74,21 @@ static const char FIX_STATUS[] = "Stream cancelled by user.";
 
 static const char FIX_CARD_CMD[] = "zzcardcmdzz --never-copied";
 
+static LPARAM pt(int x, int y);
+static ChatListView *lv_of(HWND lvh);
+
+/* The Thinking row's click tells its parent (IDC_CHAT_THINKING_MODE, lParam =
+ * the new ThinkPref); the host records the last one. */
+static int g_think_cmds = 0;
+static LPARAM g_think_cmd_pref = -1;
+
 static LRESULT CALLBACK host_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    if (m == WM_COMMAND && LOWORD(w) == IDC_CHAT_THINKING_MODE) {
+        g_think_cmds++;
+        g_think_cmd_pref = l;
+        return 0;
+    }
     return DefWindowProcA(h, m, w, l);
 }
 
@@ -219,6 +233,9 @@ static int view_open_h(TestView *tv, ChatMsgList *list, int width, int height,
     tv->s = make_font(9, dpi, FW_NORMAL, "Segoe UI");
     chat_listview_set_fonts(tv->lv, tv->f, tv->m, tv->b, tv->s);
     chat_listview_set_render_markdown(tv->lv, markdown);
+    /* The Thinking row's mode comes from the pref (a finished reply under
+     * Automatic is collapsed); these tests read the open body. */
+    chat_listview_set_thinking_pref(tv->lv, THINK_PREF_OPEN);
     chat_listview_invalidate(tv->lv);
     return 1;
 }
@@ -260,7 +277,6 @@ static void fill_fixture(ChatMsgList *list)
     chat_msg_append(list, CHAT_ITEM_USER, FIX_USER);
     ChatMsgItem *ai = chat_msg_append(list, CHAT_ITEM_AI_TEXT, FIX_AI);
     chat_msg_set_thinking(ai, FIX_THINK);
-    ai->u.ai.thinking_collapsed = 0;
     ai->u.ai.thinking_complete = 1;
     /* A command card between two text items: it records no runs. */
     ChatMsgItem *card = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
@@ -451,6 +467,237 @@ static int reason_config(int width, int dpi)
     chat_msg_list_clear(&list);
     if (bad) printf("  (width %d, dpi %d)\n", width, dpi);
     return bad;
+}
+
+/* The pref picks the row's height: collapsed < compact (four lines) < open
+ * for a long reasoning text, and the item records the mode it was laid out in. */
+int test_chat_select_win_thinking_pref_modes(void)
+{
+    TEST_BEGIN();
+    static const int prefs[3] = { THINK_PREF_COLLAPSED, THINK_PREF_COMPACT,
+                                  THINK_PREF_OPEN };
+    static const int modes[3] = { THINK_MODE_COLLAPSED, THINK_MODE_COMPACT,
+                                  THINK_MODE_OPEN };
+    int h[3] = { 0, 0, 0 };
+    for (int k = 0; k < 3; k++) {
+        ChatMsgList list;
+        fill_fixture(&list);
+        ChatMsgItem *ai = list.head->next;
+        char *longtext = (char *)malloc(4000);
+        ASSERT_NOT_NULL(longtext);
+        longtext[0] = '\0';
+        for (int i = 0; i < 60; i++) {
+            char line[40];
+            snprintf(line, sizeof(line), "reasoning line %d\n", i);
+            strcat(longtext, line);
+        }
+        chat_msg_set_thinking(ai, longtext);
+        free(longtext);
+        TestView tv;
+        ASSERT_TRUE(view_open(&tv, &list, 420, 96, 1));
+        chat_listview_set_thinking_pref(tv.lv, prefs[k]);
+        view_paint(&tv, 420);
+        h[k] = ai->measured_height;
+        ASSERT_EQ(ai->u.ai.thinking_mode, modes[k]);
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
+    ASSERT_TRUE(h[0] < h[1]);
+    ASSERT_TRUE(h[1] < h[2]);
+    TEST_END();
+}
+
+/* ---- Thinking row: compact box, Automatic, click ---------------------- */
+
+/* `n` lines "reasoning line K", then `trail` newlines. */
+static void set_think_lines(ChatMsgItem *ai, int n, int trail)
+{
+    char *buf = (char *)malloc((size_t)n * 40 + (size_t)trail + 1);
+    if (!buf) return;
+    buf[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        char line[40];
+        snprintf(line, sizeof(line), "reasoning line %d%s", i,
+                 i + 1 < n ? "\n" : "");
+        strcat(buf, line);
+    }
+    for (int i = 0; i < trail; i++) strcat(buf, "\n");
+    chat_msg_set_thinking(ai, buf);
+    free(buf);
+}
+
+/* One AI reply with `n` reasoning lines (+ `trail` blank lines) under
+ * `pref`, laid out and painted; returns the item and leaves the view open. */
+static ChatMsgItem *think_view(TestView *tv, ChatMsgList *list, int n,
+                               int trail, int pref, int complete)
+{
+    chat_msg_list_init(list);
+    ChatMsgItem *ai = chat_msg_append(list, CHAT_ITEM_AI_TEXT, "answer");
+    set_think_lines(ai, n, trail);
+    ai->u.ai.thinking_complete = complete;
+    if (!view_open(tv, list, 420, 96, 1)) return NULL;
+    chat_listview_set_thinking_pref(tv->lv, pref);
+    view_paint(tv, 420);
+    return ai;
+}
+
+int test_chat_select_win_thinking_compact_box(void)
+{
+    TEST_BEGIN();
+    int h60 = 0, h8 = 0, h4 = 0, h2 = 0, h1 = 0, h8trail = 0;
+    int lh = 0, full60 = 0, scroll60 = 0, scroll8 = 0, scroll8trail = 0;
+    int full8 = 0, full8trail = 0;
+    static const int ns[6] = { 60, 8, 4, 2, 1, 8 };
+    static const int trails[6] = { 0, 0, 0, 0, 0, 6 };
+    for (int k = 0; k < 6; k++) {
+        ChatMsgList list;
+        TestView tv;
+        ChatMsgItem *ai = think_view(&tv, &list, ns[k], trails[k],
+                                     THINK_PREF_COMPACT, 1);
+        ASSERT_NOT_NULL(ai);
+        if (!ai) return 1;
+        ASSERT_EQ(ai->u.ai.thinking_mode, THINK_MODE_COMPACT);
+        const int hh = ai->measured_height;
+        lh = ai->u.ai.think_cache_line_h;
+        switch (k) {
+        case 0: h60 = hh; full60 = ai->u.ai.think_cache_full_h;
+                scroll60 = ai->u.ai.thinking_scroll_y; break;
+        case 1: h8 = hh; full8 = ai->u.ai.think_cache_full_h;
+                scroll8 = ai->u.ai.thinking_scroll_y; break;
+        case 2: h4 = hh; break;
+        case 3: h2 = hh; break;
+        case 4: h1 = hh; break;
+        default: h8trail = hh; full8trail = ai->u.ai.think_cache_full_h;
+                 scroll8trail = ai->u.ai.thinking_scroll_y; break;
+        }
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
+    ASSERT_TRUE(lh > 0);
+    /* the body is exactly four lines for a long text... */
+    ASSERT_EQ(h60, h8);
+    ASSERT_EQ(h60, h4);
+    /* ...and its own height below that */
+    ASSERT_EQ(h4 - h2, 2 * lh);
+    ASSERT_EQ(h2 - h1, lh);
+    /* the last lines are in view: offset = full - visible */
+    ASSERT_EQ(full60, 60 * lh);
+    ASSERT_EQ(scroll60, full60 - 4 * lh);
+    ASSERT_EQ(scroll8, full8 - 4 * lh);
+    /* trailing blank lines do not count: same box, same offset */
+    ASSERT_EQ(h8trail, h8);
+    ASSERT_EQ(full8trail, full8);
+    ASSERT_EQ(scroll8trail, scroll8);
+    TEST_END();
+}
+
+/* Automatic: compact while the reply streams, collapsed once it finished. */
+int test_chat_select_win_thinking_auto_follows_complete(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    TestView tv;
+    ChatMsgItem *ai = think_view(&tv, &list, 12, 0, THINK_PREF_AUTO, 0);
+    ASSERT_NOT_NULL(ai);
+    if (!ai) return 1;
+    ASSERT_EQ(ai->u.ai.thinking_mode, THINK_MODE_COMPACT);
+    const int h_stream = ai->measured_height;
+    ai->u.ai.thinking_complete = 1;
+    ai->dirty = 1;
+    chat_listview_invalidate(tv.lv);
+    view_paint(&tv, 420);
+    ASSERT_EQ(ai->u.ai.thinking_mode, THINK_MODE_COLLAPSED);
+    ASSERT_TRUE(ai->measured_height < h_stream);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+static void pump_messages(void)
+{
+    MSG m;
+    while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageA(&m);
+    }
+}
+
+static int item_top_of(const ChatListView *lv, const ChatMsgItem *target)
+{
+    int y = lv->msg_gap;
+    for (const ChatMsgItem *it = lv->msg_list->head; it; it = it->next) {
+        if (it->measured_height <= 0) continue;
+        if (it == target) return y;
+        y += it->measured_height + lv->msg_gap;
+    }
+    return -1;
+}
+
+/* A click on the row cycles the pref, tells the parent, and (scrolled to
+ * the middle) leaves the clicked row at the same screen y although every
+ * Thinking row changed height. */
+int test_chat_select_win_thinking_click_cycles_and_anchors(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *its[6];
+    for (int i = 0; i < 6; i++) {
+        its[i] = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "answer text");
+        set_think_lines(its[i], 14, 0);
+        its[i]->u.ai.thinking_complete = 1;
+    }
+    TestView tv;
+    ASSERT_TRUE(view_open_h(&tv, &list, 420, 400, 96, 1));
+    chat_listview_set_thinking_pref(tv.lv, THINK_PREF_COMPACT);
+    view_paint(&tv, 420);
+    ChatListView *lv = lv_of(tv.lv);
+    ASSERT_NOT_NULL(lv);
+    if (!lv) return 1;
+    ChatMsgItem *target = its[3];
+
+    /* scrolled to the middle with the target's top 60 px down the view */
+    lv->stick_to_bottom = 0;
+    lv->scroll_y = item_top_of(lv, target) - 60;
+    ASSERT_TRUE(lv->scroll_y > 0);
+    ASSERT_TRUE(lv->scroll_y < lv->total_height - lv->viewport_height);
+    const int screen_before = item_top_of(lv, target) - lv->scroll_y;
+    const int h_before = target->measured_height;
+
+    g_think_cmds = 0;
+    g_think_cmd_pref = -1;
+    const int row_y = screen_before + 20 + 4 + 6;   /* inside the row */
+    const int row_x = 8 + lv->ai_indent + 24;
+    SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(row_x, row_y));
+    SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(row_x, row_y));
+    pump_messages();
+
+    /* compact -> open, the sticky pref, and the parent was told */
+    ASSERT_EQ(lv->thinking_pref, THINK_PREF_OPEN);
+    ASSERT_EQ(target->u.ai.thinking_mode, THINK_MODE_OPEN);
+    ASSERT_EQ(g_think_cmds, 1);
+    ASSERT_EQ((int)g_think_cmd_pref, THINK_PREF_OPEN);
+    ASSERT_TRUE(target->measured_height > h_before);
+    /* the clicked row did not move on screen */
+    ASSERT_EQ(item_top_of(lv, target) - lv->scroll_y, screen_before);
+
+    /* next click: open -> collapsed, still anchored */
+    const int screen2 = item_top_of(lv, target) - lv->scroll_y;
+    SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON,
+                 pt(row_x, screen2 + 20 + 4 + 6));
+    SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(row_x, screen2 + 20 + 4 + 6));
+    pump_messages();
+    ASSERT_EQ(lv->thinking_pref, THINK_PREF_COLLAPSED);
+    ASSERT_EQ(g_think_cmds, 2);
+    /* held, unless the shorter list cannot scroll that far (clamped to its
+     * end: the row then sits lower than it was) */
+    ASSERT_TRUE(item_top_of(lv, target) - lv->scroll_y == screen2 ||
+                lv->scroll_y == lv->total_height - lv->viewport_height ||
+                lv->scroll_y == 0);
+
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
 }
 
 int test_chat_select_win_reason_in_row(void)

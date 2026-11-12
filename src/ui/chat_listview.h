@@ -95,6 +95,8 @@ typedef struct {
     HWND ext_scrollbar;
 
     int render_markdown;        /* 1 = markdown render on, 0 = plain text */
+    int thinking_pref;          /* ThinkPref: how every Thinking row shows its
+                                 * text (thinking_mode.h); default THINK_PREF_AUTO */
 
     /* Hover tracking for painted elements (approval card rows/actions,
      * the [Retry] link) -- see ns_hover.h and Design-System Foundation
@@ -215,6 +217,13 @@ void chat_listview_set_model(HWND hwnd, const char *model);
 
 /* Toggle markdown rendering. Triggers a redraw. Default after create: 1. */
 void chat_listview_set_render_markdown(HWND hwnd, int enabled);
+
+/* Set the saved Thinking-display pref (a ThinkPref, thinking_mode.h): the
+ * list view derives each Thinking row's mode from it (and from whether the
+ * reply has finished), re-measures every row and redraws.  A no-op when it
+ * is unchanged; an out of range value acts as THINK_PREF_AUTO.  Never saves
+ * anything: the chat panel owns the config. */
+void chat_listview_set_thinking_pref(HWND hwnd, int pref);
 
 /* Set (or clear, with state_id = -1) the "nothing to show yet" state to
  * paint when the message list has no items -- an AiPanelStateId from

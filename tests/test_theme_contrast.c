@@ -184,6 +184,9 @@ SEL(s_c_ind_yellow,   "chat.indicator_yellow", t->chat.indicator_yellow);
 SEL(s_c_ind_red,      "chat.indicator_red",  t->chat.indicator_red);
 SEL(s_c_send,         "chat.send_btn",       t->chat.send_btn);
 SEL(s_c_stop,         "chat.stop_btn",       t->chat.stop_btn);
+SEL(s_c_think_compact,  "chat.thinking_compact",   t->chat.thinking_compact);
+SEL(s_c_think_collapsed, "chat.thinking_collapsed", t->chat.thinking_collapsed);
+SEL(s_c_think_open,     "chat.thinking_open",      t->chat.thinking_open);
 SEL(s_c_send_down,    "chat.send_btn (pressed)", darken_pressed(t->chat.send_btn));
 SEL(s_c_stop_down,    "chat.stop_btn (pressed)", darken_pressed(t->chat.stop_btn));
 
@@ -290,6 +293,9 @@ static const Pair k_pairs[] = {
     { &s_c_ai_accent,  &s_bgp_base,      FLOOR_TEXT },  /* "AI" name next to the avatar */
     { &s_c_status,     &s_bgp_base,      FLOOR_TEXT },  /* status messages in the chat */
     { &s_c_status,     &s_sel_on_bgp,    FLOOR_TEXT },  /* selected status message */
+    { &s_c_think_compact,   &s_bgp_base, FLOOR_TEXT },  /* Thinking label, compact (chat_listview.c) */
+    { &s_c_think_collapsed, &s_bgp_base, FLOOR_TEXT },  /* Thinking label, collapsed */
+    { &s_c_think_open,      &s_bgp_base, FLOOR_TEXT },  /* Thinking label, open */
 
     /* -- intents painted as text (4.5) -- */
     { &s_warn_base,    &s_bgp_base,      FLOOR_TEXT },  /* detail dialog reason, settings URL warning */

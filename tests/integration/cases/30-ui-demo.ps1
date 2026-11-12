@@ -36,7 +36,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     Write-Host ("[RUN ] ui_gallery")
     $galleryDir = Join-Path $Artifacts "gallery"
     New-Item -ItemType Directory -Force $galleryDir | Out-Null
-    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "nokey", "nosession", "batches", "ansi", "thinking", "cmddetail", "runlist", "settings-debug", "policy-auto", "policy-compact", "all")
+    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "nokey", "nosession", "batches", "ansi", "thinking", "thinking-compact", "thinking-open", "cmddetail", "runlist", "settings-debug", "policy-auto", "policy-compact", "all")
     $galleryThemes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
     $galleryOk = $true
     $galleryDetail = New-Object System.Collections.ArrayList

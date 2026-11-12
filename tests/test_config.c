@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "ai_prompt.h"
 #include "config.h"
+#include "thinking_mode.h"
 #include "cmd_classify.h"
 #include "crypto.h"
 #include "crypto_dpapi.h"
@@ -75,6 +76,7 @@ int test_config_default_settings(void)
     ASSERT_EQ(s.ai_tool_timeout_sec, 60);
     ASSERT_EQ(s.ai_tool_auto_rounds, 3);
     ASSERT_EQ(s.ai_runcmd_mode, AI_RUNCMD_AUTO);
+    ASSERT_EQ(s.ai_thinking_mode, THINK_PREF_AUTO);
     TEST_END();
 }
 
@@ -831,6 +833,91 @@ int test_config_roundtrip_runcmd_mode(void)
     TEST_END();
 }
 
+/* "Thinking display": the key is a string ("auto", "collapsed", "compact",
+ * "open"); a file without it, or with a value the loader does not know,
+ * loads as Automatic. */
+int test_config_load_thinking_mode(void)
+{
+    TEST_BEGIN();
+    const char *cases[] = { "", "\"ai_thinking_mode\": \"auto\"",
+                            "\"ai_thinking_mode\": \"collapsed\"",
+                            "\"ai_thinking_mode\": \"compact\"",
+                            "\"ai_thinking_mode\": \"open\"",
+                            "\"ai_thinking_mode\": \"bogus\"", "\"ai_thinking_mode\": \"\"",
+                            "\"ai_thinking_mode\": \"OPEN\"", "\"ai_thinking_mode\": 2" };
+    const int want[] = { THINK_PREF_AUTO, THINK_PREF_AUTO, THINK_PREF_COLLAPSED,
+                         THINK_PREF_COMPACT, THINK_PREF_OPEN, THINK_PREF_AUTO,
+                         THINK_PREF_AUTO, THINK_PREF_AUTO, THINK_PREF_AUTO };
+    for (int i = 0; i < 9; i++) {
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fprintf(f, "{\n  \"settings\": {\n    \"font_size\": 10%s%s\n  }\n}\n",
+                cases[i][0] ? ",\n    " : "", cases[i]);
+        fclose(f);
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        if (cfg) {
+            ASSERT_EQ(cfg->settings.ai_thinking_mode, want[i]);
+            config_free(cfg);
+        }
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_roundtrip_thinking_mode(void)
+{
+    TEST_BEGIN();
+    const int vals[] = { THINK_PREF_AUTO, THINK_PREF_COLLAPSED, THINK_PREF_COMPACT,
+                         THINK_PREF_OPEN };
+    const char *keys[] = { "\"ai_thinking_mode\": \"auto\"",
+                           "\"ai_thinking_mode\": \"collapsed\"",
+                           "\"ai_thinking_mode\": \"compact\"",
+                           "\"ai_thinking_mode\": \"open\"" };
+    for (int i = 0; i < 4; i++) {
+        Config *orig = config_new_default();
+        ASSERT_NOT_NULL(orig);
+        orig->settings.ai_thinking_mode = vals[i];
+        ASSERT_EQ(config_save(orig, TMP_CFG), 0);
+        /* The file holds the string, not a number. */
+        FILE *f = fopen(TMP_CFG, "r");
+        ASSERT_NOT_NULL(f);
+        if (f) {
+            char buf[16384];
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            buf[n] = '\0';
+            fclose(f);
+            ASSERT_NOT_NULL(strstr(buf, keys[i]));
+        }
+        Config *loaded = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(loaded);
+        if (loaded) ASSERT_EQ(loaded->settings.ai_thinking_mode, vals[i]);
+        config_free(orig);
+        config_free(loaded);
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_validate_thinking_mode(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    for (int v = THINK_PREF_AUTO; v <= THINK_PREF_OPEN; v++) {
+        s.ai_thinking_mode = v;
+        settings_validate(&s);
+        ASSERT_EQ(s.ai_thinking_mode, v);
+    }
+    s.ai_thinking_mode = -1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_thinking_mode, THINK_PREF_AUTO);
+    s.ai_thinking_mode = 99;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_thinking_mode, THINK_PREF_AUTO);
+    TEST_END();
+}
+
 /* ============================================================
  * Roundtrip: all fields including custom provider
  * ============================================================ */
@@ -855,6 +942,7 @@ int test_config_roundtrip_all_fields(void)
     (void)snprintf(s->ai_custom_url, sizeof(s->ai_custom_url), "%s",
                    "http://localhost:11434/v1/chat/completions");
     (void)snprintf(s->ai_custom_model, sizeof(s->ai_custom_model), "%s", "llama3:70b");
+    s->ai_thinking_mode = THINK_PREF_COMPACT;
 
     ASSERT_EQ(config_save(orig, TMP_CFG), 0);
 
@@ -875,6 +963,7 @@ int test_config_roundtrip_all_fields(void)
     ASSERT_STR_EQ(ls->ai_custom_url,
                   "http://localhost:11434/v1/chat/completions");
     ASSERT_STR_EQ(ls->ai_custom_model, "llama3:70b");
+    ASSERT_EQ(ls->ai_thinking_mode, THINK_PREF_COMPACT);
 
     config_free(orig);
     config_free(loaded);

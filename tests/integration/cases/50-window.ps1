@@ -614,7 +614,7 @@ Invoke-Case -Name "settings_help_tool_count" -Settings @{} -ExtraArgs @("-nc") -
         [void]$counts.Add($n)
     }
     $seen = (@($counts | Sort-Object) -join ", ")
-    Assert-True ($seen -eq "1, 82") "the Settings dialog's tooltip windows hold tools [$seen], expected [1, 82]"
+    Assert-True ($seen -eq "1, 83") "the Settings dialog's tooltip windows hold tools [$seen], expected [1, 83]"
 
     # A second Edit > Settings while the dialog is open opens nothing more.
     [NutshellNative]::PostMessage($s.Main, $WM_COMMAND, [IntPtr]$IDM_EDIT_SETTINGS, [IntPtr]::Zero) | Out-Null
@@ -624,7 +624,7 @@ Invoke-Case -Name "settings_help_tool_count" -Settings @{} -ExtraArgs @("-nc") -
     Assert-True ([NutshellNative]::IsWindow($dlg)) "the first Settings window is gone after a second Edit > Settings"
 
     Close-NutshellDialog -Dialog $dlg -Button Cancel
-    "tooltip windows of the Settings dialog hold [$seen] tools (82 labelled controls, 1 API key eye); a second Edit > Settings left one Settings window"
+    "tooltip windows of the Settings dialog hold [$seen] tools (83 labelled controls, 1 API key eye); a second Edit > Settings left one Settings window"
 }
 
 # The sheet on all four themes, for the eye: --ui-demo=shortcuts opens it over

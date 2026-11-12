@@ -293,7 +293,7 @@ static void build_list(ChatMsgList *l, int thinking_open)
     ChatMsgItem *ai = chat_msg_append(l, CHAT_ITEM_AI_TEXT,
                                       "**Hi** there\n[EXEC]ls[/EXEC]");
     chat_msg_set_thinking(ai, "think");
-    ai->u.ai.thinking_collapsed = !thinking_open;
+    ai->u.ai.thinking_mode = thinking_open ? THINK_MODE_OPEN : THINK_MODE_COLLAPSED;
     ChatMsgItem *cmd = chat_msg_append(l, CHAT_ITEM_COMMAND, "");
     chat_msg_set_command(cmd, "rm -rf /tmp/x", CMD_WRITE, 0);
     chat_msg_append(l, CHAT_ITEM_STATUS, "done **raw**");
@@ -338,7 +338,7 @@ int test_chat_copy_selection_takes_open_thinking_only(void)
     ASSERT_EQ(n, strlen(out));
     free(out);
     out = NULL;
-    l.head->next->u.ai.thinking_collapsed = 1;
+    l.head->next->u.ai.thinking_mode = THINK_MODE_COLLAPSED;
     ChatSelPos b2 = { ai, TR_PART_MAIN, 6 };
     n = chat_copy_selection(&l, a, b2, 1, &out);
     ASSERT_NOT_NULL(out);
