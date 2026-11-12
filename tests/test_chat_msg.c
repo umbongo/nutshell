@@ -1851,3 +1851,109 @@ int test_chat_fold_refresh_split_batch_stays_whole(void) {
     chat_msg_list_clear(&list);
     TEST_END();
 }
+
+int test_chat_fold_refresh_held_row_on_card_never_folds(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b = add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE, 1);
+    /* a held row still on the card: blocked, not approved, not settled */
+    ChatMsgItem *h = add_row(&list, 3, 0, 1, 0, CHAT_RUN_NONE, 0);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 0);
+    ASSERT_EQ(h->u.cmd.fold_hidden, 0);
+    /* the held row sitting first changes nothing either */
+    chat_msg_list_clear(&list);
+    chat_msg_list_init(&list);
+    h = add_row(&list, 3, 0, 1, 0, CHAT_RUN_NONE, 0);
+    a = add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_NONE);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_rebuilt_negative_batch_folds(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, -2, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b = add_row(&list, -2, 1, 0, 0, CHAT_RUN_UNFINISHED, 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 2);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_CLOSED);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 1);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_open_choice_survives_unfold_refold(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 2, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b = add_row(&list, 2, 1, 0, 0, CHAT_RUN_RUNNING, 1);
+    /* b still runs: no fold; the user's (earlier) open choice is kept */
+    a->u.cmd.fold_open = 1;
+    chat_msg_fold_refresh(&list);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(a->u.cmd.fold_open, 1);
+    /* b finishes: the group comes back open, not closed */
+    b->u.cmd.run = CHAT_RUN_DONE;
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 1);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_OPEN);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_toggle_on_hidden_member_is_noop(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 2, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b = add_row(&list, 2, 1, 0, 0, CHAT_RUN_DONE, 1);
+    chat_msg_fold_refresh(&list);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 1);
+    ASSERT_EQ(chat_msg_fold_toggle(b), 0);
+    ASSERT_EQ(b->u.cmd.fold_open, 0);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_CLOSED);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* A fold change marks every row of the group dirty (their heights and the
+ * last row's summary line change); a refresh that changes nothing leaves
+ * the flags alone, so layout remeasures only what a fold touched. */
+int test_chat_fold_refresh_marks_changed_group_dirty(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 1, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b = add_row(&list, 1, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *c = add_row(&list, 1, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *o = add_row(&list, 7, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *p = add_row(&list, 7, 1, 0, 0, CHAT_RUN_RUNNING, 1);
+    a->dirty = b->dirty = c->dirty = o->dirty = p->dirty = 0;
+    chat_msg_fold_refresh(&list);
+    ASSERT_EQ(a->dirty, 1);
+    ASSERT_EQ(b->dirty, 1);
+    ASSERT_EQ(c->dirty, 1);
+    ASSERT_EQ(o->dirty, 0);   /* batch 7 did not change */
+    ASSERT_EQ(p->dirty, 0);
+    a->dirty = b->dirty = c->dirty = 0;
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    ASSERT_EQ(a->dirty, 0);
+    /* opening it: NONE members' heights and the last row's summary change,
+     * even though only the head's fold value moves from CLOSED to OPEN */
+    chat_msg_fold_toggle(a);
+    chat_msg_fold_refresh(&list);
+    ASSERT_EQ(a->dirty, 1);
+    ASSERT_EQ(b->dirty, 1);
+    ASSERT_EQ(c->dirty, 1);
+    ASSERT_EQ(o->dirty, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}

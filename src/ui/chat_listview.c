@@ -1040,6 +1040,13 @@ static int clv_batch_summary_text(const ChatListView *lv, const ChatMsgItem *ite
     for (const ChatMsgItem *it = item->next; it; it = it->next)
         if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.batch == batch)
             return 0;   /* a later row of the batch carries the line */
+    /* A folded group (its fold row, open or closed, already shows the same
+     * counts) draws no summary line. The group is the contiguous run of
+     * this batch ending at `item`; its first row carries the fold. */
+    for (const ChatMsgItem *h = item; h; h = h->prev) {
+        if (h->type != CHAT_ITEM_COMMAND || h->u.cmd.batch != batch) break;
+        if (h->u.cmd.fold != CHAT_FOLD_NONE) return 0;
+    }
     ChatBatchCounts c;
     chat_msg_batch_counts(lv->msg_list, batch, &c);
     return chat_batch_summary_text(&c, buf, cap) > 0;
@@ -1189,40 +1196,48 @@ static void recalc_layout(ChatListView *lv)
         fold_changed = chat_msg_fold_refresh(lv->msg_list);
         if (fold_changed > 0 && !lv->stick_to_bottom) {
             /* The heights are still the last layout's here. A row that has
-             * just been hidden anchors on its group's first row instead. */
-            int ay = lv->msg_gap;
-            int head_id = -1, head_top = 0;
-            for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) {
-                if (it->type == CHAT_ITEM_COMMAND &&
-                    it->u.cmd.fold != CHAT_FOLD_NONE) {
-                    head_id = it->id;
-                    head_top = ay;
-                }
-                if (it->measured_height <= 0) continue;
-                if (ay + it->measured_height > lv->scroll_y) {
+             * just been hidden anchors on its group's first row, at its top
+             * (offset 0), instead of on the rows it hid. */
+            int n = 0;
+            for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) n++;
+            int *hts = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof(int) * 2);
+            ChatMsgItem **ids = (ChatMsgItem **)malloc(
+                (size_t)(n > 0 ? n : 1) * sizeof(ChatMsgItem *));
+            if (hts && ids) {
+                int *redirect = hts + n;
+                int k = 0, head_k = -1;
+                for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next, k++) {
+                    ids[k] = it;
+                    hts[k] = it->measured_height;
                     if (it->type == CHAT_ITEM_COMMAND &&
-                        it->u.cmd.fold_hidden && head_id >= 0) {
-                        anchor_id = head_id;
-                        anchor_old_top = head_top;
-                    } else {
-                        anchor_id = it->id;
-                        anchor_old_top = ay;
-                    }
-                    break;
+                        it->u.cmd.fold != CHAT_FOLD_NONE)
+                        head_k = k;
+                    redirect[k] = (it->type == CHAT_ITEM_COMMAND &&
+                                   it->u.cmd.fold_hidden) ? head_k : -1;
                 }
-                ay += it->measured_height + lv->msg_gap;
+                int offset = 0;
+                int ai = stick_scroll_pick_anchor(hts, redirect, n,
+                                                  lv->msg_gap, lv->scroll_y,
+                                                  &offset);
+                if (ai >= 0) {
+                    anchor_id = ids[ai]->id;
+                    anchor_old_top = lv->scroll_y - offset;
+                }
             }
+            free(hts);
+            free(ids);
         }
     }
 
     /* Pass 1: measure items (only dirty items need remeasuring).
-     * Exception: command items are always remeasured because Pass 2
-     * overwrites an unsettled one's measured_height with the container
-     * height (we need the original card height for cmd_heights[]) and
-     * Pass 2b overwrites a folded group's. */
+     * Exception: unsettled command items are always remeasured because
+     * Pass 2 overwrites their measured_height with the container height,
+     * and we need the original card height for cmd_heights[]. A fold change
+     * marks its group dirty (chat_msg_fold_refresh()), and measure_item()
+     * already returns the folded heights. */
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
-        int force = (item->type == CHAT_ITEM_COMMAND);
+        int force = (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled);
         if (item->dirty || item->measured_height == 0 || force)
             item->measured_height = measure_item(lv, hdc, item, width);
         item->dirty = 0;
@@ -1274,25 +1289,6 @@ static void recalc_layout(ChatListView *lv)
         }
 
         if (hdc2) ReleaseDC(lv->hwnd, hdc2);
-    }
-
-    /* Pass 2b: a finished command card folded to one row. The group's first
-     * row is the fold row alone (closed) or the fold row above its own row
-     * (open); the other rows of a closed group take no height. */
-    {
-        const int fold_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
-        item = lv->msg_list ? lv->msg_list->head : NULL;
-        while (item) {
-            if (item->type == CHAT_ITEM_COMMAND) {
-                if (item->u.cmd.fold_hidden)
-                    item->measured_height = 0;
-                else if (item->u.cmd.fold == CHAT_FOLD_CLOSED)
-                    item->measured_height = fold_h;
-                else if (item->u.cmd.fold == CHAT_FOLD_OPEN)
-                    item->measured_height += fold_h;
-            }
-            item = item->next;
-        }
     }
 
     /* Pass 3: compute total height (skip h=0 items) */
@@ -1447,6 +1443,14 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
          * matches approval_row_height() exactly like an unsettled row so
          * scroll maths and the container never need to special-case it. */
         if (item->u.cmd.settled) {
+            /* A finished card folded to one row (chat_msg_fold_refresh()):
+             * a closed group's first row is the fold row alone and its other
+             * rows take no height; an open group's first row is the fold row
+             * above its own row. Folding marks the group dirty, so this is
+             * measured again exactly when it changes. */
+            const int fold_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+            if (item->u.cmd.fold_hidden) return 0;
+            if (item->u.cmd.fold == CHAT_FOLD_CLOSED) return fold_h;
             int text_line_h;
             old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
                                                         : GetStockObject(ANSI_FIXED_FONT));
@@ -1460,6 +1464,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             char summary[CLV_SUMMARY_MAX];
             if (clv_batch_summary_text(lv, item, summary, sizeof(summary)))
                 row_h += clv_batch_summary_h(lv, hdc);
+            if (item->u.cmd.fold == CHAT_FOLD_OPEN) row_h += fold_h;
             return row_h;
         }
         /* Unsettled commands are grouped by recalc_layout's Pass 2 into a
@@ -3878,6 +3883,20 @@ static int chatlv_hit_is_actionable(int id)
  *  Hit testing: convert mouse click to button action
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* The content-coordinate top of `target` (the layout's own walk: items of
+ * height 0 take no gap), or 0 when it is not in the list. */
+static int clv_item_top(const ChatListView *lv, const ChatMsgItem *target)
+{
+    int y = lv->msg_gap;
+    for (const ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL; it;
+         it = it->next) {
+        if (it->measured_height <= 0) continue;
+        if (it == target) return y;
+        y += it->measured_height + lv->msg_gap;
+    }
+    return 0;
+}
+
 static int on_lbuttondown(ChatListView *lv, int mx, int my)
 {
     SetFocus(lv->hwnd);   /* Acquire keyboard focus so WM_KEYDOWN fires */
@@ -3922,13 +3941,27 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
         int shit = HIT_NONE;
         if (chatlv_settled_row_hit(lv, mx, my, &sitem, &shit, NULL)) {
             if (shit == HIT_HEADER) {
-                /* The fold row: expand or fold the finished card. Refresh
-                 * here, so recalc_layout finds nothing changed and does not
-                 * move the view to anchor (a click is the reader's own). */
+                /* The fold row: expand or fold the finished card. The row
+                 * the reader clicked stays where it is on screen, pinned to
+                 * the bottom or not (a pinned list would otherwise follow
+                 * the bottom and move it from under the pointer), and so do
+                 * the folds other cards pick up in the same refresh: the
+                 * refresh runs here, so recalc_layout finds nothing changed
+                 * and does not anchor on its own. */
+                const int screen_y = clv_item_top(lv, sitem) - lv->scroll_y;
                 chat_msg_fold_toggle(sitem);
                 chat_msg_fold_refresh(lv->msg_list);
                 sitem->dirty = 1;
+                lv->stick_to_bottom = 0;     /* do not follow the bottom */
                 recalc_layout(lv);
+                int max_scroll = lv->total_height - lv->viewport_height;
+                lv->scroll_y = stick_scroll_hold_row(
+                    screen_y, clv_item_top(lv, sitem), max_scroll);
+                /* A click is the reader's own scroll: stuck again only when
+                 * the row's new place is the bottom. */
+                lv->stick_to_bottom =
+                    stick_scroll_after_user(lv->scroll_y, max_scroll);
+                update_scrollbar(lv);
                 InvalidateRect(lv->hwnd, NULL, FALSE);
                 return 1;
             }
@@ -4480,6 +4513,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             ChatMsgItem *wi = lv->msg_list ? lv->msg_list->head : NULL;
             while (wi) {
                 int wh = wi->measured_height;
+                /* Hidden rows take neither height nor gap (a folded card's
+                 * rows): the same skip as every other walk. */
+                if (wh == 0) { wi = wi->next; continue; }
                 if (wi->type == CHAT_ITEM_AI_TEXT && wi->u.ai.thinking_text
                     && wi->u.ai.thinking_text[0]
                     && !wi->u.ai.thinking_collapsed

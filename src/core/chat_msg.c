@@ -578,6 +578,7 @@ int chat_msg_fold_refresh(ChatMsgList *list)
                                                 : CHAT_FOLD_CLOSED;
                 want_hidden = want_fold == CHAT_FOLD_CLOSED;
             }
+            int group_changed = 0;
             for (ChatMsgItem *m = it; m != end; m = m->next) {
                 int f = (m == it) ? want_fold : CHAT_FOLD_NONE;
                 int h = (m == it) ? 0 : want_hidden;
@@ -585,14 +586,22 @@ int chat_msg_fold_refresh(ChatMsgList *list)
                     m->u.cmd.fold = f;
                     m->u.cmd.fold_hidden = h;
                     changed++;
+                    group_changed = 1;
                 }
             }
+            /* A change anywhere in the group changes its rows' heights (head
+             * and hidden rows) and where the summary line sits (the last
+             * row), so the layout remeasures all of them -- and only them. */
+            if (group_changed)
+                for (ChatMsgItem *m = it; m != end; m = m->next)
+                    m->dirty = 1;
             it = end;
             continue;
         }
         if (it->u.cmd.fold != CHAT_FOLD_NONE || it->u.cmd.fold_hidden) {
             it->u.cmd.fold = CHAT_FOLD_NONE;
             it->u.cmd.fold_hidden = 0;
+            it->dirty = 1;
             changed++;
         }
         it = it->next;

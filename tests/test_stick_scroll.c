@@ -123,3 +123,77 @@ int test_stick_scroll_anchor_never_negative(void) {
     ASSERT_EQ(stick_scroll_anchor(0, 0, 0, 0, 80), 0);
     TEST_END();
 }
+
+/* --- stick_scroll_pick_anchor tests --- */
+
+int test_stick_scroll_pick_anchor_plain_item(void) {
+    TEST_BEGIN();
+    /* gap 10: tops 10, 60 (h 40), 110 (h 100); scroll_y 70 is 10 px into #1 */
+    int h[3]  = { 40, 40, 100 };
+    int rd[3] = { -1, -1, -1 };
+    int off = -99;
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 3, 10, 70, &off), 1);
+    ASSERT_EQ(off, 10);
+    /* in the gap above the first item: that item, negative offset */
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 3, 10, 0, &off), 0);
+    ASSERT_EQ(off, -10);
+    /* a zero-height item is skipped, no gap added for it */
+    int h2[3] = { 40, 0, 100 };
+    ASSERT_EQ(stick_scroll_pick_anchor(h2, rd, 3, 10, 70, &off), 2);
+    ASSERT_EQ(off, 10);
+    TEST_END();
+}
+
+int test_stick_scroll_pick_anchor_hidden_redirects_to_head_offset_zero(void) {
+    TEST_BEGIN();
+    /* #0 is a fold head, #1 and #2 were its rows (old heights still set) and
+     * are hidden now; scroll_y lands inside #2: anchor on #0 at offset 0 */
+    int h[4]  = { 30, 30, 30, 50 };
+    int rd[4] = { -1, 0, 0, -1 };
+    int off = -99;
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 4, 10, 85, &off), 0);
+    ASSERT_EQ(off, 0);
+    /* the first row below the hidden group is a plain item again */
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 4, 10, 135, &off), 3);
+    ASSERT_EQ(off, 135 - 130);
+    TEST_END();
+}
+
+int test_stick_scroll_pick_anchor_nothing_visible(void) {
+    TEST_BEGIN();
+    int h[2]  = { 40, 40 };
+    int rd[2] = { -1, -1 };
+    int off = -99;
+    /* scrolled past the end */
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 2, 10, 500, &off), -1);
+    /* empty, all hidden, bad arguments */
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 0, 10, 0, &off), -1);
+    int z[2] = { 0, 0 };
+    ASSERT_EQ(stick_scroll_pick_anchor(z, rd, 2, 10, 0, &off), -1);
+    ASSERT_EQ(stick_scroll_pick_anchor(NULL, rd, 2, 10, 0, &off), -1);
+    ASSERT_EQ(stick_scroll_pick_anchor(h, NULL, 2, 10, 0, &off), -1);
+    ASSERT_EQ(stick_scroll_pick_anchor(h, rd, 2, 10, 0, NULL), -1);
+    TEST_END();
+}
+
+/* --- stick_scroll_hold_row tests --- */
+
+int test_stick_scroll_hold_row_keeps_screen_position(void) {
+    TEST_BEGIN();
+    /* the row was 120 px below the top of the view; now its top is 900 */
+    ASSERT_EQ(stick_scroll_hold_row(120, 900, 5000), 780);
+    /* content above it shrank: it moved up, the view follows */
+    ASSERT_EQ(stick_scroll_hold_row(120, 300, 5000), 180);
+    TEST_END();
+}
+
+int test_stick_scroll_hold_row_clamps(void) {
+    TEST_BEGIN();
+    /* would scroll above the top */
+    ASSERT_EQ(stick_scroll_hold_row(200, 100, 5000), 0);
+    /* would scroll past the bottom (content shrank below the row) */
+    ASSERT_EQ(stick_scroll_hold_row(10, 900, 400), 400);
+    /* content fits the viewport */
+    ASSERT_EQ(stick_scroll_hold_row(10, 900, -50), 0);
+    TEST_END();
+}

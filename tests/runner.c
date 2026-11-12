@@ -1948,6 +1948,11 @@ int test_stick_scroll_anchor_pinned_unchanged(void);
 int test_stick_scroll_anchor_follows_item_top(void);
 int test_stick_scroll_anchor_offset_clamped_to_new_height(void);
 int test_stick_scroll_anchor_never_negative(void);
+int test_stick_scroll_pick_anchor_plain_item(void);
+int test_stick_scroll_pick_anchor_hidden_redirects_to_head_offset_zero(void);
+int test_stick_scroll_pick_anchor_nothing_visible(void);
+int test_stick_scroll_hold_row_keeps_screen_position(void);
+int test_stick_scroll_hold_row_clamps(void);
 int test_scroll_page_up_negative_max_treated_as_zero(void);
 
 /* test_term_extract.c */
@@ -2600,6 +2605,11 @@ int test_chat_fold_refresh_open_choice(void);
 int test_chat_fold_refresh_skips_tools_and_batch_zero(void);
 int test_chat_fold_refresh_adjacent_batches_separate(void);
 int test_chat_fold_refresh_split_batch_stays_whole(void);
+int test_chat_fold_refresh_held_row_on_card_never_folds(void);
+int test_chat_fold_refresh_rebuilt_negative_batch_folds(void);
+int test_chat_fold_refresh_open_choice_survives_unfold_refold(void);
+int test_chat_fold_toggle_on_hidden_member_is_noop(void);
+int test_chat_fold_refresh_marks_changed_group_dirty(void);
 int test_chat_batch_items_settled_survives_ceiling_raise(void);
 int test_chat_batch_items_card_survives_ceiling_drop(void);
 int test_chat_batch_items_half_decided_card(void);
@@ -6223,6 +6233,11 @@ int main(void) {
     failed += test_stick_scroll_anchor_follows_item_top();
     failed += test_stick_scroll_anchor_offset_clamped_to_new_height();
     failed += test_stick_scroll_anchor_never_negative();
+    failed += test_stick_scroll_pick_anchor_plain_item();
+    failed += test_stick_scroll_pick_anchor_hidden_redirects_to_head_offset_zero();
+    failed += test_stick_scroll_pick_anchor_nothing_visible();
+    failed += test_stick_scroll_hold_row_keeps_screen_position();
+    failed += test_stick_scroll_hold_row_clamps();
 
     printf("\n--- Term Extract ---\n");
     failed += test_extract_empty_term();
@@ -6939,6 +6954,11 @@ int main(void) {
     failed += test_chat_fold_refresh_skips_tools_and_batch_zero();
     failed += test_chat_fold_refresh_adjacent_batches_separate();
     failed += test_chat_fold_refresh_split_batch_stays_whole();
+    failed += test_chat_fold_refresh_held_row_on_card_never_folds();
+    failed += test_chat_fold_refresh_rebuilt_negative_batch_folds();
+    failed += test_chat_fold_refresh_open_choice_survives_unfold_refold();
+    failed += test_chat_fold_toggle_on_hidden_member_is_noop();
+    failed += test_chat_fold_refresh_marks_changed_group_dirty();
     failed += test_chat_batch_items_settled_survives_ceiling_raise();
     failed += test_chat_batch_items_card_survives_ceiling_drop();
     failed += test_chat_batch_items_half_decided_card();
