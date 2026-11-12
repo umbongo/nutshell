@@ -365,6 +365,18 @@ RECT ai_chat_to_RECT(NsRect r)
     return rc;
 }
 
+/* Ask for a repaint of the header row without erasing it (the paint fills
+ * the status strip itself). Call it when the activity word changes or goes
+ * away with no heartbeat left to repaint it. */
+void ai_chat_header_invalidate(AiChatData *d)
+{
+    if (!d || !d->hwnd) return;
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+    RECT rc = ai_chat_to_RECT(l.header);
+    InvalidateRect(d->hwnd, &rc, FALSE);
+}
+
 /* Paint the header's model chip and (while a session is active) the
  * activity dot + one-word status, next to the session label. Every rect
  * comes from ai_header_layout(): the word sits between the session name
@@ -377,6 +389,20 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc)
 
     AiHeaderLayout hl;
     ai_chat_header_layout(d, l.header, hdc, &hl);
+
+    /* The header is not erased on a repaint (the heartbeat invalidates it
+     * with bErase FALSE, so as not to flicker the chip, label and buttons),
+     * so the strip the word and dot can occupy -- from the end of the name
+     * to the chip -- is filled with the panel background here first. It
+     * is also what clears the word when the activity ends. */
+    {
+        int x0 = hl.name.x + hl.name.w;
+        int x1 = hl.chip.w > 0 ? hl.chip.x : hl.buttons.x;
+        if (x1 > x0 && hl.status.h > 0) {
+            RECT strip = { x0, hl.status.y, x1, hl.status.y + hl.status.h };
+            FillRect(hdc, &strip, d->hBrBgPrimary);
+        }
+    }
 
     if (hl.chip.w > 0 && hl.chip.h > 0) {
         RECT chip_rc = ai_chat_to_RECT(hl.chip);

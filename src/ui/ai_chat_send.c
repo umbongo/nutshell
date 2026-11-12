@@ -437,6 +437,7 @@ void ai_chat_cancel_active_stream(AiChatData *d)
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     d->dispatch_active = 0;
     chat_activity_reset(&d->activity);
+    ai_chat_header_invalidate(d);
     if (d->hChatList) {
         chat_listview_set_pulse(d->hChatList, 0);
         chat_listview_invalidate(d->hChatList);

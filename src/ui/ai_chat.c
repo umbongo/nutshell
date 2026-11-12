@@ -810,6 +810,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->active_state) d->active_state->show_thinking = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
+                ai_chat_header_invalidate(d);
                 ai_chat_thinking_history_clear(d);
                 /* Clear display -- an empty msg_list is painted as the
                  * empty/no-key/no-session state (ai_chat_update_panel_state()). */
@@ -1125,6 +1126,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     runcmd_cause_keep_free(RUNCMD_CAUSE_RETRY));   /* Retry relaunches */
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
+                ai_chat_header_invalidate(d);
                 if (d->hChatList) {
                     chat_listview_set_pulse(d->hChatList, 0);
                     chat_listview_invalidate(d->hChatList);
@@ -1653,6 +1655,7 @@ next_coalesce:;
         KillTimer(hwnd, TIMER_THINKING);
         KillTimer(hwnd, TIMER_HEARTBEAT);
         chat_activity_reset(&d->activity);
+        ai_chat_header_invalidate(d);
         if (d->hChatList) {
             chat_listview_set_pulse(d->hChatList, 0);
             chat_listview_invalidate(d->hChatList);
@@ -2743,6 +2746,7 @@ static void do_session_switch(AiChatData *d,
         d->approval_q.policy = cmd_policy_default();
         d->show_thinking = 0;
         chat_activity_reset(&d->activity);
+        ai_chat_header_invalidate(d);
     }
 
     ai_chat_relayout(d);

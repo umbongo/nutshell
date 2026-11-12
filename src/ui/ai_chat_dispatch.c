@@ -353,6 +353,7 @@ void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch
          * "Executing" for a command that is no longer running. */
         if (displayed && d->activity.phase == ACTIVITY_EXECUTING) {
             chat_activity_reset(&d->activity);
+            ai_chat_header_invalidate(d);
             ai_chat_update_context_bar(d);
         }
         /* Nothing launched, so the stream that would have ended in
