@@ -12,6 +12,7 @@
 #ifdef _WIN32
 
 #include "ai_prompt.h"
+#include "thinking_mode.h"
 #include "ai_tools.h"
 #include "ai_tool_web_search.h"
 #include "ai_tool_web_fetch.h"
@@ -191,13 +192,11 @@ typedef struct {
      * four cells and the Auto-approve button) -- see ai_chat_status_hit()/ai_chat_status_rect(). */
     NsHover status_hover;
     int status_hover_tracking;  /* TrackMouseEvent armed for WM_MOUSELEAVE */
-    int show_thinking;    /* 1 = user has manually opened a Thinking
-                            * disclosure this session -- suppresses
-                            * auto-collapse at reply-start (chat_listview.c)
-                            * and is also passed to ai_build_save_text() so
-                            * a session where the user looked at reasoning
-                            * saves it too. Mirrors the policy: persisted
-                            * per-session in AiSessionState, reset on New Chat. */
+    int thinking_pref;    /* ThinkPref (thinking_mode.h): the saved Thinking
+                            * display choice, pushed by ai_chat_set_thinking_pref()
+                            * and by a click on a row (the list view holds the
+                            * same value). Decides whether Save writes the
+                            * reasoning. Global, not per session. */
     HFONT hFont;
     HFONT hSmallFont;     /* small bold font for indicator label */
     char font_name[64];

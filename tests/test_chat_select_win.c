@@ -219,6 +219,9 @@ static int view_open_h(TestView *tv, ChatMsgList *list, int width, int height,
     tv->s = make_font(9, dpi, FW_NORMAL, "Segoe UI");
     chat_listview_set_fonts(tv->lv, tv->f, tv->m, tv->b, tv->s);
     chat_listview_set_render_markdown(tv->lv, markdown);
+    /* The Thinking row's mode comes from the pref (a finished reply under
+     * Automatic is collapsed); these tests read the open body. */
+    chat_listview_set_thinking_pref(tv->lv, THINK_PREF_OPEN);
     chat_listview_invalidate(tv->lv);
     return 1;
 }
@@ -260,7 +263,6 @@ static void fill_fixture(ChatMsgList *list)
     chat_msg_append(list, CHAT_ITEM_USER, FIX_USER);
     ChatMsgItem *ai = chat_msg_append(list, CHAT_ITEM_AI_TEXT, FIX_AI);
     chat_msg_set_thinking(ai, FIX_THINK);
-    ai->u.ai.thinking_collapsed = 0;
     ai->u.ai.thinking_complete = 1;
     /* A command card between two text items: it records no runs. */
     ChatMsgItem *card = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
@@ -451,6 +453,44 @@ static int reason_config(int width, int dpi)
     chat_msg_list_clear(&list);
     if (bad) printf("  (width %d, dpi %d)\n", width, dpi);
     return bad;
+}
+
+/* The pref picks the row's height: collapsed < compact (four lines) < open
+ * for a long reasoning text, and the item records the mode it was laid out in. */
+int test_chat_select_win_thinking_pref_modes(void)
+{
+    TEST_BEGIN();
+    static const int prefs[3] = { THINK_PREF_COLLAPSED, THINK_PREF_COMPACT,
+                                  THINK_PREF_OPEN };
+    static const int modes[3] = { THINK_MODE_COLLAPSED, THINK_MODE_COMPACT,
+                                  THINK_MODE_OPEN };
+    int h[3] = { 0, 0, 0 };
+    for (int k = 0; k < 3; k++) {
+        ChatMsgList list;
+        fill_fixture(&list);
+        ChatMsgItem *ai = list.head->next;
+        char *longtext = (char *)malloc(4000);
+        ASSERT_NOT_NULL(longtext);
+        longtext[0] = '\0';
+        for (int i = 0; i < 60; i++) {
+            char line[40];
+            snprintf(line, sizeof(line), "reasoning line %d\n", i);
+            strcat(longtext, line);
+        }
+        chat_msg_set_thinking(ai, longtext);
+        free(longtext);
+        TestView tv;
+        ASSERT_TRUE(view_open(&tv, &list, 420, 96, 1));
+        chat_listview_set_thinking_pref(tv.lv, prefs[k]);
+        view_paint(&tv, 420);
+        h[k] = ai->measured_height;
+        ASSERT_EQ(ai->u.ai.thinking_mode, modes[k]);
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
+    ASSERT_TRUE(h[0] < h[1]);
+    ASSERT_TRUE(h[1] < h[2]);
+    TEST_END();
 }
 
 int test_chat_select_win_reason_in_row(void)

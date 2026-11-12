@@ -876,9 +876,6 @@ typedef struct {
                                    * user) -- guards against re-seeding an
                                    * explicit choice on a later session switch */
     int activity_phase;          /* ActivityPhase saved on session switch */
-    int show_thinking;           /* 1 = user opened a Thinking disclosure this
-                                   * session -- suppresses auto-collapse when a
-                                   * reply's text starts (see chat_listview.c) */
     int auto_rounds;             /* consecutive unattended continue rounds
                                    * since the user last spoke or acted
                                    * (ai_rounds_*() below); 0 at creation */

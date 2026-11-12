@@ -141,36 +141,33 @@ int test_chat_msg_set_thinking(void) {
     ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "response");
     ASSERT_EQ(chat_msg_set_thinking(item, "I think..."), 0);
     ASSERT_STR_EQ(item->u.ai.thinking_text, "I think...");
-    ASSERT_EQ(item->u.ai.thinking_collapsed, 1); /* default collapsed */
+    ASSERT_EQ(item->u.ai.thinking_mode, THINK_MODE_COLLAPSED); /* default collapsed */
     chat_msg_list_clear(&list);
     TEST_END();
 }
 
-/* Thinking disclosure: a user collapse must stick (see ai_chat.c's
- * WM_AI_STREAM handler). thinking_user_set is the flag that records a
- * manual open/close; a freshly created AI item must start with it unset,
- * and chat_msg_set_thinking() -- called on every streamed thinking chunk
- * -- must never touch it, or a mid-stream collapse would be silently
- * undone by the very next chunk. */
-int test_chat_msg_new_ai_item_thinking_user_set_is_zero(void) {
+/* A freshly created AI item starts collapsed, and chat_msg_set_thinking()
+ * -- called on every streamed thinking chunk -- leaves the mode alone (the
+ * list view owns it and recomputes it from the saved pref at each layout). */
+int test_chat_msg_new_ai_item_thinking_mode_is_collapsed(void) {
     TEST_BEGIN();
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "response");
     ASSERT_NOT_NULL(item);
-    ASSERT_EQ(item->u.ai.thinking_user_set, 0);
+    ASSERT_EQ(item->u.ai.thinking_mode, THINK_MODE_COLLAPSED);
     chat_msg_list_clear(&list);
     TEST_END();
 }
 
-int test_chat_msg_set_thinking_leaves_user_set_alone(void) {
+int test_chat_msg_set_thinking_leaves_mode_alone(void) {
     TEST_BEGIN();
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "response");
-    item->u.ai.thinking_user_set = 1;
+    item->u.ai.thinking_mode = THINK_MODE_COMPACT;
     ASSERT_EQ(chat_msg_set_thinking(item, "more thinking..."), 0);
-    ASSERT_EQ(item->u.ai.thinking_user_set, 1);
+    ASSERT_EQ(item->u.ai.thinking_mode, THINK_MODE_COMPACT);
     chat_msg_list_clear(&list);
     TEST_END();
 }

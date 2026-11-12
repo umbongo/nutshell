@@ -2556,8 +2556,8 @@ int test_chat_msg_set_text(void);
 int test_chat_msg_set_command(void);
 int test_chat_msg_set_thinking(void);
 int test_chat_msg_set_thinking_marks_dirty(void);
-int test_chat_msg_new_ai_item_thinking_user_set_is_zero(void);
-int test_chat_msg_set_thinking_leaves_user_set_alone(void);
+int test_chat_msg_new_ai_item_thinking_mode_is_collapsed(void);
+int test_chat_msg_set_thinking_leaves_mode_alone(void);
 int test_chat_msg_empty_text(void);
 int test_chat_msg_null_text(void);
 int test_chat_msg_unique_ids(void);
@@ -4131,6 +4131,8 @@ int test_ui_demo_thinking_text_long_non_empty_and_much_longer(void);
 int test_ui_demo_build_thinking_matches_chat_conversation(void);
 int test_ui_demo_scrolls_to_top_chat_all_and_thinking(void);
 int test_ui_demo_scrolls_to_top_false_for_other_states(void);
+int test_ui_demo_thinking_mode_states_match_chat_conversation(void);
+int test_ui_demo_thinking_pref_per_state(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -6919,8 +6921,8 @@ int main(void) {
     failed += test_chat_msg_set_command();
     failed += test_chat_msg_set_thinking();
     failed += test_chat_msg_set_thinking_marks_dirty();
-    failed += test_chat_msg_new_ai_item_thinking_user_set_is_zero();
-    failed += test_chat_msg_set_thinking_leaves_user_set_alone();
+    failed += test_chat_msg_new_ai_item_thinking_mode_is_collapsed();
+    failed += test_chat_msg_set_thinking_leaves_mode_alone();
     failed += test_chat_msg_empty_text();
     failed += test_chat_msg_null_text();
     failed += test_chat_msg_unique_ids();
@@ -8360,6 +8362,8 @@ int main(void) {
     failed += test_ui_demo_build_thinking_matches_chat_conversation();
     failed += test_ui_demo_scrolls_to_top_chat_all_and_thinking();
     failed += test_ui_demo_scrolls_to_top_false_for_other_states();
+    failed += test_ui_demo_thinking_mode_states_match_chat_conversation();
+    failed += test_ui_demo_thinking_pref_per_state();
 
     failed += test_ai_conv_take_moves_overflow_and_clears_source();
     failed += test_ai_conv_take_frees_previous_destination();

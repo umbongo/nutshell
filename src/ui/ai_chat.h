@@ -102,6 +102,12 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme);
  * already-deleted handle. A no-op if the window is not open. */
 void ai_chat_refresh_fonts(HWND hwnd);
 
+/* Set the saved Thinking-display pref (a ThinkPref, thinking_mode.h) on the
+ * panel and its list view: every Thinking row re-lays out in the mode the
+ * pref gives. Never saves; the caller owns the config. A no-op if the
+ * window is not open. */
+void ai_chat_set_thinking_pref(HWND hwnd, int pref);
+
 /* Enable or disable markdown rendering in the AI chat list view. */
 void ai_chat_set_markdown(HWND hwnd, int enabled);
 

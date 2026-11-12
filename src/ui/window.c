@@ -2409,6 +2409,8 @@ static void on_settings_clicked_page(int initial_page) {
                                 g_config->settings.ai_tool_auto_rounds);
         ai_chat_set_runcmd_mode(g_hwndAiChat,
                                 g_config->settings.ai_runcmd_mode);
+        ai_chat_set_thinking_pref(g_hwndAiChat,
+                                  g_config->settings.ai_thinking_mode);
     }
 
     /* Resize all terminals to the new character grid */
@@ -2480,6 +2482,7 @@ static HWND create_ai_chat(HWND parent)
         ai_chat_set_tool_rounds(hwnd, g_config->settings.ai_tool_auto_rounds);
         ai_chat_set_runcmd_mode(hwnd, g_config->settings.ai_runcmd_mode);
         ai_chat_set_policy_default(hwnd, g_config->settings.ai_policy_default);
+        ai_chat_set_thinking_pref(hwnd, g_config->settings.ai_thinking_mode);
     }
     return hwnd;
 }
@@ -4644,6 +4647,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 return 0;
             }
             switch (LOWORD(wParam)) {
+                case IDC_CHAT_THINKING_MODE:
+                    /* A click on a Thinking row cycled the display (sent by
+                     * the chat panel; lParam = the new ThinkPref). Store it
+                     * as the saved choice. --ui-demo keeps it in memory only
+                     * (the demo runs on the user's real config). */
+                    if (g_config && g_startup_action != CLI_UI_DEMO) {
+                        g_config->settings.ai_thinking_mode = (int)lParam;
+                        config_save(g_config, active_config_path());
+                    }
+                    return 0;
                 case IDM_FILE_NEW_SESSION:
                     on_tab_new();
                     return 0;
