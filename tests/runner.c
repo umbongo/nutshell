@@ -1286,6 +1286,8 @@ int test_term_cursor_moves(void);
 int test_term_csi_empty_first_param_counts(void);
 int test_term_non_sgr_csi_with_colon_is_ignored(void);
 int test_term_extended_moves(void);
+int test_term_cbt(void);
+int test_term_cbt_nano_sequence(void);
 int test_term_sgr_flags(void);
 int test_term_resize_basic(void);
 int test_term_resize_reflow(void);
@@ -5590,6 +5592,8 @@ int main(void) {
     failed += test_term_csi_empty_first_param_counts();
     failed += test_term_non_sgr_csi_with_colon_is_ignored();
     failed += test_term_extended_moves();
+    failed += test_term_cbt();
+    failed += test_term_cbt_nano_sequence();
     failed += test_term_sgr_flags();
     failed += test_term_resize_basic();
     failed += test_term_resize_reflow();

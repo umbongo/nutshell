@@ -401,6 +401,13 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
             term->cursor.col -= get_param(term, 0, 1);
             clamp_cursor(term);
             break;
+        case 'Z': { // CBT - Back to the previous 8-column tab stop, Ps times
+            int tabs = get_param(term, 0, 1);
+            while (tabs-- > 0 && term->cursor.col > 0)
+                term->cursor.col = (term->cursor.col - 1) / 8 * 8;
+            clamp_cursor(term);
+            break;
+        }
         case 'H': // CUP - Cursor Position
         case 'f':
             n = get_param(term, 0, 1);
