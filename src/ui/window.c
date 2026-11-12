@@ -76,7 +76,7 @@
 static void hide_ai_panel(HWND parent);
 
 static const char *CLASS_NAME = "Nutshell_Window";
-static const char *APP_TITLE = "Nutshell";
+static const char *APP_TITLE = "Nutshell - v" APP_VERSION;
 
 
 #define TAB_HEIGHT_BASE 32
