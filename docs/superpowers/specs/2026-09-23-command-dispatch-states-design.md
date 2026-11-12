@@ -1,7 +1,7 @@
 # Command cards tell the truth: run states, no silent truncation, stall reporting
 
 **Date**: 2026-09-23
-**Status**: DRAFT, revised after one Opus critique (see the Critique section)
+**Status**: Implemented, v1.2.2, PR #41
 **Branch**: `dispatch-states`, version **1.2.2**
 **Fixes**: the maintainer's report of 2026-09-23: the assistant proposed three commands, the
 panel showed all three as "ran", the terminal showed only the first, truncated mid-argument,

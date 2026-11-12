@@ -1,7 +1,7 @@
 # Debug logging: a runtime log an AI can read, and an issue marker
 
 **Date**: 2026-10-17
-**Status**: DRAFT, not yet critiqued.
+**Status**: Implemented, v1.2.36.
 **Branch**: `feat/debug-logging`
 **Prompted by**: the maintainer, 2026-10-17: "Add debug to the app, create a new section in the
 settings for debugging. Present an 'enable debugging' tickbox. Once pressed show a series of

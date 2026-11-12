@@ -1,7 +1,7 @@
 # Local shell: Nutshell as a portable bash for Windows
 
 **Date**: 2026-09-22
-**Status**: DRAFT, revised after one Opus critique (see the Critique section)
+**Status**: Implemented
 **Branch**: `local-shell`
 **Versions**: two pull requests. **1.2.0** is the transport seam (section 2), a refactor with
 no behaviour change. **1.2.1** is the local shell itself (sections 3-6). A third change,

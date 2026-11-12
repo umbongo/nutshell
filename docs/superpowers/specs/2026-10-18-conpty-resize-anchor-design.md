@@ -348,8 +348,8 @@ as `anchor=…` at the end of `issue.term` (`:73-84`), filled in `window.c:3183-
 
 ## Tests
 
-Native, `make test`; new files `tests/test_term_anchor.c`, `tests/test_reflow_fixes.c` and
-`tests/test_pty_resize_throttle.c`, every function declared and called in `tests/runner.c`.
+Native, `make test`; new files `tests/test_term_anchor.c` (not built), `tests/test_reflow_fixes.c` and
+`tests/test_pty_resize_throttle.c` (not built), every function declared and called in `tests/runner.c`.
 "Screen text" is the rows read through `term_screen_to_phys()` (`buffer.c:319-323`); "history"
 is `term_extract_last_n()` (`src/core/term_extract.h:25`) over every logical line. Native
 tests call `term_resize()` directly: no throttle is involved unless a test says so.
@@ -360,7 +360,7 @@ narrowed to 10 and widened back to 20 is one row again; a prompt `PS C:\>` (7 ce
 cursor at column 8 keeps column 8 across a height change and is clamped to `new_cols - 1` when
 narrowed below it. Negative: a 21-character line on 20 columns still wraps to two rows.
 
-**Top mode** (`test_term_anchor.c`):
+**Top mode** (`test_term_anchor.c`) (not built):
 
 - **Defaults**: `term_init()` gives bottom mode.
 - **Grow, cursor at the bottom**: 10×20, 30 numbered lines, cursor row 9; resize to 20×20: row
@@ -398,7 +398,7 @@ narrowed below it. Negative: a 21-character line on 20 columns still wraps to tw
   `issue.term` ends `anchor=top`, and `anchor=-` for NULL (`tests/test_dlog_snapshot.c:148`
   updated for the field).
 
-**Throttle** (`test_pty_resize_throttle.c`): the twelve request times of the 15:55:59 drag
+**Throttle** (`test_pty_resize_throttle.c`) (not built): the twelve request times of the 15:55:59 drag
 (.091, .135, .171, .202, .234, .284, .323, .354, .378, .416, .457, .489 with 157 .. 121
 columns) and `prt_take()` every 10 ms from .090 give exactly five sends: 157 at .091 (leading),
 144 at .200, 132 at .300, 126 at .400, 121 at .500 (trailing); the last send is always the last
@@ -473,7 +473,7 @@ receiver).
 | ui | `src/ui/window.c:106-149`, `:526-554`, `:610-656`, `:1170-1180`, `:1766`, `:1789-1794`, `:2122-2123`, `:2538`, `:3183-3200`, `:4161`, `:4723-4840` | throttle state, init and take; `g_size_why`; top mode; reconnect push; DPI reorder; snapshot |
 | ui | `src/ui/resource.h` | `APP_VERSION`/`APP_VERSION_BINARY` bump |
 | build | `README.md` `**Version**:` line, `build/win/nutshell.exe` | version and rebuilt exe for the gate |
-| tests | `tests/test_term_anchor.c`, `tests/test_reflow_fixes.c`, `tests/test_pty_resize_throttle.c`, `tests/runner.c`, `tests/test_dlog_snapshot.c`, `tests/test_term_conpty.c`, `tests/fixtures/conpty_resize_*.bin` | new and updated |
+| tests | `tests/test_term_anchor.c` (not built), `tests/test_reflow_fixes.c`, `tests/test_pty_resize_throttle.c` (not built), `tests/runner.c`, `tests/test_dlog_snapshot.c`, `tests/test_term_conpty.c`, `tests/fixtures/conpty_resize_*.bin` | new and updated |
 | tests | `tests/test_local_pty.c`, `tests/win_runner.c` | `--console-probe`, parity case, fixture recorder |
 | tests | `tests/integration/NutshellIT.psm1`, `tests/integration/cases/80-local-shell.ps1` | wheel helper; `local_resize_keeps_history` |
 | docs | `docs/superpowers/specs/2026-10-17-debug-logging-design.md` section 2 | a `term` table with `term.resize` |

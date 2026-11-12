@@ -1,6 +1,6 @@
 # Keyboard-interactive SSH authentication — design
 
-Date: 2026-11-05. Status: draft for the maintainer, revised after critique rounds 1 and 2. The
+Date: 2026-11-05. Status: Implemented (PR #89). The
 decisions come from the orchestrator's brief of 2026-11-04. A decision the code forced to
 change is marked *Amended*. One the author added is marked *Author's addition*. The final
 review's rulings of 2026-11-05 are marked *Amended (maintainer, 2026-11-05)*. Written

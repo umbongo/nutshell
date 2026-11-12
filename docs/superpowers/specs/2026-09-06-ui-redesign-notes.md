@@ -1,19 +1,19 @@
 # UI Redesign — Working Notes (checkpoint)
 
 **Status:** sub-projects 1 (design-system foundation) and 2 (AI Assist panel)
-landed at v1.0.92/v1.0.96 (see "Landed since v1.0.96" below for what's
+landed at v1.0.92/v1.0.96 (see "Todo" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **4,118 tests**, 0 failures (hosted `Native tests`, real
-libssh2, PR #94's head, 2026-11-12; 4,077 with the libssh2 stub on `automaton`, as PR #94
-reports; `wintest` 52). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
-(`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 74 cases in the
-README's case tables (`settings_help_tool_count` new in PR #93) plus the five telnet cases, manual only since 2026-09-15, DPI-aware since
-PR #71; `ui_gallery` captures 10 `--ui-demo` states x 4 themes = 40 images. Next action is sub-project 3 (main window
+batches). Native suite: **4,132 tests**, 0 failures (hosted `Native tests`, real
+libssh2, PR #96's head, 2026-11-12; 4,091 with the libssh2 stub on `automaton`;
+`wintest` 56). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
+(`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 84 registered cases
+(the README's case tables and the telnet file), manual only since 2026-09-15, DPI-aware since
+PR #71; `ui_gallery` captures 19 `--ui-demo` states x 4 themes = 76 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.82 (2026-11-12).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.83 (2026-11-12).
 
 ## Decisions so far
 
@@ -341,6 +341,8 @@ Done, in order (details in the commit messages and the specs named):
   turn; a `sensitive` bit gives credential reads a card at any policy; classifier fixes
   (`sh -c`/`bash -c`/`eval` bodies, `xargs`/`watch`, `$(...)`, IOS `conf t`/`debug`/`do`);
   `env rm -rf /` and `echo $(rm F)` now classify CRITICAL.
+- SSH keyboard-interactive authentication, v1.2.56 (branch `feat/keyboard-interactive-auth`;
+  spec `2026-11-05-keyboard-interactive-design.md`): the server is asked what it offers and
   the methods are tried in a fixed plan (`src/core/ssh_auth_plan.c`; a saved password goes
   first when password is on offer, else keyboard-interactive does); each server prompt is
   shown one at a time with its text in a scrolling box (`src/core/ssh_kbd.c`,
@@ -382,7 +384,19 @@ Done, in order (details in the commit messages and the specs named):
   widened, with a `wintest` that measures every label at four scalings (99bea50). The
   maintainer tested v1.2.77 and v1.2.81 on Windows; v1.2.82 itself was not seen on screen
   before the merge.
-- 2026-11-12 retrospective (`docs/retrospectives/2026-11-12-fourteen-merges-retrospective.md`).
+- 2026-11-12 retrospective (PR #95, f842775;
+  `docs/retrospectives/2026-11-12-fourteen-merges-retrospective.md`).
+- Thinking row modes, v1.2.83 (PR #96, 1a03af5; spec
+  `2026-11-12-thinking-row-modes-design.md`): a Thinking row is collapsed, compact (the last
+  four lines of the text) or open, and a click cycles them. One global choice for every
+  row, saved in the config as `ai_thinking_mode` and replacing the session-wide
+  `IDC_CHAT_THINKING_OPENED/CLOSED` preference. Automatic, the default, is compact while
+  the reply streams and collapsed once it is idle; Settings has a "Thinking display" combo
+  (Automatic, Always collapsed, Always compact, Always open). The label colour follows the
+  mode (new theme tokens). The review fixes: the click works from an undocked panel, the
+  clicked row keeps its place on screen, compact ends at the last non-blank text. Gallery
+  states `thinking-compact` and `thinking-open`. Its Windows checks are in the first Open
+  item.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -396,28 +410,19 @@ Open, in priority order:
       Anthropic `cache_control` returning 200, sensitive cards at Read. #89: the spec's hand
       tests against `tests/manual/kbdint_server.py`. #92: the four-theme gallery judgement
       (Moss & Mist's deep-sage accent, the light-theme indicator greens). #93: the spec's
-      13-item checklist and `settings_help_tool_count`. #94: v1.2.82 on screen (title,
+      13-item checklist and `settings_help_tool_count` (83 tools since PR #96's combo). #94: v1.2.82 on screen (title,
       fold anchor, row heights after a scaling change), Retry, New Chat, undock and redock,
-      an error ending, `cls`/`Clear-Host` capture, `--ui-demo=tool`. All: `--ui-demo=all`
-      on the four themes and a `ui_gallery` run.
-- [ ] **Thinking row: three visual modes** (maintainer, 2026-11-12). Today the row is
-      either collapsed (one line) or open (the whole text). Add a compact mode that
-      shows only four lines of the streaming text at a time, and make a click on the
-      row cycle through the three: collapsed, compact, open. Decided the same day:
-      compact is the default while the text streams; once the reply is idle the row
-      sits fully collapsed; the row's label ("Thinking") changes colour with the
-      mode, from a pastel palette: compact green, collapsed brown, open grey (new
-      theme tokens, one set per theme; no literals in `src/ui`). A mode the user
-      clicks to always sticks, at idle and across restarts: it is one global choice
-      for every Thinking row, saved in the config, and it replaces the session-wide
-      preference from `IDC_CHAT_THINKING_OPENED/CLOSED`. Settings gets a control
-      that resets it to the defaults (compact while streaming, collapsed at idle).
-      In progress on `feat/thinking-row-modes`: spec
-      `docs/superpowers/specs/2026-11-12-thinking-row-modes-design.md`. Windows hand checks
-      still to run: the three modes on the four themes (`--ui-demo=thinking`,
+      an error ending, `cls`/`Clear-Host` capture, `--ui-demo=tool`. #96: the three modes on the four themes (`--ui-demo=thinking`,
       `thinking-compact`, `thinking-open`), a live reply under Automatic (compact, then
-      collapsed), the click cycle, the choice surviving a restart, Settings > Automatic
-      resetting it, and `settings_help_tool_count` at 83.
+      collapsed), the click cycle and the clicked row keeping its place, the choice
+      surviving a restart and an undock and redock, Settings > Automatic resetting it. All:
+      `--ui-demo=all` on the four themes and a `ui_gallery` run (19 states x 4 themes).
+- [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
+      under Automatic a click on a streaming row goes compact to open (the next mode in
+      the cycle), so hiding the text takes two clicks; Save under Automatic never includes
+      the reasoning, since the idle mode is collapsed (before PR #96, opening any row once
+      made Save include it). Both are as the spec decided; the maintainer says whether
+      either should change.
 - [ ] `run_command` follow-ups (PR #94): live rounds were run on Moonshot (Kimi) only;
       Anthropic and OpenAI (Automatic means On) are untested live, DeepSeek, Gemini and
       Custom stay Off until tried. Duplicate "session ended" rows (*reported*); the `[EXEC]`
@@ -438,6 +443,18 @@ Open, in priority order:
 - [ ] Terminal escapes (PR #94's nano work): CSI I, HTS and TBC unhandled; `term_put_char`
       auto-wrap inside a scroll region; entering the alternate screen resets the primary's
       scroll region (*reported*); replay vim, htop, mc and less against tmux as nano was.
+- [ ] Terminal attributes (found 2026-11-12 while checking this list): the parser keeps SGR
+      underline and blink (`TERM_ATTR_UNDERLINE`, `TERM_ATTR_BLINK`) but `renderer.c` draws
+      neither, though the in-app guide lists both styles; the OSC 0/2 window title is parsed
+      into `term->title` and nothing reads it, so it is never shown (a tab title or the
+      window caption could).
+- [ ] Dead code: `src/core/chat_thinking.[ch]` (the old Thinking-box timer state) is used
+      only by `tests/test_chat_thinking.c`; no file in `src/` includes it. Delete both with
+      the test, or use it.
+- [ ] Settings help text contradicts itself: the Search Engine tip in
+      `src/core/settings_help.c` says "Gemini and custom providers get no tools", while the
+      Provider and Commands as tool calls tips say they get them with Commands as tool calls
+      On. A `src/` change, so it waits for the next code PR.
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
@@ -481,8 +498,8 @@ Open, in priority order:
       the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
       combining marks and the reflow drop order in PR #76; middle-click now extends, so
       middle-button paste is off the list; the scrollback-size setting and lazy allocation
-      shipped in PR #93): Alt+drag block selection; mouse reporting to applications; the
-      per-byte paste writes over SSH.
+      shipped in PR #93): Alt+drag block selection; the per-byte paste writes over SSH
+      (mouse reporting to applications: see "Local shell follow-ups").
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
       the 100 ms throttle with its starved-timer check, DPI reorder, logging, the
@@ -493,10 +510,13 @@ Open, in priority order:
       (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
       v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are
       tab-switch cases; investigate together (tab B never reports its grid). Not run
-      since, as far as the log shows: PR #76's four gate cases, PR #81's telnet cases,
-      PR #93's `settings_help_tool_count`, and `ui_gallery` since the PR #92 token changes.
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.82, which adds telnet, the
-      password eye, keyboard-interactive auth, the tool gate and `run_command` since then.
+      since, as far as the log shows: PR #76's four gate cases, the telnet cases and
+      `settings_help_tool_count` (see their own items), `ui_gallery` since the PR #92 token
+      changes, and its states added since: `runlist` (PR #94), `thinking-compact` and
+      `thinking-open` (PR #96).
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.83, which adds telnet, the
+      password eye, keyboard-interactive auth, the tool gate, `run_command` and the Thinking
+      row modes since then.
       The first tag will also be the first run of `release.yml`'s `.sha256` step (PR #87).
       Tagging is the maintainer's call (`feature-workflow` step 10), best after the Windows
       checks in the first item.
@@ -524,7 +544,7 @@ Open, in priority order:
       (`window.c` size, `src/ui` logic that belongs in `src/core`; `ai_chat.c` was split
       in PR #86). The external code review of 2026-11-04 and PRs #85, #87, #88, #89 and
       #91 covered part of the AI command path, web_fetch and CI; start from what they
-      left. Findings ranked by severity, each answered in writing; folds in the open H3-H8
+      left. Findings ranked by severity, each answered in writing; folds in the open H7/H8
       items below. Known classifier holes to start from (PR #50 review, 2026-09-23):
       `env rm -rf /` and `echo $(rm ...)` are CRITICAL since PR #88; check
       `perl -e "unlink ..."` and backtick substitution; no PowerShell ruleset, so
@@ -540,6 +560,9 @@ Open, in priority order:
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
 - [ ] CI review follow-ups (2026-09-10 review; the libssh2 part was done 2026-09-24):
+      `tests/integration/Install-IntegrationRunner.ps1` still exists for the runner
+      decommissioned on 2026-09-15 and names the removed `integration.yml`; deleting it is
+      the maintainer's call;
       `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
       `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
@@ -548,8 +571,7 @@ Open, in priority order:
       test input. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
 - [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
-      settings), D (AI extras) — 31 cases planned; the suite has since grown to 79 cases
-      (74 in the README tables plus five telnet), so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
+      settings), D (AI extras) — 31 cases planned; the suite has since grown to 84 cases, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config

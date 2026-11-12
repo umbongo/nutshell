@@ -1,6 +1,6 @@
 # Retrospective, 2026-11-03: ten merges, telnet, and a branch nobody pushed
 
-**Status**: DRAFT until the maintainer reviews.
+**Status**: Reviewed (merged)
 **Covers**: merges into `main` after the 2026-10-19 marker `7960bd2` (PR #71) up to
 `94d7ae3` (PR #81): #73, #70, #72, #74, #75, #76, #77, #79, #80 and #81, 2026-10-20 to
 2026-11-03 (10 merges). No merges between 2026-10-21 and 2026-11-03.
@@ -42,7 +42,7 @@ All ten merged with all four checks green on the final head.
 
 **F1. Finished fixes have sat on an unpushed branch for thirteen days.** Worktree
 `~/nutshell-wt/tidy` holds `fix/sgr-codeql-tidy`: two commits from 2026-10-21 (e5a1229,
-359dbe0) on top of #77's merge. They fix the truncated-SGR leak and all six open CodeQL
+359dbe0) (rebased into PR #83, 723ee51) on top of #77's merge. They fix the truncated-SGR leak and all six open CodeQL
 alerts, including #22, `config_save` creating the config's temp file with a plain
 `fopen()` while it carries the encrypted secrets, with tests. They were never pushed,
 bumped or built, and they merge cleanly with `main` at 94d7ae3. The commits carry

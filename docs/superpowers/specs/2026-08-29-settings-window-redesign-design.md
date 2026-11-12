@@ -3,6 +3,7 @@
 **Date**: 2026-08-29
 **Branch**: `fixes`
 **Status**: Approved for implementation
+See also: 2026-09-07-design-system-foundation-design.md and the redesign notes (2026-09-06-ui-redesign-notes.md).
 
 ## Problem
 
