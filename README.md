@@ -7,9 +7,9 @@
 
 ## Overview
 
-Nutshell is a lightweight, AI-enabled, native C SSH client for Windows. It pairs a full-featured terminal with a built-in AI assistant that can read your terminal output, suggest commands, and execute them over SSH — with your approval at every step.
+Nutshell is a lightweight, AI-enabled, native C terminal for Windows that opens SSH, telnet and local shell sessions. It pairs a full-featured terminal with a built-in AI assistant that can read your terminal output, suggest commands, and run them in the session — with your approval at every step.
 
-Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~5.3 MB (UPX compressed).
+Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, or built natively under MSYS2. The release binary is ~5.3 MB (UPX compressed).
 
 ## AI Chat Assistant
 
@@ -30,19 +30,19 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 ## Features
 
 - AI chat assistant with terminal context, pending approval cards for command execution (never block the input, up to eight per session), a `run_command` tool as an alternative to `[EXEC]` markers, streaming, and a Thinking disclosure for reasoning
-- Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
+- Multi-tab sessions (SSH, telnet or local shell) with owner-drawn tab strip (status dots, log indicator, close button)
 - **Telnet** sessions for devices that only speak telnet, with auto-login at the login and password prompts, and port checks ([see below](#telnet))
 - **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
-- VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
+- VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys
 - Password, SSH key and keyboard-interactive authentication (one-time-password, PAM and TACACS-style prompts, shown one at a time), with a passphrase prompt, retry, and a hold-to-reveal eye on every password field
 - Windows DPAPI password encryption at rest, per-user (legacy AES-256-GCM configs migrate automatically)
 - TOFU host key verification (first-connect dialog, mismatch warning)
 - Dynamic PTY resize on window resize and zoom
 - Paste confirmation dialog with configurable inter-line delay
-- Session file logging with ANSI stripping and configurable strftime filenames
+- Session file logging with ANSI stripping and configurable strftime filenames, started per tab or for every session
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 4,029 unit tests across 150 test files, and cppcheck reports no errors or warnings
+- A native unit-test suite (`make test`), libFuzzer targets, and a cppcheck gate that reports no errors or warnings
 
 ---
 
@@ -93,18 +93,20 @@ Each tab shows a **status dot**:
 - Green = connected
 - Red = connection lost
 
-A **[L]** badge appears when session logging is active for that tab.
+Click a tab's status dot: on a connected tab it asks whether to disconnect; on a lost tab it reconnects with the saved profile. **File > Disconnect** does the same for the active tab.
+
+A **[L]** badge appears when session logging is active for that tab. Click it to start or stop the log for that tab.
 
 ### Terminal
 
 The terminal emulates a VT100/ANSI-compatible display. It supports:
 
 - **16, 256, and truecolor** (24-bit RGB) rendering
-- **Bold, dim, underline, blink, reverse video** text attributes
+- **Bold, dim, reverse video** text attributes (underline and blink are parsed but not drawn)
 - **Alternate screen buffer** (used by vim, nano, less, htop, etc.)
 - **Scroll regions** (DECSTBM — used by ncurses applications for smooth scrolling)
 - **Application cursor keys** mode (programs like vim switch arrow key sequences)
-- **OSC title** — programs can set the window/tab title via escape sequences
+- **OSC title** — accepted and stored, but not yet shown in the window or tab
 - **10,000-line scrollback** by default (configurable 100 to 50,000)
 
 #### Scrolling
@@ -125,7 +127,8 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 - **Releasing the mouse button** copies the selection to the clipboard, and the highlight stays; **Ctrl+Shift+C** or **Edit > Copy** copies it again (never sent to the shell). **Ctrl+C** always sends SIGINT to the shell, with or without a selection, as in PuTTY
 - **Edit > Select All** selects everything from the oldest line held to the last line with text, and copies it
 - **Confirm before pasting** (Settings > Terminal, on by default) shows a preview dialog before every paste, so you can review what's about to be sent. The **Paste** button has the focus, so **Enter** pastes; **Tab** moves to **Cancel** (Enter then cancels) and **Escape** cancels
-- **Paste delay**: an optional inter-line delay (0 to 5000 ms) can be set in Settings for servers that need time between lines
+- **Paste delay**: an optional inter-line delay (0 to 5000 ms) can be set in Settings for servers that need time between lines. It is skipped when the program has turned on bracketed paste, which sends the whole paste at once
+- **Control characters are stripped** from every paste: ESC, other C0 and C1 controls, DEL and bidi override characters. Tab, line feed and carriage return stay. The confirmation dialog shows each stripped character as a visible marker
 
 Every copy, paste and selection chord is in [Keyboard Shortcuts](#keyboard-shortcuts).
 
@@ -136,6 +139,33 @@ Most keys reach the shell the way xterm sends them, so remote-side editing and p
 ### Zoom
 
 Zoom the terminal font in discrete steps (6, 8, 10, 12, 14, 16, 18, 20 pt) with the zoom chords or Ctrl+mouse wheel listed in [Keyboard Shortcuts](#keyboard-shortcuts). Zoom changes trigger an automatic PTY resize so the remote shell adapts to the new column/row count.
+
+### Command Line
+
+```
+nutshell.exe [option]
+```
+
+Only one option may be given at a time, except `--theme`, which goes with `--ui-demo`.
+
+| Option | Effect |
+|--------|--------|
+| `-sn`, `--session-name <name>` | Connect to the saved session with this name |
+| `-h`, `--host <host>` | Connect to the saved session with this host |
+| `-nc`, `--no-connect` | Start without auto-connecting (and without opening the Session Manager at startup) |
+| `--local` | Open a local shell instead of connecting by SSH |
+| `-l`, `--list` | List saved sessions and exit |
+| `-v`, `--version` | Show the version and exit |
+| `-?`, `--help` | Show the usage text and exit |
+| `--ui-demo[=<state>]` | Open a demo window in a panel state (default `all`) with no SSH session or API key; see [Design system](#design-system) |
+| `--theme <name>` | With `--ui-demo` only: the colour scheme to show |
+
+### Menus
+
+- **File**: New Session, Close Tab, Session Manager..., Disconnect, Start Logging, Stop Logging, Save AI Chat..., Exit
+- **Edit**: Copy, Paste, Select All, Send Key, Settings...
+- **View**: AI Assist, Undock AI Assist, Fullscreen
+- **Help**: Keyboard Shortcuts..., User Guide, Mark Issue, Open Debug Log Folder, About
 
 ### Settings
 
@@ -172,45 +202,53 @@ scrolls if you shrink it below the content.
 - **Log directory** — where log files are saved (default: same directory as the executable)
 - **Log name format** — strftime format string for log filenames (e.g. `%Y-%m-%d_%H-%M-%S`)
 
-Logging itself is started and stopped from **File > Start/Stop Logging**, not here.
+There is no on/off switch here. Start or stop logging for one tab with **File > Start Logging** / **Stop Logging** or the tab's **[L]** button. To log every session from connect, set `"logging_enabled": true` in `nutshell.config`.
 
 #### Debugging
-- **Debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, its per-category levels, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log)
+- **Enable debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log). Off by default; with it off only errors and warnings are written
+- **Levels per category** — Rendering, Terminal, AI, SSH, Shell and General, each Off, Errors, Info, Debug or Trace (default: Info)
+- **Keep recent detail for issue marks** — keeps the last few minutes of detail in a 4 MB memory buffer, at its own level (default: on, at Trace), and writes it to a file when you mark an issue
+- **Save a screenshot with each issue mark** and **Include terminal content** — both off by default
+- **Log folder** — default `logs` beside the exe; **Browse** and **Open** buttons
+- **Max file size** — 1 to 100 MB (default: 10); a full file is closed and a new one started
+- **Keep at most** — 5 to 5,000 MB for the folder (default: 50); the oldest files are deleted first
 
 #### Connection > SSH
-- **Idle timeout** — disconnect after this many minutes with no user activity; 0 never disconnects. Keystrokes, mouse-wheel scrolling, tab switches and AI chat input all count as activity.
+- **Idle timeout** — disconnect an SSH tab after this many minutes with no user activity, 0 to 10,080 (one week); 0 never disconnects (default). Local shell and telnet tabs are never disconnected by it. Keystrokes, mouse-wheel scrolling, tab switches and AI chat input all count as activity.
 
 #### Connection > Startup
-- **Open Session Manager at startup** — show the Session Manager as soon as Nutshell launches (default: off). Ignored when auto-connect fires, and suppressed by `-nc`.
+- **Open Session Manager at startup** — show the Session Manager as soon as Nutshell launches (default: off). Ignored when auto-connect fires, and suppressed by `-nc`, by naming a session on the command line (`-sn`, `-h`) and by `--local`.
 - **Auto-connect at startup** — connect to a saved session as soon as Nutshell launches
 - **Session** — which saved session to open. Command-line options override this; start with `-nc` to skip auto-connect once.
 
 #### AI Assistant > Provider
 - **Provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or Custom
 - **API key** — encrypted at rest with Windows DPAPI, per Windows user (same protection as saved passwords)
-- **Model** — type one, or press the refresh button to fetch the provider's model list
+- **Model** — type one, or press the refresh button to fetch the provider's model list. Left empty, each provider uses its own default model; the Custom provider has none, so type the name your server expects
 - **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
 - **Commands as tool calls** — Automatic (default), On or Off: how the assistant runs terminal commands, through its `run_command` tool or through `[EXEC]` markers. Automatic is On for Anthropic, OpenAI and Moonshot and Off for DeepSeek, Gemini and Custom; see [Commands as Tool Calls](#commands-as-tool-calls)
 
 #### AI Assistant > Behaviour
 - **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens. It can read no more than the tab keeps, which is Scrollback lines plus the rows on screen.
-- **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
+- **System instructions** — global instructions included in every AI conversation (a session's AI Notes are sent after them and add detail for one server)
 - **Thinking display** — how the Thinking row of a reply shows the model's reasoning: Automatic (default; compact while a reply streams, collapsed once it has finished), Always collapsed, Always compact (the last four lines) or Always open (all of it). Clicking a Thinking row in the chat cycles the same choice and saves it; Automatic is the reset; see [Thought Process](#thought-process)
 - **Render AI markdown** — format AI replies as markdown; turn off to see raw text. Headings, list/blockquote markers, and table header text pick up the theme's link hue, and code (inline and fenced) picks up the theme's info hue, so the structure of a reply reads at a glance
+- **Tool approval timeout** — how long a tool approval card waits before it expires: 15 to 3,600 seconds, 0 to wait until you answer (default: 60). See [Tool Calls](#tool-calls)
+- **Automatic tool rounds** — how many rounds in a row a tool call may run without asking while Auto-approve covers it, 1 to 20 (default: 3). See [Tool Calls](#tool-calls)
 - **Allowed** — the highest level a new session may run: Read / Unknown / Write / Critical (default: Read). Commands above it are blocked outright and show as held; commands at or below it ask first unless Auto-approve is on.
 - **Auto-approve by default** — start new sessions with Auto-approve on, so commands up to **Allowed** run without asking (default: off). With **Allowed** at Critical, Save asks you to confirm. The AI panel's status line changes both per session.
 
 #### AI Assistant > Web Access
-- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call. Whether a fetch asks first depends on Auto-approve (see [Tool Calls](#tool-calls)). With it off the AI is not offered the tool; if it calls `web_fetch` anyway, no card appears, a status row under the reply says "web_fetch is off: turn on Permit Web Fetch in Settings > AI Assistant > Web Access to allow it", and the AI is told the call was not run
-- **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
+- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call (default: off). Whether a fetch asks first depends on Auto-approve (see [Tool Calls](#tool-calls)). With it off the AI is not offered the tool; if it calls `web_fetch` anyway, no card appears, a status row under the reply says "web_fetch is off: turn on Permit Web Fetch in Settings > AI Assistant > Web Access to allow it", and the AI is told the call was not run
+- **Search engine** — None, DuckDuckGo (API) (default), DuckDuckGo (HTML), or Custom
 - **Search URL** — shown only for the Custom search engine
-- **Max results** — search results returned to the AI per query (1 to 20)
+- **Max results** — search results returned to the AI per query (1 to 20; default: 7)
 
 ### AI Chat Assistant
 
 Click the **AI** button in the tab strip (or press **Ctrl+Shift+Space**, or use View > AI Assist) to open the panel. The button is green when an API key is configured, grey otherwise — either way the panel opens; it just shows one of the [empty states](#empty-no-key-and-no-session-states) below when there's nothing to display yet.
 
-The AI assistant can see the recent history of your terminal output (1,000 lines by default, configurable up to 50,000) and execute commands over SSH. Each tab maintains its own independent conversation history.
+The AI assistant can see the recent history of your terminal output (1,000 lines by default, configurable up to 50,000) and run commands in the session. Each tab maintains its own independent conversation history.
 
 #### Header
 
@@ -295,6 +333,8 @@ runs it without asking. The four categories are the four stops on the policy sca
 the scale, one above Read: with the ceiling at **Read**, an unrecognised command is held back,
 because nothing proved it read-only.
 
+**A local shell is classified by its kind.** PowerShell and cmd sessions (and a custom command Nutshell does not recognise as bash) are locked to the strictest ruleset, the one an unresolved platform uses. A local bash (Git for Windows or MSYS2) uses the Linux rules.
+
 **Classification is per-device.** A profile's **Platform** decides which ruleset applies, since
 the same word means different things on different systems — `reload` reboots a Cisco switch,
 `commit` applies a firewall policy on PAN-OS and Junos, `undo` removes configuration on Comware.
@@ -332,14 +372,14 @@ The panel always opens, even with nothing to show yet — there's no longer a di
 
 Each saved session profile has an **AI Notes** field in the session manager. These notes are included in the AI's system prompt for that session, giving it context about the server (e.g. "This is the production database server, be cautious with write operations").
 
-Global **System Notes** in Settings are included in every conversation across all sessions.
+Global **System instructions** (Settings > AI Assistant > Behaviour) are included in every conversation across all sessions. A session's AI Notes are sent after them, under "About this server:", so they add detail for one server.
 
 ### Session Logging
 
-When enabled in Settings, each connected session writes a log file with ANSI escape codes stripped (plain text only).
+A session writes a log file with ANSI escape codes stripped (plain text only). Start it for one tab with **File > Start Logging** (stop with **Stop Logging**) or by clicking the tab's **[L]** button. Setting `"logging_enabled": true` in `nutshell.config` starts a log for every session as it connects; Settings has no control for it.
 
 - Log files are named `<Log Name Format>_<name>.log` under the configured Log Directory — `<name>` is the session's profile name, falling back to its host. Log Name Format is a strftime format string (default: `%Y-%m-%d_%H-%M-%S`, e.g. `2026-09-07_14-30-00_myserver.log`). An empty or invalid format falls back to the default.
-- The **[L]** badge on a tab indicates active logging
+- The **[L]** badge on a tab indicates active logging; click it to start or stop the log for that tab
 - Logging status is also shown in tab tooltips
 
 ### Analysing an issue with AI
@@ -362,7 +402,7 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 - **Threat model** — what Nutshell assumes and what it does not protect against:
   - The remote host and everything it prints are untrusted. Terminal output can carry text meant to steer the AI, which is why every command is classified and, unless you turn on Auto-approve, waits for your click.
   - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log, fetched pages and, with **Commands as tool calls** On, the output of every command it runs (up to 16 KiB each). Keep secrets off the screen while AI Assist is in use.
-  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. A fetch runs unasked only with Auto-approve on at Unknown or above, in the tab you are looking at and within the automatic-tool-round cap (Settings > AI Assistant > Behaviour, default 3); otherwise (Auto-approve off or at Read, a background tab, or past the cap) it waits for your click on a card. The query string is one channel for that text, and the card row hides it, but the path and a subdomain carry data too: reading the card, and **Details** for the address (non-ASCII and control characters escaped, a very long one cut with `…`), is the check, not the row's shape. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
+  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. A fetch runs unasked only with Auto-approve on at Unknown or above, in the tab you are looking at and within the automatic-tool-round cap (Settings > AI Assistant > Behaviour, default 3); otherwise (Auto-approve off or at Read, a background tab, or past the cap) it waits for your click on a card. The query string is one channel for that text, and the card row hides it, but the path and a subdomain carry data too: reading the card, and **Details** for the address (non-ASCII and control characters escaped, a very long one cut with `…`), is the check, not the row's shape. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused; the shared range 100.64.0.0/10 and multicast are not. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
   - A local shell runs with your Windows privileges, and so does anything the assistant runs in it.
   - `nutshell.config` kept in a shared folder exposes its non-secret fields (hosts, usernames, settings) to everyone who can read it. The secrets stay DPAPI-locked.
 
@@ -468,7 +508,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 Nutshell can open a shell **on the machine it is running on**, with no SSH
 host involved: the same window, the same terminal, the same AI assistant,
-driving a bash on your own PC. Start one with
+driving a shell on your own PC (PowerShell by default). Start one with
 
 ```
 nutshell.exe --local
@@ -478,7 +518,8 @@ or pick **Local shell** in the Session Manager's **Type** dropdown and press
 Connect. A saved profile named "Local shell" is added at the top of the
 session list the first time this version starts, so it is also available as
 an autoconnect target or as `-sn "Local shell"`. It is an ordinary profile:
-rename it, edit it or delete it like any other.
+rename it or edit it like any other. Nutshell adds it again at every start when no
+local profile exists, so deleting it lasts only until the next start.
 
 ### Which shell it runs
 
@@ -535,7 +576,7 @@ way; set them with that in mind.
 
 The profile's `kind` and `shell` keys are new in v1.2.1. Opening the same
 `nutshell.config` with v1.1.x or earlier and saving will **drop them**, which
-turns a local profile back into an empty SSH one. Keep a copy of the config
+turns a local profile back into an empty SSH one. A telnet profile becomes an SSH profile the same way. Keep a copy of the config
 if you need to move between versions.
 
 ## Telnet
@@ -623,6 +664,8 @@ telnet tabs.
 
 ## Directory Structure
 
+Selected files by area, not a full listing.
+
 ```
 .
 ├── src/
@@ -649,28 +692,33 @@ telnet tabs.
 │   │   ├── chat_copy.c/.h             #   Visible text of an AI-panel selection (what Ctrl+C copies)
 │   │   ├── chat_exec.c/.h             #   [EXEC] segment split of an AI reply, shared by painter and copier
 │   │   ├── chat_msg.c/.h              #   Chat message list with secure wipe
-│   │   ├── chat_thinking.c/.h         #   Thinking/reasoning display state
 │   │   ├── cheatsheet_layout.c/.h     #   Keyboard shortcuts sheet layout (columns, scroll, placement; pure)
-│   │   ├── cli_args.c/.h              #   Command-line flag parsing (--ui-demo, --theme, -sn/-h/-nc/-l/-v/-?)
+│   │   ├── cli_args.c/.h              #   Command-line flag parsing (--local, --ui-demo, --theme, -sn/-h/-nc/-l/-v/-?)
 │   │   ├── cmd_batch.c/.h             #   Set of pending command-approval batches per AI session (up to 8)
 │   │   ├── cmd_classify.c/.h          #   Command safety classification (Linux, Cisco, HP, Aruba, PAN-OS, Junos, FortiOS, VyOS, RouterOS)
 │   │   ├── cmd_detect.c/.h            #   Device-platform detection from the login banner and prompt
+│   │   ├── cmd_policy.c/.h            #   Allowed level and Auto-approve policy per session
 │   │   ├── connect_anim.c/.h          #   Connection animation dots
 │   │   ├── display_buffer.c/.h        #   Display invalidation tracking
+│   │   ├── dlog*.c/.h                 #   Runtime debug log: categories, levels, issue marks, rotation, queries
 │   │   ├── edit_scroll.c/.h           #   Scroll math for text editors
 │   │   ├── html_util.c/.h             #   HTML tag stripping for web-fetch/search tool results
 │   │   ├── json_validate.c/.h         #   JSON string escaping for AI request bodies
+│   │   ├── key_encode.c/.h            #   Keystroke to xterm byte sequences
+│   │   ├── local_shell.c/.h           #   Local shell resolver and command line (pure; probes injected)
 │   │   ├── log_format.c/.h            #   Log filename formatting (strftime)
-│   │   ├── logger.c/.h                #   File and stderr logging
 │   │   ├── markdown.h                 #   Header-only markdown line classifier and inline parser
 │   │   ├── md_table.c/.h              #   Markdown table parsing/column layout (pure; src/ui/md_render.c paints them)
+│   │   ├── net_guard.c/.h             #   Web-fetch address policy and strict URL parser
 │   │   ├── ns_hover.c/.h              #   Hover/hot-state tracker for painted controls
 │   │   ├── ns_layout.c/.h             #   Pure layout geometry (buttons, cards, approval card + hit-test)
 │   │   ├── ns_motion.c/.h             #   Easing curves and animation progress (one timer, all panels)
 │   │   ├── ns_scale.c/.h              #   The one DPI-scaling helper (round-half-up, base 96)
 │   │   ├── ns_type.c/.h               #   Spacing grid, radii, strokes, type ramp, font-slot key
+│   │   ├── paste_filter.c/.h          #   Control-character stripping for pastes
 │   │   ├── paste_preview.c/.h         #   Paste preview with size constraints
 │   │   ├── pw_prompt_layout.c/.h      #   Geometry of the modal secret prompt (optional server-text box, label, field, save tick, buttons)
+│   │   ├── run_command.c/.h           #   The run_command tool: parsing and result shaping
 │   │   ├── secure_zero.h              #   Volatile memset for secrets
 │   │   ├── selection.c/.h             #   Text selection (buffer-absolute: drag, word/line, staleness, copy)
 │   │   ├── settings_layout.c/.h    #   Settings window layout (pages, panes, rows)
@@ -683,8 +731,10 @@ telnet tabs.
 │   │   ├── stick_scroll.c/.h          #   Stick-to-bottom / smart-scroll decision logic for the chat list and terminal
 │   │   ├── string_utils.c/.h          #   String helpers, ANSI stripping, UTF-8
 │   │   ├── tab_manager.c/.h           #   Tab data model
+│   │   ├── telnet_*.c/.h              #   Telnet protocol, auto-login, session and status text (pure)
 │   │   ├── term_extract.c/.h          #   Terminal text extraction
 │   │   ├── text_lines.c/.h            #   LF <-> CR LF for the message box
+│   │   ├── thinking_mode.c/.h         #   The Thinking row's modes and the Automatic rule
 │   │   ├── text_runs.c/.h             #   Painted word geometry and the hit-test behind chat selection
 │   │   ├── theme.c/.h                 #   Color calculations (luminance, bg detection, per-role contrast)
 │   │   ├── tooltip.c/.h               #   Connection tooltip formatting
@@ -699,14 +749,15 @@ telnet tabs.
 │   ├── term/                           # Terminal emulator & SSH
 │   │   ├── buffer.c                   #   Ring buffer management (scrollback, resize, reflow)
 │   │   ├── parser.c                   #   VT100/ANSI escape sequence parser
+│   │   ├── session_io.h               #   Transport-neutral session I/O (SSH, telnet, local)
 │   │   ├── term.c/.h                  #   Terminal structs, init, dirty tracking
 │   │   ├── ssh_session.c/.h           #   SSH session lifecycle (connect, auth, disconnect)
 │   │   ├── ssh_channel.c/.h           #   SSH channel I/O with timeout
 │   │   ├── ssh_pty.c/.h              #   PTY allocation and resize
 │   │   └── knownhosts.c/.h           #   TOFU host key verification
 │   └── ui/                             # Win32 UI (excluded from test builds)
-│       ├── window.c                   #   Main window, menu, layout (108 KB)
-│       ├── ai_chat.c/.h              #   AI chat panel: window class, WndProc, public API (117 KB)
+│       ├── window.c                   #   Main window, menu, layout
+│       ├── ai_chat.c/.h              #   AI chat panel: window class, WndProc, public API
 │       ├── ai_chat_internal.h        #   Types, constants and prototypes shared by the ai_chat files
 │       ├── ai_chat_stream.c          #   SSE stream parser and background stream thread
 │       ├── ai_chat_input.c           #   Message box subclass, text and image paste, scroll sync
@@ -717,6 +768,12 @@ telnet tabs.
 │       ├── ai_http_win.c             #   WinHTTP streaming implementation
 │       ├── chat_listview.c/.h        #   Chat message rendering, sticky scroll
 │       ├── md_render.c/.h             #   Markdown and plain-text layout for the AI panel (records runs, draws the selection)
+│       ├── clipboard.c/.h            #   Clipboard text and image access
+│       ├── cmd_detail_dlg.c/.h       #   Command Details dialog for approval cards
+│       ├── local_pty.c/.h            #   ConPTY backend for local shells
+│       ├── pw_prompt.c/.h            #   Modal password and keyboard-interactive prompt
+│       ├── pw_reveal.c/.h            #   Hold-to-reveal eye on password fields
+│       ├── telnet_io.c/.h            #   Telnet socket backend
 │       ├── session_manager.c/.h       #   Session manager dialog
 │       ├── settings.c, settings_dlg.h #   Settings dialog (paged, resizable)
 │       ├── tabs.c/.h                  #   Double-buffered tab strip widget
@@ -736,13 +793,17 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 4,029 unit tests across 150 test files
+├── tests/                              # Native unit tests (make test), Win32 tests (make wintest)
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion
+│   ├── fuzz/                           #   libFuzzer targets and seed corpora (make fuzz)
+│   ├── integration/                    #   PowerShell harness that drives nutshell.exe against a live host (manual)
 │   ├── manual/                         #   Hand tools, never run by make test (paramiko keyboard-interactive server)
 │   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
+├── docs/                               # Specs, retrospectives, audit tags
+├── .github/                            # Workflows (checks, quality, CodeQL, release) and scripts
 ├── images/                             # Application icon and assets
 ├── CLAUDE.md                           # AI assistant project conventions
 ├── LICENSE
@@ -786,16 +847,16 @@ make clean && make release
 
 ### Targets
 
-Always clean before building to ensure a full rebuild. Use plain `make` only if you need an uncompressed binary for debugging.
+Always clean before building to ensure a full rebuild.
 
 | Command | Purpose |
 |---------|---------|
 | `make clean && make release` | **Recommended** — optimised + UPX compressed (~5.3 MB) |
-| `make` | Uncompressed build (~9.7 MB), useful for debugging |
+| `make` | The same `-Os -flto` stripped build as `release`, without the UPX step. It is not a debug build: there is no debug target and the exe has no symbols |
 | `make test` | Run unit tests natively on the build host |
 | `make -j test` | The same, incremental and parallel (one object per source under `build/test`) |
 | `make test SAN=1` | The suite under AddressSanitizer, UBSan and LeakSanitizer (`build/test-san`, Linux only); ASan and LeakSanitizer fail the run, UBSan reports (`runtime error:`) print but do not, so grep the output; the `Sanitizers` check fails on any report |
-| `make wintest` | Win32 icon-renderer tests (runs directly on Windows, under Wine on Linux) |
+| `make wintest` | The Win32-only tests (icons, the ConPTY local shell, the chat painter and selection, the debug log, the parser and buffer, and others), run directly on Windows or under Wine on Linux |
 | `make lint` | Static analysis with cppcheck |
 | `make lint-gate` | The cppcheck gate the `Lint` check runs |
 | `make fuzz` / `make fuzz-run` / `make fuzz-long` | Build the libFuzzer targets; replay their seed corpora (what the `Fuzz` check runs); fuzz each target for `FUZZ_TIME` seconds (default 60; the weekly run) |
@@ -807,7 +868,7 @@ Always clean before building to ensure a full rebuild. Use plain `make` only if 
 
 To run Dr. Memory on the Windows release build:
 
-1.  Build the executable: `make`
+1.  Build the executable: `make`. The exe is stripped and there is no debug build target, so Dr. Memory reports addresses without symbols.
 2.  Transfer `build/win/nutshell.exe` to a Windows machine.
 3.  Run with Dr. Memory:
     ```cmd
@@ -820,7 +881,7 @@ To run Dr. Memory on the Windows release build:
 2.  **Memory Management**: Strict `malloc`/`free` discipline. Use `xmalloc` from `src/core/` — it aborts on OOM so callers treat the return as unconditionally valid.
 3.  **TDD**: Create a test file in `tests/` before writing code in `src/`.
 4.  **Static Analysis**: Run `make lint` before committing; it must report no errors or warnings. cppcheck enforces `constVariablePointer` — declare pointers as `const T *` whenever the pointee is not mutated.
-5.  **No format-string vulnerabilities**: `log_write()` takes a pre-formatted `const char *`. Use `snprintf` at the call site.
+5.  **No format-string vulnerabilities**: `DLOG()` takes a literal format string. Never pass text from the host, the user or the AI as the format.
 6.  **String copying**: Always use `snprintf(dst, sizeof(dst), "%s", src)`. Never use `strcpy` or `strncpy`.
 7.  **Secrets**: Use `secure_zero()` from `src/core/secure_zero.h` to wipe passwords and keys. Never use plain `memset` for sensitive data.
 
