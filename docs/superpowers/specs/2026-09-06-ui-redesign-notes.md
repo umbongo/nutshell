@@ -535,9 +535,14 @@ Open, in priority order:
       row cycle through the three: collapsed, compact, open. Decided the same day:
       compact is the default while the text streams; once the reply is idle the row
       sits fully collapsed; the row's label ("Thinking") changes colour with the
-      mode. Needs a short spec first (which colour token for each mode, how the
-      session-wide preference from `IDC_CHAT_THINKING_OPENED/CLOSED` maps onto three
-      states, whether a mode the user clicked to survives the collapse at idle).
+      mode, from a pastel palette: green, brown, grey (new theme tokens, one set per
+      theme; no literals in `src/ui`). A mode the user clicks to always sticks, at
+      idle and across restarts (so it is saved in the config), and Settings gets a
+      control that resets it to the defaults. Needs a short spec first: which of the
+      three colours goes with which mode (the maintainer gave them in the order
+      green, brown, grey), how the existing session-wide preference from
+      `IDC_CHAT_THINKING_OPENED/CLOSED` is replaced by the saved choice, and whether
+      the choice is one global value or kept per row until restart.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
