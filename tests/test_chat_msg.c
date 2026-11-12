@@ -1593,3 +1593,261 @@ int test_chat_batch_items_run_state_and_note(void) {
     cmd_batch_set_free(&set);
     TEST_END();
 }
+
+/* --- Folding a finished command card to one row ------------------------- */
+
+static ChatBatchCounts fold_counts(int ran, int running, int unfinished,
+                                   int queued, int awaiting, int held,
+                                   int not_run, int denied, int skipped,
+                                   int quoted, int decided)
+{
+    ChatBatchCounts c;
+    memset(&c, 0, sizeof(c));
+    c.ran = ran; c.running = running; c.unfinished = unfinished;
+    c.queued = queued; c.awaiting = awaiting; c.held = held;
+    c.not_run = not_run; c.denied = denied; c.skipped = skipped;
+    c.quoted = quoted; c.decided = decided;
+    c.n = ran + running + unfinished + queued + awaiting + held + not_run +
+          denied + skipped + quoted;
+    return c;
+}
+
+int test_chat_batch_is_final_states(void) {
+    TEST_BEGIN();
+    /* ran + denied + not run, all left the card: final */
+    ChatBatchCounts c = fold_counts(1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 3);
+    ASSERT_EQ(chat_batch_is_final(&c), 1);
+    /* one command, ran */
+    c = fold_counts(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+    ASSERT_EQ(chat_batch_is_final(&c), 1);
+    /* one row still on the card (decided < n) */
+    c = fold_counts(2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2);
+    ASSERT_EQ(chat_batch_is_final(&c), 0);
+    /* running, queued: not final even when every row is settled */
+    c = fold_counts(1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2);
+    ASSERT_EQ(chat_batch_is_final(&c), 0);
+    c = fold_counts(1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2);
+    ASSERT_EQ(chat_batch_is_final(&c), 0);
+    /* nothing at all, NULL */
+    c = fold_counts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    ASSERT_EQ(chat_batch_is_final(&c), 0);
+    ASSERT_EQ(chat_batch_is_final(NULL), 0);
+    TEST_END();
+}
+
+int test_chat_batch_fold_text_plural_singular(void) {
+    TEST_BEGIN();
+    char label[32], sum[96];
+    int warn = -1;
+    ChatBatchCounts c = fold_counts(3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3);
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum),
+                                   &warn), 1);
+    ASSERT_STR_EQ(label, "3 commands");
+    ASSERT_STR_EQ(sum, "\xC2\xB7 3 ran");
+    ASSERT_EQ(warn, 0);
+
+    c = fold_counts(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum),
+                                   NULL), 1);
+    ASSERT_STR_EQ(label, "1 command");
+    ASSERT_STR_EQ(sum, "\xC2\xB7 1 ran");
+
+    c = fold_counts(1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 4);
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum),
+                                   &warn), 1);
+    ASSERT_STR_EQ(label, "4 commands");
+    ASSERT_STR_EQ(sum, "\xC2\xB7 1 ran, 1 unfinished, 2 not run");
+    TEST_END();
+}
+
+int test_chat_batch_fold_text_warn(void) {
+    TEST_BEGIN();
+    char label[32], sum[96];
+    int warn = 0;
+    /* unfinished, not run, held each warn */
+    ChatBatchCounts c = fold_counts(1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2);
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum), &warn), 1);
+    ASSERT_EQ(warn, 1);
+    c = fold_counts(1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2);
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum), &warn), 1);
+    ASSERT_EQ(warn, 1);
+    c = fold_counts(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+    c.decided = 2;   /* a settled held row */
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum), &warn), 1);
+    ASSERT_EQ(warn, 1);
+    /* ran and denied alone do not */
+    c = fold_counts(2, 0, 0, 0, 0, 0, 0, 1, 0, 0, 3);
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum), &warn), 1);
+    ASSERT_EQ(warn, 0);
+    ASSERT_STR_EQ(sum, "\xC2\xB7 2 ran, 1 denied");
+    TEST_END();
+}
+
+int test_chat_batch_fold_text_not_final_or_small_cap(void) {
+    TEST_BEGIN();
+    char label[32], sum[96];
+    ChatBatchCounts c = fold_counts(1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2);
+    strcpy(label, "x"); strcpy(sum, "x");
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), sum, sizeof(sum), NULL), 0);
+    ASSERT_STR_EQ(label, "");
+    ASSERT_STR_EQ(sum, "");
+
+    c = fold_counts(3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3);
+    char tiny[5];
+    strcpy(label, "x"); strcpy(sum, "x");
+    ASSERT_EQ(chat_batch_fold_text(&c, tiny, sizeof(tiny), sum, sizeof(sum), NULL), 0);
+    ASSERT_STR_EQ(tiny, "");
+    ASSERT_STR_EQ(sum, "");
+    strcpy(label, "x");
+    ASSERT_EQ(chat_batch_fold_text(&c, label, sizeof(label), tiny, sizeof(tiny), NULL), 0);
+    ASSERT_STR_EQ(label, "");
+    ASSERT_STR_EQ(tiny, "");
+    ASSERT_EQ(chat_batch_fold_text(&c, NULL, 0, sum, sizeof(sum), NULL), 0);
+    ASSERT_EQ(chat_batch_fold_text(NULL, label, sizeof(label), sum, sizeof(sum), NULL), 0);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_closes_final_group(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 4, 1, 0, 0, CHAT_RUN_DONE,    1);
+    ChatMsgItem *b = add_row(&list, 4, 0, 0, 0, CHAT_RUN_NONE,    1);
+    ChatMsgItem *c = add_row(&list, 4, 1, 0, 0, CHAT_RUN_ABORTED, 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 3);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_CLOSED);
+    ASSERT_EQ(a->u.cmd.fold_hidden, 0);
+    ASSERT_EQ(b->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 1);
+    ASSERT_EQ(c->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(c->u.cmd.fold_hidden, 1);
+    /* a second call changes nothing */
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_single_command_folds(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 7, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 1);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_CLOSED);
+    ASSERT_EQ(a->u.cmd.fold_hidden, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_pending_stays_whole(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    /* a settled ran row, one still on the card, one running, one queued */
+    ChatMsgItem *r0 = add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE,    1);
+    ChatMsgItem *r1 = add_row(&list, 3, -1, 0, 0, CHAT_RUN_NONE,   0);
+    ChatMsgItem *r2 = add_row(&list, 3, 1, 0, 0, CHAT_RUN_RUNNING, 1);
+    ChatMsgItem *r3 = add_row(&list, 3, 1, 0, 0, CHAT_RUN_NONE,    1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    ChatMsgItem *rows[4] = { r0, r1, r2, r3 };
+    for (int i = 0; i < 4; i++) {
+        ASSERT_EQ(rows[i]->u.cmd.fold, CHAT_FOLD_NONE);
+        ASSERT_EQ(rows[i]->u.cmd.fold_hidden, 0);
+    }
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_unfolds_when_work_returns(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b = add_row(&list, 3, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 2);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 1);
+    b->u.cmd.run = CHAT_RUN_RUNNING;
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 2);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_open_choice(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = add_row(&list, 2, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b = add_row(&list, 2, 1, 0, 0, CHAT_RUN_DONE, 1);
+    chat_msg_fold_refresh(&list);
+    ASSERT_EQ(chat_msg_fold_toggle(a), 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 2);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_OPEN);
+    ASSERT_EQ(a->u.cmd.fold_hidden, 0);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 0);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    /* a second toggle folds again */
+    ASSERT_EQ(chat_msg_fold_toggle(a), 0);
+    chat_msg_fold_refresh(&list);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_CLOSED);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 1);
+    /* a toggle on a row that heads no fold does nothing */
+    ASSERT_EQ(chat_msg_fold_toggle(b), 0);
+    ASSERT_EQ(b->u.cmd.fold_open, 0);
+    ASSERT_EQ(chat_msg_fold_toggle(NULL), 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_skips_tools_and_batch_zero(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *z = add_row(&list, 0, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *t = add_row(&list, 6, 1, 0, 0, CHAT_RUN_DONE, 1);
+    chat_msg_set_tool(t, 1);
+    ChatMsgItem *m1 = add_row(&list, 8, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *m2 = add_row(&list, 8, 1, 0, 0, CHAT_RUN_DONE, 1);
+    chat_msg_set_tool(m2, 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    ASSERT_EQ(z->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(t->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(m1->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(m2->u.cmd.fold_hidden, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_adjacent_batches_separate(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a1 = add_row(&list, 1, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *a2 = add_row(&list, 1, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b1 = add_row(&list, 2, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ChatMsgItem *b2 = add_row(&list, 2, 1, 0, 0, CHAT_RUN_RUNNING, 1);
+    chat_msg_fold_refresh(&list);
+    ASSERT_EQ(a1->u.cmd.fold, CHAT_FOLD_CLOSED);
+    ASSERT_EQ(a2->u.cmd.fold_hidden, 1);
+    ASSERT_EQ(b1->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(b1->u.cmd.fold_hidden, 0);
+    ASSERT_EQ(b2->u.cmd.fold_hidden, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_fold_refresh_split_batch_stays_whole(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    /* a batch's rows with prose between them are not one group: never fold */
+    ChatMsgItem *a = add_row(&list, 5, 1, 0, 0, CHAT_RUN_DONE, 1);
+    chat_msg_append(&list, CHAT_ITEM_STATUS, "between");
+    ChatMsgItem *b = add_row(&list, 5, 1, 0, 0, CHAT_RUN_DONE, 1);
+    ASSERT_EQ(chat_msg_fold_refresh(&list), 0);
+    ASSERT_EQ(a->u.cmd.fold, CHAT_FOLD_NONE);
+    ASSERT_EQ(b->u.cmd.fold_hidden, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}

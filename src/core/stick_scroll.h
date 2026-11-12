@@ -34,6 +34,17 @@ int stick_scroll_after_user(int scroll_y, int max_scroll);
  * otherwise scroll_y clamped to [0, max(max_scroll, 0)]. */
 int stick_scroll_on_layout(int stick, int scroll_y, int max_scroll);
 
+/* Called after a layout change that moved or resized the first visible
+ * item (a command card folding to one row, say). stick is the
+ * stick_to_bottom bit; scroll_y the position before; old_top and new_top the
+ * item's top in content coordinates before and after; new_h its height now.
+ * Pinned: scroll_y unchanged (stick_scroll_on_layout() follows the bottom).
+ * Not pinned: the view keeps the same offset into that item, clamped to its
+ * last pixel (new_h - 1), so what the reader looks at stays put when content
+ * above it shrinks. Never negative. */
+int stick_scroll_anchor(int stick, int scroll_y, int old_top, int new_top,
+                        int new_h);
+
 #ifdef __cplusplus
 }
 #endif

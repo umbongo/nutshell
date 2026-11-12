@@ -16,3 +16,14 @@ int stick_scroll_on_layout(int stick, int scroll_y, int max_scroll)
     if (scroll_y < 0) return 0;
     return scroll_y;
 }
+
+int stick_scroll_anchor(int stick, int scroll_y, int old_top, int new_top,
+                        int new_h)
+{
+    if (stick) return scroll_y;
+    int offset = scroll_y - old_top;
+    int last = new_h > 0 ? new_h - 1 : 0;
+    if (offset > last) offset = last;
+    int y = new_top + offset;
+    return y < 0 ? 0 : y;
+}

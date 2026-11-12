@@ -841,6 +841,26 @@ int test_ui_demo_runlist_rows(void)
     ASSERT_TRUE(chat_batch_summary_text(&c, line, sizeof(line)) > 0);
     ASSERT_STR_EQ(line, "3 commands: 1 unfinished, 1 not run, 1 denied");
 
+    /* Folding: the recorded batch has all reached a final state and comes
+     * back folded; the live one still has work in it and stays whole. */
+    chat_msg_fold_refresh(&list);
+    ChatMsgItem *it4 = list.head;
+    for (int k = 0; k < 4; k++, it4 = it4->next) {
+        ASSERT_EQ(it4->u.cmd.fold, CHAT_FOLD_NONE);
+        ASSERT_EQ(it4->u.cmd.fold_hidden, 0);
+    }
+    ASSERT_EQ(it4->u.cmd.fold, CHAT_FOLD_CLOSED);
+    ASSERT_EQ(it4->u.cmd.fold_hidden, 0);
+    ASSERT_EQ(it4->next->u.cmd.fold_hidden, 1);
+    ASSERT_EQ(it4->next->next->u.cmd.fold_hidden, 1);
+    char flabel[32], fsum[96];
+    int fwarn = 0;
+    ASSERT_EQ(chat_batch_fold_text(&c, flabel, sizeof(flabel), fsum,
+                                   sizeof(fsum), &fwarn), 1);
+    ASSERT_STR_EQ(flabel, "3 commands");
+    ASSERT_STR_EQ(fsum, "\xC2\xB7 1 unfinished, 1 not run, 1 denied");
+    ASSERT_EQ(fwarn, 1);
+
     chat_msg_list_clear(&list);
     cmd_run_log_free(&log);
     ai_conv_reset(&conv);

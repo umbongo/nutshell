@@ -59,6 +59,9 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.cmd.container_scroll = 0;
         item->u.cmd.tool = 0;
         item->u.cmd.tool_outcome = (int)TOOL_DECISION_NONE;
+        item->u.cmd.fold = CHAT_FOLD_NONE;
+        item->u.cmd.fold_hidden = 0;
+        item->u.cmd.fold_open = 0;
     }
 
     /* Link into list */
@@ -464,12 +467,11 @@ int chat_msg_batch_counts(const ChatMsgList *list, int batch_id,
     return out->n;
 }
 
-int chat_batch_summary_text(const ChatBatchCounts *c, char *buf, size_t cap)
+/* The non-zero parts as "<count> <word>" joined by ", ", appended to buf at
+ * *pos in the fixed order. 0 when it does not fit in cap. */
+static int append_count_parts(const ChatBatchCounts *c, char *buf, size_t cap,
+                              size_t *pos)
 {
-    if (!buf || cap == 0) return 0;
-    buf[0] = '\0';
-    if (!c || c->n < 2 || c->decided < 1) return 0;
-
     const struct { int count; const char *word; } parts[] = {
         { c->ran,        "ran" },
         { c->running,    "running" },
@@ -482,21 +484,129 @@ int chat_batch_summary_text(const ChatBatchCounts *c, char *buf, size_t cap)
         { c->skipped,    "skipped" },
         { c->quoted,     "quoted" },
     };
-
-    size_t pos = 0;
-    int w = snprintf(buf, cap, "%d commands: ", c->n);
-    if (w < 0 || (size_t)w >= cap) { buf[0] = '\0'; return 0; }
-    pos = (size_t)w;
     int first = 1;
     for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
         if (parts[i].count <= 0) continue;
-        w = snprintf(buf + pos, cap - pos, "%s%d %s", first ? "" : ", ",
-                     parts[i].count, parts[i].word);
-        if (w < 0 || (size_t)w >= cap - pos) { buf[0] = '\0'; return 0; }
-        pos += (size_t)w;
+        int w = snprintf(buf + *pos, cap - *pos, "%s%d %s", first ? "" : ", ",
+                         parts[i].count, parts[i].word);
+        if (w < 0 || (size_t)w >= cap - *pos) return 0;
+        *pos += (size_t)w;
         first = 0;
     }
+    return 1;
+}
+
+int chat_batch_summary_text(const ChatBatchCounts *c, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    buf[0] = '\0';
+    if (!c || c->n < 2 || c->decided < 1) return 0;
+
+    int w = snprintf(buf, cap, "%d commands: ", c->n);
+    if (w < 0 || (size_t)w >= cap) { buf[0] = '\0'; return 0; }
+    size_t pos = (size_t)w;
+    if (!append_count_parts(c, buf, cap, &pos)) { buf[0] = '\0'; return 0; }
     return (int)pos;
+}
+
+int chat_batch_is_final(const ChatBatchCounts *c)
+{
+    if (!c) return 0;
+    return c->n >= 1 && c->decided == c->n && c->running == 0 &&
+           c->queued == 0 && c->awaiting == 0;
+}
+
+int chat_batch_fold_text(const ChatBatchCounts *c, char *label, size_t lcap,
+                         char *summary, size_t scap, int *warn)
+{
+    if (label && lcap > 0) label[0] = '\0';
+    if (summary && scap > 0) summary[0] = '\0';
+    if (warn) *warn = 0;
+    if (!label || lcap == 0 || !summary || scap == 0) return 0;
+    if (!chat_batch_is_final(c)) return 0;
+
+    int w = snprintf(label, lcap, c->n == 1 ? "%d command" : "%d commands",
+                     c->n);
+    if (w < 0 || (size_t)w >= lcap) { label[0] = '\0'; return 0; }
+    w = snprintf(summary, scap, "\xC2\xB7 ");
+    if (w < 0 || (size_t)w >= scap) {
+        label[0] = '\0'; summary[0] = '\0';
+        return 0;
+    }
+    size_t pos = (size_t)w;
+    if (!append_count_parts(c, summary, scap, &pos)) {
+        label[0] = '\0'; summary[0] = '\0';
+        return 0;
+    }
+    if (warn) *warn = (c->unfinished > 0 || c->not_run > 0 || c->held > 0);
+    return 1;
+}
+
+/* A row that can be part of a fold group: a settled command row that is not
+ * a tool call, of a real batch. */
+static int fold_candidate(const ChatMsgItem *it)
+{
+    return it && it->type == CHAT_ITEM_COMMAND && it->u.cmd.settled &&
+           !it->u.cmd.tool && it->u.cmd.batch != 0;
+}
+
+int chat_msg_fold_refresh(ChatMsgList *list)
+{
+    if (!list) return 0;
+    int changed = 0;
+    ChatMsgItem *it = list->head;
+    while (it) {
+        if (it->type != CHAT_ITEM_COMMAND) { it = it->next; continue; }
+
+        int want_fold = CHAT_FOLD_NONE;
+        int want_hidden = 0;
+        ChatMsgItem *end = it->next;   /* one past the run, or past it */
+        if (fold_candidate(it)) {
+            const int batch = it->u.cmd.batch;
+            int run = 1;
+            while (end && fold_candidate(end) && end->u.cmd.batch == batch) {
+                run++;
+                end = end->next;
+            }
+            ChatBatchCounts c;
+            chat_msg_batch_counts(list, batch, &c);
+            /* The whole batch must be this one run: otherwise rows of it sit
+             * elsewhere (apart, or as a tool row) and the counts would not
+             * describe the group. */
+            if (chat_batch_is_final(&c) && c.n == run) {
+                want_fold = it->u.cmd.fold_open ? CHAT_FOLD_OPEN
+                                                : CHAT_FOLD_CLOSED;
+                want_hidden = want_fold == CHAT_FOLD_CLOSED;
+            }
+            for (ChatMsgItem *m = it; m != end; m = m->next) {
+                int f = (m == it) ? want_fold : CHAT_FOLD_NONE;
+                int h = (m == it) ? 0 : want_hidden;
+                if (m->u.cmd.fold != f || m->u.cmd.fold_hidden != h) {
+                    m->u.cmd.fold = f;
+                    m->u.cmd.fold_hidden = h;
+                    changed++;
+                }
+            }
+            it = end;
+            continue;
+        }
+        if (it->u.cmd.fold != CHAT_FOLD_NONE || it->u.cmd.fold_hidden) {
+            it->u.cmd.fold = CHAT_FOLD_NONE;
+            it->u.cmd.fold_hidden = 0;
+            changed++;
+        }
+        it = it->next;
+    }
+    return changed;
+}
+
+int chat_msg_fold_toggle(ChatMsgItem *head)
+{
+    if (!head || head->type != CHAT_ITEM_COMMAND ||
+        head->u.cmd.fold == CHAT_FOLD_NONE)
+        return 0;
+    head->u.cmd.fold_open = !head->u.cmd.fold_open;
+    return head->u.cmd.fold_open;
 }
 
 size_t utf8_cut_at(char *buf, size_t max)

@@ -86,3 +86,40 @@ int test_stick_scroll_on_layout_stuck_content_shrinks(void) {
     ASSERT_EQ(stick_scroll_on_layout(1, 700, 400), 400);
     TEST_END();
 }
+
+/* --- stick_scroll_anchor tests --- */
+
+int test_stick_scroll_anchor_pinned_unchanged(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(stick_scroll_anchor(1, 500, 400, 300, 80), 500);
+    ASSERT_EQ(stick_scroll_anchor(1, 0, 0, 0, 0), 0);
+    TEST_END();
+}
+
+int test_stick_scroll_anchor_follows_item_top(void) {
+    TEST_BEGIN();
+    /* 30 px into an item that moved up 100 px: still 30 px into it */
+    ASSERT_EQ(stick_scroll_anchor(0, 430, 400, 300, 80), 330);
+    /* content above grew: the item moved down, the view follows */
+    ASSERT_EQ(stick_scroll_anchor(0, 430, 400, 450, 80), 480);
+    /* nothing moved */
+    ASSERT_EQ(stick_scroll_anchor(0, 430, 400, 400, 80), 430);
+    TEST_END();
+}
+
+int test_stick_scroll_anchor_offset_clamped_to_new_height(void) {
+    TEST_BEGIN();
+    /* 300 px into an item that is now only 50 px tall: its last pixel */
+    ASSERT_EQ(stick_scroll_anchor(0, 400, 100, 100, 50), 149);
+    /* a zero-height item: offset 0 */
+    ASSERT_EQ(stick_scroll_anchor(0, 400, 100, 100, 0), 100);
+    TEST_END();
+}
+
+int test_stick_scroll_anchor_never_negative(void) {
+    TEST_BEGIN();
+    /* 40 px above the item (its gap) and the item moved to the very top */
+    ASSERT_EQ(stick_scroll_anchor(0, 10, 50, 5, 80), 0);
+    ASSERT_EQ(stick_scroll_anchor(0, 0, 0, 0, 80), 0);
+    TEST_END();
+}

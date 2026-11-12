@@ -13,6 +13,11 @@
 enum { CHAT_RUN_NONE = 0, CHAT_RUN_RUNNING, CHAT_RUN_DONE, CHAT_RUN_ABORTED,
        CHAT_RUN_UNFINISHED /* sent, and the panel stopped waiting for it */ };
 
+/* How a finished command card shows (chat_msg_fold_refresh()). */
+enum { CHAT_FOLD_NONE = 0,  /* in full, as it always was */
+       CHAT_FOLD_CLOSED,    /* the group's head: one "N commands" row */
+       CHAT_FOLD_OPEN };    /* the group's head: that row, then the rows */
+
 typedef enum {
     CHAT_ITEM_USER,
     CHAT_ITEM_AI_TEXT,
@@ -95,6 +100,11 @@ typedef struct ChatMsgItem {
             int tool_outcome;   /* a ToolDecision (tool_decision.h) as int:
                                   * PENDING once chat_msg_set_tool(item, 1)
                                   * ran, NONE (0) on a command row */
+            int fold;           /* CHAT_FOLD_*, on a finished group's first
+                                  * row; derived by chat_msg_fold_refresh() */
+            int fold_hidden;    /* 1 = a row of a closed group: not shown */
+            int fold_open;      /* the user's choice on the group's first
+                                  * row: 1 = keep it expanded (default 0) */
         } cmd;
     } u;
 
@@ -297,6 +307,34 @@ int chat_msg_batch_counts(const ChatMsgList *list, int batch_id,
  * counts and when it does not fit in cap bytes (the NUL included), buf[0] is
  * set to NUL (when buf is non-NULL and cap > 0) and 0 is returned. */
 int chat_batch_summary_text(const ChatBatchCounts *c, char *buf, size_t cap);
+
+/* True when every row of the batch has reached a final state: n >= 1, all
+ * decided (settled), and none running, queued or awaiting approval. Counts
+ * cover every row of the batch anywhere in the list. CmdBatch.settled is not
+ * the test: it is set while rows are still running. NULL is not final. */
+int chat_batch_is_final(const ChatBatchCounts *c);
+
+/* The fold row of a finished card: label "N commands" ("1 command") and
+ * summary "\xC2\xB7 " then the non-zero parts as chat_batch_summary_text()
+ * words them ("\xC2\xB7 1 ran, 1 unfinished, 2 not run"). *warn (when not
+ * NULL) is 1 when anything is unfinished, not run or held -- denied and
+ * skipped alone are not a warning. Returns 1 when the batch is final and
+ * both strings fit; otherwise 0 with both set to "". */
+int chat_batch_fold_text(const ChatBatchCounts *c, char *label, size_t lcap,
+                         char *summary, size_t scap, int *warn);
+
+/* Derive every command row's fold state from the list: a group is a
+ * maximal run of consecutive settled, non-tool command rows of one non-zero
+ * batch, folded when the whole batch is final, is that one run, and holds no
+ * tool row. Sets u.cmd.fold (CLOSED or, with fold_open, OPEN) on the
+ * group's first row and u.cmd.fold_hidden on the rest of a closed group;
+ * every other row gets NONE / 0. Returns how many rows changed (0 on a
+ * second call). Does not mark anything dirty. */
+int chat_msg_fold_refresh(ChatMsgList *list);
+
+/* Flip fold_open on the head of a folded group. Returns the new value; does
+ * nothing (returns 0) when head is NULL or its fold is CHAT_FOLD_NONE. */
+int chat_msg_fold_toggle(ChatMsgItem *head);
 
 /* Append one CHAT_ITEM_COMMAND per entry in a batch's queue, in order,
  * tagged with the batch's id (chat_msg_set_batch) -- the inverse of what
