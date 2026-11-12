@@ -4,9 +4,10 @@ name: Quality
 #   "Sanitizers" -- the native suite under ASan, UBSan and LeakSanitizer
 #                   (make test SAN=1).
 #   "Lint"       -- the cppcheck gate (make lint-gate) on src/.
-#   "Fuzz"       -- the six libFuzzer targets built, then the committed seed
-#                   corpus replayed once with no mutation (make fuzz &&
-#                   make fuzz-run), so the job is deterministic.
+#   "Fuzz"       -- the libFuzzer targets (the Makefile's FUZZ_TARGETS)
+#                   built, then the committed seed corpus replayed once
+#                   with no mutation (make fuzz && make fuzz-run), so the
+#                   job is deterministic.
 # None of them is a required check (they are not in the main ruleset), but
 # all three are deterministic and expected green before a merge: "never merge
 # a red check" holds for them as for the two required ones. The weekly

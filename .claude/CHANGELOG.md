@@ -4,6 +4,48 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-12 — retrospective (14 merges)
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Retrospective: `docs/retrospectives/2026-11-12-fourteen-merges-retrospective.md`.
+Models: claude-opus-5-5 (retrospective); claude-fable-5-2 (brief, session notes).
+
+- **`memory/MEMORY.md`.** Marker moved to `d966713` (PR #94; 14 merges from
+  `94d7ae3`). Baselines 4,118 hosted, 4,077 stub, `wintest` 52. Snapshot branch
+  `v1.2.60` at `0f5bf9a`. Two traps: a `pgrep -f` wait loop matches itself and
+  never ends (one ran 7.5 days, reported); Wine is not Windows (v1.2.49-v1.2.59 did
+  not start on the maintainer's machine, PR #90). Windows command blocks: `.\`
+  and no `#` lines (reported). `gh pr ready` was accepted after the maintainer's
+  go-ahead (reported). Exe 5.6 MB and 197 commits; 94 CRLF files, eight of them fuzz
+  seeds; the release `.sha256` untried; open items and line counts for v1.2.82.
+  Why: the period's measurements and the session's notes, checked against git.
+- **`skills/feature-workflow/SKILL.md`.** Step 7: the background-command check wait
+  and never a `pgrep -f` loop. Step 8: Wine is not Windows; unrun Windows checks go
+  into the notes' Open list in the same PR. Step 9: merging from `automaton` too;
+  `gh pr ready` with the maintainer's go-ahead; say what the maintainer has not seen
+  when the head moved after their test. Why: findings F1, F3, F9 and F10.
+- **`skills/checkpoint/SKILL.md`.** Step 2: read each merged PR body's unrun checks,
+  follow-ups, deferrals and known limits into Open. Why: F1 and F4 (eight of eleven
+  `src/` PRs recorded nothing in the notes; one body claimed an Open item that was
+  not there). "When it runs" and step 7 already matched the rule of 2026-11-04.
+- **`skills/repo-status/SKILL.md`.** Known state on 2026-11-12. Why: stale.
+- **`.github/workflows/quality.yml`** (comment only). "The six libFuzzer targets"
+  became the Makefile's `FUZZ_TARGETS`; there are seven since PR #94. Why: stale
+  documentation; nothing the job does changes.
+- **Critique and fixes.** The process-rule edits were critiqued (an Opus critic, nine
+  findings: eight accepted, one declined: checkpoint step 2 stays as the only backstop
+  on request, step 8 covers PR time; the `gh pr checks --watch` early-exit behaviour
+  was left unverified). Changes made: `feature-workflow` step 9 states the maintainer's
+  go-ahead as a condition in every permission mode, before the commands (names `ready`
+  or `merge` and the PR number in this session; a moved head means HOLD until a fresh
+  yes; cloud never merges; classifier note cites MEMORY.md); step 8 puts unrun Windows
+  checks in the Open list at PR open or in a docs-only PR after the merge, never a late
+  push; step 7 carries the wait command itself, chained with `;`, and drops PID and
+  `pgrep -x` waits. `memory/MEMORY.md` pgrep item matched. `repo-status` Known state
+  points at `gh pr list` instead of claiming no open PR. `feature-workflow` (216 to
+  about 185 lines) and `checkpoint` trimmed; history moved to the retrospective's
+  "Rules added"; no rule deleted.
+
 ## 2026-11-05 — the quality checks in the process texts
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.

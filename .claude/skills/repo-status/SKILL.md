@@ -5,7 +5,7 @@ description: Survey the state of umbongo/nutshell — branches, tags, open pull 
 
 # Repo status — branches, PRs and checks
 
-Last updated: 2026-11-03. Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-12 (known state). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## Why the naive commands mislead here
 
@@ -54,13 +54,14 @@ A short table: branch, tip subject, relation to `main` (ahead/behind or
 which have an open PR, which are stale. Say explicitly when a number could
 not be measured (shallow history) rather than reporting a wrong one.
 
-## Known state on 2026-11-03
+## Known state on 2026-11-12
 
-`main` at v1.2.49 (PR #81). Open: Dependabot #78 (codeql-action 4.39.0,
-green since 2026-10-21), and the 2026-11-03 retrospective's draft. `v1.2.41` is a snapshot branch (no
-tag) at `7960bd2`. `v1.0.76`
+`main` at v1.2.82 (PR #94). Open pull requests: `gh pr list` (this
+retrospective's draft PR is one until merged). `v1.2.41` (at `7960bd2`)
+and `v1.2.60` (at `0f5bf9a`, the comctl32 fix) are snapshot branches with
+no tag. `v1.0.76`
 and `v1.1.21` are still both a branch and a tag, and `git ls-remote --tags
 origin` lists eight `archive/*` tags (a local `git tag` may show fewer); `v1.2.13` is a branch
 only, the backup kept before the v1.2.14 security fixes. Merged feature
 branches are deleted on merge. The only release is v1.1.21 (2026-09-14); no
-v1.2.x tag has been cut.
+v1.2.x tag has been cut. No never-pushed branch on `automaton`.

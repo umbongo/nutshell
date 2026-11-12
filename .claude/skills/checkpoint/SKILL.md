@@ -5,23 +5,21 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-11-04 (retrospective on request after each merge; no cadence, no Routine). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-12 (step 2 reads the merged PR bodies' unrun checks and follow-ups). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
 - **After a branch is merged and deleted, or its pull request closed
-  unmerged** (maintainer's standing rule of 2026-11-04, replacing the
-  every-10-merges cadence of 2026-09-21): the session that confirmed the
-  merge asks the maintainer whether to run a retrospective now, and runs
-  this skill only on a yes. There is no merge counter and no scheduled
-  Routine. The "Last retrospective" marker in `.claude/memory/MEMORY.md`
-  is the scope of the next one:
+  unmerged** (maintainer's rule of 2026-11-04): the session that confirmed
+  it asks whether to run a retrospective now, and runs this skill only on a
+  yes. No merge counter, no Routine. The "Last retrospective" marker in
+  `.claude/memory/MEMORY.md` is the scope:
   `git log --merges --first-parent origin/main <marker>..`.
 - On request: "create a checkpoint", "do a retrospective".
 
-The notes document defines a checkpoint as: compact the todo list, compact
-memory, delete temp files and worktrees, leave the tree ready for a new
-session. This skill is that, plus the record-keeping added on 2026-09-21.
+A checkpoint (notes document): compact the todo and memory, delete temp
+files and worktrees, leave the tree ready for a new session; plus the
+record-keeping of 2026-09-21.
 
 ## Files involved
 
@@ -55,6 +53,9 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
 2. **Compact the notes document.** Move finished items to "Done" with the
    PR number and commit, keep "Open" in priority order, fix any counts.
    Do not delete history; the done list is the project's memory of why.
+   Read each merged PR body's "not run", "Not verified", "Follow-ups",
+   "Deferred" and "Known limits" sections and carry into Open what the
+   notes lack (why: the 2026-11-12 retrospective, "Rules added").
 3. **Update `MEMORY.md`.** Add only facts that will still be true next
    session (host limits, gate rules, API quirks, ref layout). Remove
    anything the docs now state better. Bump its "Last updated" line.
