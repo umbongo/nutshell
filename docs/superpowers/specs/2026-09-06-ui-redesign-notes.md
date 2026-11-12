@@ -529,6 +529,19 @@ Open, in priority order:
 - [ ] Main-window chords (Ctrl+Shift+T/W/M, F11, Ctrl+Shift+Space) fire only while the main
       window has focus; from the AI panel's input they are dead. The cheat sheet states the
       condition per row ("from the terminal"); forwarding them is a separate change.
+- [ ] **Thinking row: three visual modes** (maintainer, 2026-11-12). Today the row is
+      either collapsed (one line) or open (the whole text). Add a compact mode that
+      shows only four lines of the streaming text at a time, and make a click on the
+      row cycle through the three: collapsed, compact, open. Decided the same day:
+      compact is the default while the text streams; once the reply is idle the row
+      sits fully collapsed; the row's label ("Thinking") changes colour with the
+      mode, from a pastel palette: compact green, collapsed brown, open grey (new
+      theme tokens, one set per theme; no literals in `src/ui`). A mode the user
+      clicks to always sticks, at idle and across restarts: it is one global choice
+      for every Thinking row, saved in the config, and it replaces the session-wide
+      preference from `IDC_CHAT_THINKING_OPENED/CLOSED`. Settings gets a control
+      that resets it to the defaults (compact while streaming, collapsed at idle).
+      Needs a short spec before any code.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the

@@ -195,6 +195,53 @@ int test_term_extended_moves(void) {
     TEST_END();
 }
 
+// CBT (CSI Z): back to the previous 8-column tab stop, Ps times.
+static int cbt_col(const char *setup, const char *seq, int *row_out) {
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, setup, strlen(setup));
+    term_process(t, seq, strlen(seq));
+    int col = t->cursor.col;
+    if (row_out) *row_out = t->cursor.row;
+    term_free(t);
+    return col;
+}
+
+int test_term_cbt(void) {
+    TEST_BEGIN();
+    int row = -1;
+    ASSERT_EQ(cbt_col("\x1B[1;50H", "\x1B[Z", NULL), 48);
+    ASSERT_EQ(cbt_col("\x1B[1;50H", "\x1B[2Z", NULL), 40);
+    ASSERT_EQ(cbt_col("\x1B[1;9H", "\x1B[Z", NULL), 0);
+    // Already on a stop (col 48): goes to the one before.
+    ASSERT_EQ(cbt_col("\x1B[1;49H", "\x1B[Z", NULL), 40);
+    // 0 and a missing parameter both mean 1.
+    ASSERT_EQ(cbt_col("\x1B[1;50H", "\x1B[0Z", NULL), 48);
+    // A large count clamps at column 0.
+    ASSERT_EQ(cbt_col("\x1B[1;50H", "\x1B[999Z", NULL), 0);
+    // Already at column 0: stays.
+    ASSERT_EQ(cbt_col("\x1B[H", "\x1B[Z", NULL), 0);
+    // The row never changes.
+    ASSERT_EQ(cbt_col("\x1B[6;30H", "\x1B[Z", &row), 24);
+    ASSERT_EQ(row, 5);
+    TEST_END();
+}
+
+int test_term_cbt_nano_sequence(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    const char *seq = "\x1B[2J\x1B[HABCDEFGHIJ\b \b\x1B[Z \x1B[Z";
+    term_process(t, seq, strlen(seq));
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 8);
+    const char *want = "ABCDEFGH";
+    for (int c = 0; c < 8; c++)
+        ASSERT_EQ((int)get_cell(t, 0, c).codepoint, (int)want[c]);
+    uint32_t cp = get_cell(t, 0, 8).codepoint;
+    ASSERT_TRUE(cp == ' ' || cp == 0);
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_sgr_flags(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);

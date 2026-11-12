@@ -283,9 +283,10 @@ int test_term_sb_resize_alloc_failure_unchanged(void)
     int fails[4] = { 1, 2, n / 2, n };
     for (int k = 0; k < 4; k++) {
         Terminal *t = make_partly();
+        t->erase_seq = 7;                  /* values a failed resize must not touch */
         int rows = t->rows, cols = t->cols, count = t->lines_count, start = t->lines_start;
         uint64_t recycled = t->lines_recycled;
-        uint32_t epoch = t->epoch;
+        uint32_t epoch = t->epoch, reflow = t->reflow_seq, erase = t->erase_seq;
         TermCursor cur = t->cursor;
         char *before = all_text(t);
         ASSERT_NOT_NULL(before);
@@ -296,6 +297,8 @@ int test_term_sb_resize_alloc_failure_unchanged(void)
         ASSERT_EQ(t->rows, rows); ASSERT_EQ(t->cols, cols);
         ASSERT_EQ(t->lines_count, count); ASSERT_EQ(t->lines_start, start);
         ASSERT_EQ(t->lines_recycled, recycled); ASSERT_EQ(t->epoch, epoch);
+        ASSERT_EQ(t->reflow_seq, reflow);
+        ASSERT_EQ(t->erase_seq, erase);
         ASSERT_EQ(t->cursor.row, cur.row); ASSERT_EQ(t->cursor.col, cur.col);
         ASSERT_TRUE(ring_ok(t));
         char *txt = all_text(t);
@@ -348,7 +351,7 @@ int test_term_sb_resize_alt_alloc_failure_unchanged(void)
     int count = t->lines_count, pcount = t->primary_lines_count;
     int start = t->lines_start, pstart = t->primary_lines_start;
     TermCursor cur = t->cursor, pcur = t->primary_cursor;
-    uint32_t epoch = t->epoch;
+    uint32_t epoch = t->epoch, reflow = t->reflow_seq;
     uint64_t recycled = t->lines_recycled, precycled = t->primary_lines_recycled;
     char *alt_before = all_text(t);
 
@@ -364,6 +367,7 @@ int test_term_sb_resize_alt_alloc_failure_unchanged(void)
     ASSERT_EQ(t->cursor.row, cur.row); ASSERT_EQ(t->cursor.col, cur.col);
     ASSERT_EQ(t->primary_cursor.row, pcur.row); ASSERT_EQ(t->primary_cursor.col, pcur.col);
     ASSERT_EQ(t->epoch, epoch);
+    ASSERT_EQ(t->reflow_seq, reflow);
     ASSERT_EQ(t->lines_recycled, recycled); ASSERT_EQ(t->primary_lines_recycled, precycled);
     ASSERT_TRUE(t->resize_failing);
     ASSERT_TRUE(ring_ok(t));

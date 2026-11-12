@@ -5,15 +5,30 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "ai_conv_guard.h"
+#include "run_command.h"
 
 #ifdef _WIN32
 #include <stdio.h>
+
+/* The provider's tools and run_command for this panel's setting "Commands as
+ * tool calls" (AiChatData.runcmd_mode, 0 = Automatic). The one place the UI
+ * asks; the launch and the thread's rebuild read the answer, not the setting. */
+static int ai_chat_provider_tools(const AiChatData *d)
+{
+    return d ? ai_provider_tools(d->provider, d->runcmd_mode) : 0;
+}
+
+static int ai_chat_provider_runcmd(const AiChatData *d)
+{
+    return d ? ai_provider_runcmd(d->provider, d->runcmd_mode) : 0;
+}
 
 /* 1 when the next reply will carry read_debug_log (ai_chat_launch_stream_thread adds
  * it under the same two conditions), so the system prompt may mention it. */
 static int debug_tool_active(const AiChatData *d)
 {
-    return d && dlog_enabled() && ai_provider_supports_tools(d->provider);
+    return d && dlog_enabled() && ai_chat_provider_tools(d);
 }
 
 /* Initialise the tool registry from the configured search/fetch settings. */
@@ -101,6 +116,12 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
 {
     if (!d || !d->active_state) return;
 
+    /* The buffers the system prompt and the terminal text are built in. */
+    if (!ctx_buffers_ensure(d)) {
+        launch_failed(d, "[out of memory starting the AI request]");
+        return;
+    }
+
     AiStream *s = ai_stream_new();
     if (!s) {
         launch_failed(d, "[out of memory starting the AI request]");
@@ -117,99 +138,150 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
      * reads the panel's setting. */
     s->tool_timeout_ms = tool_decision_timeout_ms(d->tool_timeout_sec);
     s->tool_auto_rounds = ai_tool_rounds_clamp(d->tool_auto_rounds);
-    int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
+    /* Whether this request offers run_command, and whether it goes through
+     * the tools branch: decided once, here, from the setting. */
+    const int offers_runcmd = ai_chat_provider_runcmd(d);
+    const int provider_tools = ai_chat_provider_tools(d);
+    const int use_tools = provider_tools &&
+        (d->tool_registry.count > 0 || dlog_enabled() || offers_runcmd);
+
+    /* The registry this request carries: the panel's tools plus run_command
+     * when offered. It is the system prompt's tool list too, so the prompt
+     * names exactly what the request offers; read_debug_log joins the stream's
+     * copy below (the prompt mentions it through its own flag). The registry
+     * is ~42 KB: on the heap, not the UI thread's stack. */
+    AiToolRegistry *launch_reg = NULL;
+    if (use_tools) {
+        launch_reg = (AiToolRegistry *)malloc(sizeof(*launch_reg));
+        if (!launch_reg) {
+            ai_stream_discard(s);
+            launch_failed(d, "[out of memory starting the AI request]");
+            return;
+        }
+        *launch_reg = d->tool_registry;
+        if (offers_runcmd) runcmd_register(launch_reg);
+    }
+
+    /* The system prompt is built here and nowhere else (spec 2026-11-05
+     * run-command decision 3): send, continue and retry all launch through
+     * this function, so they agree. It holds settings and the tools only. A
+     * conversation with no system turn (the send path adds an empty one) or
+     * no room for the prompt is not sent. */
+    {
+        char  *sys_prompt     = d->ctx_prompt;
+        size_t sys_prompt_cap = d->ctx_prompt_cap;
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap,
+                                  d->session_notes, d->system_notes,
+                                  active_session_kind(d), active_shell_name(d),
+                                  debug_tool_active(d), launch_reg);
+        if (d->conv.msg_count > 0 &&
+            d->conv.messages[0].role == AI_ROLE_SYSTEM &&
+            ai_conv_set_system(&d->conv, sys_prompt) != 0) {
+            free(launch_reg);
+            ai_stream_discard(s);
+            launch_failed(d, "[out of memory starting the AI request]");
+            return;
+        }
+    }
 
     /* One terminal snapshot per launch (spec 2026-11-05 decision 2), taken
-     * here on the UI thread and handed to the stream, which only reads it.
-     * Every tool-loop rebuild reuses it. A failed allocation sends the
-     * request without the block rather than aborting it. */
-    d->last_snapshot_len = 0;
-    if (d->active_term && ctx_buffers_ensure(d)) {
-        size_t n = term_extract_last_n(d->active_term, d->context_lines,
-                                       d->ctx_term, d->ctx_term_cap);
-        if (n > 0) {
-            s->snapshot = (char *)malloc(n + 1);
-            if (s->snapshot) {
-                memcpy(s->snapshot, d->ctx_term, n);
-                s->snapshot[n] = '\0';
-                d->last_snapshot_len = n;
-            }
-        }
-    }
+     * here on the UI thread and frozen onto the conversation (decision 22):
+     * the copy below carries it to the stream, whose rebuilds reuse it. A
+     * failed allocation sends the request without the block rather than
+     * aborting it. Which turn takes it is ai_conv_launch_snapshot()'s rule. */
     {
-        /* A fresh delimiter for every request body. */
-        char delim[AI_DELIM_MAX];
-        ai_delim_make(crypto_random_bytes, NULL, delim);
-        AiBodyFrame frame;
-        frame.snapshot = s->snapshot;
-        frame.delim = delim;
-        int last_msg = d->conv.msg_count - 1;
-        const AiAttachment *att = (last_msg >= 0)
-            ? d->conv.messages[last_msg].attachment : NULL;
-
-        /* Use tool-aware request builder when tools are registered and provider supports them */
-        int has_tools = (d->tool_registry.count > 0) || dlog_enabled();
-        int provider_supports = ai_provider_supports_tools(d->provider);
-
-        if (has_tools && provider_supports) {
-            /* Snapshot the registry: the thread runs the tools from its own
-             * copy, never the panel's (which settings can change, and which
-             * dies with the panel). */
-            /* read_debug_log joins the snapshot only while debugging is on
-             * right now, whatever the panel's own registry holds; its call
-             * counter is the stream's copy (one per user message). */
-            /* The registry is ~42 KB: on the heap, not the UI thread's stack. */
-            AiToolRegistry *launch_reg = (AiToolRegistry *)malloc(sizeof(*launch_reg));
-            if (!launch_reg) {
-                ai_stream_discard(s);
-                launch_failed(d, "[out of memory starting the AI request]");
-                return;
-            }
-            *launch_reg = d->tool_registry;
-            DebugLogToolContext debug_ctx;
-            ai_debug_tool_ctx_init(&debug_ctx);
-            int with_debug = ai_debug_tool_register_if_enabled(launch_reg, &debug_ctx);
-            ai_stream_copy_tools(s, launch_reg, d->tools_gen,
-                                 &d->search_ctx, &d->fetch_ctx,
-                                 with_debug ? &debug_ctx : NULL);
-            free(launch_reg);
-            /* The stream's own fetch copy reports each hop as a chat row. */
-            s->fetch.on_hop = ai_chat_fetch_on_hop;
-            s->fetch.user = s;
-            s->has_tools = 1;
-            /* Serialize tool definitions for this provider */
-            s->tools_json[0] = '\0';
-            if (strcmp(d->provider, "anthropic") == 0)
-                ai_tools_serialize_anthropic(&s->tools, s->tools_json,
-                                             sizeof(s->tools_json));
-            else
-                ai_tools_serialize_openai(&s->tools, s->tools_json,
-                                          sizeof(s->tools_json));
-
-            s->body_len = ai_build_request_body_frame(&d->conv, att,
-                                                      s->tools_json[0] ? s->tools_json : NULL,
-                                                      &frame,
-                                                      s->body, AI_BODY_MAX,
-                                                      1, s->provider);
-        } else {
-            s->has_tools = 0;
-            s->body_len = ai_build_request_body_frame(&d->conv, att, NULL,
-                                                      &frame, s->body,
-                                                      AI_BODY_MAX, 1,
-                                                      s->provider);
-        }
+        size_t n = 0;
+        if (d->active_term)
+            n = term_extract_last_n(d->active_term, d->context_lines,
+                                    d->ctx_term, d->ctx_term_cap);
+        ai_conv_launch_snapshot(&d->conv, n > 0 ? d->ctx_term : NULL, n,
+                                offers_runcmd);
     }
 
-    if (!conv_ok) {
+    if (ai_conv_copy(&s->conv, &d->conv) != 0) {
+        free(launch_reg);
         ai_stream_discard(s);
         launch_failed(d, "[out of memory starting the AI request]");
         return;
     }
+    /* The meter adds the snapshot the request really carries: the copy's (a
+     * copy that cannot allocate one carries none, and the launch's body is
+     * then built without it, as the rebuild would be). */
+    d->last_snapshot_len = ai_conv_has_snapshot(&s->conv) ? s->conv.snapshot_len : 0;
 
+    /* A fresh delimiter for every request body. */
+    char delim[AI_DELIM_MAX];
+    ai_delim_make(crypto_random_bytes, NULL, delim);
+    AiBodyFrame frame;
+    frame.delim = delim;
+    ai_conv_snapshot_frame(&s->conv, &frame);
+    int last_msg = d->conv.msg_count - 1;
+    const AiAttachment *att = (last_msg >= 0)
+        ? d->conv.messages[last_msg].attachment : NULL;
+
+    /* The builder returns 0 for pairing, overflow and allocation alike, so the
+     * pairing is checked first and the row names the cause. */
+    if (!ai_conv_tool_pairs_well_formed(&d->conv)) {
+        free(launch_reg);
+        ai_stream_discard(s);
+        launch_failed(d, ai_body_failure_text(&d->conv));
+        return;
+    }
+
+    if (use_tools) {
+        /* Snapshot the registry: the thread runs the tools from its own
+         * copy, never the panel's (which settings can change, and which
+         * dies with the panel). read_debug_log joins it only while debugging
+         * is on right now, whatever the panel's own registry holds; its call
+         * counter is the stream's copy (one per user message). */
+        DebugLogToolContext debug_ctx;
+        ai_debug_tool_ctx_init(&debug_ctx);
+        int with_debug = ai_debug_tool_register_if_enabled(launch_reg, &debug_ctx);
+        ai_stream_copy_tools(s, launch_reg, d->tools_gen,
+                             &d->search_ctx, &d->fetch_ctx,
+                             with_debug ? &debug_ctx : NULL);
+        /* The stream's own fetch copy reports each hop as a chat row. */
+        s->fetch.on_hop = ai_chat_fetch_on_hop;
+        s->fetch.user = s;
+        s->has_tools = 1;
+        s->run_command = offers_runcmd;
+        /* Serialize tool definitions for this provider */
+        s->tools_json[0] = '\0';
+        if (strcmp(d->provider, "anthropic") == 0)
+            ai_tools_serialize_anthropic(&s->tools, s->tools_json,
+                                         sizeof(s->tools_json));
+        else
+            ai_tools_serialize_openai(&s->tools, s->tools_json,
+                                      sizeof(s->tools_json));
+
+        s->body_len = ai_build_request_body_frame(&d->conv, att,
+                                                  s->tools_json[0] ? s->tools_json : NULL,
+                                                  &frame,
+                                                  s->body, AI_BODY_MAX,
+                                                  1, s->provider);
+    } else {
+        s->has_tools = 0;
+        s->body_len = ai_build_request_body_frame(&d->conv, att, NULL,
+                                                  &frame, s->body,
+                                                  AI_BODY_MAX, 1,
+                                                  s->provider);
+    }
+    free(launch_reg);
+
+    if (s->body_len == 0) {
+        /* pairing, a reply's reasoning too long for DeepSeek, overflow or
+         * allocation: the row says which (a static string, read before the
+         * discard frees the stream's provider and tools) */
+        const char *why = ai_body_failure_text_for(
+            &d->conv, s->provider,
+            s->has_tools && s->tools_json[0] ? s->tools_json : NULL);
+        ai_stream_discard(s);
+        launch_failed(d, why);
+        return;
+    }
     {
         char json_err[256] = "";
-        if (s->body_len == 0 ||
-            !json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
+        if (!json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
             ai_stream_discard(s);
             launch_failed(d, json_err[0] ? json_err : "JSON build failed");
             return;
@@ -241,13 +313,17 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     s = NULL;   /* the thread may free it from here on; only the id is ours */
     SetTimer(d->hwnd, TIMER_STREAM_REAP, STREAM_REAP_MS, NULL);
 
-    /* One-time notification when tools are configured but provider doesn't support them */
-    if (d->tool_registry.count > 0 && !ai_provider_supports_tools(d->provider)
-        && !d->tool_support_notified) {
-        d->tool_support_notified = 1;
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-            "[Note: web search/fetch tools require Anthropic, OpenAI, or DeepSeek provider]");
-        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    /* One-time notification when web tools are configured but this provider
+     * is not offered them (ai_provider_tools_note decides which note). */
+    if (!d->tool_support_notified) {
+        const char *note = ai_provider_tools_note_text(
+            ai_provider_tools_note(d->provider, d->runcmd_mode,
+                                   d->tool_registry.count > 0));
+        if (note) {
+            d->tool_support_notified = 1;
+            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, note);
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        }
     }
 
     /* Allocate per-session stream accumulators */
@@ -299,7 +375,8 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
 /* Abort and orphan the reply `state` has in flight, and put the session
  * back to idle: its busy flag and its stream accumulators. Touches no
  * panel UI -- see ai_chat_cancel_active_stream() for that. Safe with no stream. */
-void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state)
+void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state,
+                                  int keep_free)
 {
     if (!d || !state) return;
     /* Answer and remove the session's tool cards first, so no stream thread
@@ -316,6 +393,12 @@ void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state)
     state->stream_thinking_len = 0;
     state->stream_phase = 0;
     state->activity_phase = (int)ACTIVITY_IDLE;
+    /* A stopped stream's reply never arrives to flush the notes queued behind
+     * it. keep_free is the caller's: 1 where a launch follows (Retry), so a
+     * note never takes the reply's slot. A note that does not fit stays
+     * queued; an open tool call keeps them all. */
+    (void)ai_conv_flush_notes(ai_chat_owner_conv(d, state), &state->notes,
+                              keep_free);
 }
 
 /* Free the payloads of stream messages still queued for a panel that is
@@ -327,7 +410,7 @@ void ai_chat_drain_stream_messages(HWND hwnd)
     while (PeekMessage(&m, hwnd, WM_AI_RESPONSE, WM_AI_TOOL_MSG, PM_REMOVE)) {
         if (m.message == WM_AI_RESPONSE) {
             AiResponseMsg *r = (AiResponseMsg *)m.lParam;
-            if (r) { free(r->content); free(r->thinking); free(r); }
+            ai_response_msg_free(r);
         } else if (m.message == WM_AI_STREAM || m.message == WM_AI_TOOL_MSG) {
             AiStreamChunk *c = (AiStreamChunk *)m.lParam;
             if (c) { free(c->delta); free(c); }
@@ -347,13 +430,14 @@ void ai_chat_cancel_active_stream(AiChatData *d)
 
     /* Abort and orphan this session's stream only -- another tab's reply
      * keeps running -- and put the session back to idle. */
-    ai_chat_abort_session_stream(d, d->active_state);
+    ai_chat_abort_session_stream(d, d->active_state, 0);
 
     /* Kill timers */
     KillTimer(d->hwnd, TIMER_HEARTBEAT);
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     d->dispatch_active = 0;
     chat_activity_reset(&d->activity);
+    ai_chat_header_invalidate(d);
     if (d->hChatList) {
         chat_listview_set_pulse(d->hChatList, 0);
         chat_listview_invalidate(d->hChatList);
@@ -374,8 +458,10 @@ void ai_chat_cancel_active_stream(AiChatData *d)
 
     /* Remove the last assistant message from conv if partially added */
     if (d->conv.msg_count > 0 &&
-        d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
+        d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT) {
         ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
+        ai_conv_snapshot_trim(&d->conv);   /* R40: after every pop */
+    }
 
     /* Update UI */
     ai_chat_update_context_bar(d);
@@ -463,11 +549,6 @@ void ai_chat_send_user_message(AiChatData *d)
     if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
         return;
 
-    /* The user is talking again: the unattended-round count starts over
-     * (guard-rails spec 2026-11-04 section 1). */
-    ai_rounds_user_message(d->active_state);
-    ai_tool_rounds_reset(d->active_state);   /* ... and so are the tool rounds */
-
     char *input = input_text_utf8(d->hInput);
     if (!input) return;
     /* The text as read: the prefix strip below shortens the string, but the
@@ -492,7 +573,44 @@ void ai_chat_send_user_message(AiChatData *d)
         return;
     }
 
+    /* Room for the typed message and its reply (spec decision 24), checked on
+     * every typed message before anything is changed: an open run_command
+     * batch (a card nobody ran) also needs a slot for the results turn its
+     * finish stores first, and the queued notes the finish flushes count too.
+     * Without room nothing is sent, the text stays in the box and the round
+     * counters stay as they were. */
+    CmdBatch *runcmd_batch = cmd_batch_runcmd(&d->active_state->batches);
+    const int ends_runcmd_batch = (runcmd_batch != NULL);   /* the finish frees it */
+    if (!ai_conv_room_for_send(&d->conv, ends_runcmd_batch,
+                               &d->active_state->notes)) {
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            "[conversation full: your message was not sent; start a New Chat]");
+        if (d->hChatList) {
+            chat_listview_invalidate(d->hChatList);
+            chat_listview_scroll_to_bottom(d->hChatList);
+        }
+        secure_zero(input, input_len);
+        free(input);
+        /* Nothing launched: an approved batch waiting must not be stranded
+         * (a no-op while a dispatch runs or a stream is busy). */
+        ai_chat_maybe_start_next_batch(d);
+        return;
+    }
+
+    /* The user is talking again: the unattended-round count starts over
+     * (guard-rails spec 2026-11-04 section 1). */
+    ai_rounds_user_message(d->active_state);
+    ai_tool_rounds_reset(d->active_state);   /* ... and so are the tool rounds */
+
     SetWindowText(d->hInput, "");
+
+    /* An open run_command batch ends with this message (spec decision 8): its
+     * results go in first, then the typed turn. The finish leaves two slots
+     * free (this message's and its reply's, R47) and settles the card above
+     * the typed message. It relaunches nothing: the typed message does. */
+    if (ends_runcmd_batch)
+        ai_chat_runcmd_finish(d, d->active_state, runcmd_batch,
+                              runcmd_path_plan(RUNCMD_PATH_TYPED).cause);
 
     /* Display user message in ChatListView */
     chat_msg_append(&d->msg_list, CHAT_ITEM_USER, input);
@@ -501,24 +619,11 @@ void ai_chat_send_user_message(AiChatData *d)
         chat_listview_scroll_to_bottom(d->hChatList);
     }
 
-    /* The system prompt holds settings only (spec 2026-11-05 decision 1): the
-     * terminal text is no longer part of it. It is built even with no active
-     * terminal, and carries the tools paragraph on every path. */
-    int ctx_ok = ctx_buffers_ensure(d);
-    if (ctx_ok) {
-        char  *sys_prompt     = d->ctx_prompt;
-        size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap,
-                                  d->session_notes, d->system_notes,
-                                  active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d),
-                                  ai_provider_supports_tools(d->provider)
-                                      ? &d->tool_registry : NULL);
-        if (d->conv.msg_count == 0)
-            ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
-        else
-            ai_conv_set_system(&d->conv, sys_prompt);
-    }
+    /* The system prompt is built at launch (ai_chat_launch_stream_thread, the
+     * one place, spec 2026-11-05 run-command decision 3); here the
+     * conversation only needs a system turn to put it in. */
+    if (d->conv.msg_count == 0)
+        ai_conv_add(&d->conv, AI_ROLE_SYSTEM, "");
 
     ai_conv_add(&d->conv, AI_ROLE_USER, input);
 
@@ -539,6 +644,12 @@ void ai_chat_send_user_message(AiChatData *d)
 
     ai_chat_launch_stream_thread(d, "user");
 
+    /* The finish above starts no next batch (a request was to follow). When
+     * the launch failed, an approved batch waiting behind the one that ended
+     * must not be stranded; a no-op while the stream is busy. */
+    if (ends_runcmd_batch)
+        ai_chat_maybe_start_next_batch(d);
+
     /* Clear pending attachment after thread is launched */
     ai_attachment_free(&d->pending_attachment);
 
@@ -558,28 +669,50 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
     if (!d || !d->active_state || d->active_state->busy) return;
     if (!msg_text || !msg_text[0]) return;
 
-    ai_rounds_continue(d->active_state, unattended);
-
-    /* Refresh the system prompt (settings and tools only; the terminal text
-     * is added to the last user turn when the request body is built). */
-    if (ctx_buffers_ensure(d) && d->conv.msg_count > 0) {
-        char  *sys_prompt     = d->ctx_prompt;
-        size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap,
-                                  d->session_notes, d->system_notes,
-                                  active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d),
-                                  ai_provider_supports_tools(d->provider)
-                                      ? &d->tool_registry : NULL);
-        ai_conv_set_system(&d->conv, sys_prompt);
+    /* Through the door like every Nutshell USER turn, leaving the reply's
+     * slot (keep_free 1). Queued behind an open run_command turn (1): nothing
+     * launches, the text rides the relaunch. Full (2): the door's wrapper
+     * shows the notice and nothing launches. Failed (-1): nothing launches
+     * either, a request without its text would end on the assistant's turn. */
+    const int note_rc = ai_chat_owner_add_note(d, d->active_state, msg_text, 1);
+    if (note_rc != 0) {
+        if (note_rc < 0) {
+            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                "[the command results could not be stored: Nutshell ran out "
+                "of memory]");
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        }
+        /* Nothing launched, so the stream that would have ended in
+         * ai_chat_maybe_start_next_batch() never runs: an approved batch
+         * waiting behind this one must not be stranded. No-op while a
+         * dispatch runs or a stream is busy. */
+        ai_chat_maybe_start_next_batch(d);
+        return;
     }
 
-    ai_conv_add(&d->conv, AI_ROLE_USER, msg_text);
-
+    ai_rounds_continue(d->active_state, unattended);
 
     ai_chat_start_indicator(d, "continuing");
 
     ai_chat_launch_stream_thread(d, "continue");
+}
+
+int ai_chat_send_tool_results(AiChatData *d, int unattended)
+{
+    if (!d || !d->active_state || d->active_state->busy) return 0;
+
+    ai_rounds_continue(d->active_state, unattended);
+
+    /* Notes the finish could not store ahead of the results (R47): the
+     * reply's slot stays free, a note that does not fit stays queued. */
+    (void)ai_conv_flush_notes(&d->conv, &d->active_state->notes, 1);
+
+    ai_chat_start_indicator(d, "continuing");
+
+    ai_chat_launch_stream_thread(d, "continue");
+    /* The launch sets busy only when a stream really started; a failure has
+     * said so in a status row (launch_failed). */
+    return d->active_state->busy ? 1 : 0;
 }
 
 #endif /* _WIN32 */

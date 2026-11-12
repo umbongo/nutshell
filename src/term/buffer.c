@@ -116,6 +116,10 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->lines_recycled         = 0;
     term->primary_lines_recycled = 0;
     term->epoch                  = 0;
+    term->reflow_seq             = 0;
+    term->region_scroll_seq      = 0;
+    term->erase_seq              = 0;
+    term->after_cup_home         = false;
     term->write_gen              = 0;
     term->grow_failing           = false;
     term->resize_failing         = false;
@@ -458,6 +462,7 @@ bool term_resize(Terminal *term, int rows, int cols) {
 
     /* Reflow renumbered every row: a selection's line numbers no longer apply. */
     term->epoch++;
+    term->reflow_seq++;
 
     term->rows = rows;
     term->cols = cols;
@@ -571,6 +576,14 @@ int term_screen_to_phys(const Terminal *term, int screen_row) {
     return (term->lines_start + top + screen_row) % term->lines_capacity;
 }
 
+uint64_t term_abs_cursor_line(const Terminal *term)
+{
+    if (!term) return 0;
+    int top = (term->lines_count >= term->rows)
+            ? (term->lines_count - term->rows) : 0;
+    return term->lines_recycled + (uint64_t)top + (uint64_t)term->cursor.row;
+}
+
 int term_view_to_logical(const Terminal *t, int screen_row)
 {
     if (!t || screen_row < 0 || screen_row >= t->rows) return -1;
@@ -600,6 +613,11 @@ void term_scroll_up(Terminal *term, int top, int bot, int n) {
             term_scroll(term);
         return;
     }
+
+    /* Rows shift in place from here: on the primary screen absolute line
+     * numbers stop meaning the same rows (term.h, region_scroll_seq). The
+     * alternate screen has rows of its own, so its scrolls are not counted. */
+    if (!term->alt_screen_active) term->region_scroll_seq++;
 
     /* Region scroll (or alt screen): pointer-swap within screen rows.
      * H10: n can exceed 64 for a scroll region taller than 64 rows (the
@@ -650,6 +668,10 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
     if (!term || top < 0 || bot >= term->rows || top >= bot || n <= 0)
         return;
     if (n > bot - top + 1) n = bot - top + 1;
+
+    /* Rows always shift in place when scrolling down (counted on the primary
+     * screen only, as in term_scroll_up()). */
+    if (!term->alt_screen_active) term->region_scroll_seq++;
 
     /* H10: chunk in groups of at most 64 -- see the matching comment in
      * term_scroll_up(). Scrolling down by n is equivalent to scrolling

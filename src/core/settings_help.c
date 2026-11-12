@@ -184,7 +184,7 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "type one again, or leave Model empty for the provider's default. "
       "Tool calls (web search, web fetch, the debug log) work with "
       "anthropic, openai, deepseek and moonshot; gemini and custom get "
-      "none.\nDefault: anthropic.",
+      "them only with Commands as tool calls set to On.\nDefault: anthropic.",
       "anthropic",
       0, 0, 0u),
     E(SH_AI_KEY, SETTINGS_PAGE_AI_PROVIDER, SH_KIND_SETTING,
@@ -230,8 +230,26 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Provider is custom. Use https. With plain http to anything but "
       "this PC, your API key and terminal text cross the network "
       "unencrypted, and a warning under the box says so. Refresh models "
-      "derives the model list address from this.\nDefault: empty.",
+      "derives the model list address from this. A custom endpoint gets "
+      "tool calls only with Commands as tool calls set to On.\nDefault: empty.",
       "empty",
+      0, 0, 0u),
+    E(SH_AI_RUNCMD_MODE, SETTINGS_PAGE_AI_PROVIDER, SH_KIND_SETTING,
+      "Commands as tool calls:",
+      NULL,
+      "Commands as tool calls:\n\nHow the assistant runs terminal "
+      "commands. On: through its run_command tool, each call an ordinary "
+      "command card; for custom it also tells Nutshell the endpoint "
+      "accepts the OpenAI \"tools\" field, so web search, web fetch and "
+      "the debug log come with it, and a server that silently ignores "
+      "tools then leaves the assistant unable to run anything. Off: "
+      "[EXEC] markers; web tools stay as they are. Automatic: On for "
+      "anthropic, openai and moonshot; Off for deepseek, gemini and "
+      "custom, whose tool calls are not yet verified against the live "
+      "services. Turn it Off if requests start failing with an error "
+      "about tools, or the assistant stops running commands.\n"
+      "Default: Automatic.",
+      "Automatic",
       0, 0, 0u),
 
     /* AI_BEHAVIOUR */

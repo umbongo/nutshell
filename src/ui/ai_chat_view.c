@@ -6,6 +6,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_header_layout.h"
+#include "chat_rebuild.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -113,64 +114,13 @@ void ai_chat_thinking_history_clear(AiChatData *d)
     d->stream_thinking_len = 0;
 }
 
-/* Append one CHAT_ITEM_COMMAND per entry in a batch's queue, in order,
- * tagged with the batch's id (chat_msg_set_batch) -- the inverse of what
- * WM_AI_RESPONSE builds live, used to rebuild a pending card wherever the
- * command items themselves aren't carried across a rebuild: a session
- * switch (ai_chat_rebuild_display, below) and --ui-demo's "batches"/etc.
- * states (ai_chat_apply_demo_extras, which builds real CmdBatch entries
- * from the canned ApprovalQueue and lets this same replay draw them).
- * Status maps straight onto the fields the list view reads: PENDING/
- * BLOCKED stay unsettled (part of the active card, approved=-1, which
- * chat_msg_set_command already defaults to); DENIED/APPROVED/EXECUTING/
- * COMPLETED all render inline (settled=1) -- APPROVED is included because
- * a card settles the moment every entry is decided, well before the
- * dispatcher actually gets around to sending it (see
- * ai_chat_settle_batch_if_done()). */
-void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
-{
-    if (!list || !batch) return;
-    for (int i = 0; i < batch->q.count; i++) {
-        const ApprovalEntry *e = &batch->q.entries[i];
-        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
-        if (!item) continue;
-        chat_msg_set_command(item, e->command, e->safety,
-                             e->status == APPROVE_BLOCKED);
-        chat_msg_set_quoted(item, e->quoted);
-        chat_msg_set_reason(item, e->reason);
-        chat_msg_set_batch(item, batch->id);
-        chat_msg_set_note(item, e->note);
-        /* A tool call's row (outcome PENDING until its slot is answered). */
-        if (e->tool) chat_msg_set_tool(item, 1);
-        switch (e->status) {
-        case APPROVE_APPROVED:
-        case APPROVE_EXECUTING:
-        case APPROVE_COMPLETED:
-            item->u.cmd.approved = 1;
-            item->u.cmd.settled = 1;
-            break;
-        case APPROVE_DENIED:
-            item->u.cmd.approved = 0;
-            item->u.cmd.settled = 1;
-            break;
-        case APPROVE_PENDING:
-        case APPROVE_BLOCKED:
-        default:
-            break;  /* stays unsettled -- part of the active card */
-        }
-    }
-
-    /* Run state comes from the same queue, so a rebuilt display (session
-     * switch, --ui-demo=executing) shows "running"/"ran" exactly where the
-     * live panel does instead of falling back to "queued". The batch is
-     * alive here by definition -- a rebuild only ever replays batches still
-     * in the set -- hence batch_ending = 0. */
-    chat_msg_batch_sync_run(list, batch->id, &batch->q, 0);
-}
-
 /* Rebuild the chat display from the conversation history.
- * Used when switching sessions to replay the loaded conversation.
- * Populates the ChatMsgList and invalidates the ChatListView. */
+ * Used when switching sessions (and redocking) to replay the loaded
+ * conversation. Which rows a stored turn yields is chat_rebuild_replay()'s
+ * (src/core/chat_rebuild.c, native tests): the rows of every tool call and
+ * its result, the replayed command rows of the session's run log, the live
+ * batches' cards. This clears the list, calls it and invalidates the
+ * ChatListView. */
 void ai_chat_rebuild_display(AiChatData *d)
 {
     if (!d) return;
@@ -179,76 +129,11 @@ void ai_chat_rebuild_display(AiChatData *d)
     d->stream_ai_item = NULL;
 
     /* No welcome placeholder any more -- an empty msg_list here (no real
-     * messages replayed below) is painted by chat_listview as the empty/
-     * no-key/no-session state instead (see ai_chat_update_panel_state()). */
-
-    /* Replay messages, skipping the system prompt at index 0 */
-    for (int i = 1; i < d->conv.msg_count; i++) {
-        const AiMessage *msg = &d->conv.messages[i];
-
-        if (msg->role == AI_ROLE_USER) {
-            chat_msg_append(&d->msg_list, CHAT_ITEM_USER,
-                            ai_msg_content(msg));
-        } else if (msg->role == AI_ROLE_ASSISTANT) {
-            /* Tool-use blocks first, matching the live "using tool: <name>"
-             * status row posted while the call is in flight. */
-            if (msg->n_tool_calls > 0 && msg->tool_calls) {
-                for (int ti = 0; ti < msg->n_tool_calls; ti++) {
-                    char tool_call_text[256];
-                    char fetch_desc[160] = "";
-                    if (strcmp(msg->tool_calls[ti].name, "web_fetch") == 0)
-                        (void)web_fetch_describe(msg->tool_calls[ti].input_json,
-                                                 fetch_desc, sizeof(fetch_desc));
-                    if (fetch_desc[0])
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s - %s",
-                                 msg->tool_calls[ti].name, fetch_desc);
-                    else
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s", msg->tool_calls[ti].name);
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_CALL,
-                                    tool_call_text);
-                }
-            }
-            const char *content = ai_msg_content(msg);
-            if (content && content[0] != '\0') {
-                ChatMsgItem *item = chat_msg_append(&d->msg_list,
-                                                     CHAT_ITEM_AI_TEXT,
-                                                     content);
-                if (item && d->thinking_history[i] &&
-                    d->thinking_history[i][0]) {
-                    chat_msg_set_thinking(item, d->thinking_history[i]);
-                    item->u.ai.thinking_complete = 1;
-                }
-            }
-        } else if (msg->role == AI_ROLE_TOOL) {
-            const char *content = ai_msg_content(msg);
-            size_t clen = content ? strlen(content) : 0;
-            char preview[256];
-            size_t plen = clen < 200 ? clen : 200;
-            memcpy(preview, content ? content : "", plen);
-            preview[plen] = '\0';
-            chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
-            if (clen > 200) {
-                char warn[256];
-                agentic_truncation_warning(msg->tool_name, warn, sizeof(warn));
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
-            }
-        }
-        /* Skip system messages injected mid-conversation */
-    }
-
-    /* Pending command batches: rebuild one card per batch still in the
-     * active session's set, oldest first -- the interleaving with earlier
-     * conversation turns isn't reconstructed (every batch's cards land
-     * after the full replay above), only which cards exist and their
-     * state (see docs/superpowers/specs/
-     * 2026-09-09-pending-command-batches.md, "Session switch"). */
-    if (d->active_state) {
-        for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            ai_chat_append_batch_command_items(&d->msg_list,
-                                               d->active_state->batches.b[bi]);
-    }
+     * messages replayed) is painted by chat_listview as the empty/no-key/
+     * no-session state instead (see ai_chat_update_panel_state()). */
+    chat_rebuild_replay(&d->msg_list, &d->conv, d->thinking_history,
+                        d->active_state ? &d->active_state->run_log : NULL,
+                        d->active_state ? &d->active_state->batches : NULL);
 
     if (d->hChatList) {
         chat_listview_invalidate(d->hChatList);
@@ -480,6 +365,18 @@ RECT ai_chat_to_RECT(NsRect r)
     return rc;
 }
 
+/* Ask for a repaint of the header row without erasing it (the paint fills
+ * the status strip itself). Call it when the activity word changes or goes
+ * away with no heartbeat left to repaint it. */
+void ai_chat_header_invalidate(AiChatData *d)
+{
+    if (!d || !d->hwnd) return;
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+    RECT rc = ai_chat_to_RECT(l.header);
+    InvalidateRect(d->hwnd, &rc, FALSE);
+}
+
 /* Paint the header's model chip and (while a session is active) the
  * activity dot + one-word status, next to the session label. Every rect
  * comes from ai_header_layout(): the word sits between the session name
@@ -492,6 +389,20 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc)
 
     AiHeaderLayout hl;
     ai_chat_header_layout(d, l.header, hdc, &hl);
+
+    /* The header is not erased on a repaint (the heartbeat invalidates it
+     * with bErase FALSE, so as not to flicker the chip, label and buttons),
+     * so the strip the word and dot can occupy -- from the end of the name
+     * to the chip -- is filled with the panel background here first. It
+     * is also what clears the word when the activity ends. */
+    {
+        int x0 = hl.name.x + hl.name.w;
+        int x1 = hl.chip.w > 0 ? hl.chip.x : hl.buttons.x;
+        if (x1 > x0 && hl.status.h > 0) {
+            RECT strip = { x0, hl.status.y, x1, hl.status.y + hl.status.h };
+            FillRect(hdc, &strip, d->hBrBgPrimary);
+        }
+    }
 
     if (hl.chip.w > 0 && hl.chip.h > 0) {
         RECT chip_rc = ai_chat_to_RECT(hl.chip);

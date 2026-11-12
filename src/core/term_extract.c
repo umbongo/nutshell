@@ -177,3 +177,130 @@ char *term_extract_last_n_dup(const Terminal *term, int n, size_t *len_out)
     if (len_out) *len_out = len;
     return buf;
 }
+
+/* ---- Absolute-line range capture ---- */
+
+static const TermRow *row_at(const Terminal *term, int logical)
+{
+    if (logical < 0 || logical >= term_logical_rows(term)) return NULL;
+    return term->lines[(term->lines_start + logical) % term->lines_capacity];
+}
+
+/* Writes the UTF-8 of cells [0, upto) of row to out (NULL: count only); a
+ * control cell is a space, as in extract_rows(). Returns the byte count. */
+static size_t row_emit(const TermRow *row, int upto, char *out)
+{
+    size_t n = 0;
+    for (int c = 0; c < upto; c++) {
+        char u8[4];
+        int k = utf8_encode(cell_text_codepoint(row->cells[c].codepoint), u8);
+        if (out) memcpy(out + n, u8, (size_t)k);
+        n += (size_t)k;
+    }
+    return n;
+}
+
+/* Cells up to and including the last that is not blank: what the writer
+ * trims a row to. */
+static int row_trimmed_cells(const TermRow *row)
+{
+    int last = -1;
+    for (int c = 0; c < row->len; c++)
+        if (cell_text_codepoint(row->cells[c].codepoint) != ' ') last = c;
+    return last + 1;
+}
+
+char *term_extract_abs_range_dup(const Terminal *term, uint64_t first, uint64_t end,
+                                 const char *echo, size_t *len_out, unsigned *flags)
+{
+    if (len_out) *len_out = 0;
+    if (flags) *flags = 0;
+    if (!term) return NULL;
+
+    /* Clamp the range to the live part of the ring: absolute line
+     * lines_recycled + i is logical row i. */
+    uint64_t base = term->lines_recycled;
+    uint64_t live_end = base + (uint64_t)term_logical_rows(term);
+    if (first < base) {
+        first = base;
+        if (flags) *flags = TERM_RANGE_START_RECYCLED;
+    }
+    if (end > live_end) end = live_end;
+    int s = 0, e = 0;
+    if (first < end) {
+        s = (int)(first - base);
+        e = (int)(end - base);
+    }
+
+    /* One allocation, the result's: room for every row of the range
+     * untrimmed plus a newline each, which also serves as the scratch the
+     * echo test builds its logical line in. */
+    size_t cap = 2;
+    for (int r = s; r < e; r++) {
+        const TermRow *row = row_at(term, r);
+        if (row) cap += row_emit(row, row->len, NULL) + 1;
+    }
+    char *buf = malloc(cap);
+    if (!buf) return NULL;
+    buf[0] = '\0';
+
+    /* The echo: the first row and the rows wrapped onto it, joined whole. */
+    if (echo && *echo && s < e) {
+        const TermRow *row = row_at(term, s);
+        if (row && !row->wrapped) {
+            size_t n = 0;
+            int r = s;
+            for (; r < e; r++) {
+                row = row_at(term, r);
+                if (r > s && (!row || !row->wrapped)) break;
+                if (row) n += row_emit(row, row->len, buf + n);
+            }
+            buf[n] = '\0';
+            if (strstr(buf, echo)) s = r;
+        }
+    }
+
+    int last = -1;
+    for (int r = s; r < e; r++) {
+        const TermRow *row = row_at(term, r);
+        if (row && row_trimmed_cells(row) > 0) last = r;
+    }
+
+    size_t pos = 0;
+    for (int r = s; r <= last; r++) {
+        const TermRow *row = row_at(term, r);
+        if (row) pos += row_emit(row, row_trimmed_cells(row), buf + pos);
+        if (r < last) buf[pos++] = '\n';
+    }
+    buf[pos] = '\0';
+    if (len_out) *len_out = pos;
+    return buf;
+}
+
+size_t term_extract_cursor_prefix(const Terminal *term, char *out, size_t cap)
+{
+    if (out && cap > 0) out[0] = '\0';
+    if (!term) return 0;
+    if (term->cursor.row < 0 || term->cursor.row >= term->rows) return 0;
+    int physical = term_screen_to_phys(term, term->cursor.row);
+    if (physical < 0 || physical >= term->lines_capacity) return 0;
+    const TermRow *row = term->lines[physical];
+    if (!row) return 0;
+
+    int upto = term->cursor.col;
+    if (upto > term->cols) upto = term->cols;
+    size_t total = 0, written = 0;
+    for (int c = 0; c < upto; c++) {
+        /* A cell past the written width has never held text: a space. */
+        uint32_t cp = c < row->len ? cell_text_codepoint(row->cells[c].codepoint) : ' ';
+        char u8[4];
+        int k = utf8_encode(cp, u8);
+        total += (size_t)k;
+        if (out && cap > 0 && written + (size_t)k < cap && written == total - (size_t)k) {
+            memcpy(out + written, u8, (size_t)k);
+            written += (size_t)k;
+        }
+    }
+    if (out && cap > 0) out[written] = '\0';
+    return total;
+}

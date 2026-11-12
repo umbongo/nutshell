@@ -6,6 +6,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "ai_conv_guard.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -25,6 +26,81 @@ CmdBatch *ai_chat_resolve_batch(AiChatData *d, LPARAM lParam)
               : cmd_batch_first_pending(&d->active_state->batches);
 }
 
+AiConversation *ai_chat_owner_conv(AiChatData *d, AiSessionState *owner)
+{
+    return (owner == d->active_state) ? &d->conv : &owner->conv;
+}
+
+int ai_chat_owner_add_note(AiChatData *d, AiSessionState *owner,
+                           const char *text, int keep_free)
+{
+    if (!d || !text) return -1;
+    AiConversation *conv = owner ? ai_chat_owner_conv(d, owner) : &d->conv;
+    AiNoteQueue *q = owner ? &owner->notes : NULL;
+    const int defer = owner &&
+        ai_stream_table_find_owner(&d->streams, owner) != NULL;
+    const int rc = ai_conv_add_user_note(conv, q, defer, keep_free, text);
+    if (rc < 0)   /* the note's text is never logged */
+        DLOG(DLOG_AI, DLOG_WARN, 0, "note.door_failed",
+             "rc=%d keep_free=%d defer=%d displayed=%d", rc, keep_free,
+             defer, (!owner || owner == d->active_state) ? 1 : 0);
+    if (rc == 2 && (!owner || owner == d->active_state)) {
+        /* Nothing was stored or queued: say so, so no note is lost silently
+         * (spec decisions 19 and 24). */
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            keep_free > 0
+                ? "[conversation full: the command results were not sent; "
+                  "start a New Chat]"
+                : "[conversation full: a Nutshell note was not stored; "
+                  "start a New Chat]");
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    }
+    return rc;
+}
+
+/* Record a command batch's rows in the owner's run log. A tool batch, an
+ * empty queue or an allocation failure records nothing (the log refuses). */
+static void batch_record(AiChatData *d, AiSessionState *owner,
+                         const CmdBatch *batch, int batch_ending)
+{
+    if (!d || !owner || !batch || cmd_batch_is_tool(batch)) return;
+    /* The hash is the one the batch took from its reply when it was created
+     * (CmdBatch.reply_hash), not read from a conversation now: a tab switch
+     * has already moved the working copy away, and Retry may have replaced
+     * the reply. */
+    (void)cmd_run_log_record(&owner->run_log, batch, batch->reply_hash,
+                             batch_ending);
+}
+
+void ai_chat_batch_remove_recorded(AiChatData *d, AiSessionState *owner,
+                                   CmdBatch *batch, int batch_ending)
+{
+    if (!d || !owner || !batch) return;
+    const int id = batch->id;   /* batch is freed by the remove below */
+    batch_record(d, owner, batch, batch_ending);
+    cmd_batch_remove(&owner->batches, id);
+}
+
+void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner)
+{
+    if (!d || !owner || owner->batches.count < CMD_BATCH_MAX) return;
+    /* cmd_batch_add() evicts b[0] and frees it. */
+    CmdBatch *oldest = owner->batches.b[0];
+    batch_record(d, owner, oldest, 1);
+    /* The displayed owner's live rows end as the record says: an approved
+     * row never sent reads "not run", not "queued", and a running one
+     * "unfinished". The caller settles the rows after the add. */
+    if (owner == d->active_state && !cmd_batch_is_tool(oldest))
+        chat_msg_batch_sync_run(&d->msg_list, oldest->id, &oldest->q, 1);
+}
+
+void ai_chat_batch_settle_rows(AiChatData *d, CmdBatch *batch)
+{
+    if (!d || !batch) return;
+    batch->settled = 1;
+    chat_msg_batch_settle(&d->msg_list, batch->id);
+}
+
 /* Once every entry in a batch has been decided (chat_approval_all_decided
  * -- PENDING is the only thing that blocks this; BLOCKED counts as
  * decided), render its command items inline (chat_msg_batch_settle) and,
@@ -39,8 +115,10 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
     if (!d || !batch) return;
     if (!chat_approval_all_decided(&batch->q)) return;
 
-    int batch_id = batch->id;
-    int has_runnable = chat_approval_next_approved(&batch->q) >= 0;
+    /* Still runnable: a command approved but not sent, or sent and still
+     * running (EXECUTING) -- denying the last pending row while another row
+     * runs must not remove the batch under the dispatcher. */
+    int has_runnable = !cmd_batch_finished(batch);
 
     /* A tool batch is never removed with its call unanswered (spec decision
      * 20: every removal answers the slot). Run and Deny have already
@@ -50,10 +128,245 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
     if (cmd_batch_is_tool(batch))
         (void)ai_chat_tool_slot_answer(d, batch, TOOL_DECISION_NOT_APPROVED);
 
-    chat_msg_batch_settle(&d->msg_list, batch_id);
+    /* A run_command batch with nothing left to run ends through the one
+     * finish (it settles the rows itself); a Deny all starts no request. */
+    if (!has_runnable && d->active_state && batch->runcmd) {
+        ai_chat_runcmd_finish(d, d->active_state, batch,
+                              runcmd_path_plan(RUNCMD_PATH_DECIDED).cause);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        return;
+    }
+
+    ai_chat_batch_settle_rows(d, batch);
     if (!has_runnable && d->active_state)
-        cmd_batch_remove(&d->active_state->batches, batch_id);
+        ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
+}
+
+/* ---- run_command: answering a reply that has no batch (spec decisions 5, 7, 25) ---- */
+
+/* A status row where the owner is displayed; a background owner has no list
+ * to draw into: the row is in its run log (runcmd_store_results), and the
+ * rebuild draws it. */
+static void owner_status_row(AiChatData *d, const AiSessionState *owner,
+                             const char *text)
+{
+    if (!d || owner != d->active_state) return;
+    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, text);
+    if (d->hChatList) chat_listview_invalidate(d->hChatList);
+}
+
+/* Fit `res` (n results, heap) and store them against the owner's open tool
+ * turn; age, flush the owner's notes (`keep_free` slots left free: 0 where
+ * nothing relaunches, runcmd_cause_keep_free otherwise) and say what happened: the
+ * row for the store's return and `cause_row` (RUNCMD_ROW_NONE: none) when the
+ * results are stored. Each row is shown when the owner is displayed and, with
+ * the turn kept, recorded in the owner's run log keyed to that reply (R64), so
+ * a rebuild or a background owner's later display draws it under its reply.
+ * `no_card` is 1 for a reply answered without a card (the record then says the
+ * live view drew none of its run_command calls, and the rebuild draws none),
+ * 0 for the results of a card's batch.
+ * The caller frees `res` and each content. Returns the store's return (0, 1,
+ * -1, -2). */
+static int runcmd_store_results(AiChatData *d, AiSessionState *owner,
+                                AiToolResult *res, int n,
+                                RunCmdStatusRow cause_row, int cause_n,
+                                int keep_free, int no_card)
+{
+    AiConversation *conv = ai_chat_owner_conv(d, owner);
+    const AiMessage *turn = ai_conv_open_tool_turn(conv);
+    if (!turn) return -1;
+    /* The key of the record, taken now: a negative return frees the turn. */
+    const int reply_msg = (int)(turn - conv->messages);
+    const uint32_t reply_hash = cmd_run_log_reply_hash(
+        ai_msg_content(turn), turn->content_len, turn->tool_calls,
+        turn->n_tool_calls);
+    /* The budget uses the panel's current model (the one the next request
+     * goes to), never a background owner's conv.model (Part A review item 4). */
+    const size_t snap = ai_conv_has_snapshot(conv) ? conv->snapshot_len : 0;
+    runcmd_fit(res, n,
+               runcmd_request_estimate(conv, d->provider, RUNCMD_TOOLS_ESTIMATE, snap),
+               runcmd_budget(AI_BODY_MAX, d->context_limit));
+    /* The stored turn's calls, in result order: without them no part is
+     * recognised as run_command (framed, aged, exempt from the cap). A negative
+     * return frees the turn, so nothing below reads it. */
+    const int rc = agentic_add_tool_results(conv, turn->tool_calls, res, n);
+    if (rc >= 0) runcmd_age_results(conv);
+    (void)ai_conv_flush_notes(conv, &owner->notes, keep_free);
+
+    char rows[CMD_RUN_STATUS_ROWS][CMD_RUN_STATUS_MAX];
+    const char *texts[CMD_RUN_STATUS_ROWS];
+    int nt = 0;
+    RunCmdStatusRow kinds[2];
+    int ks = 0;
+    if (rc == 1) kinds[ks++] = RUNCMD_ROW_REDUCED;
+    else if (rc == -1) kinds[ks++] = RUNCMD_ROW_FULL;
+    else if (rc < 0) kinds[ks++] = RUNCMD_ROW_STORE_FAILED;
+    if (rc >= 0 && cause_row != RUNCMD_ROW_NONE) kinds[ks++] = cause_row;
+    for (int k = 0; k < ks; k++) {
+        if (runcmd_status_text(kinds[k], kinds[k] == RUNCMD_ROW_FULL ? n : cause_n,
+                               rows[nt], sizeof(rows[nt])) == 0)
+            continue;
+        owner_status_row(d, owner, rows[nt]);
+        texts[nt] = rows[nt];
+        nt++;
+    }
+    /* With the turn gone (a negative return) there is no reply to key to. */
+    if (rc >= 0 && nt > 0)
+        (void)cmd_run_log_record_status(&owner->run_log, reply_msg, reply_hash,
+                                        texts, nt, no_card);
+    return rc;
+}
+
+static void free_results(AiToolResult *res, int n)
+{
+    if (!res) return;
+    for (int i = 0; i < n; i++) free(res[i].content);
+    free(res);
+}
+
+void ai_chat_runcmd_answer_reply(AiChatData *d, AiSessionState *owner,
+                                 RunCmdReply *r, RunCmdCause cause)
+{
+    if (!r) return;
+    if (!d || !owner) { runcmd_reply_free(r); return; }
+    const int n = r->n_calls;
+    /* 16 + 48 results is far too large for the stack: on the heap. */
+    AiToolResult *res = (AiToolResult *)calloc((size_t)(n > 0 ? n : 1), sizeof(*res));
+    if (!res || runcmd_build_results(r, NULL, cause, res) != n) {
+        free_results(res, n);
+        runcmd_reply_free(r);
+        /* No answer could be built: fall back to the one that needs no plan,
+         * else drop the turn so no call stays unanswered (spec decision 25). */
+        ai_chat_runcmd_answer_oom(d, owner);
+        return;
+    }
+    RunCmdStatusRow row = RUNCMD_ROW_NONE;
+    if (cause == RUNCMD_CAUSE_SESSION_GONE) row = RUNCMD_ROW_SESSION_GONE;
+    else if (cause == RUNCMD_CAUSE_SET_FULL) row = RUNCMD_ROW_SET_FULL;
+    else if (cause == RUNCMD_CAUSE_NO_SLOT) row = RUNCMD_ROW_NO_SLOT;
+    /* "N refused" counts every call of the reply: none of them could run. */
+    (void)runcmd_store_results(d, owner, res, n, row, n, 0, 1);
+    free_results(res, n);
+    runcmd_reply_free(r);
+}
+
+void ai_chat_runcmd_answer_oom(AiChatData *d, AiSessionState *owner)
+{
+    if (!d || !owner) return;
+    AiConversation *conv = ai_chat_owner_conv(d, owner);
+    const AiMessage *turn = ai_conv_open_tool_turn(conv);
+    if (!turn) return;
+    const int n = turn->n_tool_calls;
+    AiToolResult *res = (AiToolResult *)calloc((size_t)n, sizeof(*res));
+    if (!res || runcmd_oom_results(turn->tool_calls, n, res) != n) {
+        free(res);
+        (void)ai_conv_drop_open_tool_turn(conv);
+        char row[CMD_RUN_STATUS_MAX];
+        if (runcmd_status_text(RUNCMD_ROW_STORE_FAILED, n, row, sizeof(row)) > 0)
+            owner_status_row(d, owner, row);
+        return;
+    }
+    (void)runcmd_store_results(d, owner, res, n, RUNCMD_ROW_PLANNER_OOM, n, 0, 1);
+    free_results(res, n);
+}
+
+/* ---- run_command: the one end of a batch (spec decisions 8, 9 and 10) ---- */
+
+static const char RUNCMD_NO_ROOM_ROW[] =
+    "[conversation full: the command results were not sent; start a New Chat]";
+
+/* Read back the output of the call whose entry is `entry` (once: the capture's
+ * own flag makes every later call a no-op). UI thread only: it reads the
+ * Terminal. */
+static void runcmd_take_entry(AiChatData *d, CmdBatch *batch, int entry)
+{
+    if (!d || !batch || !batch->runcmd || !d->active_term) return;
+    RunCmdCall *call = runcmd_call_for_entry(batch->runcmd, entry);
+    if (!call) return;
+    (void)runcmd_capture_take(&call->cap, d->active_term, call->command,
+                              runcmd_cap_bytes(batch->runcmd->n_slot));
+}
+
+void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch,
+                           RunCmdCause cause)
+{
+    if (!d || !owner || !batch) return;
+    const int displayed = (owner == d->active_state);
+    const int batch_id = batch->id;
+    /* Read before the removal below frees the batch. */
+    const int user_acted = batch->user_acted;
+    const RunCmdReply *r = batch->runcmd;
+    int stored = 0;
+    int room = 0;
+
+    if (r && runcmd_cause_captures(cause) && displayed) {
+        /* The terminal may be gone (SESSION_ENDED, PANEL_CLOSED): no capture
+         * then; the call says "ran; output not captured". Only a displayed
+         * owner's terminal is d->active_term. */
+        for (int i = 0; i < batch->q.count; i++)
+            if (batch->q.entries[i].status == APPROVE_EXECUTING)
+                runcmd_take_entry(d, batch, i);
+    }
+
+    if (r && runcmd_cause_appends(cause)) {
+        AiConversation *conv = ai_chat_owner_conv(d, owner);
+        /* R45: the owner's queue, read here on the UI thread. Taken before the
+         * append, as the budget below is. The assistant tool turn is already
+         * stored, so only the results and the reply are still to come (not the
+         * stream thread's pre-store check, which counts the turn as well). */
+        room = agentic_room_for_finish(conv, &owner->notes);
+        const int n = r->n_calls;
+        /* 64 results are about 40 KB: on the heap. */
+        AiToolResult *res = (AiToolResult *)calloc((size_t)(n > 0 ? n : 1),
+                                                   sizeof(*res));
+        if (res && runcmd_build_results(r, &batch->q, cause, res) == n) {
+            const int rc = runcmd_store_results(d, owner, res, n,
+                                                RUNCMD_ROW_NONE, 0,
+                                                runcmd_cause_keep_free(cause), 0);
+            stored = (rc >= 0);
+        } else {
+            /* No answer could be built: the one that needs no plan, else the
+             * turn is dropped (spec decision 25). Nothing relaunches from it. */
+            ai_chat_runcmd_answer_oom(d, owner);
+        }
+        free_results(res, n);
+    }
+
+    if (displayed) {
+        chat_msg_batch_sync_run(&d->msg_list, batch_id, &batch->q, 1);
+        ai_chat_batch_settle_rows(d, batch);
+    }
+    ai_chat_batch_remove_recorded(d, owner, batch, 1);   /* frees batch */
+
+    /* A relaunch that fails to launch (out of memory, a refused body, no
+     * thread) leaves no request in flight: it takes the same tail as no
+     * relaunch, so a batch waiting behind this one is not stranded and the
+     * activity line does not keep reading "Executing". */
+    int launched = 0;
+    if (runcmd_finish_relaunches(cause, displayed, owner->busy, stored, room))
+        launched = ai_chat_send_tool_results(d, !user_acted);
+    if (!launched) {
+        if (runcmd_cause_relaunches(cause) && displayed && stored && !room)
+            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, RUNCMD_NO_ROOM_ROW);
+        /* No request follows: the activity line must not keep reading
+         * "Executing" for a command that is no longer running. */
+        if (displayed && d->activity.phase == ACTIVITY_EXECUTING) {
+            chat_activity_reset(&d->activity);
+            ai_chat_header_invalidate(d);
+            ai_chat_update_context_bar(d);
+        }
+        /* Nothing launched, so the stream that would have ended in
+         * ai_chat_maybe_start_next_batch() never runs: an approved batch
+         * waiting behind this one must not be stranded. Only a cause that
+         * leaves the session in place asks (a teardown cause never does: the
+         * session is being left or freed). Its own guards make it a no-op
+         * while a dispatch runs or a stream is busy; a background owner is
+         * never started here. */
+        if (displayed && runcmd_cause_starts_next(cause))
+            ai_chat_maybe_start_next_batch(d);
+    }
+    if (displayed && d->hChatList) chat_listview_invalidate(d->hChatList);
 }
 
 /* ---- Tool cards (trust boundary spec decisions 14, 15, 20, 22) ---- */
@@ -259,7 +572,7 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
     }
 
     if (displayed) {
-        ai_chat_append_batch_command_items(&d->msg_list, b);
+        chat_msg_append_batch_items(&d->msg_list, b);
         chat_activity_set_phase(&d->activity, ACTIVITY_WAITING,
                                 (float)GetTickCount() / 1000.0f);
         if (d->hChatList) chat_listview_reset_cmd_expand(d->hChatList);
@@ -296,7 +609,7 @@ void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state)
         if (res == TOOL_DECISION_NONE) res = TOOL_DECISION_CANCELLED;
         if (displayed) {
             tool_rows_set_outcome(d, batch_id, res);
-            (void)chat_msg_batch_settle(&d->msg_list, batch_id);
+            ai_chat_batch_settle_rows(d, b);
         }
         cmd_batch_remove(&state->batches, batch_id);   /* frees b */
         swept++;
@@ -321,7 +634,8 @@ void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state)
  * so the prefix actually written can never disagree with the check that
  * decided it was safe to send at all (dispatch_line_clear.h). */
 static void execute_command(AiChatData *d, const char *cmd,
-                             DispatchLineClearMode line_clear_mode)
+                             DispatchLineClearMode line_clear_mode,
+                             RunCmdCall *call)
 {
     if (!d || !cmd || !cmd[0]) return;
     SessionIo *io = d->active_io;
@@ -329,6 +643,8 @@ static void execute_command(AiChatData *d, const char *cmd,
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                         "[error: no active session]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        /* A run_command call is answered as not run, not "ran". */
+        if (call) call->unsent = RUNCMD_UNSENT_NO_SESSION;
         return;
     }
     /* Defense in depth: even though ai_extract_commands() and
@@ -342,8 +658,14 @@ static void execute_command(AiChatData *d, const char *cmd,
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
             "[command rejected: control characters inside an EXEC block]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        if (call) call->unsent = RUNCMD_UNSENT_UNSAFE;
         return;
     }
+
+    /* A run_command call records where its output starts, just before this
+     * command's first write (the prefix below, or the command itself). It
+     * writes nothing to the terminal. */
+    if (call) runcmd_capture_start(&call->cap, d->active_term);
 
     /* Clear any existing text on the line before pasting -- but only for a
      * shell known to treat Ctrl+E (end of line) + Ctrl+U (kill to start of
@@ -460,8 +782,15 @@ void ai_chat_maybe_start_next_batch(AiChatData *d)
  * Ctrl+C when the terminal is sitting at a continuation prompt, so the
  * shell discards the half-finished line and gives the user a prompt back,
  * and (b) tell the model what ran and what did not, instead of leaving it
- * to assume every command it proposed was executed (section 3). */
-void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
+ * to assume every command it proposed was executed (section 3).
+ *
+ * A run_command batch never reaches the [EXEC] continue text: it ends through
+ * ai_chat_runcmd_finish() with `cause` (the caller's runcmd_path_plan cause),
+ * after the status row and the Send button, so a relaunch (the timeout's) sees
+ * the panel at rest. The finish answers the model with the results, not with
+ * notify's text; notify still sends the Ctrl+C. */
+void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify,
+                             RunCmdCause cause)
 {
     if (!d || !d->dispatch_active) return;
 
@@ -474,12 +803,15 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
     char continue_text[4096] = "";
     int have_continue = 0;
     int unattended = 1;
+    CmdBatch *runcmd_batch = NULL;   /* ended by the finish, below */
 
     CmdBatch *batch = d->active_state
         ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
         : NULL;
-    if (batch) {
-        /* Read before cmd_batch_remove() below frees the batch. */
+    if (batch && batch->runcmd) {
+        runcmd_batch = batch;
+    } else if (batch) {
+        /* Read before ai_chat_batch_remove_recorded() below frees the batch. */
         unattended = !batch->user_acted;
         chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 1);
 
@@ -504,8 +836,8 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
                                                        sizeof(continue_text)) > 0;
         }
 
-        chat_msg_batch_settle(&d->msg_list, batch->id);
-        cmd_batch_remove(&d->active_state->batches, batch->id);
+        ai_chat_batch_settle_rows(d, batch);
+        ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
     }
     d->dispatch_batch_id = 0;
@@ -528,7 +860,10 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
 
-    if (have_continue) ai_chat_send_continue_message(d, continue_text, unattended);
+    if (runcmd_batch)
+        ai_chat_runcmd_finish(d, d->active_state, runcmd_batch, cause);
+    else if (have_continue)
+        ai_chat_send_continue_message(d, continue_text, unattended);
 }
 
 /* Diagnostic only, for dispatch_log_stall_if_due() below -- never used by
@@ -712,7 +1047,8 @@ void ai_chat_dispatch_tick(AiChatData *d)
         /* notify: the model is told which commands ran and which did not,
          * rather than being left to assume the whole batch executed. No
          * Ctrl+C -- active_io is already gone, which is why we're here. */
-        ai_chat_dispatch_cancel(d, NULL, 1);
+        ai_chat_dispatch_cancel(d, NULL, 1,
+                                runcmd_path_plan(RUNCMD_PATH_SESSION_ENDED).cause);
         return;
     }
 
@@ -782,6 +1118,9 @@ void ai_chat_dispatch_tick(AiChatData *d)
     if (idx >= 0) {
         if (d->dispatch_last_idx >= 0) {
             chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
+            /* The finished call's output, read at the prompt (a no-op after
+             * the first tick that sees it, the capture's own flag). */
+            runcmd_take_entry(d, batch, d->dispatch_last_idx);
             /* Sync the display now, not only right before the next send
              * below: the checks that follow can return without sending
              * anything this tick (a no-prefix wait, possibly for several
@@ -880,7 +1219,8 @@ void ai_chat_dispatch_tick(AiChatData *d)
                     ai_chat_dispatch_cancel(d,
                         "[not sent: the input line isn't empty, or the "
                         "prompt ends with a space before its last "
-                        "character]", 1);
+                        "character]", 1,
+                        runcmd_path_plan(RUNCMD_PATH_TIMEOUT).cause);
                     return;
                 }
 
@@ -916,7 +1256,9 @@ void ai_chat_dispatch_tick(AiChatData *d)
          * this one turns "running", the rest stay "queued". */
         chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 0);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        execute_command(d, batch->q.entries[idx].command, line_clear_mode);
+        RunCmdCall *rcall = batch->runcmd
+            ? runcmd_call_for_entry(batch->runcmd, idx) : NULL;
+        execute_command(d, batch->q.entries[idx].command, line_clear_mode, rcall);
         d->dispatch_last_idx = idx;
         d->dispatch_sent_count++;
         d->dispatch_await_echo = 1;
@@ -934,8 +1276,10 @@ void ai_chat_dispatch_tick(AiChatData *d)
         /* Nothing left to send in this batch -- settle it, remove it, and
          * tell the AI which batch just ran (rule 4) before letting it
          * continue. */
-        if (d->dispatch_last_idx >= 0)
+        if (d->dispatch_last_idx >= 0) {
             chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
+            runcmd_take_entry(d, batch, d->dispatch_last_idx);
+        }
 
         {
             char line[96];
@@ -945,8 +1289,27 @@ void ai_chat_dispatch_tick(AiChatData *d)
             DLOG(DLOG_AI, DLOG_INFO, 0, "dispatch.settled", "msg=%s", line);
         }
 
+        if (batch->runcmd) {
+            /* The tick's end of a run_command batch: the results answer the
+             * model, never the [EXEC] continue text. The finish settles,
+             * records, removes, and starts the next request (SETTLED). */
+            KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+            d->dispatch_active = 0;
+            d->dispatch_batch_id = 0;
+            d->dispatch_stall_reported = 0;
+            d->dispatch_ambiguous_since_tick = 0;
+            d->dispatch_ambiguous_reported = 0;
+            if (d->hSendBtn) {
+                SetWindowText(d->hSendBtn, ">");
+                InvalidateRect(d->hSendBtn, NULL, TRUE);
+            }
+            ai_chat_runcmd_finish(d, d->active_state, batch,
+                                  runcmd_path_plan(RUNCMD_PATH_TICK_END).cause);
+            return;
+        }
+
         int batch_id = batch->id;
-        /* Read before cmd_batch_remove() below frees the batch. */
+        /* Read before ai_chat_batch_remove_recorded() below frees the batch. */
         int unattended = !batch->user_acted;
         int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
         char first_cmd[1024] = "";
@@ -982,8 +1345,8 @@ void ai_chat_dispatch_tick(AiChatData *d)
         d->dispatch_ambiguous_since_tick = 0;
         d->dispatch_ambiguous_reported = 0;
 
-        chat_msg_batch_settle(&d->msg_list, batch_id);
-        cmd_batch_remove(&d->active_state->batches, batch_id);
+        ai_chat_batch_settle_rows(d, batch);
+        ai_chat_batch_remove_recorded(d, d->active_state, batch, 1);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
         if (d->hSendBtn) {

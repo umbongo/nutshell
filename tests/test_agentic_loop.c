@@ -1,5 +1,10 @@
 #include "test_framework.h"
 #include "ai_agentic.h"
+#include "run_command.h"
+#include "ai_conv_guard.h"
+#include "ai_prompt.h"
+#include "json_validate.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -161,24 +166,22 @@ int test_agentic_add_tool_results(void)
 
     int rc = agentic_add_tool_results(&conv, calls, results, 2);
     ASSERT_EQ(rc, 0);
-    ASSERT_EQ(conv.msg_count, 2);
+    ASSERT_EQ(conv.msg_count, 1);   /* one results turn for the round */
 
     AiMessage *m0 = &conv.messages[0];
     ASSERT_EQ((int)m0->role, (int)AI_ROLE_TOOL);
-    ASSERT_STR_EQ(ai_msg_content(m0), "search results here");
-    ASSERT_STR_EQ(m0->tool_call_id, "toolu_01");
-    ASSERT_STR_EQ(m0->tool_name, "web_search");
-    ASSERT_EQ(m0->is_tool_error, 0);
+    ASSERT_EQ(m0->n_parts, 2);
+    ASSERT_STR_EQ(m0->parts[0].content, "search results here");
+    ASSERT_STR_EQ(m0->parts[0].tool_call_id, "toolu_01");
+    ASSERT_STR_EQ(m0->parts[0].tool_name, "web_search");
+    ASSERT_EQ(m0->parts[0].is_error, 0);
 
-    AiMessage *m1 = &conv.messages[1];
-    ASSERT_EQ((int)m1->role, (int)AI_ROLE_TOOL);
-    ASSERT_STR_EQ(ai_msg_content(m1), "fetched page content");
-    ASSERT_STR_EQ(m1->tool_call_id, "toolu_02");
-    ASSERT_STR_EQ(m1->tool_name, "web_fetch");
-    ASSERT_EQ(m1->is_tool_error, 1);
+    ASSERT_STR_EQ(m0->parts[1].content, "fetched page content");
+    ASSERT_STR_EQ(m0->parts[1].tool_call_id, "toolu_02");
+    ASSERT_STR_EQ(m0->parts[1].tool_name, "web_fetch");
+    ASSERT_EQ(m0->parts[1].is_error, 1);
 
     ai_msg_free(m0);
-    ai_msg_free(m1);
     TEST_END();
 }
 
@@ -240,10 +243,344 @@ int test_agentic_truncation_warning(void)
 {
     TEST_BEGIN();
     char buf[256];
-    int n = agentic_truncation_warning("web_search", buf, sizeof(buf));
+    int n = agentic_truncation_warning("web_search", 0, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "web_search") != NULL);
     ASSERT_TRUE(strstr(buf, "truncated") != NULL);
+    TEST_END();
+}
+
+/* The warning names the real cap, or the bytes omitted: never "1MB". */
+int test_agentic_truncation_warning_text(void)
+{
+    TEST_BEGIN();
+    char buf[256];
+    int n = agentic_truncation_warning("web_fetch", 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[web_fetch output truncated at 64 KiB]");
+    ASSERT_EQ(n, (int)strlen(buf));
+    n = agentic_truncation_warning("run_command", 1234, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[run_command output cut: 1234 bytes omitted]");
+    ASSERT_EQ(n, (int)strlen(buf));
+    ASSERT_NULL(strstr(buf, "1MB"));
+    /* A NULL name reads as empty; a NULL or empty buffer writes nothing. */
+    agentic_truncation_warning(NULL, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[ output truncated at 64 KiB]");
+    ASSERT_EQ(agentic_truncation_warning("x", 0, NULL, 10), 0);
+    ASSERT_EQ(agentic_truncation_warning("x", 0, buf, 0), 0);
+    /* A small buffer is cut, never overrun. */
+    char small[8];
+    agentic_truncation_warning("web_fetch", 5, small, sizeof(small));
+    ASSERT_EQ(strlen(small), 7);
+    TEST_END();
+}
+
+/* ---- The cut-off input and the room for a tool round (spec 4) -------------- */
+
+/* A 4000-byte unterminated heredoc: the JSON stops mid-string. Stored as-is
+ * it would be sent back to the provider as invalid input. */
+int test_agentic_sanitize_cut_heredoc(void)
+{
+    TEST_BEGIN();
+    AiToolCall c;
+    memset(&c, 0, sizeof(c));
+    strcpy(c.id, "toolu_1");
+    strcpy(c.name, RUNCMD_TOOL_NAME);
+    size_t n = (size_t)snprintf(c.input_json, sizeof(c.input_json),
+                                "{\"command\":\"cat > f <<'EOF'\\n");
+    while (n < 4000) c.input_json[n++] = 'x';
+    c.input_json[n] = '\0';
+    ASSERT_EQ(agentic_sanitize_tool_inputs(&c, 1), 1);
+    ASSERT_STR_EQ(c.input_json, "{}");
+    char cmd[RUNCMD_COMMAND_MAX + 1], note[RUNCMD_NOTE_MAX];
+    ASSERT_EQ(runcmd_parse_input(c.input_json, cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+
+    /* The same call marked overflowed: its bytes are replaced even when
+     * what was kept parses as an object (a spliced command must not run). */
+    AiToolCall o;
+    memset(&o, 0, sizeof(o));
+    strcpy(o.name, RUNCMD_TOOL_NAME);
+    strcpy(o.input_json, "{\"command\":\"rm -rf build-cache\"}");
+    o.overflowed = 1;
+    ASSERT_EQ(agentic_sanitize_tool_inputs(&o, 1), 1);
+    ASSERT_STR_EQ(o.input_json, "{}");
+    ASSERT_EQ(runcmd_parse_input(o.input_json, cmd, note),
+              RUNCMD_PARSE_NO_COMMAND);
+    TEST_END();
+}
+
+int test_agentic_sanitize_keeps_valid(void)
+{
+    TEST_BEGIN();
+    AiToolCall c[5];
+    memset(c, 0, sizeof(c));
+    strcpy(c[0].input_json, "{\"command\":\"ls\"}");
+    strcpy(c[1].input_json, "");
+    strcpy(c[2].input_json, "[1]");
+    strcpy(c[3].input_json, "null");
+    strcpy(c[4].input_json, "{}");
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 5), 3);
+    ASSERT_STR_EQ(c[0].input_json, "{\"command\":\"ls\"}");
+    ASSERT_STR_EQ(c[1].input_json, "{}");
+    ASSERT_STR_EQ(c[2].input_json, "{}");
+    ASSERT_STR_EQ(c[3].input_json, "{}");
+    ASSERT_STR_EQ(c[4].input_json, "{}");
+    /* Nothing left to fix: a second pass changes nothing. */
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 5), 0);
+    ASSERT_EQ(agentic_sanitize_tool_inputs(NULL, 3), 0);
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 0), 0);
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, -1), 0);
+    TEST_END();
+}
+
+/* An input is kept only when json_validate accepts it too (review of B1-B11,
+ * 2026-11-11): the tolerant parser takes a raw newline in a string, an unknown
+ * escape, \v and \f around the object, nesting past 128 and a bare "-", and a
+ * kept input like that would make every later request body invalid. */
+int test_agentic_sanitize_json_validate(void)
+{
+    TEST_BEGIN();
+    enum { N = 8 };
+    AiToolCall c[N];
+    memset(c, 0, sizeof(c));
+    strcpy(c[0].input_json, "{\"command\":\"ls\"}");                  /* valid, kept */
+    strcpy(c[1].input_json, "{\"command\":\"a\nb\"}");               /* raw newline in a string */
+    strcpy(c[2].input_json, "{\"command\":\"a\\xb\"}");             /* unknown escape \x */
+    strcpy(c[3].input_json, "{}\v");
+    strcpy(c[4].input_json, "{}\f");
+    strcpy(c[5].input_json, "{\"command\":-}");
+    /* 130 arrays under an object: 131 deep, past json_validate's 128 */
+    size_t n = 0;
+    n += (size_t)snprintf(c[6].input_json + n, sizeof(c[6].input_json) - n, "{\"a\":");
+    for (int i = 0; i < 130; i++) c[6].input_json[n++] = '[';
+    for (int i = 0; i < 130; i++) c[6].input_json[n++] = ']';
+    c[6].input_json[n++] = '}';
+    c[6].input_json[n] = '\0';
+    /* 100 deep is within both limits and is kept */
+    n = 0;
+    n += (size_t)snprintf(c[7].input_json + n, sizeof(c[7].input_json) - n, "{\"a\":");
+    for (int i = 0; i < 100; i++) c[7].input_json[n++] = '[';
+    for (int i = 0; i < 100; i++) c[7].input_json[n++] = ']';
+    c[7].input_json[n++] = '}';
+    c[7].input_json[n] = '\0';
+    char deep_ok[AI_TOOL_INPUT_MAX];
+    strcpy(deep_ok, c[7].input_json);
+
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, N), 6);
+    ASSERT_STR_EQ(c[0].input_json, "{\"command\":\"ls\"}");
+    for (int i = 1; i <= 6; i++) ASSERT_STR_EQ(c[i].input_json, "{}");
+    ASSERT_STR_EQ(c[7].input_json, deep_ok);
+    TEST_END();
+}
+
+/* An input is kept only when it is exactly one JSON object: anything after
+ * it would make every later request body invalid. */
+int test_agentic_sanitize_exactly_one_object(void)
+{
+    TEST_BEGIN();
+    AiToolCall c[6];
+    memset(c, 0, sizeof(c));
+    strcpy(c[0].input_json, "{\"command\":\"ls\"}x");
+    strcpy(c[1].input_json, "{}{}");
+    strcpy(c[2].input_json, "{\"a\":1}{\"a\":1");
+    strcpy(c[3].input_json, "{\"command\":\"ls\"}garbage");
+    strcpy(c[4].input_json, "{\"command\":\"ls\"}  \n\t");
+    strcpy(c[5].input_json, " \n{\"command\":\"ls\"}");
+    ASSERT_EQ(agentic_sanitize_tool_inputs(c, 6), 4);
+    for (int i = 0; i < 4; i++) ASSERT_STR_EQ(c[i].input_json, "{}");
+    ASSERT_STR_EQ(c[4].input_json, "{\"command\":\"ls\"}  \n\t");
+    ASSERT_STR_EQ(c[5].input_json, " \n{\"command\":\"ls\"}");
+    TEST_END();
+}
+
+int test_agentic_room_for_tool_round(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    memset(&conv, 0, sizeof(conv));
+    conv.msg_count = 61;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 1);
+    conv.msg_count = 62;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 0);
+    conv.msg_count = 0;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 1);
+    conv.msg_count = AI_MAX_MESSAGES;
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 0);
+    ASSERT_EQ(agentic_room_for_tool_round(NULL, NULL), 0);
+    TEST_END();
+}
+
+/* The finish's room (review M1): the assistant tool turn is already stored, so
+ * only the results and the reply are still to come. */
+int test_agentic_room_for_finish(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    memset(&conv, 0, sizeof(conv));
+    conv.msg_count = 62;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 1);
+    conv.msg_count = 63;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 0);
+    conv.msg_count = 0;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 1);
+    conv.msg_count = AI_MAX_MESSAGES;
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 0);
+    ASSERT_EQ(agentic_room_for_finish(NULL, NULL), 0);
+
+    /* queued notes count one slot each; an empty queue counts nothing */
+    AiNoteQueue q;
+    memset(&q, 0, sizeof(q));
+    conv.msg_count = 60;
+    q.count = 2;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 1);   /* 60 + 2 + 2 = 64 */
+    conv.msg_count = 61;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 0);   /* 61 + 2 + 2 = 65 */
+    q.count = 1;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 1);   /* 61 + 2 + 1 = 64 */
+    q.count = 0;
+    ASSERT_EQ(agentic_room_for_finish(&conv, &q), 1);
+    TEST_END();
+}
+
+/* The sequence the review ran at 61 messages: the thread's check passes, the
+ * turn is stored (62), the finish stores the results (63), relaunches, and the
+ * reply is stored (64). The thread's function counts the turn a second time
+ * once it is stored, so it said "no room" here and the commands' results were
+ * never sent. */
+int test_agentic_finish_sequence_at_61(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    for (int i = 0; i < 61; i++)
+        ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_USER, "x"), 0);
+    ASSERT_EQ(conv.msg_count, 61);
+
+    /* the stream thread's check, before the turn is stored */
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 1);
+
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    snprintf(call.id, sizeof(call.id), "toolu_1");
+    snprintf(call.name, sizeof(call.name), "run_command");
+    snprintf(call.input_json, sizeof(call.input_json), "{\"command\":\"ls\"}");
+    ASSERT_EQ(agentic_add_assistant_tool_msg_ex(&conv, "", NULL, NULL, NULL,
+                                                &call, 1, NULL), 0);
+    ASSERT_EQ(conv.msg_count, 62);
+
+    /* the finish's check, with the turn stored */
+    ASSERT_EQ(agentic_room_for_tool_round(&conv, NULL), 0);   /* the old test */
+    ASSERT_EQ(agentic_room_for_finish(&conv, NULL), 1);
+
+    static const char out[] = "files";
+    AiToolResult res;
+    memset(&res, 0, sizeof(res));
+    snprintf(res.tool_use_id, sizeof(res.tool_use_id), "toolu_1");
+    res.content = (char *)(uintptr_t)out;
+    res.content_len = strlen(out);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &res, 1), 0);
+    ASSERT_EQ(conv.msg_count, 63);
+    ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_ASSISTANT, "done"), 0);
+    ASSERT_EQ(conv.msg_count, 64);
+    ASSERT_EQ(ai_conv_tool_pairs_well_formed(&conv), 1);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* A run_command result is bounded by its executor (64 KiB, escaped): the
+ * generic cap must not cut or strip it a second time. Another tool's result
+ * of the same size is still capped. */
+int test_agentic_runcmd_result_not_capped(void)
+{
+    TEST_BEGIN();
+    size_t big = 70000;
+    char *a = (char *)malloc(big + 1);
+    char *b = (char *)malloc(big + 1);
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    memset(a, 'a', big); a[big] = '\0';
+    memset(b, 'b', big); b[big] = '\0';
+
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall calls[2];
+    memset(calls, 0, sizeof(calls));
+    strcpy(calls[0].name, RUNCMD_TOOL_NAME);
+    strcpy(calls[1].name, "web_fetch");
+    AiToolResult res[2];
+    memset(res, 0, sizeof(res));
+    res[0].content = a; res[0].content_len = big;
+    res[1].content = b; res[1].content_len = big;
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 2), 0);
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(conv.messages[0].n_parts, 2);
+    ASSERT_EQ(conv.messages[0].parts[0].content_len, big);
+    ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, "");
+    ASSERT_TRUE(conv.messages[0].parts[1].content_len < big);
+    ASSERT_STR_EQ(conv.messages[0].parts[1].tool_note, AI_TOOL_TRUNC_NOTE);
+    ai_conv_reset(&conv);
+    free(a);
+    free(b);
+    TEST_END();
+}
+
+/* A long note ending with the cap's "\n" truncation line: the stored part
+ * keeps the whole note, the line still at its end (a part carries
+ * AI_TOOL_PART_NOTE_MAX bytes, so nothing is cut or moved). */
+int test_agentic_note_copy_keeps_marker(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    strcpy(call.name, "web_fetch");
+    AiToolResult r;
+    memset(&r, 0, sizeof(r));
+    size_t marker = strlen(AI_TOOL_TRUNC_NOTE);
+    /* 'a' then 200 two-byte characters: 401 bytes of head, odd on purpose */
+    size_t head_len = 401;
+    r.tool_note[0] = 'a';
+    for (size_t i = 1; i + 1 < head_len + 1; i += 2)
+        memcpy(r.tool_note + i, "\xC3\xA9", 2);
+    r.tool_note[head_len] = '\n';
+    memcpy(r.tool_note + head_len + 1, AI_TOOL_TRUNC_NOTE, marker + 1);
+    ASSERT_TRUE(head_len + 1 + marker < AI_TOOL_PART_NOTE_MAX);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
+    ASSERT_EQ(conv.messages[0].n_parts, 1);
+    const char *got = conv.messages[0].parts[0].tool_note;
+    ASSERT_STR_EQ(got, r.tool_note);
+    size_t glen = strlen(got);
+    ASSERT_EQ(glen, head_len + 1 + marker);
+    ASSERT_STR_EQ(got + glen - marker - 1, "\n" AI_TOOL_TRUNC_NOTE);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* AiToolResult and AiToolPart both carry AI_TOOL_PART_NOTE_MAX bytes of note;
+ * a stored part keeps a 355-byte note, multi-byte character and all. */
+int test_agentic_long_note_copy_cut_safely(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(sizeof(((AiToolResult *)0)->tool_note), AI_TOOL_PART_NOTE_MAX);
+    ASSERT_EQ(sizeof(((AiToolPart *)0)->tool_note), AI_TOOL_PART_NOTE_MAX);
+    ASSERT_EQ(AI_TOOL_PART_NOTE_MAX, 512);
+
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    strcpy(call.name, "web_fetch");
+    AiToolResult r;
+    memset(&r, 0, sizeof(r));
+    /* 254 ASCII bytes then a 2-byte character that straddles byte 255. */
+    memset(r.tool_note, 'n', 254);
+    memcpy(r.tool_note + 254, "\xC3\xA9", 2);
+    memset(r.tool_note + 256, 'm', 100);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
+    ASSERT_EQ(strlen(conv.messages[0].parts[0].tool_note), 356);
+    ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, r.tool_note);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -265,7 +602,7 @@ static void reasoning_conv(AiConversation *conv, const char *reasoning)
     snprintf(call.id, sizeof(call.id), "call_1");
     snprintf(call.name, sizeof(call.name), "web_fetch");
     snprintf(call.input_json, sizeof(call.input_json), "{\"url\":\"https://x.test/\"}");
-    agentic_add_assistant_tool_msg_ex(conv, "", reasoning, &call, 1);
+    agentic_add_assistant_tool_msg_ex(conv, "", reasoning, NULL, NULL, &call, 1, NULL);
 
     const char *page = "page text";
     AiToolResult res;
@@ -276,11 +613,20 @@ static void reasoning_conv(AiConversation *conv, const char *reasoning)
     agentic_add_tool_results(conv, &call, &res, 1);
 }
 
+/* DeepSeek's reasoning rule (spec decision 23) applies only to a request that
+ * offers run_command: the tests of that rule build with this array. */
+static const char REASON_TOOLS_RC[] =
+    "[{\"type\":\"function\",\"function\":{\"name\":\"web_fetch\","
+    "\"description\":\"d\",\"parameters\":{\"type\":\"object\"}}},"
+    "{\"type\":\"function\",\"function\":{\"name\":\"run_command\","
+    "\"description\":\"d\",\"parameters\":{\"type\":\"object\"}}}]";
+
 static size_t reasoning_body(const AiConversation *conv, const char *provider,
                              char *buf, size_t cap)
 {
-    return ai_build_request_body_tools(conv, NULL, REASON_TOOLS, buf, cap, 1,
-                                       provider);
+    const char *tools = strcmp(provider, "deepseek") == 0 ? REASON_TOOLS_RC
+                                                          : REASON_TOOLS;
+    return ai_build_request_body_tools(conv, NULL, tools, buf, cap, 1, provider);
 }
 
 int test_ai_supports_tools_moonshot(void)
@@ -322,8 +668,8 @@ int test_ai_reasoning_other_providers_none(void)
     TEST_BEGIN();
     AiConversation conv;
     reasoning_conv(&conv, "secret thoughts");
-    static const char *const providers[] = {"deepseek", "openai", "gemini",
-                                            "anthropic", NULL};
+    static const char *const providers[] = {"openai", "gemini", "anthropic",
+                                            "custom", NULL};
     for (int i = 0; providers[i]; i++) {
         char buf[16384];
         ASSERT_TRUE(reasoning_body(&conv, providers[i], buf, sizeof(buf)) > 0);
@@ -361,12 +707,15 @@ int test_ai_reasoning_absent_emits_nothing(void)
     ASSERT_NULL(conv.messages[2].reasoning);
 
     /* every other provider still emits nothing */
-    static const char *const others[] = {"deepseek", "openai", "gemini",
-                                         "anthropic", NULL};
+    static const char *const others[] = {"openai", "gemini", "anthropic",
+                                         "custom", NULL};
     for (int i = 0; others[i]; i++) {
         ASSERT_TRUE(reasoning_body(&conv, others[i], buf, sizeof(buf)) > 0);
         ASSERT_NULL(strstr(buf, "reasoning_content"));
     }
+    /* DeepSeek with tools sends the empty field too, like Moonshot */
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"reasoning_content\":\"\",\"tool_calls\":[") != NULL);
     ai_conv_reset(&conv);
     TEST_END();
 }
@@ -420,6 +769,326 @@ int test_ai_reasoning_capped(void)
     TEST_END();
 }
 
+/* ---- DeepSeek: reasoning whole or not at all (spec decision 23) ---------- */
+
+/* sys, user, asst(tool call, reasoning "r1"), tool, asst plain ("r2"), asst
+ * plain (none), user. The tool turn is recorded under `tool_provider`. */
+static void deepseek_conv(AiConversation *conv, const char *tool_provider)
+{
+    reasoning_conv(conv, "r1");
+    AiMessage *tm = &conv->messages[2];
+    snprintf(tm->tool_provider, sizeof(tm->tool_provider), "%s", tool_provider);
+    snprintf(tm->tool_model, sizeof(tm->tool_model), "m");
+    ai_conv_add(conv, AI_ROLE_ASSISTANT, "answer one");
+    ai_msg_set_reasoning(&conv->messages[conv->msg_count - 1], "r2");
+    ai_conv_add(conv, AI_ROLE_ASSISTANT, "answer two");
+    ai_conv_add(conv, AI_ROLE_USER, "next");
+}
+
+static size_t count_substr(const char *hay, const char *needle)
+{
+    size_t n = 0, nl = strlen(needle);
+    for (const char *p = hay; (p = strstr(p, needle)) != NULL; p += nl) n++;
+    return n;
+}
+
+int test_ai_reasoning_deepseek_tools_every_turn(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "deepseek");
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"reasoning_content\":\"r1\",\"tool_calls\":[") != NULL);
+    ASSERT_TRUE(strstr(buf, "{\"role\":\"assistant\",\"content\":\"answer one\","
+                            "\"reasoning_content\":\"r2\"}") != NULL);
+    ASSERT_TRUE(strstr(buf, "{\"role\":\"assistant\",\"content\":\"answer two\","
+                            "\"reasoning_content\":\"\"}") != NULL);
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":"), 3);
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":\"\""), 1);
+    /* a user turn carries none */
+    ASSERT_NULL(strstr(buf, "\"content\":\"next\",\"reasoning_content\""));
+    char err[128] = "";
+    ASSERT_TRUE(json_validate(buf, strlen(buf), err, sizeof(err)));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_no_tools_none(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "");
+    char buf[16384];
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, NULL, buf, sizeof(buf), 1,
+                                            "deepseek") > 0);
+    ASSERT_NULL(strstr(buf, "reasoning_content"));
+    ASSERT_NULL(strstr(buf, "\"r1\""));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_cut_not_sent(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "deepseek");
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+
+    /* a plain turn whose reasoning was cut: the request is not sent */
+    conv.messages[4].reasoning_cut = 1;
+    ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
+    ASSERT_STR_EQ(ai_body_failure_text_for(&conv, "deepseek", REASON_TOOLS_RC),
+        "[request not sent: a reply's reasoning was too long to send back whole; "
+        "start a New Chat, or set Commands as tool calls to Off]");
+    /* without tools the field is not sent, so nothing is refused */
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, NULL, buf, sizeof(buf), 1,
+                                            "deepseek") > 0);
+    /* nor with web tools only (Commands as tool calls Off): built as before */
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, REASON_TOOLS, buf, sizeof(buf), 1,
+                                            "deepseek") > 0);
+    ASSERT_NULL(strstr(buf, "reasoning_content"));
+    /* Moonshot sends only the tool-call turn's: a cut plain turn is no matter */
+    ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
+    conv.messages[4].reasoning_cut = 0;
+
+    /* the tool-call turn's own cut refuses too */
+    conv.messages[2].reasoning_cut = 1;
+    ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_foreign_turn_as_text(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    /* the tool turn was recorded under anthropic: it goes to deepseek as text,
+     * carries no reasoning_content, and its cut flag refuses nothing */
+    deepseek_conv(&conv, "anthropic");
+    conv.messages[2].reasoning_cut = 1;
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_NULL(strstr(buf, "\"tool_calls\""));
+    ASSERT_NULL(strstr(buf, "\"r1\""));
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":"), 2);   /* the two plain turns */
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+static void *refusing_alloc(size_t n)
+{
+    (void)n;
+    return NULL;
+}
+
+int test_ai_reasoning_oom_sets_cut(void)
+{
+    TEST_BEGIN();
+    AiMessage m;
+    memset(&m, 0, sizeof(m));
+    ai_prompt_set_alloc_for_test(refusing_alloc);
+    ASSERT_EQ(ai_msg_set_reasoning(&m, "some thoughts"), -1);
+    ai_prompt_set_alloc_for_test(NULL);
+    ASSERT_NULL(m.reasoning);
+    ASSERT_EQ(m.reasoning_cut, 1);
+
+    /* a clean set afterwards replaces the text and clears the flag */
+    ASSERT_EQ(ai_msg_set_reasoning(&m, "fine"), 0);
+    ASSERT_STR_EQ(m.reasoning, "fine");
+    ASSERT_EQ(m.reasoning_cut, 0);
+
+    /* the 16 KiB cap sets it; nothing cut does not */
+    size_t big = (size_t)AI_REASONING_MAX + 10;
+    char *text = (char *)malloc(big + 1);
+    ASSERT_NOT_NULL(text);
+    memset(text, 'a', big);
+    text[big] = '\0';
+    ASSERT_EQ(ai_msg_set_reasoning(&m, text), 0);
+    ASSERT_EQ(m.reasoning_cut, 1);
+    ASSERT_EQ(ai_msg_set_reasoning(&m, NULL), 0);
+    ASSERT_EQ(m.reasoning_cut, 0);
+    free(text);
+    ai_msg_free(&m);
+    ASSERT_EQ(m.reasoning_cut, 0);
+    TEST_END();
+}
+
+int test_ai_reasoning_moonshot_unchanged(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    deepseek_conv(&conv, "moonshot");
+    char buf[16384];
+    ASSERT_TRUE(reasoning_body(&conv, "moonshot", buf, sizeof(buf)) > 0);
+    /* the tool-call turn only: no plain turn carries it, "r2" is never sent */
+    ASSERT_EQ((int)count_substr(buf, "\"reasoning_content\":"), 1);
+    ASSERT_TRUE(strstr(buf, "\"reasoning_content\":\"r1\",\"tool_calls\":[") != NULL);
+    ASSERT_NULL(strstr(buf, "r2"));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_move_between_messages(void)
+{
+    TEST_BEGIN();
+    AiMessage a, b;
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    ASSERT_EQ(ai_msg_set_reasoning(&a, "from a"), 0);
+    a.reasoning_cut = 1;
+    snprintf(a.tool_provider, sizeof(a.tool_provider), "deepseek");
+    snprintf(a.tool_model, sizeof(a.tool_model), "deepseek-chat");
+    ASSERT_EQ(ai_msg_set_reasoning(&b, "old b"), 0);
+
+    ai_msg_move_reasoning(&b, &a);
+    ASSERT_STR_EQ(b.reasoning, "from a");
+    ASSERT_EQ(b.reasoning_cut, 1);
+    ASSERT_STR_EQ(b.tool_provider, "deepseek");
+    ASSERT_STR_EQ(b.tool_model, "deepseek-chat");
+    ASSERT_NULL(a.reasoning);
+    ASSERT_EQ(a.reasoning_cut, 0);
+    ASSERT_STR_EQ(a.tool_provider, "");
+    ASSERT_STR_EQ(a.tool_model, "");
+
+    /* an empty source clears the destination; NULL and self are no-ops */
+    ai_msg_move_reasoning(&b, &a);
+    ASSERT_NULL(b.reasoning);
+    ASSERT_EQ(b.reasoning_cut, 0);
+    ASSERT_EQ(ai_msg_set_reasoning(&b, "kept"), 0);
+    ai_msg_move_reasoning(&b, &b);
+    ai_msg_move_reasoning(NULL, &b);
+    ai_msg_move_reasoning(&b, NULL);
+    ASSERT_STR_EQ(b.reasoning, "kept");
+    ai_msg_free(&a);
+    ai_msg_free(&b);
+    TEST_END();
+}
+
+/* sys, user, a plain assistant turn issued by `provider` / `model` carrying
+ * `reasoning` (flagged cut when `cut`), user. The conversation's own model is
+ * `conv_model`. */
+static void issuer_conv(AiConversation *conv, const char *conv_model,
+                        const char *provider, const char *model,
+                        const char *reasoning, int cut)
+{
+    ai_conv_init(conv, conv_model);
+    ai_conv_add(conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(conv, AI_ROLE_USER, "q");
+    ai_conv_add_reply(conv, "answer", reasoning, cut, provider, model);
+    ai_conv_add(conv, AI_ROLE_USER, "next");
+}
+
+int test_ai_reasoning_deepseek_foreign_plain_turn_empty(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    char buf[16384];
+
+    /* (a) a Moonshot plain turn, then a switch to deepseek with tools */
+    issuer_conv(&conv, "deepseek-chat", "moonshot", "kimi-k2", "rm", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "{\"role\":\"assistant\",\"content\":\"answer\","
+                            "\"reasoning_content\":\"\"}") != NULL);
+    ASSERT_NULL(strstr(buf, "\"rm\""));
+    ai_conv_reset(&conv);
+
+    /* (b) deepseek-chat wrote it, the request is for deepseek-reasoner */
+    issuer_conv(&conv, "deepseek-reasoner", "deepseek", "deepseek-chat", "chat thoughts", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"content\":\"answer\",\"reasoning_content\":\"\"}") != NULL);
+    ASSERT_NULL(strstr(buf, "chat thoughts"));
+    ai_conv_reset(&conv);
+
+    /* the same model gets it back */
+    issuer_conv(&conv, "deepseek-reasoner", "deepseek", "deepseek-reasoner", "own thoughts", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"content\":\"answer\",\"reasoning_content\":\"own thoughts\"}") != NULL);
+    ai_conv_reset(&conv);
+
+    /* a turn with no recorded issuer is judged as before: sent */
+    issuer_conv(&conv, "deepseek-reasoner", "", "", "legacy", 0);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "\"content\":\"answer\",\"reasoning_content\":\"legacy\"}") != NULL);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_reasoning_deepseek_foreign_cut_plain_turn_not_refused(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    char buf[16384];
+
+    /* (c) a cut turn of another provider, or of another model, refuses nothing */
+    issuer_conv(&conv, "deepseek-chat", "moonshot", "kimi-k2", "rm", 1);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS_RC), 0);
+    ai_conv_reset(&conv);
+    issuer_conv(&conv, "deepseek-reasoner", "deepseek", "deepseek-chat", "x", 1);
+    ASSERT_TRUE(reasoning_body(&conv, "deepseek", buf, sizeof(buf)) > 0);
+    ai_conv_reset(&conv);
+
+    /* a deepseek turn of the same model, cut, still refuses */
+    issuer_conv(&conv, "deepseek-chat", "deepseek", "deepseek-chat", "x", 1);
+    ASSERT_EQ((int)reasoning_body(&conv, "deepseek", buf, sizeof(buf)), 0);
+    ASSERT_EQ(ai_body_refuses_cut_reasoning(&conv, "deepseek", REASON_TOOLS_RC), 1);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_conv_add_reply_records_issuer(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    ASSERT_EQ(ai_conv_add_reply(&conv, "hi", "why", 1, "deepseek", "deepseek-chat"), 0);
+    const AiMessage *t = &conv.messages[0];
+    ASSERT_EQ((int)t->role, (int)AI_ROLE_ASSISTANT);
+    ASSERT_STR_EQ(ai_msg_content(t), "hi");
+    ASSERT_STR_EQ(t->reasoning, "why");
+    ASSERT_EQ(t->reasoning_cut, 1);
+    ASSERT_STR_EQ(t->tool_provider, "deepseek");
+    ASSERT_STR_EQ(t->tool_model, "deepseek-chat");
+    ASSERT_EQ(t->n_tool_calls, 0);
+
+    /* nothing cut, no reasoning, no issuer */
+    ASSERT_EQ(ai_conv_add_reply(&conv, "yo", NULL, 0, NULL, NULL), 0);
+    ASSERT_NULL(conv.messages[1].reasoning);
+    ASSERT_EQ(conv.messages[1].reasoning_cut, 0);
+    ASSERT_STR_EQ(conv.messages[1].tool_provider, "");
+
+    /* the issuer does not turn a plain turn into text: a tool conversation of
+     * another provider still builds the plain turn structured */
+    ASSERT_EQ(ai_conv_add_reply(NULL, "x", NULL, 0, NULL, NULL), -1);
+    ASSERT_EQ(ai_conv_add_reply(&conv, NULL, NULL, 0, NULL, NULL), -1);
+    ASSERT_EQ(conv.msg_count, 2);
+
+    /* a full conversation stores nothing */
+    while (conv.msg_count < AI_MAX_MESSAGES) ai_conv_add(&conv, AI_ROLE_USER, "u");
+    ASSERT_EQ(ai_conv_add_reply(&conv, "x", "r", 0, "a", "b"), -1);
+    ASSERT_EQ(conv.msg_count, AI_MAX_MESSAGES);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* the copy keeps the flag */
+int test_ai_reasoning_cut_survives_copy(void)
+{
+    TEST_BEGIN();
+    AiConversation a, b;
+    deepseek_conv(&a, "deepseek");
+    a.messages[4].reasoning_cut = 1;
+    ai_conv_init(&b, "m");
+    ASSERT_EQ(ai_conv_copy(&b, &a), 0);
+    ASSERT_EQ(b.messages[4].reasoning_cut, 1);
+    ASSERT_EQ(b.messages[2].reasoning_cut, 0);
+    ai_conv_reset(&a);
+    ai_conv_reset(&b);
+    TEST_END();
+}
+
 int test_ai_reasoning_copy_take_compact(void)
 {
     TEST_BEGIN();
@@ -451,7 +1120,7 @@ int test_ai_reasoning_copy_take_compact(void)
     snprintf(call.name, sizeof(call.name), "web_fetch");
     for (int i = 0; i < 4; i++) {
         ai_conv_add(&t, AI_ROLE_USER, "u");
-        agentic_add_assistant_tool_msg_ex(&t, "", i == 3 ? "last" : "old", &call, 1);
+        agentic_add_assistant_tool_msg_ex(&t, "", i == 3 ? "last" : "old", NULL, NULL, &call, 1, NULL);
     }
     ASSERT_TRUE(ai_conv_compact(&t, 1) > 0);
     ASSERT_STR_EQ(t.messages[t.msg_count - 1].reasoning, "last");
@@ -536,9 +1205,29 @@ int test_ai_stream_chunk_cut_off(void)
     ASSERT_EQ(ai_stream_chunk_cut_off("not json"), 0);
     ASSERT_EQ(ai_stream_chunk_cut_off(""), 0);
     ASSERT_EQ(ai_stream_chunk_cut_off(NULL), 0);
-    /* Anthropic's own stop reason is a different format and not reported here */
+    TEST_END();
+}
+
+/* Anthropic ends a cut-off reply with message_delta and stop_reason
+ * "max_tokens"; any other reason is not a cut-off. */
+int test_stream_cut_off_anthropic_max_tokens(void)
+{
+    TEST_BEGIN();
     ASSERT_EQ(ai_stream_chunk_cut_off(
-        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}"), 0);
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\","
+        "\"stop_sequence\":null},\"usage\":{\"output_tokens\":8096}}"), 1);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}"), 0);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}"), 0);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":null}}"), 0);
+    /* The word as text is not a stop reason. */
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\","
+        "\"text\":\"max_tokens\"}}"), 0);
+    ASSERT_EQ(ai_stream_chunk_cut_off(
+        "{\"type\":\"message_delta\",\"delta\":{}}"), 0);
     TEST_END();
 }
 
@@ -579,5 +1268,577 @@ int test_ai_moonshot_output_limit_per_model(void)
         ASSERT_NULL(strstr(buf, "max_completion_tokens"));
         ai_conv_reset(&conv);
     }
+    TEST_END();
+}
+
+/* ---- One stored turn per tool round (spec decision 11, 25) ---------------- */
+
+/* Five calls, five results: each distinct, so an order or field mix-up shows. */
+static void five_calls(AiToolCall calls[5], AiToolResult res[5],
+                       char *bufs[5])
+{
+    static const char *names[5] = { "web_fetch", RUNCMD_TOOL_NAME, "web_search",
+                                    RUNCMD_TOOL_NAME, "read_debug_log" };
+    memset(calls, 0, 5 * sizeof(AiToolCall));
+    memset(res, 0, 5 * sizeof(AiToolResult));
+    for (int i = 0; i < 5; i++) {
+        snprintf(calls[i].id, sizeof(calls[i].id), "call_%d", i);
+        snprintf(calls[i].name, sizeof(calls[i].name), "%s", names[i]);
+        snprintf(res[i].tool_use_id, sizeof(res[i].tool_use_id), "call_%d", i);
+        char text[64];
+        snprintf(text, sizeof(text), "output number %d", i);
+        bufs[i] = (char *)malloc(strlen(text) + 1);
+        strcpy(bufs[i], text);
+        res[i].content = bufs[i];
+        res[i].content_len = strlen(text);
+        res[i].is_error = (i == 2);
+    }
+    /* result 1 is a cut run_command result with a full-length note */
+    memset(res[1].tool_note, 'n', AI_TOOL_PART_NOTE_MAX - 1);
+    res[1].omit_at = 7;
+    res[1].omitted_bytes = 41213;
+    snprintf(res[3].tool_note, sizeof(res[3].tool_note), "ran");
+    res[4].content_len = 0;         /* an empty result */
+    bufs[4][0] = '\0';
+}
+
+int test_agentic_results_one_turn(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+
+    AiToolCall calls[5];
+    AiToolResult res[5];
+    char *bufs[5];
+    five_calls(calls, res, bufs);
+
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 0);
+    ASSERT_EQ(conv.msg_count, 3);                 /* one message, not five */
+    AiMessage *m = &conv.messages[2];
+    ASSERT_EQ((int)m->role, (int)AI_ROLE_TOOL);
+    ASSERT_EQ(m->n_parts, 5);
+    ASSERT_NOT_NULL(m->parts);
+    if (m->parts && m->n_parts == 5) {
+        for (int i = 0; i < 5; i++) {
+            char want[16];
+            snprintf(want, sizeof(want), "call_%d", i);
+            ASSERT_STR_EQ(m->parts[i].tool_call_id, want);
+            ASSERT_STR_EQ(m->parts[i].tool_name, calls[i].name);
+            ASSERT_EQ(m->parts[i].is_error, i == 2);
+        }
+        ASSERT_STR_EQ(m->parts[0].content, "output number 0");
+        ASSERT_EQ(m->parts[0].content_len, 15);
+        ASSERT_TRUE(m->parts[0].content != bufs[0]);   /* its own copy */
+        /* the cut fields and the whole 511-byte note survive */
+        ASSERT_EQ(m->parts[1].omit_at, 7);
+        ASSERT_EQ(m->parts[1].omitted_bytes, 41213);
+        ASSERT_EQ(strlen(m->parts[1].tool_note), AI_TOOL_PART_NOTE_MAX - 1);
+        ASSERT_STR_EQ(m->parts[3].tool_note, "ran");
+        ASSERT_EQ(m->parts[0].omitted_bytes, 0);
+        ASSERT_EQ(m->parts[4].content_len, 0);
+    }
+
+    /* A deep copy and a take each own what they hold; reset frees all
+     * (SAN=1 reports a leak or a double free). */
+    AiConversation *copy = (AiConversation *)calloc(1, sizeof(*copy));
+    AiConversation *moved = (AiConversation *)calloc(1, sizeof(*moved));
+    ASSERT_NOT_NULL(copy);
+    ASSERT_NOT_NULL(moved);
+    if (copy && moved) {
+        ASSERT_EQ(ai_conv_copy(copy, &conv), 0);
+        AiMessage *c = &copy->messages[2];
+        ASSERT_EQ(c->n_parts, 5);
+        ASSERT_TRUE(c->parts != m->parts);
+        ASSERT_TRUE(c->parts && c->parts[0].content != m->parts[0].content);
+        ASSERT_STR_EQ(c->parts[0].content, "output number 0");
+        ASSERT_EQ(c->parts[1].omitted_bytes, 41213);
+        ASSERT_STR_EQ(c->parts[3].tool_note, "ran");
+
+        ai_conv_take(moved, &conv);
+        ASSERT_EQ(conv.msg_count, 0);
+        ASSERT_EQ(moved->messages[2].n_parts, 5);
+        ASSERT_STR_EQ(moved->messages[2].parts[2].tool_call_id, "call_2");
+        ASSERT_EQ(conv.messages[2].n_parts, 0);
+        ASSERT_NULL(conv.messages[2].parts);
+        ai_conv_reset(copy);
+        ai_conv_reset(moved);
+    }
+    ai_conv_reset(&conv);
+    free(copy);
+    free(moved);
+    for (int i = 0; i < 5; i++) free(bufs[i]);
+
+    /* Full: one slot is all a round needs, none left stores nothing. */
+    AiConversation full;
+    ai_conv_init(&full, "m");
+    for (int i = 0; i < AI_MAX_MESSAGES - 1; i++)
+        ai_conv_add(&full, AI_ROLE_USER, "x");
+    five_calls(calls, res, bufs);
+    ASSERT_EQ(agentic_add_tool_results(&full, calls, res, 5), 0);
+    ASSERT_EQ(full.msg_count, AI_MAX_MESSAGES);
+    ASSERT_EQ(agentic_add_tool_results(&full, calls, res, 5), -1);
+    ASSERT_EQ(full.msg_count, AI_MAX_MESSAGES);
+    ai_conv_reset(&full);
+    for (int i = 0; i < 5; i++) free(bufs[i]);
+
+    /* No results store no message. */
+    AiConversation none;
+    ai_conv_init(&none, "m");
+    ASSERT_EQ(agentic_add_tool_results(&none, calls, res, 0), 0);
+    ASSERT_EQ(none.msg_count, 0);
+    TEST_END();
+}
+
+/* An allocator that fails on the Nth call (fail_at) or on every call from the
+ * Nth on (fail_from). */
+static int g_alloc_n, g_alloc_fail_at, g_alloc_fail_from;
+
+static void *counting_alloc(size_t n)
+{
+    g_alloc_n++;
+    if (g_alloc_n == g_alloc_fail_at) return NULL;
+    if (g_alloc_fail_from && g_alloc_n >= g_alloc_fail_from) return NULL;
+    return malloc(n);
+}
+
+static void alloc_plan(int fail_at, int fail_from)
+{
+    g_alloc_n = 0;
+    g_alloc_fail_at = fail_at;
+    g_alloc_fail_from = fail_from;
+    agentic_set_alloc_for_test(counting_alloc);
+}
+
+/* A result's content that cannot be copied does not leave its call
+ * unanswered: the round is stored as one notes-only turn (spec 25). If even
+ * that array cannot be had, nothing is stored (Task B4 then drops the open
+ * assistant turn). */
+int test_agentic_results_oom_notes_only(void)
+{
+    TEST_BEGIN();
+    AiToolCall calls[5];
+    AiToolResult res[5];
+    char *bufs[5];
+
+    /* allocation 1 is the parts array, 2 the first content copy: fail it */
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    five_calls(calls, res, bufs);
+    /* the calls the results answer: the body builders refuse a results turn
+     * with no assistant turn before it */
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "go", calls, 5), 0);
+    alloc_plan(2, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 1);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 3);
+    AiMessage *m = &conv.messages[2];
+    ASSERT_EQ((int)m->role, (int)AI_ROLE_TOOL);
+    ASSERT_EQ(m->n_parts, 5);
+    if (m->parts && m->n_parts == 5) {
+        for (int i = 0; i < 5; i++) {
+            char want[16];
+            snprintf(want, sizeof(want), "call_%d", i);
+            ASSERT_STR_EQ(m->parts[i].tool_call_id, want);
+            ASSERT_STR_EQ(m->parts[i].tool_name, calls[i].name);
+            ASSERT_NULL(m->parts[i].content);
+            ASSERT_EQ(m->parts[i].content_len, 0);
+            ASSERT_EQ(m->parts[i].omitted_bytes, 0);
+            /* each result keeps its own note, and says its output is gone
+             * when it had one (a cut note keeps its tail: 511 bytes cannot
+             * hold the phrase too); result 4 had no output and no note */
+            if (i == 1) {
+                char cut[AI_TOOL_PART_NOTE_MAX];
+                size_t room = AI_TOOL_PART_NOTE_MAX - 1 - strlen("; output dropped: Nutshell ran out of memory");
+                memset(cut, 'n', room);
+                strcpy(cut + room, "; output dropped: Nutshell ran out of memory");
+                ASSERT_STR_EQ(m->parts[i].tool_note, cut);
+            } else if (i == 3) {
+                ASSERT_STR_EQ(m->parts[i].tool_note, "ran; output dropped: Nutshell ran out of memory");
+            } else if (i == 4) {
+                ASSERT_STR_EQ(m->parts[i].tool_note, "");
+            } else {
+                ASSERT_STR_EQ(m->parts[i].tool_note, "output dropped: Nutshell ran out of memory");
+            }
+        }
+    }
+    /* the caller still owns its results */
+    ASSERT_STR_EQ(res[0].content, "output number 0");
+
+    /* the turn answers every call: a well-formed Anthropic body */
+    char body[8192];
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, "[{\"name\":\"run_command\"}]",
+                                            body, sizeof(body), 0, "anthropic") > 0);
+    ASSERT_TRUE(strstr(body, "\"tool_use_id\":\"call_4\"") != NULL);
+    ASSERT_TRUE(strstr(body, "ran; output dropped: Nutshell ran out of memory") != NULL);
+    ASSERT_TRUE(strstr(body, "not run: Nutshell ran out of memory") == NULL);
+    ai_conv_reset(&conv);
+
+    /* a failure at a later part falls back the same way */
+    ai_conv_init(&conv, "m");
+    alloc_plan(4, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), 1);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(conv.messages[0].n_parts, 5);
+    ASSERT_NULL(conv.messages[0].parts[3].content);
+    ai_conv_reset(&conv);
+
+    /* nothing can be allocated: -1 and nothing stored */
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    alloc_plan(0, 1);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -2);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 1);
+
+    /* the parts array comes, the first content does not, and the notes-only
+     * array does not either: the partial first array is freed (SAN=1) */
+    alloc_plan(0, 2);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 5), -2);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_EQ(conv.msg_count, 1);
+    ai_conv_reset(&conv);
+    for (int i = 0; i < 5; i++) free(bufs[i]);
+    TEST_END();
+}
+
+/* The notes-only fallback keeps each result's own note (decision 25, review
+ * of B1-B11): a result that had output says "output dropped: Nutshell ran out
+ * of memory" after its note; one that had none keeps its note, so a command
+ * that ran is never reported as not run. */
+int test_agentic_notes_only_keeps_notes(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    AiToolCall calls[4];
+    AiToolResult res[4];
+    memset(calls, 0, sizeof(calls));
+    memset(res, 0, sizeof(res));
+    static const char *names[4] = { RUNCMD_TOOL_NAME, RUNCMD_TOOL_NAME, RUNCMD_TOOL_NAME, "web_search" };
+    static const char *notes[4] = { "ran", "not run (denied)", "", "" };
+    char out0[] = "hello", out2[] = "world";
+    for (int i = 0; i < 4; i++) {
+        snprintf(calls[i].id, sizeof(calls[i].id), "c%d", i);
+        snprintf(calls[i].name, sizeof(calls[i].name), "%s", names[i]);
+        snprintf(res[i].tool_use_id, sizeof(res[i].tool_use_id), "c%d", i);
+        snprintf(res[i].tool_note, sizeof(res[i].tool_note), "%s", notes[i]);
+    }
+    res[0].content = out0; res[0].content_len = 5;
+    res[2].content = out2; res[2].content_len = 5;
+    res[3].is_error = 1;
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "", calls, 4), 0);
+    alloc_plan(2, 0);                           /* the first content copy fails */
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 4), 1);
+    agentic_set_alloc_for_test(NULL);
+    ASSERT_TRUE(ai_conv_tool_pairs_well_formed(&conv));
+    const AiMessage *m = &conv.messages[conv.msg_count - 1];
+    ASSERT_EQ(m->n_parts, 4);
+    if (m->parts && m->n_parts == 4) {
+        ASSERT_STR_EQ(m->parts[0].tool_note, "ran; output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[1].tool_note, "not run (denied)");
+        ASSERT_STR_EQ(m->parts[2].tool_note, "output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[3].tool_note, "");
+        ASSERT_EQ(m->parts[3].is_error, 1);
+        for (int i = 0; i < 4; i++) ASSERT_NULL(m->parts[i].content);
+    }
+    char body[8192];
+    ASSERT_TRUE(ai_build_request_body_tools(&conv, NULL, "[{\"name\":\"run_command\"}]",
+                                            body, sizeof(body), 0, "anthropic") > 0);
+    ai_conv_reset(&conv);
+
+    /* a note too long to take the phrase is cut on a UTF-8 boundary, never
+     * mid-character and never mid-phrase */
+    const char *phrase = "; output dropped: Nutshell ran out of memory";
+    size_t room = AI_TOOL_PART_NOTE_MAX - 1 - strlen(phrase);
+    memset(res[0].tool_note, 'x', room - 1);
+    memcpy(res[0].tool_note + room - 1, "\xC3\xA9" "tail", 7);   /* the cut falls inside the e-acute */
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "", calls, 4), 0);
+    alloc_plan(2, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 4), 1);
+    agentic_set_alloc_for_test(NULL);
+    m = &conv.messages[conv.msg_count - 1];
+    if (m->parts && m->n_parts == 4) {
+        char want[AI_TOOL_PART_NOTE_MAX];
+        memset(want, 'x', room - 1);
+        strcpy(want + room - 1, phrase);
+        ASSERT_STR_EQ(m->parts[0].tool_note, want);
+    }
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* A note a part carries is the full AiToolResult note, never the 256-byte cut
+ * of a stored message, and the cap's truncation line stays at its end. */
+int test_agentic_parts_keep_full_note(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "m");
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    strcpy(call.name, "web_fetch");
+    AiToolResult r;
+    memset(&r, 0, sizeof(r));
+    memset(r.tool_note, 'n', 400);
+    memcpy(r.tool_note + 400, "\xC3\xA9", 2);
+    ASSERT_EQ(agentic_add_tool_results(&conv, &call, &r, 1), 0);
+    ASSERT_EQ(conv.messages[0].n_parts, 1);
+    ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, r.tool_note);
+    ASSERT_NULL(conv.messages[0].parts[0].content);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* The fallback also takes a stale "output cut: N bytes omitted from the middle"
+ * out of the note: the output is dropped, so a count of what was omitted from
+ * it would say something false (review of FW4, 2026-11-11). */
+int test_agentic_notes_only_drops_cut_note(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    AiToolCall calls[3];
+    AiToolResult res[3];
+    memset(calls, 0, sizeof(calls));
+    memset(res, 0, sizeof(res));
+    static const char *notes[3] = {
+        "ran; output cut: 41213 bytes omitted from the middle",
+        "output cut: 5 bytes omitted from the middle; the screen changed",
+        "ran; output cut: 7 bytes omitted from the middle",
+    };
+    char out[] = "hello";
+    for (int i = 0; i < 3; i++) {
+        snprintf(calls[i].id, sizeof(calls[i].id), "c%d", i);
+        snprintf(calls[i].name, sizeof(calls[i].name), "%s", RUNCMD_TOOL_NAME);
+        snprintf(res[i].tool_use_id, sizeof(res[i].tool_use_id), "c%d", i);
+        snprintf(res[i].tool_note, sizeof(res[i].tool_note), "%s", notes[i]);
+    }
+    res[0].content = out; res[0].content_len = 5;
+    res[1].content = out; res[1].content_len = 5;
+    /* res[2] had no output: its note stays as it was */
+    ai_conv_init(&conv, "m");
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(agentic_add_assistant_tool_msg(&conv, "", calls, 3), 0);
+    alloc_plan(2, 0);
+    ASSERT_EQ(agentic_add_tool_results(&conv, calls, res, 3), 1);
+    agentic_set_alloc_for_test(NULL);
+    const AiMessage *m = &conv.messages[conv.msg_count - 1];
+    ASSERT_EQ(m->n_parts, 3);
+    if (m->parts && m->n_parts == 3) {
+        ASSERT_STR_EQ(m->parts[0].tool_note, "ran; output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[1].tool_note,
+                      "the screen changed; output dropped: Nutshell ran out of memory");
+        ASSERT_STR_EQ(m->parts[2].tool_note, "ran; output cut: 7 bytes omitted from the middle");
+    }
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* ---- What the stream thread does with the store's answers (Task B13) ---- */
+
+int test_agentic_results_step_from_return(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)agentic_results_step(0), (int)AGENTIC_STEP_GO);
+    ASSERT_EQ((int)agentic_results_step(1), (int)AGENTIC_STEP_NOTE);
+    ASSERT_EQ((int)agentic_results_step(-1), (int)AGENTIC_STEP_FULL);
+    ASSERT_EQ((int)agentic_results_step(-2), (int)AGENTIC_STEP_FULL);
+    ASSERT_EQ((int)agentic_results_step(-7), (int)AGENTIC_STEP_FULL);
+    TEST_END();
+}
+
+int test_agentic_turn_step_from_return(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)agentic_turn_step(0), (int)AGENTIC_STEP_GO);
+    /* -1 is "the conversation filled meanwhile"; anything else is a failure
+     * to allocate, which is not a full conversation */
+    ASSERT_EQ((int)agentic_turn_step(-1), (int)AGENTIC_STEP_FULL);
+    ASSERT_EQ((int)agentic_turn_step(-2), (int)AGENTIC_STEP_FAIL);
+    ASSERT_EQ((int)agentic_turn_step(1), (int)AGENTIC_STEP_FAIL);
+    TEST_END();
+}
+
+int test_agentic_stop_row_texts(void)
+{
+    TEST_BEGIN();
+    char buf[128];
+    ASSERT_EQ(agentic_full_row(3, buf, sizeof(buf)) > 0, 1);
+    ASSERT_STR_EQ(buf, "[conversation full: 3 tool call(s) not run; start a New Chat]");
+    agentic_full_row(1, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "[conversation full: 1 tool call(s) not run; start a New Chat]");
+    /* a small buffer cuts, never overruns */
+    char tiny[12];
+    memset(tiny, 'x', sizeof(tiny));
+    agentic_full_row(2, tiny, sizeof(tiny));
+    ASSERT_EQ((int)strlen(tiny), 11);
+    ASSERT_EQ(agentic_full_row(2, NULL, 0), 0);
+    ASSERT_STR_EQ(AGENTIC_REDUCED_ROW,
+                  "[some results were reduced to notes: Nutshell ran out of memory]");
+    TEST_END();
+}
+
+/* ---- Gemini thought signatures (spec 2026-11-05 run-command §1) ------------ */
+
+/* system, user, assistant (two tool calls, issuer `provider`/"gem-model",
+ * thought_sig), the two results. */
+static void signature_conv(AiConversation *conv, const char *provider,
+                           const char *sig)
+{
+    ai_conv_init(conv, "gem-model");
+    ai_conv_add(conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(conv, AI_ROLE_USER, "look it up");
+
+    AiToolCall calls[2];
+    memset(calls, 0, sizeof(calls));
+    snprintf(calls[0].id, sizeof(calls[0].id), "call_a");
+    snprintf(calls[0].name, sizeof(calls[0].name), "web_search");
+    snprintf(calls[0].input_json, sizeof(calls[0].input_json), "{\"query\":\"x\"}");
+    snprintf(calls[1].id, sizeof(calls[1].id), "call_b");
+    snprintf(calls[1].name, sizeof(calls[1].name), "web_fetch");
+    snprintf(calls[1].input_json, sizeof(calls[1].input_json), "{\"url\":\"https://x.test/\"}");
+    agentic_add_assistant_tool_msg_ex(conv, "", NULL, provider, "gem-model",
+                                      calls, 2, sig);
+
+    static const char one[] = "r1", two[] = "r2";
+    AiToolResult res[2];
+    memset(res, 0, sizeof(res));
+    snprintf(res[0].tool_use_id, sizeof(res[0].tool_use_id), "call_a");
+    res[0].content = (char *)(uintptr_t)one;
+    res[0].content_len = 2;
+    snprintf(res[1].tool_use_id, sizeof(res[1].tool_use_id), "call_b");
+    res[1].content = (char *)(uintptr_t)two;
+    res[1].content_len = 2;
+    agentic_add_tool_results(conv, calls, res, 2);
+}
+
+static size_t signature_body(const AiConversation *conv, const char *provider,
+                             char *buf, size_t cap)
+{
+    return ai_build_request_body_tools(conv, NULL, REASON_TOOLS, buf, cap, 1,
+                                       provider);
+}
+
+int test_body_gemini_echoes_signature_first_call(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    signature_conv(&conv, "gemini", "c2ln\"\\x");   /* quote and backslash escape */
+    char buf[16384];
+    ASSERT_TRUE(signature_body(&conv, "gemini", buf, sizeof(buf)) > 0);
+    ASSERT_EQ(json_validate(buf, strlen(buf), NULL, 0), 1);
+
+    const char *blk = "\"extra_content\":{\"google\":{\"thought_signature\":"
+                      "\"c2ln\\\"\\\\x\"}}";
+    const char *at = strstr(buf, blk);
+    ASSERT_NOT_NULL(at);
+    ASSERT_NULL(strstr(at + 1, "\"extra_content\""));   /* once, not on the second call */
+
+    /* it sits on the first call (call_a), before the second call opens */
+    const char *a = strstr(buf, "\"id\":\"call_a\"");
+    const char *b = strstr(buf, "\"id\":\"call_b\"");
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ASSERT_TRUE(a < at && at < b);
+    /* the call object closes right after the block: ...}}}},{"id":"call_b" */
+    ASSERT_EQ(strncmp(at + strlen(blk), "},{\"id\":\"call_b\"", 16), 0);
+    ASSERT_NULL(strstr(buf, "skip_thought_signature_validator"));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_body_gemini_no_signature(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    signature_conv(&conv, "gemini", NULL);
+    char buf[16384];
+    ASSERT_TRUE(signature_body(&conv, "gemini", buf, sizeof(buf)) > 0);
+    ASSERT_EQ(json_validate(buf, strlen(buf), NULL, 0), 1);
+    ASSERT_NULL(strstr(buf, "extra_content"));
+    ASSERT_NULL(strstr(buf, "thought_signature"));
+    ASSERT_NULL(strstr(buf, "skip_thought_signature_validator"));
+    ASSERT_NOT_NULL(strstr(buf, "\"id\":\"call_a\""));
+
+    /* an empty string is no signature either */
+    ai_conv_reset(&conv);
+    signature_conv(&conv, "gemini", "");
+    ASSERT_NULL(conv.messages[2].thought_sig);
+    ASSERT_TRUE(signature_body(&conv, "gemini", buf, sizeof(buf)) > 0);
+    ASSERT_NULL(strstr(buf, "extra_content"));
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_body_openai_never_signature(void)
+{
+    TEST_BEGIN();
+    const char *provs[] = { "openai", "moonshot", "deepseek", "custom", "anthropic" };
+    for (int p = 0; p < 5; p++) {
+        AiConversation conv;
+        signature_conv(&conv, provs[p], "c2ln");   /* issued by that provider */
+        char buf[16384];
+        ASSERT_TRUE(signature_body(&conv, provs[p], buf, sizeof(buf)) > 0);
+        ASSERT_NULL(strstr(buf, "extra_content"));
+        ASSERT_NULL(strstr(buf, "thought_signature"));
+        ai_conv_reset(&conv);
+    }
+
+    /* a turn Gemini issued, sent to another provider, is text: no signature */
+    AiConversation conv;
+    signature_conv(&conv, "gemini", "c2ln");
+    char buf[16384];
+    ASSERT_TRUE(signature_body(&conv, "openai", buf, sizeof(buf)) > 0);
+    ASSERT_NULL(strstr(buf, "thought_signature"));
+    ASSERT_NULL(strstr(buf, "extra_content"));
+    ASSERT_EQ(json_validate(buf, strlen(buf), NULL, 0), 1);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_conv_thought_sig_owned_copied_moved(void)
+{
+    TEST_BEGIN();
+    AiConversation conv, copy, taken;
+    signature_conv(&conv, "gemini", "c2ln");
+    ASSERT_STR_EQ(conv.messages[2].thought_sig, "c2ln");
+
+    ai_conv_init(&copy, "m");
+    ASSERT_EQ(ai_conv_copy(&copy, &conv), 0);
+    ASSERT_STR_EQ(copy.messages[2].thought_sig, "c2ln");
+    ASSERT_TRUE(copy.messages[2].thought_sig != conv.messages[2].thought_sig);
+
+    ai_conv_init(&taken, "m");
+    ai_conv_take(&taken, &conv);
+    ASSERT_STR_EQ(taken.messages[2].thought_sig, "c2ln");
+    ASSERT_EQ(conv.msg_count, 0);
+
+    /* a plain reply added later starts with none */
+    ASSERT_EQ(ai_conv_add(&taken, AI_ROLE_ASSISTANT, "done"), 0);
+    ASSERT_NULL(taken.messages[taken.msg_count - 1].thought_sig);
+
+    /* the reasoning move carries it with the rest */
+    AiMessage a, b;
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    b.thought_sig = (char *)malloc(5);
+    memcpy(b.thought_sig, "abcd", 5);
+    a.thought_sig = (char *)malloc(2);
+    memcpy(a.thought_sig, "z", 2);
+    ai_msg_move_reasoning(&a, &b);
+    ASSERT_STR_EQ(a.thought_sig, "abcd");
+    ASSERT_NULL(b.thought_sig);
+    ai_msg_free(&a);
+    ASSERT_NULL(a.thought_sig);
+
+    ai_conv_reset(&taken);
+    ai_conv_reset(&copy);
     TEST_END();
 }

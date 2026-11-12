@@ -16,6 +16,7 @@
 #include "ai_tool_web_search.h"
 #include "ai_tool_web_fetch.h"
 #include "ai_agentic.h"
+#include "run_command.h"
 #include "ai_http.h"
 #include "ai_stream.h"
 #include "ai_data_block.h"
@@ -406,6 +407,8 @@ typedef struct {
     unsigned tools_gen;         /* bumped on every reconfigure; each stream
                                   * records the generation it snapshotted */
     int tool_support_notified;  /* 1 after showing "tools unavailable" message */
+    int runcmd_mode;            /* "Commands as tool calls": AI_RUNCMD_AUTO (0, the zero value),
+                                 * _ON or _OFF; ai_chat_set_runcmd_mode() sets it */
 
     /* Empty/no-key/no-session state (ai_panel_states.h), pushed to
      * hChatList whenever it might change -- see ai_chat_update_panel_state()
@@ -447,7 +450,23 @@ typedef struct {
     char *thinking;
     int input_tokens;          /* actual input token count from API (0 if unavailable) */
     int output_tokens;         /* actual output token count from API (0 if unavailable) */
+    int reply_stored;          /* 1 when the stream thread's own ai_conv_add() of
+                                * the reply into its conversation succeeded: the
+                                * reply is then that conversation's last message.
+                                * 0 on an error, a refused add (a full
+                                * conversation) and the tool-only paths. */
+    AiToolCall *calls;         /* a run_command stop: the stored turn's calls
+                                * (ids as stored), heap-copied by the thread; NULL
+                                * otherwise. Freed by ai_response_msg_free. */
+    int n_calls;               /* how many; 0 when calls is NULL */
+    int exec_inert;            /* the stream's run_command flag: this reply's [EXEC]
+                                * text is not acted on (set on every done message) */
+    int fetch_registered;      /* the stream's registry held web_fetch (planner input) */
 } AiResponseMsg;
+
+/* Free the message and what it owns (content, thinking, calls). NULL-safe.
+ * Every site that drops an AiResponseMsg uses it. */
+void ai_response_msg_free(AiResponseMsg *m);
 
 /* WM_AI_STREAM payload (one delta) and WM_AI_TOOL_MSG payload (one status
  * line; wParam is the ChatItemType). */
@@ -511,9 +530,71 @@ void ai_chat_input_sync_scroll(AiChatData *d);
 /* ai_chat_dispatch.c */
 CmdBatch *ai_chat_resolve_batch(AiChatData *d, LPARAM lParam);
 void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch);
+/* The conversation `owner` reads and writes: the panel's working copy for
+ * the displayed session, the session's own otherwise. */
+AiConversation *ai_chat_owner_conv(AiChatData *d, AiSessionState *owner);
+/* The one way a Nutshell-written USER turn (a NOTE, the policy notes, the
+ * [EXEC] continue text) enters a conversation: ai_conv_add_user_note() on the
+ * owner's conversation and note queue, with `defer` = a stream owned by
+ * `owner` is still registered (its thread works on a copy of the
+ * conversation, so a turn stored now would be lost by the take; inside
+ * WM_AI_RESPONSE the stream is already finished and nothing defers).
+ * `keep_free` is 1 when the text launches a request (the continue text), 0
+ * otherwise. `owner` NULL means the panel's own conversation with no queue.
+ * Returns the door's result (0 stored, 1 queued, 2 conversation full, -1
+ * failed). On 2 a row is shown when `owner` is the displayed session: the
+ * conversation-full notice for a launching text, "a Nutshell note was not
+ * stored" otherwise; a background owner's list is not drawn. */
+int ai_chat_owner_add_note(AiChatData *d, AiSessionState *owner,
+                           const char *text, int keep_free);
+/* Record a command batch in `owner`'s run log (cmd_run_log.h), then remove it
+ * from the owner's set and free it: the one way a command batch leaves the
+ * set, so a rebuilt display can show what ran (spec 2026-11-05 run-command
+ * tool, decision 21). `batch_ending` is 1 for every removal: a removed batch
+ * never runs again, so its replay must not read "queued" or "running". A tool
+ * batch is removed without a record. `batch` is freed. */
+void ai_chat_batch_remove_recorded(AiChatData *d, AiSessionState *owner,
+                                   CmdBatch *batch, int batch_ending);
+/* Call before cmd_batch_add() on `owner`'s set: when the set is full the add
+ * evicts the oldest batch, which is recorded here first (batch_ending 1) so
+ * its commands are not lost. Does nothing when there is room. */
+void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner);
+/* Answer a run_command reply that has no batch (spec decisions 5 and 7): one
+ * result per call of `r` in call order (runcmd_build_results with no queue
+ * under `cause`: NO_SLOT, SESSION_GONE or SET_FULL), fitted to the budget and
+ * stored in `owner`'s conversation against the open assistant tool turn, its
+ * calls passed in the stored order so each part is recognised as run_command;
+ * then runcmd_age_results and a flush of the owner's queued notes (keep_free
+ * 0). The return of the store is handled as spec decision 25: 1, -1 and -2
+ * each show a status row (the turn is already dropped on a negative one).
+ * Appends the status row of spec decision 5 for `cause` when `owner` is
+ * displayed (a background owner's list is not drawn; the rebuild shows the
+ * stored results). It never relaunches: no model request starts here. Frees
+ * `r`. When even the results array cannot be had, the open turn is dropped
+ * (ai_conv_drop_open_tool_turn) and a row says so. */
+void ai_chat_runcmd_answer_reply(AiChatData *d, AiSessionState *owner,
+                                 RunCmdReply *r, RunCmdCause cause);
+/* The planner-failure answer (runcmd_plan or cmd_batch_add ran out of memory,
+ * so there is no RunCmdReply): every call of the open stored tool turn is
+ * answered "not run: Nutshell ran out of memory" (runcmd_oom_results, R41),
+ * stored as above; the turn is dropped when even that array cannot be had.
+ * Never relaunches. */
+void ai_chat_runcmd_answer_oom(AiChatData *d, AiSessionState *owner);
 void ai_chat_dispatch_start(AiChatData *d, int batch_id);
 void ai_chat_maybe_start_next_batch(AiChatData *d);
-void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);
+/* Stop the dispatcher (see ai_chat_dispatch.c). `cause` is the RunCmdCause the
+ * running batch is answered with when it is a run_command batch (read from
+ * runcmd_path_plan(<the path>).cause at each caller); an [EXEC] batch ignores it. */
+void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify,
+                             RunCmdCause cause);
+/* The one end of a run_command batch (spec decisions 8 and 9): capture the
+ * EXECUTING entry's output where the cause says the terminal may exist, build
+ * the results, store them in `owner`'s conversation when the cause appends,
+ * settle the rows when `owner` is displayed, record and remove the batch (freed),
+ * and relaunch only where runcmd_finish_relaunches says so. Everything runs on
+ * the UI thread. */
+void ai_chat_runcmd_finish(AiChatData *d, AiSessionState *owner, CmdBatch *batch,
+                           RunCmdCause cause);
 void ai_chat_dispatch_tick(AiChatData *d);
 /* Tool cards (trust boundary spec decisions 14, 15, 20). The slot answer is
  * found by the batch's stream id and generation; no stream: NONE. Returns the
@@ -535,12 +616,24 @@ void ai_chat_register_tools(AiChatData *d, const char *search_provider,
                             const char *search_url, int max_search_results,
                             int web_fetch_enabled);
 void ai_chat_launch_stream_thread(AiChatData *d, const char *src);
-void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state);
+/* `keep_free`: the slots the flush of the owner's queued notes leaves free: 1
+ * where a launch follows the abort (Retry: runcmd_cause_keep_free of RETRY),
+ * 0 otherwise (Stop, New Chat, a closed session, the reaper, WM_DESTROY). */
+void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state,
+                                  int keep_free);
 void ai_chat_drain_stream_messages(HWND hwnd);
 void ai_chat_cancel_active_stream(AiChatData *d);
 void ai_chat_send_user_message(AiChatData *d);
 void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
                                    int unattended);
+/* Relaunch from a conversation that now ends on a run_command results turn: no
+ * USER turn. Same guard as the continue message; counts as a round
+ * (ai_rounds_continue), flushes the displayed session's queued notes leaving
+ * the reply's slot free, and launches the stream. Returns 1 when a stream is
+ * in flight, 0 when nothing launched (the guard, or a launch that failed and
+ * said so in a status row): the run_command finish then takes its no-relaunch
+ * tail. */
+int ai_chat_send_tool_results(AiChatData *d, int unattended);
 
 /* ai_chat_status.c */
 void ai_chat_invalidate_status_line(AiChatData *d);
@@ -565,7 +658,11 @@ int ai_chat_unscale(int px, int dpi);
 int ai_chat_input_h(const AiChatData *d);
 void ai_chat_update_panel_state(AiChatData *d);
 void ai_chat_thinking_history_clear(AiChatData *d);
-void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch);
+
+/* Settle `batch`'s rows in the displayed list (chat_msg_batch_settle) and
+ * remember it on the batch (CmdBatch.settled), which a rebuild reads. The one
+ * place a live batch's rows are settled while the batch can outlive the call. */
+void ai_chat_batch_settle_rows(AiChatData *d, CmdBatch *batch);
 void ai_chat_rebuild_display(AiChatData *d);
 void ai_chat_add_tooltip(HWND hTooltip, HWND hCtrl, const char *text);
 void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
@@ -574,6 +671,7 @@ void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
 void ai_chat_relayout(AiChatData *d);
 void ai_chat_paint_header(AiChatData *d, HDC hdc);
 void ai_chat_header_sync(AiChatData *d);
+void ai_chat_header_invalidate(AiChatData *d);
 void ai_chat_apply_zoom(AiChatData *d, int delta);
 
 #endif /* _WIN32 */

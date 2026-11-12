@@ -34,6 +34,40 @@ int stick_scroll_after_user(int scroll_y, int max_scroll);
  * otherwise scroll_y clamped to [0, max(max_scroll, 0)]. */
 int stick_scroll_on_layout(int stick, int scroll_y, int max_scroll);
 
+/* Called after a layout change that moved or resized the first visible
+ * item (a command card folding to one row, say). stick is the
+ * stick_to_bottom bit; scroll_y the position before; old_top and new_top the
+ * item's top in content coordinates before and after; new_h its height now.
+ * Pinned: scroll_y unchanged (stick_scroll_on_layout() follows the bottom).
+ * Not pinned: the view keeps the same offset into that item, clamped to its
+ * last pixel (new_h - 1), so what the reader looks at stays put when content
+ * above it shrinks. Never negative. */
+int stick_scroll_anchor(int stick, int scroll_y, int old_top, int new_top,
+                        int new_h);
+
+/* Which item the view should stay on when the layout above it changes (a
+ * command card folding): walk the items of the LAST layout. heights[i] is
+ * item i's height then (0 = not shown, no gap), redirect[i] is the index of
+ * the item to anchor on instead when item i has just been hidden (its fold
+ * group's first row), or -1. A group head whose own fold state changed in
+ * this refresh (a tall card that folded to one short row) sets
+ * redirect[i] = i: its old offset would be clamped to the last pixel of the
+ * fold row, so it too anchors at offset 0. gap is the space between items and above the
+ * first; scroll_y the position. Returns the first item whose bottom is below
+ * scroll_y and stores in *offset how far scroll_y sits into it (negative in
+ * the gap above the first item); an item that was just hidden gives its
+ * redirect target with offset 0, so the fold row sits at the top of the view.
+ * Returns -1 (offset untouched) when nothing is at or below scroll_y, or on
+ * bad arguments. */
+int stick_scroll_pick_anchor(const int *heights, const int *redirect, int n,
+                             int gap, int scroll_y, int *offset);
+
+/* The position that keeps a row where it is on screen across a layout
+ * change: screen_y is the row's top relative to the top of the view before
+ * (its content top minus scroll_y), new_top its content top now, max_scroll
+ * the new maximum offset. Clamped to [0, max(max_scroll, 0)]. */
+int stick_scroll_hold_row(int screen_y, int new_top, int max_scroll);
+
 #ifdef __cplusplus
 }
 #endif

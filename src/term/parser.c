@@ -382,7 +382,7 @@ static void handle_private_mode(Terminal *term, bool set)
 
 /* --------------------------------------------------------------------------- */
 
-static void handle_csi(Terminal *term, char final) {
+static void handle_csi(Terminal *term, char final, bool after_home) {
     int n, m;
     switch (final) {
         case 'A': // CUU - Up
@@ -401,6 +401,13 @@ static void handle_csi(Terminal *term, char final) {
             term->cursor.col -= get_param(term, 0, 1);
             clamp_cursor(term);
             break;
+        case 'Z': { // CBT - Back to the previous 8-column tab stop, Ps times
+            int tabs = get_param(term, 0, 1);
+            while (tabs-- > 0 && term->cursor.col > 0)
+                term->cursor.col = (term->cursor.col - 1) / 8 * 8;
+            clamp_cursor(term);
+            break;
+        }
         case 'H': // CUP - Cursor Position
         case 'f':
             n = get_param(term, 0, 1);
@@ -408,11 +415,19 @@ static void handle_csi(Terminal *term, char final) {
             term->cursor.row = n - 1;
             term->cursor.col = m - 1;
             clamp_cursor(term);
+            /* Remembered for an ED 0 that follows at once (see 'J'). */
+            term->after_cup_home = term->cursor.row == 0 && term->cursor.col == 0;
             break;
         case 'J': /* ED — Erase in Display */
             n = get_param(term, 0, 0);
             if (n == 0) {
-                /* Clear from cursor to end of screen */
+                /* Clear from cursor to end of screen. Straight after a CUP or
+                 * HVP to the home position this is `clear` (ESC[H ESC[J): a
+                 * whole-screen erase, counted like ED 2 (term.h, erase_seq).
+                 * Reaching home any other way (\r ESC[1A ESC[J, a transient
+                 * prompt) is not a clear. */
+                if (!term->alt_screen_active && after_home)
+                    term->erase_seq++;
                 TermRow *cr0 = get_screen_row(term, term->cursor.row);
                 if (cr0) {
                     for (int c = term->cursor.col; c < term->cols; c++) {
@@ -466,6 +481,7 @@ static void handle_csi(Terminal *term, char final) {
                 }
             } else if (n == 2) {
                 /* Clear entire screen — VT100: does NOT move cursor (xterm compat) */
+                if (!term->alt_screen_active) term->erase_seq++;
                 for (int r = 0; r < term->rows; r++) {
                     TermRow *rr = get_screen_row(term, r);
                     if (rr) {
@@ -688,6 +704,9 @@ void term_process(Terminal *term, const char *data, size_t len) {
                  * would otherwise reach term_put_char_utf8() (which already
                  * resyncs) -- handling it in the same place as every other
                  * control keeps this one rule easy to audit. */
+                /* "Straight after a CUP/HVP home" (erase_seq) survives only
+                 * the ESC that starts the next sequence. */
+                if (c != 0x1B) term->after_cup_home = false;
                 if ((c < 0x20 || c == 0x7F) && term->utf8_remaining > 0) {
                     term->utf8_remaining = 0;
                     term_put_char(term, 0xFFFDu);
@@ -715,6 +734,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                 break;
 
             case TERM_STATE_ESC:
+                if (c != '[') term->after_cup_home = false;
                 if (c == '[') {
                     term->state = TERM_STATE_CSI;
                     term->csi_param_count = 0;
@@ -822,6 +842,10 @@ void term_process(Terminal *term, const char *data, size_t len) {
                         term->csi_overflow = true;
                     }
                 } else if (c >= 0x40 && c <= 0x7E) {
+                    /* This sequence is "the control function before" for the
+                     * next one: only a CUP/HVP that homes sets it again. */
+                    bool after_home = term->after_cup_home;
+                    term->after_cup_home = false;
                     if (term->csi_sub_mask != 0 &&
                             !(c == 'm' && !term->csi_private)) {
                         /* Only SGR defines sub-parameters; any other CSI
@@ -829,7 +853,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     } else if (term->csi_private && (c == 'h' || c == 'l')) {
                         handle_private_mode(term, c == 'h');
                     } else {
-                        handle_csi(term, (char)c);
+                        handle_csi(term, (char)c, after_home);
                     }
                     term->csi_private = false;
                     term->state = TERM_STATE_NORMAL;

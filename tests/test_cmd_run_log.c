@@ -1,0 +1,852 @@
+/* tests/test_cmd_run_log.c */
+#include "test_framework.h"
+#include "cmd_run_log.h"
+#include "chat_msg.h"
+#include "ai_prompt.h"
+#include "run_command.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* An allocator that fails its `fail_at`-th call (1-based) and counts calls. */
+static int g_alloc_calls;
+static int g_alloc_fail_at;
+
+static void *failing_alloc(size_t n)
+{
+    g_alloc_calls++;
+    if (g_alloc_calls == g_alloc_fail_at) return NULL;
+    return malloc(n);
+}
+
+/* A batch of `n` approved commands (n <= 16) in a fresh set. */
+static CmdBatch *make_batch(CmdBatchSet *set, int n, int reply_msg)
+{
+    cmd_batch_set_init(set);
+    CmdBatch *b = cmd_batch_add(set, NULL, NULL);
+    if (!b) return NULL;
+    b->reply_msg = reply_msg;
+    b->q.policy.allowed = CMD_CRITICAL;
+    for (int i = 0; i < n; i++) {
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "echo row-%d", i);
+        int idx = chat_approval_add(&b->q, cmd, CMD_PLATFORM_LINUX);
+        chat_approval_approve(&b->q, idx);
+    }
+    return b;
+}
+
+/* Every ApprovalStatus x batch_ending 0/1, and what chat_cmd_label says of
+ * the row it maps to. */
+int test_cmd_run_row_every_state(void)
+{
+    TEST_BEGIN();
+    struct {
+        ApprovalStatus status;
+        int ending;
+        int approved, run;
+        const char *label;
+    } cases[] = {
+        { APPROVE_COMPLETED, 0,  1, CHAT_RUN_DONE,       "ran" },
+        { APPROVE_COMPLETED, 1,  1, CHAT_RUN_DONE,       "ran" },
+        { APPROVE_EXECUTING, 0,  1, CHAT_RUN_RUNNING,    "running" },
+        { APPROVE_EXECUTING, 1,  1, CHAT_RUN_UNFINISHED, "unfinished" },
+        { APPROVE_APPROVED,  0,  1, CHAT_RUN_NONE,       "queued" },
+        { APPROVE_APPROVED,  1,  1, CHAT_RUN_ABORTED,    "not run" },
+        { APPROVE_DENIED,    0,  0, CHAT_RUN_NONE,       "denied" },
+        { APPROVE_DENIED,    1,  0, CHAT_RUN_NONE,       "denied" },
+        { APPROVE_PENDING,   0, -1, CHAT_RUN_NONE,       "skipped" },
+        { APPROVE_PENDING,   1, -1, CHAT_RUN_NONE,       "skipped" },
+        { APPROVE_BLOCKED,   0, -1, CHAT_RUN_NONE,       "held" },
+        { APPROVE_BLOCKED,   1, -1, CHAT_RUN_NONE,       "held" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ApprovalEntry e;
+        memset(&e, 0, sizeof(e));
+        snprintf(e.command, sizeof(e.command), "ls");
+        e.safety = CMD_WRITE;
+        e.status = cases[i].status;
+        CmdRunRow row;
+        memset(&row, 0x5A, sizeof(row));
+        cmd_run_row_from_entry(&e, cases[i].ending, &row);
+        ASSERT_EQ(row.approved, cases[i].approved);
+        /* A held row stays held: the live row says "held" (blocked wins in
+         * chat_cmd_label), so the replay must too. */
+        ASSERT_EQ(row.blocked, cases[i].status == APPROVE_BLOCKED ? 1 : 0);
+        ASSERT_EQ(row.run, cases[i].run);
+        ASSERT_EQ(row.quoted, 0);
+        ASSERT_EQ((int)row.safety, (int)CMD_WRITE);
+        ASSERT_NULL(row.command);   /* the command is not copied */
+        ASSERT_STR_EQ(chat_cmd_label(row.approved, row.blocked, row.quoted,
+                                     row.run, NULL), cases[i].label);
+    }
+
+    /* The intent of the new chip. */
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_UNFINISHED, &intent),
+                  "unfinished");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
+
+    /* quoted is copied and wins, with its reason. */
+    ApprovalEntry q;
+    memset(&q, 0, sizeof(q));
+    q.status = APPROVE_BLOCKED;
+    q.quoted = 1;
+    snprintf(q.reason, sizeof(q.reason), "reads credentials");
+    CmdRunRow qr;
+    cmd_run_row_from_entry(&q, 1, &qr);
+    ASSERT_EQ(qr.quoted, 1);
+    ASSERT_STR_EQ(qr.reason, "reads credentials");
+    ASSERT_STR_EQ(chat_cmd_label(qr.approved, qr.blocked, qr.quoted, qr.run,
+                                 NULL), "quoted, not run");
+
+    /* NULL arguments are ignored. */
+    cmd_run_row_from_entry(NULL, 0, &qr);
+    cmd_run_row_from_entry(&q, 0, NULL);
+
+    /* Replayed as rows (the rebuild's fields), a held and a skipped entry
+     * count "held" and "skipped" in the batch summary, as they did live. */
+    ApprovalEntry he, se;
+    memset(&he, 0, sizeof(he));
+    memset(&se, 0, sizeof(se));
+    he.status = APPROVE_BLOCKED;
+    se.status = APPROVE_PENDING;
+    ApprovalEntry *ents[2] = { &he, &se };
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    for (int i = 0; i < 2; i++) {
+        CmdRunRow rr;
+        cmd_run_row_from_entry(ents[i], 1, &rr);
+        ChatMsgItem *it = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+        ASSERT_NOT_NULL(it);
+        chat_msg_set_command(it, "ls", rr.safety, rr.blocked);
+        chat_msg_set_batch(it, -1);
+        it->u.cmd.approved = rr.approved;
+        it->u.cmd.run = rr.run;
+        it->u.cmd.settled = 1;
+    }
+    ChatBatchCounts counts;
+    ASSERT_EQ(chat_msg_batch_counts(&list, -1, &counts), 2);
+    ASSERT_EQ(counts.held, 1);
+    ASSERT_EQ(counts.skipped, 1);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_cmd_run_log_record_copies(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    CmdBatch *b = make_batch(&set, 3, 4);
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->q.count, 3);
+    snprintf(b->q.entries[1].reason, sizeof(b->q.entries[1].reason),
+             "touches keys");
+    chat_approval_set_executing(&b->q, 0);
+    chat_approval_set_completed(&b->q, 0);
+    chat_approval_set_executing(&b->q, 1);
+
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(log.count, 0);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 0xABCDu, 1), 0);
+    ASSERT_EQ(log.count, 1);
+    const CmdRunRecord *r = log.rec[0];
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(r->n, 3);
+    ASSERT_EQ(r->reply_msg, 4);
+    ASSERT_EQ((int)r->turn_hash, 0xABCD);
+    ASSERT_STR_EQ(r->rows[0].command, "echo row-0");
+    ASSERT_STR_EQ(r->rows[1].command, "echo row-1");
+    ASSERT_STR_EQ(r->rows[2].command, "echo row-2");
+    ASSERT_EQ(r->rows[0].run, CHAT_RUN_DONE);
+    ASSERT_EQ(r->rows[1].run, CHAT_RUN_UNFINISHED);   /* batch_ending 1 */
+    ASSERT_EQ(r->rows[2].run, CHAT_RUN_ABORTED);
+    ASSERT_STR_EQ(r->rows[1].reason, "touches keys");
+
+    /* The copies are the log's own: change the source afterwards. */
+    ASSERT_TRUE(r->rows[0].command != b->q.entries[0].command);
+    snprintf(b->q.entries[0].command, sizeof(b->q.entries[0].command),
+             "changed");
+    ASSERT_STR_EQ(r->rows[0].command, "echo row-0");
+
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_cmd_run_log_refusals(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    CmdBatch *b = make_batch(&set, 2, 1);
+    ASSERT_NOT_NULL(b);
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+
+    ASSERT_EQ(cmd_run_log_record(NULL, b, 1, 0), -1);
+    ASSERT_EQ(cmd_run_log_record(&log, NULL, 1, 0), -1);
+    ASSERT_EQ(log.count, 0);
+
+    b->tool_stream_id = 7;                       /* a tool batch */
+    ASSERT_EQ(cmd_run_log_record(&log, b, 1, 0), -1);
+    ASSERT_EQ(log.count, 0);
+    b->tool_stream_id = 0;
+
+    b->q.count = 0;                              /* an empty queue */
+    ASSERT_EQ(cmd_run_log_record(&log, b, 1, 0), -1);
+    ASSERT_EQ(log.count, 0);
+
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_cmd_run_log_drops_oldest(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    CmdBatch *b = make_batch(&set, 2, 0);
+    ASSERT_NOT_NULL(b);
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+
+    for (int i = 1; i <= CMD_RUN_LOG_MAX + 1; i++) {
+        b->reply_msg = i;
+        ASSERT_EQ(cmd_run_log_record(&log, b, (uint32_t)i, 0), 0);
+        ASSERT_EQ(log.count, i <= CMD_RUN_LOG_MAX ? i : CMD_RUN_LOG_MAX);
+    }
+    ASSERT_EQ(log.count, 16);
+    ASSERT_EQ(log.rec[0]->reply_msg, 2);                 /* the 1st was dropped */
+    ASSERT_EQ(log.rec[15]->reply_msg, 17);               /* newest last */
+    for (int i = 0; i < log.count; i++) {
+        ASSERT_NOT_NULL(log.rec[i]);
+        ASSERT_EQ(log.rec[i]->reply_msg, i + 2);
+    }
+
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_cmd_run_log_free(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    CmdBatch *b = make_batch(&set, 2, 1);
+    ASSERT_NOT_NULL(b);
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 1, 0), 0);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 2, 0), 0);
+    ASSERT_EQ(log.count, 2);
+
+    cmd_run_log_free(&log);
+    ASSERT_EQ(log.count, 0);
+    ASSERT_NULL(log.rec[0]);
+    cmd_run_log_free(&log);          /* twice is safe */
+    ASSERT_EQ(log.count, 0);
+    cmd_run_log_free(NULL);          /* NULL is safe */
+    cmd_run_log_init(NULL);
+
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_cmd_run_log_turn_hash(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(cmd_run_log_turn_hash("", 0) == 0x811C9DC5u);   /* FNV-1a 32 offset basis */
+    ASSERT_TRUE(cmd_run_log_turn_hash("abc", 3) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_turn_hash(NULL, 0) == 0x811C9DC5u);
+    /* Only len bytes are read. */
+    ASSERT_TRUE(cmd_run_log_turn_hash("abcdef", 3) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_turn_hash("abd", 3) != cmd_run_log_turn_hash("abc", 3));
+    ASSERT_TRUE(cmd_run_log_turn_hash("Abc", 3) != cmd_run_log_turn_hash("abc", 3));
+    TEST_END();
+}
+
+/* The rebuild's match rule (spec 21 (c)): reply_msg, an assistant turn, and
+ * the content's hash. */
+int test_cmd_run_record_matches_rule(void)
+{
+    TEST_BEGIN();
+    const char *text = "I will run two commands.";
+    size_t len = strlen(text);
+    CmdRunRecord rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.reply_msg = 5;
+    rec.turn_hash = cmd_run_log_turn_hash(text, len);
+
+    ASSERT_EQ(cmd_run_record_matches(&rec, 5, 1, text, len), 1);
+    ASSERT_EQ(cmd_run_record_matches(&rec, 4, 1, text, len), 0);   /* other index */
+    ASSERT_EQ(cmd_run_record_matches(&rec, 5, 0, text, len), 0);   /* not an assistant turn */
+    ASSERT_EQ(cmd_run_record_matches(&rec, 5, 1, "I will run two commands!", len), 0);
+    ASSERT_EQ(cmd_run_record_matches(&rec, 5, 1, text, len - 1), 0);
+    ASSERT_EQ(cmd_run_record_matches(NULL, 5, 1, text, len), 0);
+    ASSERT_EQ(cmd_run_record_matches(&rec, 5, 1, NULL, 0), 0);     /* hash of "" differs */
+    TEST_END();
+}
+
+/* The hash of a reply that made tool calls mixes in the calls' ids, in order:
+ * an empty-content tool-only reply would otherwise hash alike at every index
+ * (Review Focus 6). A reply with no calls hashes exactly as before. */
+static void set_call_id(AiToolCall *c, const char *id)
+{
+    memset(c, 0, sizeof(*c));
+    snprintf(c->id, sizeof(c->id), "%s", id);
+    snprintf(c->name, sizeof(c->name), "run_command");
+    snprintf(c->input_json, sizeof(c->input_json), "{\"command\":\"ls\"}");
+}
+
+int test_cmd_run_log_reply_hash_no_calls_is_turn_hash(void)
+{
+    TEST_BEGIN();
+    AiToolCall c;
+    set_call_id(&c, "call_1");
+    /* a plain [EXEC] reply: exactly the FNV-1a of the content, as at cec497a */
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, NULL, 0) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, NULL, 0) == 0x811C9DC5u);
+    ASSERT_TRUE(cmd_run_log_reply_hash(NULL, 0, NULL, 0) == 0x811C9DC5u);
+    /* n_calls 0 (or a NULL array) ignores the calls */
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, &c, 0) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, NULL, 2) == 0x1A47E90Bu);
+    ASSERT_TRUE(cmd_run_log_reply_hash("abcdef", 3, NULL, 0) == 0x1A47E90Bu);
+    TEST_END();
+}
+
+int test_cmd_run_log_reply_hash_mixes_ids(void)
+{
+    TEST_BEGIN();
+    AiToolCall one[1], two[2];
+    set_call_id(&one[0], "call_1");
+    /* empty content, one id: the pinned value */
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, one, 1) == 0x97E49933u);
+    set_call_id(&one[0], "call_2");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, one, 1) == 0x98E49AC6u);
+    set_call_id(&one[0], "toolu_01");
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) == 0x803FDB7Cu);
+    /* the same content with different ids differs; the same ids match */
+    AiToolCall other[1];
+    set_call_id(&other[0], "toolu_02");
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) !=
+                cmd_run_log_reply_hash("abc", 3, other, 1));
+    AiToolCall same[1];
+    set_call_id(&same[0], "toolu_01");
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) ==
+                cmd_run_log_reply_hash("abc", 3, same, 1));
+    /* a tool turn never hashes like the plain reply with the same text */
+    ASSERT_TRUE(cmd_run_log_reply_hash("abc", 3, one, 1) != 0x1A47E90Bu);
+    /* ids in order: two calls, and the order counts */
+    set_call_id(&two[0], "a");  set_call_id(&two[1], "b");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, two, 2) == 0xC132AD24u);
+    set_call_id(&two[0], "b");  set_call_id(&two[1], "a");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, two, 2) == 0x434B96ACu);
+    /* the names and inputs do not enter the hash: only the ids */
+    set_call_id(&one[0], "call_1");
+    snprintf(one[0].input_json, sizeof(one[0].input_json), "{\"command\":\"pwd\"}");
+    ASSERT_TRUE(cmd_run_log_reply_hash("", 0, one, 1) == 0x97E49933u);
+    TEST_END();
+}
+
+/* The rebuild's match with a hash taken from a stored turn. */
+int test_cmd_run_record_matches_hash_rule(void)
+{
+    TEST_BEGIN();
+    AiToolCall c[1];
+    set_call_id(&c[0], "call_1");
+    CmdRunRecord rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.reply_msg = 3;
+    rec.turn_hash = cmd_run_log_reply_hash("", 0, c, 1);
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 1, rec.turn_hash), 1);
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 4, 1, rec.turn_hash), 0);   /* other index */
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 0, rec.turn_hash), 0);   /* not an assistant turn */
+    ASSERT_EQ(cmd_run_record_matches_hash(NULL, 3, 1, rec.turn_hash), 0);
+    /* a different empty tool-only reply at the same index does not match */
+    set_call_id(&c[0], "call_2");
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 1,
+                  cmd_run_log_reply_hash("", 0, c, 1)), 0);
+    /* and an [EXEC] record still matches through the older function */
+    rec.turn_hash = cmd_run_log_turn_hash("abc", 3);
+    ASSERT_EQ(cmd_run_record_matches_hash(&rec, 3, 1,
+                  cmd_run_log_reply_hash("abc", 3, NULL, 0)), 1);
+    ASSERT_EQ(cmd_run_record_matches(&rec, 3, 1, "abc", 3), 1);
+    TEST_END();
+}
+
+/* A reply answered without a card keeps its status rows in the log (R64): a
+ * record with no command rows, keyed like any other. */
+int test_cmd_run_log_record_status(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *texts[2] = { "[first row]", "[second row]" };
+    uint32_t h = cmd_run_log_turn_hash("abc", 3);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, texts, 2, 0), 0);
+    ASSERT_EQ(log.count, 1);
+    ASSERT_EQ(log.rec[0]->reply_msg, 4);
+    ASSERT_TRUE(log.rec[0]->turn_hash == h);
+    ASSERT_EQ(log.rec[0]->n, 0);
+    ASSERT_EQ(log.rec[0]->n_status, 2);
+    ASSERT_STR_EQ(log.rec[0]->status[0], "[first row]");
+    ASSERT_STR_EQ(log.rec[0]->status[1], "[second row]");
+    /* it matches its reply like any record */
+    ASSERT_EQ(cmd_run_record_matches_hash(log.rec[0], 4, 1, h), 1);
+    ASSERT_EQ(cmd_run_record_matches_hash(log.rec[0], 5, 1, h), 0);
+    /* and is forgotten with it on a pop */
+    ASSERT_EQ(cmd_run_log_forget(&log, 4), 1);
+    ASSERT_EQ(log.count, 0);
+    /* bad arguments record nothing */
+    ASSERT_EQ(cmd_run_log_record_status(NULL, 4, h, texts, 2, 0), -1);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, NULL, 2, 0), -1);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, texts, 0, 0), -1);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, texts, 3, 0), -1);
+    const char *blank[1] = { "" };
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, h, blank, 1, 0), -1);
+    ASSERT_EQ(log.count, 0);
+    /* a one-row record */
+    ASSERT_EQ(cmd_run_log_record_status(&log, 2, h, texts, 1, 0), 0);
+    ASSERT_EQ(log.rec[0]->n_status, 1);
+    /* a row longer than the field is cut, still terminated */
+    char big[400];
+    memset(big, 'x', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    const char *longrow[1] = { big };
+    ASSERT_EQ(cmd_run_log_record_status(&log, 3, h, longrow, 1, 0), 0);
+    ASSERT_EQ((int)strlen(log.rec[1]->status[0]), CMD_RUN_STATUS_MAX - 1);
+    /* the 17th record drops the oldest, as for a batch */
+    for (int i = 0; i < 15; i++)
+        ASSERT_EQ(cmd_run_log_record_status(&log, 10 + i, h, texts, 1, 0), 0);
+    ASSERT_EQ(log.count, CMD_RUN_LOG_MAX);
+    ASSERT_EQ(log.rec[0]->reply_msg, 3);              /* the reply_msg 2 record went */
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+int test_cmd_run_log_record_status_oom(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *texts[1] = { "[row]" };
+    cmd_run_log_set_alloc_for_test(failing_alloc);
+    g_alloc_calls = 0;
+    g_alloc_fail_at = 1;
+    ASSERT_EQ(cmd_run_log_record_status(&log, 1, 7u, texts, 1, 0), -1);
+    ASSERT_EQ(log.count, 0);
+    cmd_run_log_set_alloc_for_test(NULL);
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+/* Spec 25: a copy that cannot be allocated records nothing, whichever
+ * allocation fails, with the log full or not, and nothing leaks. */
+int test_cmd_run_log_oom_records_nothing(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    CmdBatch *b = make_batch(&set, 3, 2);
+    ASSERT_NOT_NULL(b);
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 11, 0), 0);
+    ASSERT_EQ(log.count, 1);
+    const CmdRunRecord *kept = log.rec[0];
+
+    cmd_run_log_set_alloc_for_test(failing_alloc);
+
+    /* One allocation for the record, one per command copy: 4 in all. Fail
+     * each in turn, so the failure is part-way through the rows. */
+    for (int at = 1; at <= 4; at++) {
+        g_alloc_calls = 0;
+        g_alloc_fail_at = at;
+        ASSERT_EQ(cmd_run_log_record(&log, b, 22, 0), -1);
+        ASSERT_EQ(log.count, 1);
+        ASSERT_TRUE(log.rec[0] == kept);
+    }
+
+    /* A full log keeps its oldest record when the new one cannot be made. */
+    for (int i = 0; i < CMD_RUN_LOG_MAX - 1; i++) {
+        g_alloc_calls = 0;
+        g_alloc_fail_at = 0;
+        ASSERT_EQ(cmd_run_log_record(&log, b, 33, 0), 0);
+    }
+    ASSERT_EQ(log.count, CMD_RUN_LOG_MAX);
+    g_alloc_calls = 0;
+    g_alloc_fail_at = 3;
+    ASSERT_EQ(cmd_run_log_record(&log, b, 44, 0), -1);
+    ASSERT_EQ(log.count, CMD_RUN_LOG_MAX);
+    ASSERT_TRUE(log.rec[0] == kept);
+
+    /* With no failure the same call goes through. */
+    g_alloc_calls = 0;
+    g_alloc_fail_at = 0;
+    ASSERT_EQ(cmd_run_log_record(&log, b, 44, 0), 0);
+    ASSERT_EQ(log.count, CMD_RUN_LOG_MAX);
+    ASSERT_EQ(g_alloc_calls, 4);
+
+    cmd_run_log_set_alloc_for_test(NULL);      /* restore the default */
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* ---- Review fixes: the reply's index, forgetting a popped turn, the note ---- */
+
+/* The index a batch is keyed to: only a reply that is stored, with an
+ * assistant turn last. (Its text is not compared: a reply that went through a
+ * tool round is posted joined, the conversation holds the last iteration.) */
+int test_cmd_run_reply_index_rule(void)
+{
+    TEST_BEGIN();
+    /* Stored, last message an assistant turn: its index. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 1), 4);
+    ASSERT_EQ(cmd_run_reply_index(1, 1, 1), 0);
+    ASSERT_EQ(cmd_run_reply_index(1, AI_MAX_MESSAGES, 1), AI_MAX_MESSAGES - 1);
+
+    /* The add failed (a full conversation): the last message is an older
+     * turn, never the reply. */
+    ASSERT_EQ(cmd_run_reply_index(0, 5, 1), -1);
+    ASSERT_EQ(cmd_run_reply_index(0, AI_MAX_MESSAGES, 1), -1);
+
+    /* Last message is a user turn. */
+    ASSERT_EQ(cmd_run_reply_index(1, 5, 0), -1);
+
+    /* Empty conversation. */
+    ASSERT_EQ(cmd_run_reply_index(1, 0, 1), -1);
+    ASSERT_EQ(cmd_run_reply_index(1, -1, 1), -1);
+    TEST_END();
+}
+
+static CmdRunRecord *add_keyed_record(CmdRunLog *log, CmdBatchSet *set,
+                                      int reply_msg, uint32_t hash)
+{
+    CmdBatch *b = make_batch(set, 1, reply_msg);
+    if (!b) return NULL;
+    if (cmd_run_log_record(log, b, hash, 0) != 0) return NULL;
+    cmd_batch_set_free(set);
+    return log->rec[log->count - 1];
+}
+
+int test_cmd_run_log_forget_drops_keyed_records(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    CmdBatchSet set;
+    cmd_run_log_init(&log);
+
+    /* An empty log, and a NULL one: nothing to do. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 4), 0);
+    ASSERT_EQ(cmd_run_log_forget(NULL, 4), 0);
+
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 2, 10));
+    CmdRunRecord *keep_a = log.rec[0];
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 4, 11));
+    CmdRunRecord *keep_b = NULL;
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 6, 12));
+    keep_b = log.rec[2];
+    ASSERT_EQ(log.count, 3);
+
+    /* None keyed to the index: unchanged. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 5), 0);
+    ASSERT_EQ(log.count, 3);
+
+    /* One match: dropped, the others keep their order. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 4), 1);
+    ASSERT_EQ(log.count, 2);
+    ASSERT_TRUE(log.rec[0] == keep_a);
+    ASSERT_TRUE(log.rec[1] == keep_b);
+    ASSERT_NULL(log.rec[2]);
+
+    /* Several matches (same index, different text), around a survivor. */
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 6, 13));
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 3, 14));
+    ASSERT_NOT_NULL(add_keyed_record(&log, &set, 6, 15));
+    ASSERT_EQ(log.count, 5);
+    CmdRunRecord *survivor = log.rec[3];
+    ASSERT_EQ(cmd_run_log_forget(&log, 6), 3);
+    ASSERT_EQ(log.count, 2);
+    ASSERT_TRUE(log.rec[0] == keep_a);
+    ASSERT_TRUE(log.rec[1] == survivor);
+    ASSERT_EQ(log.rec[1]->reply_msg, 3);
+    ASSERT_NULL(log.rec[2]);
+    ASSERT_NULL(log.rec[3]);
+    ASSERT_NULL(log.rec[4]);
+
+    /* An index nothing is keyed to (here also past the log): unchanged. */
+    ASSERT_EQ(cmd_run_log_forget(&log, 99), 0);
+    ASSERT_EQ(log.count, 2);
+
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+/* The command's note travels into the record, so a replayed row's details
+ * popup is not blank. */
+int test_cmd_run_row_keeps_note(void)
+{
+    TEST_BEGIN();
+    ApprovalEntry e;
+    memset(&e, 0, sizeof(e));
+    snprintf(e.command, sizeof(e.command), "ls");
+    e.status = APPROVE_COMPLETED;
+    snprintf(e.note, sizeof(e.note), "lists the directory");
+    CmdRunRow row;
+    memset(&row, 0x5A, sizeof(row));
+    cmd_run_row_from_entry(&e, 0, &row);
+    ASSERT_STR_EQ(row.note, "lists the directory");
+
+    /* No note is an empty string, not stale bytes. */
+    e.note[0] = '\0';
+    memset(&row, 0x5A, sizeof(row));
+    cmd_run_row_from_entry(&e, 0, &row);
+    ASSERT_STR_EQ(row.note, "");
+
+    /* A note filling the field is cut to a terminated string. */
+    memset(e.note, 'n', sizeof(e.note));
+    cmd_run_row_from_entry(&e, 0, &row);
+    ASSERT_EQ((int)strlen(row.note), CMD_NOTE_MAX - 1);
+
+    /* Through a record. */
+    CmdBatchSet set;
+    CmdBatch *b = make_batch(&set, 2, 0);
+    ASSERT_NOT_NULL(b);
+    chat_approval_set_note(&b->q, 1, "second row's note");
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 1, 0), 0);
+    ASSERT_STR_EQ(log.rec[0]->rows[0].note, "");
+    ASSERT_STR_EQ(log.rec[0]->rows[1].note, "second row's note");
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* Retry's other half: the batches still live that point at the popped reply
+ * stop pointing at it. */
+int test_cmd_run_batches_unkey(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 4), 0);      /* empty set */
+    ASSERT_EQ(cmd_run_batches_unkey(NULL, 4), 0);
+
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    CmdBatch *c = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ASSERT_NOT_NULL(c);
+    a->reply_msg = 4; a->reply_hash = 0x11u;
+    b->reply_msg = 6; b->reply_hash = 0x22u;
+    c->reply_msg = 4; c->reply_hash = 0x33u;
+
+    /* No batch keyed to the index: nothing changes. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 5), 0);
+    ASSERT_EQ(a->reply_msg, 4);
+    ASSERT_EQ(b->reply_msg, 6);
+
+    /* Several match: both detached, the other kept. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 4), 2);
+    ASSERT_EQ(a->reply_msg, -1);
+    ASSERT_EQ((int)a->reply_hash, 0);
+    ASSERT_EQ(c->reply_msg, -1);
+    ASSERT_EQ((int)c->reply_hash, 0);
+    ASSERT_EQ(b->reply_msg, 6);
+    ASSERT_EQ((int)b->reply_hash, 0x22);
+
+    /* A detached batch matches no turn, so its record cannot replay under a
+     * new reply at the same index. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, 4), 0);
+    /* -1 (never keyed) is not an index to detach. */
+    ASSERT_EQ(cmd_run_batches_unkey(&set, -1), 0);
+    ASSERT_EQ(a->reply_msg, -1);
+
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* ---- H3: what a record keeps of a reply's rows the card did not show ---- */
+
+/* A record from a status call stores the no_card flag as given. */
+int test_cmd_run_log_status_stores_no_card(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *texts[1] = { "[row]" };
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, 9u, texts, 1, 1), 0);
+    ASSERT_EQ(cmd_run_log_record_status(&log, 4, 9u, texts, 1, 0), 0);
+    ASSERT_EQ(log.rec[0]->no_card, 1);
+    ASSERT_EQ(log.rec[1]->no_card, 0);
+    ASSERT_EQ(log.rec[0]->n_quoted, 0);
+    ASSERT_EQ(log.rec[0]->n_after, 0);
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+int test_cmd_run_log_record_quoted(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *cmds[2] = { "ls", "rm -rf /tmp/x" };
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 3, 77u, cmds, 2), 0);
+    ASSERT_EQ(log.count, 1);
+    const CmdRunRecord *r = log.rec[0];
+    ASSERT_EQ(r->reply_msg, 3);
+    ASSERT_TRUE(r->turn_hash == 77u);
+    ASSERT_EQ(r->n, 0);
+    ASSERT_EQ(r->n_status, 0);
+    ASSERT_EQ(r->n_quoted, 2);
+    ASSERT_STR_EQ(r->quoted[0], "ls");
+    ASSERT_STR_EQ(r->quoted[1], "rm -rf /tmp/x");
+    /* copies, not the caller's pointers */
+    ASSERT_TRUE(r->quoted[0] != cmds[0]);
+    /* keyed like any record: it matches its reply and Retry forgets it */
+    ASSERT_EQ(cmd_run_record_matches_hash(r, 3, 1, 77u), 1);
+    ASSERT_EQ(cmd_run_log_forget(&log, 3), 1);
+    ASSERT_EQ(log.count, 0);
+
+    /* a 1023-byte command is kept whole */
+    char big[1024];
+    memset(big, 'y', 1023);
+    big[1023] = '\0';
+    const char *one[1] = { big };
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 3, 1u, one, 1), 0);
+    ASSERT_EQ((int)strlen(log.rec[0]->quoted[0]), 1023);
+
+    /* refusals record nothing */
+    const char *blank[2] = { "ls", "" };
+    ASSERT_EQ(cmd_run_log_record_quoted(NULL, 3, 1u, cmds, 2), -1);
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 3, 1u, NULL, 2), -1);
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 3, 1u, cmds, 0), -1);
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 3, 1u, cmds, CMD_RUN_QUOTED_MAX + 1), -1);
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 3, 1u, blank, 2), -1);
+    ASSERT_EQ(log.count, 1);
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+/* An allocation failure at each step records nothing and leaks nothing (the
+ * sanitizer build checks the leak). */
+int test_cmd_run_log_record_quoted_oom(void)
+{
+    TEST_BEGIN();
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    const char *cmds[2] = { "ls", "df" };
+    cmd_run_log_set_alloc_for_test(failing_alloc);
+    /* the record, the pointer array, two copies: 4 allocations at most */
+    for (int at = 1; at <= 4; at++) {
+        g_alloc_calls = 0;
+        g_alloc_fail_at = at;
+        ASSERT_EQ(cmd_run_log_record_quoted(&log, 1, 5u, cmds, 2), -1);
+        ASSERT_EQ(log.count, 0);
+    }
+    g_alloc_calls = 0;
+    g_alloc_fail_at = 0;
+    ASSERT_EQ(cmd_run_log_record_quoted(&log, 1, 5u, cmds, 2), 0);
+    cmd_run_log_set_alloc_for_test(NULL);
+    cmd_run_log_free(&log);
+    TEST_END();
+}
+
+/* A card's batch keeps the status rows of its calls that are on no card line
+ * (OVER_CAP, queue-refused) beside its command rows. */
+static CmdBatch *make_runcmd_batch(CmdBatchSet *set, int n_calls, int refuse_at)
+{
+    cmd_batch_set_init(set);
+    CmdBatch *b = cmd_batch_add(set, NULL, NULL);
+    if (!b) return NULL;
+    AiToolCall *calls = calloc((size_t)n_calls, sizeof(*calls));
+    if (!calls) return NULL;
+    for (int i = 0; i < n_calls; i++) {
+        snprintf(calls[i].id, sizeof(calls[i].id), "id%d", i);
+        snprintf(calls[i].name, sizeof(calls[i].name), "run_command");
+        snprintf(calls[i].input_json, sizeof(calls[i].input_json),
+                 "{\"command\":\"echo %d\"}", i);
+    }
+    RunCmdReply *r = runcmd_plan(calls, n_calls, 1);
+    free(calls);
+    if (!r) return NULL;
+    for (int i = 0; i < r->n_calls; i++) {
+        RunCmdCall *c = &r->calls[i];
+        if (c->kind != RUNCMD_KIND_SLOT || i == refuse_at) continue;
+        c->entry = chat_approval_add_session(&b->q, c->command,
+                                             CMD_PLATFORM_LINUX, 0);
+    }
+    b->runcmd = r;
+    b->reply_msg = 2;
+    return b;
+}
+
+int test_cmd_run_log_record_keeps_unqueued_call_rows(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    CmdBatch *b = make_runcmd_batch(&set, 18, 3);   /* 16 slots, 2 over the cap */
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->q.count, 15);                      /* call 3 was refused */
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 5u, 0), 0);
+    const CmdRunRecord *r = log.rec[0];
+    ASSERT_EQ(r->n, 15);
+    ASSERT_EQ(r->no_card, 0);
+    ASSERT_EQ(r->n_after, 3);
+    ASSERT_STR_EQ(r->after_rows[0],
+                  "not run (refused by the approval queue): echo 3");
+    ASSERT_STR_EQ(r->after_rows[1],
+        "not run (too many commands in one reply; at most 16): echo 16");
+    ASSERT_STR_EQ(r->after_rows[2],
+        "not run (too many commands in one reply; at most 16): echo 17");
+    cmd_run_log_free(&log);                         /* frees the rows too */
+
+    /* A batch with every call on the card keeps none; one without a runcmd
+     * (an [EXEC] batch) keeps none. */
+    CmdBatchSet set2;
+    CmdBatch *b2 = make_runcmd_batch(&set2, 2, -1);
+    ASSERT_NOT_NULL(b2);
+    ASSERT_EQ(cmd_run_log_record(&log, b2, 5u, 0), 0);
+    ASSERT_EQ(log.rec[0]->n_after, 0);
+    ASSERT_TRUE(log.rec[0]->after_rows == NULL);
+    runcmd_reply_free(b2->runcmd);
+    b2->runcmd = NULL;
+    ASSERT_EQ(cmd_run_log_record(&log, b2, 5u, 0), 0);
+    ASSERT_EQ(log.rec[1]->n_after, 0);
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set2);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* The larger record that fails to allocate is not stored; the log is as it
+ * was; nothing leaks. */
+int test_cmd_run_log_record_oom_with_unqueued_rows(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    CmdBatch *b = make_runcmd_batch(&set, 18, 3);
+    ASSERT_NOT_NULL(b);
+    CmdRunLog log;
+    cmd_run_log_init(&log);
+    ASSERT_EQ(cmd_run_log_record(&log, b, 1u, 0), 0);
+    const CmdRunRecord *kept = log.rec[0];
+    cmd_run_log_set_alloc_for_test(failing_alloc);
+    /* record, 15 command copies, the pointer array, 3 row copies: 20 */
+    for (int at = 1; at <= 20; at++) {
+        g_alloc_calls = 0;
+        g_alloc_fail_at = at;
+        ASSERT_EQ(cmd_run_log_record(&log, b, 2u, 0), -1);
+        ASSERT_EQ(log.count, 1);
+        ASSERT_TRUE(log.rec[0] == kept);
+    }
+    cmd_run_log_set_alloc_for_test(NULL);
+    cmd_run_log_free(&log);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}

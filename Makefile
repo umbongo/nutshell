@@ -225,7 +225,7 @@ ifeq ($(origin FUZZ_CC),undefined)
 FUZZ_CC := $(firstword $(foreach c,clang clang-18 clang-17 clang-16,$(shell command -v $(c))))
 endif
 FUZZ_TIME    ?= 60
-FUZZ_TARGETS = json term exec_markers cmd_classify html url
+FUZZ_TARGETS = json term exec_markers cmd_classify html url runcmd
 FUZZ_DIR     = build/fuzz
 FUZZ_BINS    = $(FUZZ_TARGETS:%=$(FUZZ_DIR)/%)
 FUZZ_CFLAGS  = $(TEST_CFLAGS) -Wno-ignored-attributes -Wno-unknown-warning-option
@@ -291,7 +291,9 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/telnet_io.c src/core/telnet_proto.c src/core/telnet_login.c \
                    src/core/telnet_session.c src/core/telnet_status.c \
                    tests/test_telnet_io_win.c \
-                   src/ui/ns_tip.c tests/test_ns_tip_win.c tests/win_runner.c
+                   src/ui/ns_tip.c tests/test_ns_tip_win.c \
+                   src/core/settings_help.c src/core/settings_layout.c \
+                   tests/test_settings_label_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \

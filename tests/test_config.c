@@ -74,6 +74,7 @@ int test_config_default_settings(void)
     ASSERT_EQ(s.ai_max_context_lines, 1000);
     ASSERT_EQ(s.ai_tool_timeout_sec, 60);
     ASSERT_EQ(s.ai_tool_auto_rounds, 3);
+    ASSERT_EQ(s.ai_runcmd_mode, AI_RUNCMD_AUTO);
     TEST_END();
 }
 
@@ -617,6 +618,37 @@ int test_config_load_unknown_fields(void)
     TEST_END();
 }
 
+/* A key with a \u0000 escape no longer fails the whole parse (review of the
+ * fix wave, 2026-11-11): the member is kept, never matches a name, and the
+ * other settings load. */
+int test_config_load_nul_key_member_ignored(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(
+        "{\n"
+        "  \"settings\": {\n"
+        "    \"font\\u0000x\": \"Evil\",\n"
+        "    \"font\": \"Hack\",\n"
+        "    \"font_size\": 14\n"
+        "  }\n"
+        "}\n", f);
+    fclose(f);
+
+    ConfigLoadStatus st = CONFIG_LOAD_MISSING;
+    Config *cfg = config_load_ex(TMP_CFG, &st);
+    ASSERT_EQ((int)st, (int)CONFIG_LOAD_OK);
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_STR_EQ(cfg->settings.font, "Hack");
+        ASSERT_EQ(cfg->settings.font_size, 14);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
 /* ============================================================
  * Load config with out-of-range values (validate clamps them)
  * ============================================================ */
@@ -732,6 +764,66 @@ int test_config_roundtrip_tool_rounds(void)
         Config *loaded = config_load(TMP_CFG);
         ASSERT_NOT_NULL(loaded);
         if (loaded) ASSERT_EQ(loaded->settings.ai_tool_auto_rounds, vals[i]);
+        config_free(orig);
+        config_free(loaded);
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+/* "Commands as tool calls": the key is a string ("automatic", "on", "off");
+ * a file without it, or with a value the loader does not know, loads as
+ * Automatic. */
+int test_config_load_runcmd_mode(void)
+{
+    TEST_BEGIN();
+    const char *cases[] = { "", "\"ai_runcmd_mode\": \"automatic\"",
+                            "\"ai_runcmd_mode\": \"on\"", "\"ai_runcmd_mode\": \"off\"",
+                            "\"ai_runcmd_mode\": \"bogus\"", "\"ai_runcmd_mode\": \"\"",
+                            "\"ai_runcmd_mode\": \"ON\"", "\"ai_runcmd_mode\": 2" };
+    const int want[] = { AI_RUNCMD_AUTO, AI_RUNCMD_AUTO, AI_RUNCMD_ON, AI_RUNCMD_OFF,
+                         AI_RUNCMD_AUTO, AI_RUNCMD_AUTO, AI_RUNCMD_AUTO, AI_RUNCMD_AUTO };
+    for (int i = 0; i < 8; i++) {
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fprintf(f, "{\n  \"settings\": {\n    \"font_size\": 10%s%s\n  }\n}\n",
+                cases[i][0] ? ",\n    " : "", cases[i]);
+        fclose(f);
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        if (cfg) {
+            ASSERT_EQ(cfg->settings.ai_runcmd_mode, want[i]);
+            config_free(cfg);
+        }
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_roundtrip_runcmd_mode(void)
+{
+    TEST_BEGIN();
+    const int vals[] = { AI_RUNCMD_AUTO, AI_RUNCMD_ON, AI_RUNCMD_OFF };
+    const char *keys[] = { "\"ai_runcmd_mode\": \"automatic\"",
+                           "\"ai_runcmd_mode\": \"on\"", "\"ai_runcmd_mode\": \"off\"" };
+    for (int i = 0; i < 3; i++) {
+        Config *orig = config_new_default();
+        ASSERT_NOT_NULL(orig);
+        orig->settings.ai_runcmd_mode = vals[i];
+        ASSERT_EQ(config_save(orig, TMP_CFG), 0);
+        /* The file holds the string, not a number. */
+        FILE *f = fopen(TMP_CFG, "r");
+        ASSERT_NOT_NULL(f);
+        if (f) {
+            char buf[16384];
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            buf[n] = '\0';
+            fclose(f);
+            ASSERT_NOT_NULL(strstr(buf, keys[i]));
+        }
+        Config *loaded = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(loaded);
+        if (loaded) ASSERT_EQ(loaded->settings.ai_runcmd_mode, vals[i]);
         config_free(orig);
         config_free(loaded);
         remove(TMP_CFG);

@@ -1013,6 +1013,73 @@ static int clv_reason_width(ChatListView *lv, HDC hdc, const ChatMsgItem *item,
     return sz.cx + ns_scale(SP_SM, dpi);
 }
 
+/* ── The summary line under a batch (spec 2026-11-05 run-command tool,
+ *    decision 21 (d)) ────────────────────────────────────────────────
+ * One caption line, "<n> commands: 1 ran, 1 running, 2 queued", directly
+ * under a batch's LAST item in list order: its last settled row, or the
+ * card when that item is a row still on the card. The text is built by
+ * chat_msg_batch_counts() + chat_batch_summary_text() from the batch's rows,
+ * so it changes exactly when a chip does. It is counted per batch id: a live
+ * batch (positive id) and a replayed one (negative, see
+ * ai_chat_rebuild_display()) each get their own. Drawn only -- no hit-test,
+ * no hover, no timer; the caption's height is part of the row's (or card's)
+ * measured height. */
+#define CLV_SUMMARY_MAX 192
+
+/* 1 and the line in `buf` when `item` is a command row that is the last of
+ * its batch and the batch has a summary (two or more rows, one decided). */
+static int clv_batch_summary_text(const ChatListView *lv, const ChatMsgItem *item,
+                                  char *buf, size_t cap)
+{
+    if (buf && cap > 0) buf[0] = '\0';
+    if (!lv || !lv->msg_list || !item || !buf || cap == 0) return 0;
+    if (item->type != CHAT_ITEM_COMMAND || item->u.cmd.tool ||
+        item->u.cmd.batch == 0)
+        return 0;
+    const int batch = item->u.cmd.batch;
+    for (const ChatMsgItem *it = item->next; it; it = it->next)
+        if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.batch == batch)
+            return 0;   /* a later row of the batch carries the line */
+    /* A folded group (its fold row, open or closed, already shows the same
+     * counts) draws no summary line. The group is the contiguous run of
+     * this batch ending at `item`; its first row carries the fold. */
+    for (const ChatMsgItem *h = item; h; h = h->prev) {
+        if (h->type != CHAT_ITEM_COMMAND || h->u.cmd.batch != batch) break;
+        if (h->u.cmd.fold != CHAT_FOLD_NONE) return 0;
+    }
+    ChatBatchCounts c;
+    chat_msg_batch_counts(lv->msg_list, batch, &c);
+    return chat_batch_summary_text(&c, buf, cap) > 0;
+}
+
+/* The summary line's height: SP_XS above the caption-font line. */
+static int clv_batch_summary_h(ChatListView *lv, HDC hdc)
+{
+    int dpi = CLV_DPI(lv);
+    HGDIOBJ old = SelectObject(hdc, ns_font(FONT_CAPTION, dpi));
+    TEXTMETRICA tm;
+    GetTextMetricsA(hdc, &tm);
+    SelectObject(hdc, old);
+    return ns_scale(SP_XS, dpi) + tm.tmHeight;
+}
+
+/* Draw `text` as the summary line in the strip [top, top + summary_h) of the
+ * item, its left edge at `left`, ellipsised at `right`. */
+static void paint_batch_summary(ChatListView *lv, HDC hdc, const char *text,
+                                int left, int right, int top, int bottom)
+{
+    int dpi = CLV_DPI(lv);
+    RECT rc = { left, top + ns_scale(SP_XS, dpi), right, bottom };
+    if (rc.right <= rc.left || rc.bottom <= rc.top) return;
+    int saved = SaveDC(hdc);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB_FROM_THEME(ns_tokens()->text_dim));
+    SelectObject(hdc, ns_font(FONT_CAPTION, dpi));
+    draw_text_utf8(hdc, text, &rc, DT_SINGLELINE | DT_TOP | DT_NOPREFIX |
+                                   DT_LEFT | DT_END_ELLIPSIS);
+    RestoreDC(hdc, saved);
+}
+
 /* Approval-card row height at the current DPI. v2 rows are always
  * single-line regardless of card width (approval_row_height no longer
  * takes one) -- see ns_layout.h. */
@@ -1042,6 +1109,9 @@ typedef struct {
     int row_h;
     int total_h;                           /* n * row_h */
     int visible_h;                         /* min(n, APPROVAL_VISIBLE_MAX) * row_h */
+    int summary_h;                         /* the batch summary line under the card
+                                            * (0 when the card's last row is not
+                                            * its batch's last, or it has none) */
 } CmdContainerInfo;
 
 static void cmd_container_measure(ChatListView *lv, HDC hdc_for_measure,
@@ -1082,6 +1152,11 @@ static void cmd_container_measure(ChatListView *lv, HDC hdc_for_measure,
     if (hdc_for_measure && old_font) SelectObject(hdc_for_measure, old_font);
 
     out->n = n;
+    if (hdc_for_measure && n > 0) {
+        char summary[CLV_SUMMARY_MAX];
+        if (clv_batch_summary_text(lv, out->items[n - 1], summary, sizeof(summary)))
+            out->summary_h = clv_batch_summary_h(lv, hdc_for_measure);
+    }
     out->row_h = clv_cmd_row_h(lv, out->text_h);
     int visible_rows = (n < APPROVAL_VISIBLE_MAX) ? n : APPROVAL_VISIBLE_MAX;
     out->total_h = n * out->row_h;
@@ -1109,10 +1184,62 @@ static void recalc_layout(ChatListView *lv)
     HDC hdc = GetDC(lv->hwnd);
     if (!hdc) return;
 
+    /* Folding a finished command card (chat_msg_fold_refresh()) is derived
+     * here, at every layout, from the rows' own state. Not pinned to the
+     * bottom, a fold above the reader must not move what they are reading:
+     * note the first visible item (from the heights of the last layout)
+     * and put the view back on it after Pass 3. A click on the fold row
+     * refreshes first itself, so it finds no change and does not anchor. */
+    int fold_changed = 0;
+    int anchor_id = -1, anchor_old_top = 0;
+    if (lv->msg_list) {
+        fold_changed = chat_msg_fold_refresh(lv->msg_list);
+        if (fold_changed > 0 && !lv->stick_to_bottom) {
+            /* The heights are still the last layout's here. A row that has
+             * just been hidden anchors on its group's first row, at its top
+             * (offset 0), instead of on the rows it hid. */
+            int n = 0;
+            for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) n++;
+            int *hts = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof(int) * 2);
+            ChatMsgItem **ids = (ChatMsgItem **)malloc(
+                (size_t)(n > 0 ? n : 1) * sizeof(ChatMsgItem *));
+            if (hts && ids) {
+                int *redirect = hts + n;
+                int k = 0, head_k = -1;
+                for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next, k++) {
+                    ids[k] = it;
+                    hts[k] = it->measured_height;
+                    if (it->type == CHAT_ITEM_COMMAND &&
+                        it->u.cmd.fold != CHAT_FOLD_NONE)
+                        head_k = k;
+                    redirect[k] = (it->type == CHAT_ITEM_COMMAND &&
+                                   it->u.cmd.fold_hidden) ? head_k : -1;
+                    /* A head whose own fold changed: anchor on itself at 0. */
+                    if (it->type == CHAT_ITEM_COMMAND &&
+                        it->u.cmd.fold != CHAT_FOLD_NONE &&
+                        it->u.cmd.fold_changed)
+                        redirect[k] = k;
+                }
+                int offset = 0;
+                int ai = stick_scroll_pick_anchor(hts, redirect, n,
+                                                  lv->msg_gap, lv->scroll_y,
+                                                  &offset);
+                if (ai >= 0) {
+                    anchor_id = ids[ai]->id;
+                    anchor_old_top = lv->scroll_y - offset;
+                }
+            }
+            free(hts);
+            free(ids);
+        }
+    }
+
     /* Pass 1: measure items (only dirty items need remeasuring).
      * Exception: unsettled command items are always remeasured because
      * Pass 2 overwrites their measured_height with the container height,
-     * and we need the original card height for cmd_heights[]. */
+     * and we need the original card height for cmd_heights[]. A fold change
+     * marks its group dirty (chat_msg_fold_refresh()), and measure_item()
+     * already returns the folded heights. */
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
         int force = (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled);
@@ -1148,7 +1275,9 @@ static void recalc_layout(ChatListView *lv)
                 int border_w   = ns_scale(1, CLV_DPI(lv));
                 int visible_rows = (ci.n < APPROVAL_VISIBLE_MAX) ? ci.n : APPROVAL_VISIBLE_MAX;
                 int interior_h = 2 * pad + 2 * ctrl_h + 2 * gap_sm + visible_rows * ci.row_h;
-                int container_h = 2 * border_w + interior_h;
+                /* + the summary line under the card, when its batch has one
+                 * (build_cmd_card_geometry takes it back off the box). */
+                int container_h = 2 * border_w + interior_h + ci.summary_h;
 
                 /* First command absorbs the full container height; the
                  * rest of this container's items (already known from the
@@ -1169,10 +1298,16 @@ static void recalc_layout(ChatListView *lv)
 
     /* Pass 3: compute total height (skip h=0 items) */
     int y = lv->msg_gap;
+    int anchor_new_top = 0, anchor_new_h = 0;
     item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
-        if (item->measured_height > 0)
+        if (item->measured_height > 0) {
+            if (anchor_id >= 0 && item->id == anchor_id) {
+                anchor_new_top = y;
+                anchor_new_h = item->measured_height;
+            }
             y += item->measured_height + lv->msg_gap;
+        }
         item = item->next;
     }
 
@@ -1186,6 +1321,10 @@ static void recalc_layout(ChatListView *lv)
     /* Content/viewport change: follow the bottom while stuck, otherwise
      * keep the current position (re-clamped to the new valid range). */
     int max_scroll = lv->total_height - lv->viewport_height;
+    if (fold_changed > 0 && anchor_id >= 0 && anchor_new_h > 0)
+        lv->scroll_y = stick_scroll_anchor(lv->stick_to_bottom, lv->scroll_y,
+                                           anchor_old_top, anchor_new_top,
+                                           anchor_new_h);
     lv->scroll_y = stick_scroll_on_layout(lv->stick_to_bottom, lv->scroll_y,
                                            max_scroll);
 
@@ -1309,6 +1448,14 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
          * matches approval_row_height() exactly like an unsettled row so
          * scroll maths and the container never need to special-case it. */
         if (item->u.cmd.settled) {
+            /* A finished card folded to one row (chat_msg_fold_refresh()):
+             * a closed group's first row is the fold row alone and its other
+             * rows take no height; an open group's first row is the fold row
+             * above its own row. Folding marks the group dirty, so this is
+             * measured again exactly when it changes. */
+            const int fold_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+            if (item->u.cmd.fold_hidden) return 0;
+            if (item->u.cmd.fold == CHAT_FOLD_CLOSED) return fold_h;
             int text_line_h;
             old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
                                                         : GetStockObject(ANSI_FIXED_FONT));
@@ -1318,7 +1465,12 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 text_line_h = tm.tmHeight;
             }
             SelectObject(hdc, old_font);
-            return clv_cmd_row_h(lv, text_line_h);
+            int row_h = clv_cmd_row_h(lv, text_line_h);
+            char summary[CLV_SUMMARY_MAX];
+            if (clv_batch_summary_text(lv, item, summary, sizeof(summary)))
+                row_h += clv_batch_summary_h(lv, hdc);
+            if (item->u.cmd.fold == CHAT_FOLD_OPEN) row_h += fold_h;
+            return row_h;
         }
         /* Unsettled commands are grouped by recalc_layout's Pass 2 into a
          * single scrollable container (first item absorbs the container
@@ -2022,7 +2174,23 @@ typedef struct {
     const char *label;       /* outcome chip text */
     ChatCmdIntent intent;
     int text_h;
+    /* A finished card folded to one row (chat_msg_fold_refresh()): the first
+     * row of the group carries the fold row, laid out like a collapsed
+     * Thinking row. Closed, it is all there is (layout stays zero); open,
+     * the row itself follows it at row_top. */
+    int has_fold;
+    ThinkingLayout fold;
+    int row_top;             /* top of the command row proper */
 } SettledGeom;
+
+/* The fold row's rect/chevron/label at (box_left..box_right, top): a
+ * collapsed Thinking row's layout, so the two disclosures line up. */
+static void clv_fold_layout(ChatListView *lv, int box_left, int box_right,
+                            int top, ThinkingLayout *tl)
+{
+    NsRect avail = { box_left, top, box_right - box_left, 0 };
+    thinking_layout(avail, 0, 0, 1, CLV_DPI(lv), tl);
+}
 
 static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                  int left, int right, int top, SettledGeom *g)
@@ -2037,6 +2205,15 @@ static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     int box_left  = left + lv->ai_indent;
     int box_right = right - side_pad;
     if (box_right < box_left) box_right = box_left;
+
+    memset(g, 0, sizeof(*g));
+    g->row_top = top;
+    if (item->u.cmd.fold != CHAT_FOLD_NONE) {
+        clv_fold_layout(lv, box_left, box_right, top, &g->fold);
+        g->has_fold = 1;
+        if (item->u.cmd.fold == CHAT_FOLD_CLOSED) return;   /* no row */
+        g->row_top = top + g->fold.total_h;
+    }
 
     /* Outcome -> label + intent from chat_cmd_label() (src/core/chat_msg.c),
      * the single, natively tested place where the (approved, blocked, run)
@@ -2086,9 +2263,62 @@ static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     g->text_h = tm.tmHeight;
     csz.cx += clv_reason_width(lv, hdc, item, NULL);
 
-    NsRect row_r = { box_left, top, box_right - box_left,
+    NsRect row_r = { box_left, g->row_top, box_right - box_left,
                      approval_row_height(tm.tmHeight, dpi) };
     settled_row_layout(row_r, csz.cx, chip_w, tm.tmHeight, dpi, &g->layout);
+}
+
+/* The fold row of a finished card, painted like the Thinking row: chevron
+ * (right closed, down open), the label in text_main, then the counts in
+ * text_dim -- warning when anything is unfinished, not run or held. */
+static void paint_fold_row(ChatListView *lv, HDC hdc, const ChatMsgItem *item,
+                           const SettledGeom *sg)
+{
+    const ThemeTokens *tok = ns_tokens();
+    const ThinkingLayout *tl = &sg->fold;
+    const int expanded = item->u.cmd.fold == CHAT_FOLD_OPEN;
+
+    char label[48], summary[CLV_SUMMARY_MAX];
+    int warn = 0;
+    ChatBatchCounts c;
+    chat_msg_batch_counts(lv->msg_list, item->u.cmd.batch, &c);
+    if (!chat_batch_fold_text(&c, label, sizeof(label), summary,
+                              sizeof(summary), &warn)) {
+        snprintf(label, sizeof(label), "commands");
+        summary[0] = '\0';
+    }
+
+    COLORREF dim_clr = RGB_FROM_THEME(tok->text_dim);
+    RECT chev_rc = { tl->chevron.x, tl->chevron.y,
+                     tl->chevron.x + tl->chevron.w,
+                     tl->chevron.y + tl->chevron.h };
+    if (expanded)
+        draw_chevron_down(hdc, &chev_rc, dim_clr);
+    else
+        ns_icon_draw(hdc, NS_ICON_CHEV_RIGHT, &chev_rc, dim_clr,
+                     (UINT)(96.0f * lv->dpi_scale));
+
+    int saved = SaveDC(hdc);
+    SetBkMode(hdc, TRANSPARENT);
+    SelectObject(hdc, lv->hFont ? lv->hFont : GetStockObject(DEFAULT_GUI_FONT));
+    SIZE lsz = { 0, 0 };
+    GetTextExtentPoint32A(hdc, label, (int)strlen(label), &lsz);
+    RECT label_rc = { tl->label.x, tl->label.y,
+                      tl->label.x + lsz.cx, tl->label.y + tl->label.h };
+    SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));
+    DrawTextA(hdc, label, -1, &label_rc,
+              DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+
+    int right = tl->row.x + tl->row.w;
+    RECT sum_rc = { label_rc.right + ns_scale(SP_SM, CLV_DPI(lv)), tl->row.y,
+                    right, tl->row.y + tl->row.h };
+    if (summary[0] && sum_rc.right > sum_rc.left) {
+        SetTextColor(hdc, warn ? RGB_FROM_THEME(tok->warning.base) : dim_clr);
+        draw_text_utf8(hdc, summary, &sum_rc,
+                       DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX |
+                       DT_END_ELLIPSIS);
+    }
+    RestoreDC(hdc, saved);
 }
 
 static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
@@ -2098,6 +2328,13 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     SettledGeom sg;
     settled_row_geometry(lv, hdc, item, rc->left, rc->right, rc->top, &sg);
+    if (sg.has_fold) {
+        paint_fold_row(lv, hdc, item, &sg);
+        /* Closed: the fold row is the whole item -- no row, no copy glyph,
+         * no summary line. */
+        if (item->u.cmd.fold == CHAT_FOLD_CLOSED)
+            return rc->bottom - rc->top;
+    }
     const char *label = sg.label;
     const char *cmd_text = sg.cmd_text;
 
@@ -2162,8 +2399,21 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     paint_copy_glyph(lv, hdc, &layout.copy,
                      id_ok ? CLV_SETTLED_HIT_ID(item->id, HIT_COPY) : -1);
 
-    /* Fixed single-line row height -- exactly what measure_item()
-     * returned via clv_cmd_row_h(), never wraps. */
+    /* The batch summary line, under the row when this is its batch's last
+     * item: measure_item() added its height to the row's, so it fills the
+     * rest of rc, at the command text's inset. */
+    char summary[CLV_SUMMARY_MAX];
+    if (clv_batch_summary_text(lv, item, summary, sizeof(summary)))
+        paint_batch_summary(lv, hdc, summary,
+                            layout.text.x > 0 ? layout.text.x
+                                              : rc->left + lv->ai_indent,
+                            rc->right,
+                            sg.row_top + approval_row_height(sg.text_h,
+                                                             CLV_DPI(lv)),
+                            rc->bottom);
+
+    /* Single-line row height (plus the summary line, when drawn) -- exactly
+     * what measure_item() returned, never wraps. */
     return rc->bottom - rc->top;
 }
 
@@ -2187,6 +2437,7 @@ typedef struct {
     int needs_scroll;
     int border_w;
     int total_h, visible_h, row_h;   /* container geometry, for scrollbar/wheel maths */
+    int summary_h;       /* the batch summary line under the box (0: none) */
 } CmdCardGeometry;
 
 /* `first` must be a container's first item (see cmd_container_measure()).
@@ -2201,6 +2452,7 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
 
     CmdContainerInfo cinfo;
     cmd_container_measure(lv, hdc_for_measure, first, &cinfo);
+    g->summary_h = cinfo.summary_h;
 
     int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
     int border_w = ns_scale(1, CLV_DPI(lv));
@@ -2210,7 +2462,7 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
     g->box_left  = side_pad + side_pad;
     g->box_right = cw - side_pad - side_pad;
     g->box_top   = y;
-    g->box_bot   = y + h;
+    g->box_bot   = y + h - cinfo.summary_h;   /* the summary line is under the box */
 
     g->clip_left  = g->box_left + border_w;
     g->clip_right = g->box_right - border_w;
@@ -2404,7 +2656,15 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
     /* The container's own height is fully determined by recalc_layout()'s
      * Pass 2 (first_cmd->measured_height) before this ever paints, and
      * build_cmd_card_geometry() above derives every row from that same
-     * geometry -- so the box always exactly fills rc, never taller. */
+     * geometry -- so the box always exactly fills rc less the summary line
+     * below it, never taller. */
+    if (g.summary_h > 0) {
+        char summary[CLV_SUMMARY_MAX];
+        ChatMsgItem *last_row = g.n > 0 ? g.cmd_items[g.n - 1] : NULL;
+        if (clv_batch_summary_text(lv, last_row, summary, sizeof(summary)))
+            paint_batch_summary(lv, hdc, summary, g.layout.header.x,
+                                g.box_right, g.box_bot, rc->bottom);
+    }
     return rc->bottom - rc->top;
 }
 
@@ -3270,6 +3530,16 @@ static int chatlv_settled_row_hit(ChatListView *lv, int mx, int my,
             settled_row_geometry(lv, hdc, item, side_pad, cw - side_pad, y, &sg);
             ReleaseDC(lv->hwnd, hdc);
 
+            /* The fold row of a finished card: the whole row toggles it. */
+            if (sg.has_fold && sg.fold.row.w > 0 && sg.fold.row.h > 0 &&
+                mx >= sg.fold.row.x && mx < sg.fold.row.x + sg.fold.row.w &&
+                my >= sg.fold.row.y && my < sg.fold.row.y + sg.fold.row.h) {
+                if (out_item) *out_item = item;
+                if (out_hit) *out_hit = HIT_HEADER;
+                if (out_rc) clv_nrect_to_rect(&sg.fold.row, out_rc);
+                return 1;
+            }
+
             static const int order[3] = { HIT_COPY, HIT_TAG, HIT_TEXT };
             for (int k = 0; k < 3; k++) {
                 RECT er;
@@ -3489,6 +3759,11 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
                 settled_row_geometry(lv, hdc, item, side_pad, cw - side_pad,
                                      y, &sg);
                 ReleaseDC(lv->hwnd, hdc);
+                if (hit == HIT_HEADER) {
+                    if (!sg.has_fold) return 0;
+                    clv_nrect_to_rect(&sg.fold.row, out);
+                    return 1;
+                }
                 return settled_elem_rect(&sg.layout, hit, out);
             }
             y += h + lv->msg_gap;
@@ -3613,6 +3888,20 @@ static int chatlv_hit_is_actionable(int id)
  *  Hit testing: convert mouse click to button action
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* The content-coordinate top of `target` (the layout's own walk: items of
+ * height 0 take no gap), or 0 when it is not in the list. */
+static int clv_item_top(const ChatListView *lv, const ChatMsgItem *target)
+{
+    int y = lv->msg_gap;
+    for (const ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL; it;
+         it = it->next) {
+        if (it->measured_height <= 0) continue;
+        if (it == target) return y;
+        y += it->measured_height + lv->msg_gap;
+    }
+    return 0;
+}
+
 static int on_lbuttondown(ChatListView *lv, int mx, int my)
 {
     SetFocus(lv->hwnd);   /* Acquire keyboard focus so WM_KEYDOWN fires */
@@ -3656,6 +3945,31 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
         ChatMsgItem *sitem = NULL;
         int shit = HIT_NONE;
         if (chatlv_settled_row_hit(lv, mx, my, &sitem, &shit, NULL)) {
+            if (shit == HIT_HEADER) {
+                /* The fold row: expand or fold the finished card. The row
+                 * the reader clicked stays where it is on screen, pinned to
+                 * the bottom or not (a pinned list would otherwise follow
+                 * the bottom and move it from under the pointer), and so do
+                 * the folds other cards pick up in the same refresh: the
+                 * refresh runs here, so recalc_layout finds nothing changed
+                 * and does not anchor on its own. */
+                const int screen_y = clv_item_top(lv, sitem) - lv->scroll_y;
+                chat_msg_fold_toggle(sitem);
+                chat_msg_fold_refresh(lv->msg_list);
+                sitem->dirty = 1;
+                lv->stick_to_bottom = 0;     /* do not follow the bottom */
+                recalc_layout(lv);
+                int max_scroll = lv->total_height - lv->viewport_height;
+                lv->scroll_y = stick_scroll_hold_row(
+                    screen_y, clv_item_top(lv, sitem), max_scroll);
+                /* A click is the reader's own scroll: stuck again only when
+                 * the row's new place is the bottom. */
+                lv->stick_to_bottom =
+                    stick_scroll_after_user(lv->scroll_y, max_scroll);
+                update_scrollbar(lv);
+                InvalidateRect(lv->hwnd, NULL, FALSE);
+                return 1;
+            }
             chatlv_command_click(lv, sitem, shit);
             return 1;
         }
@@ -4204,6 +4518,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             ChatMsgItem *wi = lv->msg_list ? lv->msg_list->head : NULL;
             while (wi) {
                 int wh = wi->measured_height;
+                /* Hidden rows take neither height nor gap (a folded card's
+                 * rows): the same skip as every other walk. */
+                if (wh == 0) { wi = wi->next; continue; }
                 if (wi->type == CHAT_ITEM_AI_TEXT && wi->u.ai.thinking_text
                     && wi->u.ai.thinking_text[0]
                     && !wi->u.ai.thinking_collapsed
@@ -4348,6 +4665,13 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         UINT new_dpi = HIWORD(wParam);   /* new DPI value */
         lv->dpi_scale = (float)new_dpi / 96.0f;
         recalc_dpi_constants(lv);
+        /* Finished rows keep their cached height unless marked: every
+         * height and cached Thinking layout is in the old DPI. */
+        for (ChatMsgItem *di = lv->msg_list ? lv->msg_list->head : NULL;
+             di; di = di->next) {
+            di->dirty = 1;
+            if (di->type == CHAT_ITEM_AI_TEXT) di->u.ai.think_cache_len = -1;
+        }
         /* Use the suggested window rect provided by the system */
         RECT *suggested = (RECT *)lParam;
         SetWindowPos(hwnd, NULL,

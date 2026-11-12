@@ -60,6 +60,9 @@ int test_telnet_io_win_negotiates_and_logs_in(void);
 int test_telnet_io_win_eof_reports_closed(void);
 int test_telnet_io_win_serial_unique(void);
 
+/* test_settings_label_win.c */
+int test_settings_label_win_labels_fit_column(void);
+
 /* test_ns_tip_win.c */
 int test_ns_tip_win_create_styles(void);
 int test_ns_tip_win_notify_static_hits_client(void);
@@ -242,6 +245,7 @@ static int run_ns_tip_tests(void)
         return 1;
     }
     int failed = 0;
+    failed += test_settings_label_win_labels_fit_column();
     failed += test_ns_tip_win_create_styles();
     failed += test_ns_tip_win_notify_static_hits_client();
     failed += test_ns_tip_win_add_keeps_styles();

@@ -154,6 +154,32 @@ typedef struct {
     uint64_t lines_recycled;
     uint64_t primary_lines_recycled;
     uint32_t epoch;
+    /* Counters the AI command capture compares between a command's start and
+     * its end (run_command, spec decision 10). reflow_seq: bumped by every
+     * term_resize() that commits, beside epoch -- a failed resize leaves it,
+     * and the alternate screen does not touch it. region_scroll_seq: bumped
+     * whenever PRIMARY-screen rows shift in place instead of being recycled
+     * into scrollback (a scroll region, every scroll down), the events after
+     * which absolute line numbers stop meaning the same rows. Scrolls on the
+     * alternate screen are not counted: it has rows of its own, and the
+     * capture reads the alternate-screen flag itself. */
+    uint32_t reflow_seq;
+    uint32_t region_scroll_seq;
+    /* One more, for a capture that must notice a clear. erase_seq: bumped on
+     * the PRIMARY screen by ED 2 (erase whole display) and by ED 0 straight
+     * after a CUP or HVP that placed the cursor at row 0, column 0 (`clear`
+     * sends ESC[H ESC[J): nothing, not a printed byte, a C0 control or another
+     * escape sequence, between the two. An ED 0 that reaches the home position
+     * any other way (a transient prompt's \r ESC[1A ESC[J) is not counted.
+     * Nothing else bumps it: no cursor move (CUP, CUU, RI, DECRC), no other
+     * erase. ED 3 and RIS (ESC c) are not handled by the parser, so they bump
+     * nothing and move nothing; the alternate screen does not touch it; a
+     * failed term_resize leaves it, a committed one does not touch it.
+     * after_cup_home: the parser's memory of that "straight after" (true from
+     * a CUP/HVP that homed the cursor until the next byte that is not the
+     * start of an escape sequence; not part of the interface). */
+    uint32_t erase_seq;
+    bool after_cup_home;
     uint64_t write_gen;
 
     /* The debug log's session id (the "s3" in a log line; 0 prints "-").
@@ -263,6 +289,11 @@ int term_cursor_row_is_windows_prompt(const Terminal *term);
  * ring (term_logical_rows() below) always covers the visible screen, so the
  * slot it names holds a row. */
 int term_screen_to_phys(const Terminal *term, int screen_row);
+
+/* The cursor's absolute line: lines_recycled plus the cursor's logical index
+ * (the same top term_screen_to_phys() uses). scrollback_offset never changes
+ * it. 0 for NULL. */
+uint64_t term_abs_cursor_line(const Terminal *term);
 
 /* Logical index of the row shown at screen_row in the view as scrolled
  * (scrollback_offset applied, top clamped to 0 exactly as the renderer's

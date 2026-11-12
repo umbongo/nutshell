@@ -36,4 +36,44 @@ size_t term_extract_last_n(const Terminal *term, int n, char *buf, size_t buf_si
  */
 char *term_extract_last_n_dup(const Terminal *term, int n, size_t *len_out);
 
+/* Set in *flags by term_extract_abs_range_dup() when the range began before
+ * the oldest row the buffer still holds, so the text starts later than asked. */
+#define TERM_RANGE_START_RECYCLED 1u
+
+/*
+ * The text of absolute lines [first, end): line numbers as
+ * term_abs_cursor_line() counts them (lines_recycled plus the logical row
+ * index), formatted as term_extract_last_n() formats rows: one '\n' between
+ * rows, trailing spaces per row trimmed, trailing blank rows dropped.
+ *
+ * When echo is a non-empty string and the range's first row starts a logical
+ * line (it is not a wrapped continuation), that row and the following rows
+ * whose `wrapped` flag is set (still inside the range) are dropped if their
+ * text, joined without trimming, contains echo: the command the host echoed.
+ *
+ * A first before the oldest row still held starts there and sets
+ * TERM_RANGE_START_RECYCLED in *flags; an end past the newest row is
+ * clamped. Reads only the live part of the ring and allocates only the
+ * result. Returns the malloc'd NUL-terminated text ("" when nothing is left)
+ * with its length in *len_out, or NULL (*len_out = 0) when term is NULL or
+ * allocation fails. len_out and flags may be NULL; *flags is set to 0
+ * otherwise.
+ */
+char *term_extract_abs_range_dup(const Terminal *term, uint64_t first, uint64_t end,
+                                 const char *echo, size_t *len_out, unsigned *flags);
+
+/*
+ * The text of the cursor's row to the left of the cursor: cells [0, cursor
+ * column), the column clamped to the row's width, as extract_rows() writes a
+ * cell (control cells and cells never written are spaces) but NOT trimmed, so
+ * a prompt's trailing space is kept: what a prompt comparison needs. Writes
+ * to out (cap bytes with the NUL; out may be NULL or cap 0 to only count) and
+ * returns the full byte length. When it does not fit, out holds the longest
+ * prefix of whole characters that does (never half a UTF-8 sequence) and the
+ * return value is larger than cap - 1, so the caller can tell. Reads the
+ * ring that is current (the alternate screen's when it is on); allocates
+ * nothing. 0 and an empty out for NULL term.
+ */
+size_t term_extract_cursor_prefix(const Terminal *term, char *out, size_t cap);
+
 #endif /* NUTSHELL_TERM_EXTRACT_H */

@@ -198,11 +198,12 @@ int test_add_tool_results_stores_note_and_caps(void)
     snprintf(calls[1].name, sizeof(calls[1].name), "web_fetch");
 
     ASSERT_EQ(agentic_add_tool_results(&conv, calls, r, 2), 0);
-    ASSERT_EQ(conv.msg_count, 2);
-    ASSERT_TRUE(conv.messages[0].content_len <= AI_TOOL_RESULT_ESCAPED_MAX);
-    ASSERT_STR_EQ(conv.messages[0].tool_note, AI_TOOL_TRUNC_NOTE);
-    ASSERT_STR_EQ(conv.messages[1].tool_note, "The user did not approve this tool call.");
-    ASSERT_EQ(conv.messages[1].content_len, 0);
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(conv.messages[0].n_parts, 2);
+    ASSERT_TRUE(conv.messages[0].parts[0].content_len <= AI_TOOL_RESULT_ESCAPED_MAX);
+    ASSERT_STR_EQ(conv.messages[0].parts[0].tool_note, AI_TOOL_TRUNC_NOTE);
+    ASSERT_STR_EQ(conv.messages[0].parts[1].tool_note, "The user did not approve this tool call.");
+    ASSERT_EQ(conv.messages[0].parts[1].content_len, 0);
     /* the caller's originals are untouched */
     ASSERT_EQ(r[0].content_len, 70000);
     ASSERT_STR_EQ(r[0].tool_note, "");

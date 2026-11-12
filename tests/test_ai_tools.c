@@ -1,8 +1,10 @@
 #include "test_framework.h"
 #include "ai_tools.h"
+#include "ai_agentic.h"
 #include "ai_prompt.h"
 #include "chat_approval.h"
 #include "json_parser.h"
+#include "run_command.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -1014,7 +1016,7 @@ static int feed_ex(AiToolStreamState *st, const char *json,
     char think[64] = "";
     text[0] = '\0';
     return ai_parse_stream_chunk_ex(json, text, tsz, think, sizeof(think),
-                                    st, "moonshot");
+                                    st, "moonshot", NULL, NULL);
 }
 
 int test_ai_stream_openai_finish_stop_with_pending_call(void)
@@ -1210,6 +1212,93 @@ int test_ai_stream_openai_index_less_id_only_on_first_chunk_stays_one_call(void)
     TEST_END();
 }
 
+/* Ruling R51 (review of the fix wave, 2026-11-11): with no "index" at all, a
+ * chunk carrying a new non-empty id that differs from the open slot's opens
+ * the next slot, whatever else the chunk holds; two parallel calls a and b
+ * streamed in pieces both survive whole with their own arguments. The id is
+ * repeated on some of a's chunks and on none of b's, and b's id comes in a
+ * chunk of its own before its name. */
+int test_ai_stream_openai_index_less_parallel_calls_survive(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"type\":\"function\",\"function\":{\"name\":\"web_fetch\","
+        "\"arguments\":\"\"}}]},\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"function\":{\"arguments\":\"{\\\"url\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"https://a.example/\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    /* b's id alone, then its name, then its arguments in two pieces */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"b\"}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"cats\\\"}\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(st.index_defaulted, 6);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://a.example/\"}");
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].id, "b");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"cats\"}");
+    ASSERT_EQ(st.pending_tool_calls[1].overflowed, 0);
+    ai_tools_stream_reset(&st);
+
+    /* only an explicit index reused with a different id overflows */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}},"
+        "{\"index\":0,\"id\":\"b\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_EQ(st.index_defaulted, 0);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+/* A tool input whose object holds a key with a \u0000 escape (review of the
+ * fix wave, 2026-11-11): the call is kept, the key is written back whole and
+ * never read as "command", so the real "command" member is the one that runs. */
+int test_ai_parse_tool_calls_anthropic_nul_key(void)
+{
+    TEST_BEGIN();
+    const char *resp =
+        "{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":"
+        "\"run_command\",\"input\":{\"command\\u0000x\":\"evil\","
+        "\"command\":\"ls\"}}]}";
+    AiToolCall calls[2];
+    memset(calls, 0, sizeof(calls));
+    ASSERT_EQ(ai_parse_tool_calls_anthropic(resp, calls, 2), 1);
+    ASSERT_STR_EQ(calls[0].input_json,
+                  "{\"command\\u0000x\":\"evil\",\"command\":\"ls\"}");
+    char cmd[RUNCMD_COMMAND_MAX + 1];
+    char note[RUNCMD_NOTE_MAX];
+    ASSERT_EQ(runcmd_parse_input(calls[0].input_json, cmd, note),
+              RUNCMD_PARSE_OK);
+    ASSERT_STR_EQ(cmd, "ls");
+    TEST_END();
+}
+
 int test_ai_stream_openai_indexed_parallel_calls_unchanged(void)
 {
     TEST_BEGIN();
@@ -1294,6 +1383,286 @@ int test_ai_stream_openai_plain_reply_stop_ends_normally(void)
         text, sizeof(text)), 1);
     ASSERT_EQ(st.pending_tool_count, 0);
     ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 0);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+/* ---- Sticky overflow: a refused fragment poisons its call ---------------- */
+
+/* An OpenAI chunk carrying one fragment of tool call `index`; `args` is
+ * already JSON-escaped for the arguments string. id/name only when non-NULL. */
+static void oa_frag(char *out, size_t sz, int index, const char *id,
+                    const char *name, const char *args)
+{
+    char head[160] = "";
+    if (id && name)
+        snprintf(head, sizeof head, "\"id\":\"%s\",\"type\":\"function\",", id);
+    snprintf(out, sz,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":%d,%s"
+        "\"function\":{%s%s%s\"arguments\":\"%s\"}}]},\"finish_reason\":null}]}",
+        index, head,
+        name ? "\"name\":\"" : "", name ? name : "", name ? "\"," : "", args);
+}
+
+/* The fragment that overflows: past AI_TOOL_INPUT_MAX on its own. */
+static void fill_overflow(char *buf, size_t n)
+{
+    memset(buf, 'a', n);
+    buf[n] = '\0';
+}
+
+int test_tool_stream_overflow_splice_refused(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4800];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_1", "run_command", "{\\\"note\\\":\\\"");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+
+    /* 4200 bytes: refused, past AI_TOOL_INPUT_MAX */
+    fill_overflow(big, 4200);
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL, big);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+
+    /* the tail would fit on its own: it must not be appended */
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL,
+            "\\\",\\\"command\\\":\\\"rm -rf /home/user/build-cache\\\"}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "rm -rf") == NULL);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "command") == NULL);
+
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_overflow_keeps_rest_of_chunk(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4900];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_1", "run_command", "{\\\"note\\\":\\\"");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    oa_frag(chunk, sizeof chunk, 1, "call_2", "web_search", "");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+
+    /* one chunk: call 0 overflows, call 1 completes, then the finish */
+    fill_overflow(big, 4200);
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"function\":{\"arguments\":\"%s\"}},"
+        "{\"index\":1,\"function\":{\"arguments\":\"{\\\"query\\\":\\\"q\\\"}\"}}"
+        "]},\"finish_reason\":\"tool_calls\"}]}", big);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 1);
+
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_EQ(st.pending_tool_calls[1].overflowed, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"q\"}");
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_index_bounded(void)
+{
+    TEST_BEGIN();
+    static char chunk[1024];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    /* one chunk: a huge index, a valid call 0, then the finish */
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":500000,\"id\":\"bad\",\"function\":{\"name\":\"run_command\",\"arguments\":\"{}\"}},"
+        "{\"index\":1e300,\"function\":{\"arguments\":\"{}\"}},"
+        "{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"run_command\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}"
+        "]},\"finish_reason\":\"tool_calls\"}]}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 1);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_TRUE(st.pending_tool_cap <= AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_1");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{\"command\":\"ls\"}");
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+    ai_tools_stream_reset(&st);
+
+    /* the boundary: 63 accepted, 64 refused */
+    ai_tools_stream_init(&st);
+    oa_frag(chunk, sizeof chunk, AI_TOOL_STREAM_CALLS_MAX - 1, "c63", "run_command", "{}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_STR_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].id, "c63");
+    oa_frag(chunk, sizeof chunk, AI_TOOL_STREAM_CALLS_MAX, "c64", "run_command", "{}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ai_tools_stream_reset(&st);
+
+    /* index-less deltas with a new id each: the split path stops at the bound */
+    ai_tools_stream_init(&st);
+    for (int i = 0; i < AI_TOOL_STREAM_CALLS_MAX + 6; i++) {
+        snprintf(chunk, sizeof chunk,
+            "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"i%d\","
+            "\"function\":{\"name\":\"run_command\",\"arguments\":\"{}\"}}]}}]}", i);
+        ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    }
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_STR_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].id, "i63");
+    /* the refused 65th call's id-less fragments must not splice onto call 63 */
+    ASSERT_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].overflowed, 1);
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"more\"}}]}}]}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[AI_TOOL_STREAM_CALLS_MAX - 1].input_json, "{}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+/* review of B1-B11, 2026-11-11: a second call arriving on an index whose slot
+ * already holds a different non-empty id must not be spliced onto it (call
+ * B's name with call A's arguments): the slot is overflowed, so its stored
+ * input is "{}"; the rest of the chunk is still processed. */
+int test_tool_stream_index_reuse_overflows(void)
+{
+    TEST_BEGIN();
+    static char chunk[1024];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_A", "run_command",
+            "{\\\"command\\\":\\\"ls\\\"}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+
+    /* the same id again on the same index (a resend) is not a new call */
+    oa_frag(chunk, sizeof chunk, 0, "call_A", "run_command", "");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 0);
+
+    /* one chunk: index 0 is reused by call_B, index 1 is a fresh call_C, and
+     * the finish follows */
+    snprintf(chunk, sizeof chunk,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"call_B\",\"type\":\"function\",\"function\":"
+        "{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"q\\\"}\"}},"
+        "{\"index\":1,\"id\":\"call_C\",\"type\":\"function\",\"function\":"
+        "{\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://example.org/\\\"}\"}}"
+        "]},\"finish_reason\":\"tool_calls\"}]}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 1);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_A");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "run_command");
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].id, "call_C");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_fetch");
+    ASSERT_EQ(st.pending_tool_calls[1].overflowed, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json,
+                  "{\"url\":\"https://example.org/\"}");
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+
+    /* sanitising turns the poisoned slot into "{}", the other is kept */
+    ASSERT_EQ(agentic_sanitize_tool_inputs(st.pending_tool_calls, 2), 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json,
+                  "{\"url\":\"https://example.org/\"}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_anthropic_blocks_bounded(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    for (int i = 0; i < AI_TOOL_STREAM_CALLS_MAX + 3; i++) {
+        ASSERT_EQ(ai_parse_tool_stream_anthropic(
+            "{\"type\":\"content_block_start\",\"content_block\":"
+            "{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"run_command\"}}", &st), 0);
+        ASSERT_EQ(ai_parse_tool_stream_anthropic(
+            "{\"type\":\"content_block_stop\"}", &st), 0);
+    }
+    ASSERT_EQ(st.pending_tool_count, AI_TOOL_STREAM_CALLS_MAX);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}", &st), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_anthropic_overflow_sticky(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4900];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_start\",\"index\":0,"
+        "\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\","
+        "\"name\":\"run_command\"}}", &st), 0);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"input_json_delta\","
+        "\"partial_json\":\"{\\\"note\\\":\\\"\"}}", &st), 0);
+
+    fill_overflow(big, 4200);
+    snprintf(chunk, sizeof chunk,
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"%s\"}}", big);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(chunk, &st), 0);
+    ASSERT_EQ(st.active_tool_call.overflowed, 1);
+
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"input_json_delta\","
+        "\"partial_json\":\"\\\",\\\"command\\\":\\\"rm -rf /home/user/build-cache\\\"}\"}}",
+        &st), 0);
+    ASSERT_TRUE(strstr(st.active_tool_call.input_json, "rm -rf") == NULL);
+
+    /* the block still commits, flagged, and the stop reason is still read */
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"content_block_stop\",\"index\":0}", &st), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "rm -rf") == NULL);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}",
+        &st), 1);
+
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_tool_stream_web_fetch_url_not_spliced(void)
+{
+    TEST_BEGIN();
+    static char big[4300];
+    static char chunk[4800];
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+
+    oa_frag(chunk, sizeof chunk, 0, "call_1", "web_fetch", "{\\\"note\\\":\\\"");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    fill_overflow(big, 4200);
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL, big);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+    oa_frag(chunk, sizeof chunk, 0, NULL, NULL,
+            "\\\",\\\"url\\\":\\\"https://evil.example/x\\\"}");
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &st), 0);
+
+    ASSERT_EQ(st.pending_tool_calls[0].overflowed, 1);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "evil.example") == NULL);
+    ASSERT_TRUE(strstr(st.pending_tool_calls[0].input_json, "url") == NULL);
+
     ai_tools_stream_reset(&st);
     TEST_END();
 }
@@ -1816,5 +2185,348 @@ int test_ai_tool_card_text_detail_fits_approval_note(void)
         ASSERT_EQ(chat_approval_add_tool(&q, row, detail, CMD_UNKNOWN), 0);
         ASSERT_STR_EQ(q.entries[0].note, detail);
     }
+    TEST_END();
+}
+
+int test_runcmd_serialized_both_formats(void)
+{
+    TEST_BEGIN();
+    AiToolRegistry reg;
+    static char buf[4096];
+    ai_tools_init(&reg);
+    ASSERT_EQ(runcmd_register(&reg), 0);
+    ASSERT_EQ(reg.count, 1);
+    ASSERT_EQ(ai_tools_validate_schemas(&reg), 0);
+
+    const AiToolDef *t = ai_tools_find(&reg, RUNCMD_TOOL_NAME);
+    ASSERT_NOT_NULL(t);
+    if (t) {
+        ASSERT_EQ((int)t->safety, (int)TOOL_CRITICAL);
+        ASSERT_STR_EQ(t->input_schema_json,
+            "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\","
+            "\"description\":\"one single-line command, at most 1023 bytes\"},"
+            "\"note\":{\"type\":\"string\",\"description\":\"one line for the user: "
+            "what the command does and why\"}},\"required\":[\"command\"]}");
+    }
+
+    ASSERT_TRUE(ai_tools_serialize_anthropic(&reg, buf, sizeof buf) > 0);
+    ASSERT_NOT_NULL(strstr(buf, "\"name\":\"run_command\""));
+    ASSERT_NOT_NULL(strstr(buf, "\"input_schema\""));
+
+    ASSERT_TRUE(ai_tools_serialize_openai(&reg, buf, sizeof buf) > 0);
+    ASSERT_NOT_NULL(strstr(buf, "\"type\":\"function\""));
+    ASSERT_NOT_NULL(strstr(buf, "\"name\":\"run_command\""));
+    ASSERT_NOT_NULL(strstr(buf, "\"required\":[\"command\"]"));
+
+    ASSERT_EQ(runcmd_register(NULL), -1);
+    TEST_END();
+}
+
+int test_runcmd_stub_is_error(void)
+{
+    TEST_BEGIN();
+    AiToolRegistry reg;
+    ai_tools_init(&reg);
+    ASSERT_EQ(runcmd_register(&reg), 0);
+
+    AiToolCall call;
+    memset(&call, 0, sizeof call);
+    snprintf(call.id, sizeof call.id, "toolu_1");
+    snprintf(call.name, sizeof call.name, "%s", RUNCMD_TOOL_NAME);
+    snprintf(call.input_json, sizeof call.input_json, "{\"command\":\"ls\"}");
+
+    AiToolResult r;
+    int rc = ai_tool_execute(&reg, &call, NULL, &r);
+    ASSERT_TRUE(rc != 0);
+    ASSERT_EQ(r.is_error, 1);
+    ASSERT_NOT_NULL(strstr(r.tool_note, "handled by the panel"));
+    ASSERT_NULL(r.content);   /* Nutshell's own text: note, not data */
+    free(r.content);
+    TEST_END();
+}
+
+/* ======================================================================== */
+/* Gemini thought signatures (OpenAI-compatible stream)                       */
+/* ======================================================================== */
+
+int test_ai_stream_gemini_signature_captured(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    ASSERT_NULL(state.sig);
+
+    /* no "index" (Gemini leaves it out), the signature on the call itself */
+    const char *chunk =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\","
+        "\"tool_calls\":[{\"id\":\"function-call-1\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"x\\\"}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"c2ln\"}}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 1);
+    ASSERT_STR_EQ(state.pending_tool_calls[0].name, "web_search");
+    ASSERT_NOT_NULL(state.sig);
+    ASSERT_STR_EQ(state.sig, "c2ln");
+    ASSERT_EQ((int)state.sig_len, 4);
+
+    /* a later chunk of the same response, with another signature: ignored */
+    const char *later =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"function\":{\"arguments\":\"\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"b3RoZXI=\"}}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(later, &state), 0);
+    ASSERT_STR_EQ(state.sig, "c2ln");
+
+    /* the reset frees it */
+    ai_tools_stream_reset(&state);
+    ASSERT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, 0);
+    TEST_END();
+}
+
+int test_ai_stream_gemini_parallel_first_only(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+
+    /* two index-less calls in one chunk: the first carries the signature; a
+     * signature on the second (which Gemini does not send) is not taken */
+    const char *chunk =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"Zmlyc3Q=\"}}},"
+        "{\"id\":\"b\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"c2Vjb25k\"}}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_STR_EQ(state.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(state.pending_tool_calls[1].id, "b");
+    ASSERT_STR_EQ(state.sig, "Zmlyc3Q=");
+
+    /* a second call without one (the usual case) leaves the first's alone */
+    ai_tools_stream_reset(&state);
+    const char *usual =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"Zmlyc3Q=\"}}},"
+        "{\"id\":\"b\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(usual, &state), 0);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_STR_EQ(state.sig, "Zmlyc3Q=");
+
+    /* no signature anywhere: none */
+    ai_tools_stream_reset(&state);
+    const char *none =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}}]}}]}";
+    ASSERT_EQ(ai_parse_tool_stream_openai(none, &state), 0);
+    ASSERT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, 0);
+    ai_tools_stream_reset(&state);
+    TEST_END();
+}
+
+/* The path the stream thread takes for one "data: " line: prepare, then the
+ * combined text/tool parser on what prepare returned. */
+static int read_line_like_thread(AiToolStreamState *state, const char *json,
+                                 char *content, size_t csz, char *thinking,
+                                 size_t tsz, int *in_tok, int *out_tok)
+{
+    char *owned = NULL;
+    const char *use = ai_stream_line_prepare(state, json, &owned);
+    if (!use) return -99;
+    int rc = ai_parse_stream_chunk_ex(use, content, csz, thinking, tsz, state,
+                                      "gemini", in_tok, out_tok);
+    free(owned);
+    return rc;
+}
+
+/* A chunk with text, reasoning, usage, a call carrying a `raw`-byte signature
+ * (escaped text `esc`) and a second call. */
+static char *long_sig_chunk(const char *esc)
+{
+    const char *head =
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\","
+        "\"reasoning_content\":\"hmm\",\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"},"
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"";
+    const char *tail =
+        "\"}}},{\"id\":\"b\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]}}],"
+        "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}";
+    char *chunk = (char *)malloc(strlen(head) + strlen(esc) + strlen(tail) + 1);
+    if (!chunk) return NULL;
+    sprintf(chunk, "%s%s%s", head, esc, tail);
+    return chunk;
+}
+
+int test_ai_stream_gemini_long_signature_kept(void)
+{
+    TEST_BEGIN();
+    enum { SIG_LEN = 20 * 1024 };
+    char *sig = (char *)malloc(SIG_LEN + 1);
+    ASSERT_NOT_NULL(sig);
+    for (int i = 0; i < SIG_LEN; i++) sig[i] = (char)('A' + i % 26);
+    sig[SIG_LEN] = '\0';
+    char *chunk = long_sig_chunk(sig);
+    ASSERT_NOT_NULL(chunk);
+
+    /* alone, the JSON parser refuses the line (its strings stop at 8191) */
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    ASSERT_EQ(ai_parse_tool_stream_openai(chunk, &state), -1);
+
+    /* through the thread's path: text, reasoning, usage, both calls and the
+     * whole signature */
+    char content[64] = "", thinking[64] = "";
+    int in_tok = 0, out_tok = 0;
+    int rc = read_line_like_thread(&state, chunk, content, sizeof(content),
+                                   thinking, sizeof(thinking), &in_tok, &out_tok);
+    ASSERT_TRUE(rc >= 0);
+    ASSERT_STR_EQ(content, "hello");
+    ASSERT_STR_EQ(thinking, "hmm");
+    ASSERT_EQ(in_tok, 11);
+    ASSERT_EQ(out_tok, 7);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_STR_EQ(state.pending_tool_calls[0].name, "web_search");
+    ASSERT_STR_EQ(state.pending_tool_calls[1].name, "web_fetch");
+    ASSERT_NOT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, SIG_LEN);
+    ASSERT_TRUE(strcmp(state.sig, sig) == 0);
+
+    /* a later long signature in the same response is cut out and dropped, the
+     * line still read */
+    ai_tools_stream_reset(&state);
+    ai_tools_stream_init(&state);
+    state.sig_seen = 1;
+    content[0] = '\0';
+    rc = read_line_like_thread(&state, chunk, content, sizeof(content), thinking,
+                               sizeof(thinking), &in_tok, &out_tok);
+    ASSERT_TRUE(rc >= 0);
+    ASSERT_STR_EQ(content, "hello");
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_NULL(state.sig);
+
+    ai_tools_stream_reset(&state);
+    free(chunk);
+    free(sig);
+    TEST_END();
+}
+
+int test_ai_stream_gemini_long_signature_escapes(void)
+{
+    TEST_BEGIN();
+    /* base64 slashes escaped as \/ and a \u002b plus, past the parser's limit */
+    enum { RAW = 12000 };
+    char *esc = (char *)malloc(RAW * 2 + 64);
+    char *want = (char *)malloc(RAW + 8);
+    ASSERT_NOT_NULL(esc);
+    ASSERT_NOT_NULL(want);
+    size_t e = 0, w = 0;
+    for (int i = 0; i < RAW; i++) {
+        if (i % 50 == 7)       { memcpy(esc + e, "\\/", 2); e += 2; want[w++] = '/'; }
+        else if (i % 50 == 9)  { memcpy(esc + e, "\\u002b", 6); e += 6; want[w++] = '+'; }
+        else                   { esc[e++] = want[w++] = (char)('a' + i % 26); }
+    }
+    esc[e] = '\0';
+    want[w] = '\0';
+    char *chunk = long_sig_chunk(esc);
+    ASSERT_NOT_NULL(chunk);
+
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    char content[64] = "", thinking[64] = "";
+    int in_tok = 0, out_tok = 0;
+    ASSERT_TRUE(read_line_like_thread(&state, chunk, content, sizeof(content),
+                                      thinking, sizeof(thinking), &in_tok,
+                                      &out_tok) >= 0);
+    ASSERT_EQ(state.pending_tool_count, 2);
+    ASSERT_NOT_NULL(state.sig);
+    ASSERT_EQ((int)state.sig_len, (int)w);
+    ASSERT_TRUE(strcmp(state.sig, want) == 0);
+    ASSERT_STR_EQ(content, "hello");
+    ai_tools_stream_reset(&state);
+
+    /* an escape the decoder refuses: the line cannot be read (NULL), nothing kept */
+    char *bad_esc = (char *)malloc(9100 + 16);
+    ASSERT_NOT_NULL(bad_esc);
+    memset(bad_esc, 'q', 9000);
+    memcpy(bad_esc + 9000, "\\ud83d", 6);
+    bad_esc[9006] = '\0';
+    char *bad = long_sig_chunk(bad_esc);
+    ASSERT_NOT_NULL(bad);
+    char *owned = NULL;
+    ai_tools_stream_init(&state);
+    ASSERT_NULL(ai_stream_line_prepare(&state, bad, &owned));
+    ASSERT_NULL(owned);
+    ASSERT_NULL(state.sig);
+    ai_tools_stream_reset(&state);
+
+    /* a cut value (no closing quote) is refused the same way */
+    char *cut = (char *)malloc(strlen(chunk) + 1);
+    ASSERT_NOT_NULL(cut);
+    strcpy(cut, chunk);
+    char *mid = strstr(cut, "thought_signature") + 9000;
+    *mid = '\0';
+    ai_tools_stream_init(&state);
+    ASSERT_NULL(ai_stream_line_prepare(&state, cut, &owned));
+    ai_tools_stream_reset(&state);
+
+    free(cut);
+    free(bad);
+    free(bad_esc);
+    free(chunk);
+    free(esc);
+    free(want);
+    TEST_END();
+}
+
+int test_ai_stream_line_prepare_leaves_other_lines(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState state;
+    ai_tools_stream_init(&state);
+    char *owned = NULL;
+
+    /* a short line, and one with the key but a short value, are returned as is */
+    const char *shortline =
+        "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"c2ln\"}}}]}}]}";
+    ASSERT_TRUE(ai_stream_line_prepare(&state, shortline, &owned) == shortline);
+    ASSERT_NULL(owned);
+    ASSERT_NULL(state.sig);
+
+    /* a long line whose text mentions the key (escaped quotes) is not touched,
+     * and neither is a long signature on a text part with no tool call */
+    size_t n = 9000;
+    char *big = (char *)malloc(n + 400);
+    ASSERT_NOT_NULL(big);
+    int o = sprintf(big, "{\"choices\":[{\"delta\":{\"content\":\"%s",
+                    "\\\"extra_content\\\":{\\\"google\\\":{\\\"thought_signature\\\":\\\"");
+    memset(big + o, 'x', n);
+    o += (int)n;
+    strcpy(big + o, "\"}}]}");
+    ASSERT_TRUE(ai_stream_line_prepare(&state, big, &owned) == big);
+    ASSERT_NULL(owned);
+    ASSERT_NULL(state.sig);
+
+    o = sprintf(big, "{\"choices\":[{\"delta\":{\"content\":\"hi\","
+                "\"extra_content\":{\"google\":{\"thought_signature\":\"");
+    memset(big + o, 'x', n);
+    o += (int)n;
+    strcpy(big + o, "\"}}}}]}");
+    ASSERT_TRUE(ai_stream_line_prepare(&state, big, &owned) == big);
+    ASSERT_NULL(owned);
+    ASSERT_NULL(state.sig);
+
+    free(big);
+    ai_tools_stream_reset(&state);
     TEST_END();
 }

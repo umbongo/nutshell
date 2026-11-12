@@ -64,7 +64,7 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
         if (d->conv.msg_count > 0) {
             char note[256];
             if (ai_build_policy_raised_note(next.allowed, note, sizeof(note)) > 0) {
-                ai_conv_add(&d->conv, AI_ROLE_USER, note);
+                (void)ai_chat_owner_add_note(d, d->active_state, note, 0);
             }
         }
     } else if (next.allowed < prev.allowed) {

@@ -5,6 +5,7 @@
 #include "dlog_query.h"
 #include "net_guard.h"
 #include "paste_filter.h"
+#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,7 +36,9 @@ static size_t json_object_to_string(const JsonNode *node, char *buf, size_t max)
 
         if (pos + 1 >= max) return 0;
         buf[pos++] = '"';
-        size_t key_len = strlen(key);
+        /* the decoded length: a key holding a \u0000 escape is written back
+         * with it, never cut short into a name it is not */
+        size_t key_len = (size_t)(uintptr_t)vec_get(&node->as.obj.key_lens, i);
         size_t new_pos = json_escape_string(key, key_len, buf, max, pos, 0);
         if (new_pos == 0 && key_len > 0) return 0;
         pos = new_pos;
@@ -549,27 +552,31 @@ void ai_tools_stream_reset(AiToolStreamState *state)
     if (state->pending_tool_calls) {
         free(state->pending_tool_calls);
     }
+    free(state->sig);
     memset(state, 0, sizeof(*state));
     state->current_block_type = BLOCK_NONE;
     state->pending_tool_calls = NULL;
 }
 
-/* Append partial_json to tool_call->input_json.
- * Returns 0 on success, -1 on overflow. */
-static int stream_append_input(AiToolCall *tool_call, const char *partial)
+/* Append partial_json to tool_call->input_json. The first fragment that
+ * would pass AI_TOOL_INPUT_MAX marks the call overflowed and is dropped, and
+ * so is every later fragment: a smaller one that fits must not splice onto
+ * the text before the gap and make a different, valid call. Never an error
+ * for the caller: the chunk's other calls and its finish_reason still count. */
+static void stream_append_input(AiToolCall *tool_call, const char *partial)
 {
-    if (!tool_call || !partial) return 0;
+    if (!tool_call || !partial || tool_call->overflowed) return;
 
     size_t existing = strlen(tool_call->input_json);
     size_t added    = strlen(partial);
 
     if (existing + added >= (size_t)AI_TOOL_INPUT_MAX) {
-        return -1;  /* overflow */
+        tool_call->overflowed = 1;
+        return;
     }
 
     memcpy(tool_call->input_json + existing, partial, added);
     tool_call->input_json[existing + added] = '\0';
-    return 0;
 }
 
 /* Add completed active_tool_call to pending_tool_calls array.
@@ -577,6 +584,9 @@ static int stream_append_input(AiToolCall *tool_call, const char *partial)
 static int stream_commit_tool(AiToolStreamState *state)
 {
     if (!state) return -1;
+
+    /* Past the bound the call is dropped; the stream goes on. */
+    if (state->pending_tool_count >= AI_TOOL_STREAM_CALLS_MAX) return 0;
 
     /* Grow array if needed — initial cap 4, double on overflow */
     if (state->pending_tool_count >= state->pending_tool_cap) {
@@ -645,12 +655,8 @@ int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *st
                 } else if (strcmp(delta_type, "input_json_delta") == 0
                            && state->current_block_type == BLOCK_TOOL_USE) {
                     const char *partial = json_obj_str(delta, "partial_json");
-                    if (partial) {
-                        if (stream_append_input(&state->active_tool_call, partial) < 0) {
-                            json_free(root);
-                            return -1;
-                        }
-                    }
+                    if (partial)
+                        stream_append_input(&state->active_tool_call, partial);
                 }
             }
         }
@@ -689,6 +695,28 @@ int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *st
 
 /* ---- OpenAI streaming parser --------------------------------------------- */
 
+/* Keep the first thought signature of a response (Gemini). The call's own
+ * extra_content.google.thought_signature; later ones are ignored, and a copy
+ * that cannot be allocated drops the signature without failing the stream. */
+static void openai_take_signature(AiToolStreamState *state, JsonNode *tc_node)
+{
+    if (state->sig_seen) return;
+    JsonNode *extra = json_obj_get(tc_node, "extra_content");
+    if (!extra || extra->type != JSON_OBJECT) return;
+    JsonNode *google = json_obj_get(extra, "google");
+    if (!google || google->type != JSON_OBJECT) return;
+    const char *sig = json_obj_str(google, "thought_signature");
+    if (!sig || !sig[0]) return;
+
+    state->sig_seen = 1;
+    size_t len = strlen(sig);
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) return;
+    memcpy(copy, sig, len + 1);
+    state->sig = copy;
+    state->sig_len = len;
+}
+
 /* Accumulate one delta.tool_calls array into the state. -1 on out of memory. */
 static int openai_accumulate_tool_calls(AiToolStreamState *state,
                                         JsonNode *tool_calls)
@@ -718,8 +746,18 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
                                        : c->name[0] != '\0';
                 if (differs) slot = state->pending_tool_count;
             }
+        } else if (idx_d >= (double)AI_TOOL_STREAM_CALLS_MAX) {
+            continue;   /* not accumulated; the rest of the chunk still counts */
         } else {
             slot = (int)idx_d;
+        }
+        /* The id-split path of an index-less delta can also reach the bound.
+         * Its later id-less fragments would continue the last kept call, so
+         * that call is marked overflowed (INVALID) rather than spliced. */
+        if (slot >= AI_TOOL_STREAM_CALLS_MAX) {
+            if (state->pending_tool_count > 0)
+                state->pending_tool_calls[state->pending_tool_count - 1].overflowed = 1;
+            continue;
         }
 
         /* Grow pending_tool_calls array if needed to accommodate this slot */
@@ -740,6 +778,21 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
             state->pending_tool_count = slot + 1;
         }
 
+        /* A different non-empty id on a slot that already has one is a second
+         * call on a reused index. Its name must never run with the first
+         * call's arguments, so the slot is overflowed (INVALID, stored input
+         * "{}") and this delta is not applied; the rest of the chunk still
+         * is (review of B1-B11, 2026-11-11). */
+        {
+            AiToolCall *have = &state->pending_tool_calls[slot];
+            if (id && id[0] && have->id[0] && strcmp(have->id, id) != 0) {
+                have->overflowed = 1;
+                continue;
+            }
+        }
+
+        openai_take_signature(state, tc_node);
+
         /* First chunk: id and function.name */
         if (id) {
             snprintf(state->pending_tool_calls[slot].id,
@@ -755,10 +808,8 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
             }
 
             const char *arguments = json_obj_str(func, "arguments");
-            if (arguments && arguments[0] != '\0') {
-                if (stream_append_input(&state->pending_tool_calls[slot], arguments) < 0)
-                    return -1;
-            }
+            if (arguments && arguments[0] != '\0')
+                stream_append_input(&state->pending_tool_calls[slot], arguments);
         }
     }
     return 0;
@@ -1110,4 +1161,151 @@ int ai_tool_card_text(const AiToolCall *call, char *row, size_t row_cap,
         net_text_escape(call->input_json, strnlen(call->input_json, AI_TOOL_INPUT_MAX),
                         detail, detail_cap);
     return 0;
+}
+
+/* ---- A stream line with a long thought signature ------------------------- */
+
+/* A string the JSON parser holds is at most TOK_VALUE_MAX - 1 = 8191 bytes
+ * (src/config/json_tokenizer.h); a Gemini signature can be longer. A value
+ * whose raw text is more than this many bytes is cut out of the line. */
+#define SIG_STRIP_MIN 8000
+
+/* Skip JSON whitespace. */
+static const char *sig_ws(const char *p)
+{
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    return p;
+}
+
+/* After optional whitespace, `lit` must follow; returns the position after
+ * it, or NULL. */
+static const char *sig_expect(const char *p, const char *lit)
+{
+    p = sig_ws(p);
+    size_t n = strlen(lit);
+    if (strncmp(p, lit, n) != 0) return NULL;
+    return p + n;
+}
+
+/* The first byte of the value in ..."extra_content":{"google":{
+ * "thought_signature":"<value>"... at or after `from`; NULL when none. A quote
+ * inside a JSON string is escaped, so text a model wrote cannot match. */
+static const char *sig_find_value(const char *from)
+{
+    const char *k = from;
+    while ((k = strstr(k, "\"extra_content\"")) != NULL) {
+        const char *p = sig_expect(k, "\"extra_content\"");
+        if (p) p = sig_expect(p, ":");
+        if (p) p = sig_expect(p, "{");
+        if (p) p = sig_expect(p, "\"google\"");
+        if (p) p = sig_expect(p, ":");
+        if (p) p = sig_expect(p, "{");
+        if (p) p = sig_expect(p, "\"thought_signature\"");
+        if (p) p = sig_expect(p, ":");
+        if (p) p = sig_expect(p, "\"");
+        if (p) return p;
+        k++;
+    }
+    return NULL;
+}
+
+/* Decode a JSON string body [from, to) of base64 text: the simple escapes and
+ * \u00XX below 0x80. Returns a malloc'd NUL-terminated copy, or NULL for any
+ * other escape (and \u0000) or for out of memory. */
+static char *sig_decode(const char *from, const char *to, size_t *len_out)
+{
+    char *out = (char *)malloc((size_t)(to - from) + 1);
+    if (!out) return NULL;
+    size_t n = 0;
+    for (const char *r = from; r < to; r++) {
+        if (*r != '\\') { out[n++] = *r; continue; }
+        r++;
+        switch (*r) {
+        case '"': case '\\': case '/': out[n++] = *r; break;
+        case 'b': out[n++] = '\b'; break;
+        case 'f': out[n++] = '\f'; break;
+        case 'n': out[n++] = '\n'; break;
+        case 'r': out[n++] = '\r'; break;
+        case 't': out[n++] = '\t'; break;
+        case 'u': {
+            unsigned v = 0;
+            if (to - r < 5) { free(out); return NULL; }
+            for (int i = 1; i <= 4; i++) {
+                char h = r[i];
+                unsigned d = (h >= '0' && h <= '9') ? (unsigned)(h - '0')
+                           : (h >= 'a' && h <= 'f') ? (unsigned)(h - 'a' + 10)
+                           : (h >= 'A' && h <= 'F') ? (unsigned)(h - 'A' + 10)
+                           : 16u;
+                if (d > 15u) { free(out); return NULL; }
+                v = (v << 4) | d;
+            }
+            if (v == 0 || v >= 0x80) { free(out); return NULL; }
+            out[n++] = (char)v;
+            r += 4;
+            break;
+        }
+        default: free(out); return NULL;
+        }
+    }
+    out[n] = '\0';
+    *len_out = n;
+    return out;
+}
+
+const char *ai_stream_line_prepare(AiToolStreamState *state, const char *json,
+                                   char **owned)
+{
+    if (owned) *owned = NULL;
+    if (!state || !json || !owned) return json;
+    size_t clen = strlen(json);
+    if (clen <= SIG_STRIP_MIN) return json;             /* no such string fits */
+    const char *tc = strstr(json, "\"tool_calls\"");
+    if (!tc || !strstr(tc, "thought_signature")) return json;
+
+    char *copy = NULL;          /* made at the first long value */
+    size_t out = 0;             /* bytes of copy written */
+    const char *done = json;    /* json[0..done) is in copy */
+    char *sig = NULL;
+    size_t sig_len = 0;
+    const char *search = tc;
+    const char *v;
+    while ((v = sig_find_value(search)) != NULL) {
+        const char *q = v;
+        while (*q && *q != '"') {
+            if (*q == '\\') { q++; if (!*q) goto fail; }
+            q++;
+        }
+        if (*q != '"') goto fail;                       /* a cut line */
+        search = q;
+        size_t raw = (size_t)(q - v);
+        if (raw <= SIG_STRIP_MIN) continue;             /* the parser reads it */
+
+        if (!state->sig_seen && !sig) {
+            sig = sig_decode(v, q, &sig_len);
+            if (!sig) goto fail;
+        }
+        if (!copy) {
+            copy = (char *)malloc(clen + 1);
+            if (!copy) goto fail;
+        }
+        memcpy(copy + out, done, (size_t)(v - done));
+        out += (size_t)(v - done);
+        done = q;                                       /* closing quote on */
+    }
+    if (!copy) return json;
+    memcpy(copy + out, done, clen - (size_t)(done - json) + 1);
+    *owned = copy;
+    if (sig && sig_len > 0) {
+        state->sig_seen = 1;
+        state->sig = sig;
+        state->sig_len = sig_len;
+    } else {
+        free(sig);
+    }
+    return copy;
+
+fail:
+    free(sig);
+    free(copy);
+    return NULL;
 }

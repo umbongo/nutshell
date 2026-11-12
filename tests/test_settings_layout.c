@@ -126,6 +126,23 @@ int test_sl_metrics_never_zero_across_dpis(void) {
     TEST_END();
 }
 
+/* The label column is wide enough for the longest right-aligned label,
+ * "Commands as tool calls:" (a STATIC wraps and clips what does not fit).
+ * make wintest measures the real text; this pins the number. */
+int test_sl_label_column_width(void) {
+    TEST_BEGIN();
+    SettingsMetrics m;
+    settings_metrics_init(&m, 96);
+    ASSERT_EQ(m.label_w, 168);
+    settings_metrics_init(&m, 144);
+    ASSERT_EQ(m.label_w, 252);
+    /* The default 760-px client leaves the controls room beside it:
+     * pane = 760 - nav_w, the widest fixed row (Max total) is 340. */
+    settings_metrics_init(&m, 96);
+    ASSERT_TRUE(760 - m.nav_w - m.pad - m.label_w - m.gap - m.pad >= 340);
+    TEST_END();
+}
+
 /* min_h must be big enough for the whole nav list plus the button bar,
  * at every DPI we scale to. */
 int test_sl_min_h_fits_full_nav_list(void) {

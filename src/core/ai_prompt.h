@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "ai_tools.h"
 #include "cmd_batch.h"
+#include "cmd_run_log.h"
 #include "chat_approval.h" /* ApprovalQueue for ai_build_continue_text() */
 #include "session_io.h"   /* SessionKind for the system-prompt opening */
 
@@ -40,6 +41,23 @@ typedef struct {
     int width, height;   /* original pixel dimensions */
 } AiAttachment;
 
+/* One tool call's answer inside a stored results turn (spec 2026-11-05
+ * run_command decision 11). An AI_ROLE_TOOL message holds all of one round's
+ * answers as parts, so a round costs one slot of AI_MAX_MESSAGES, not one per
+ * call. content is heap (NULL: a notes-only answer, nothing to send but the
+ * note) and omit_at / omitted_bytes record a cut (the output is the head
+ * content[0, omit_at) and the tail after it, omitted_bytes left out between;
+ * both 0: uncut). */
+typedef struct {
+    char tool_call_id[AI_TOOL_ID_MAX];
+    char tool_name[AI_TOOL_NAME_MAX];
+    int  is_error;
+    char tool_note[AI_TOOL_PART_NOTE_MAX]; /* Nutshell's own text, outside the data block */
+    char *content;
+    size_t content_len;
+    size_t omit_at, omitted_bytes;
+} AiToolPart;
+
 typedef struct {
     AiRole role;
     char content[AI_MSG_MAX];       /* inline buffer — fits most messages */
@@ -48,24 +66,82 @@ typedef struct {
     AiAttachment *attachment;       /* NULL for text-only messages */
 
     /* Tool fields — zero/empty when unused */
-    char tool_call_id[64];    /* set on ROLE_TOOL: the id this result is for */
-    char tool_name[64];       /* set on ROLE_TOOL: tool name (for display) */
-    int  is_tool_error;       /* set on ROLE_TOOL: 1 if this is an error result */
-    char tool_note[AI_TOOL_NOTE_MAX]; /* ROLE_TOOL: Nutshell's own text, outside the data block */
+
+    /* ROLE_TOOL: the answers of one tool round, one part per call, in the
+     * order of the calls. Heap array of n_parts, NULL and 0 when unused.
+     * Owned by the message: ai_msg_free() frees it and every part's content,
+     * ai_conv_copy() duplicates it, ai_conv_take() moves it. The only writer
+     * is agentic_add_tool_results(). */
+    AiToolPart *parts;
+    int n_parts;
+
+    /* ROLE_TOOL without parts: one answer in the message's own fields, the
+     * way a results message was stored before parts existed. Nothing in the
+     * product writes it any more; the body builder still reads it (with the
+     * message's content as the output), so such a conversation sends the
+     * bytes it always did. */
+    char tool_call_id[64];
+    char tool_name[64];
+    int  is_tool_error;
+    char tool_note[AI_TOOL_NOTE_MAX];
 
     /* For ROLE_ASSISTANT messages that contain tool_use blocks */
     AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */
     int n_tool_calls;         /* 0 means normal text message */
 
-    /* The reasoning the model streamed alongside this assistant turn's tool
-     * calls, kept so a provider that demands it back (Moonshot's thinking
-     * models: a 400 without it) gets it in the follow-up request. Heap, at
-     * most AI_REASONING_MAX - 1 bytes, NULL when the turn had none. Only the
-     * OpenAI-format builder reads it, and only for provider "moonshot"; the
+    /* The reasoning the model streamed alongside this assistant turn (tool
+     * calls or plain text), kept so a provider that demands it back gets it in
+     * the follow-up request. Heap, at most AI_REASONING_MAX - 1 bytes, NULL
+     * when the turn had none. Only the OpenAI-format builder reads it: for
+     * provider "moonshot" on a tool-call turn (a 400 without it), for
+     * "deepseek" on every assistant turn of a request that carries tools; the
      * Anthropic path and every other provider ignore it. Owned by the
      * message: ai_msg_free() frees it, ai_conv_copy() duplicates it, and
      * ai_conv_take() moves it with the rest. */
     char *reasoning;
+
+    /* Gemini's thought signature for this assistant turn's tool calls, as
+     * the stream carried it (the first tool call's
+     * extra_content.google.thought_signature). Heap, NULL when none. Only the
+     * OpenAI-format builder reads it: written back on the turn's first tool
+     * call for provider "gemini" (a turn recorded under another provider goes
+     * out as text, so it never carries it). Owned like `reasoning`:
+     * ai_msg_free() frees it, ai_conv_copy() duplicates it, ai_conv_take() and
+     * ai_msg_move_reasoning() move it. */
+    char *thought_sig;
+
+    /* 1 when the reasoning stored for this assistant turn is not the whole of
+     * what the model streamed: the stream dropped some (its 16 KiB), the
+     * AI_REASONING_MAX cap cut it, or its copy failed to allocate. DeepSeek
+     * wants every turn's reasoning "fully passed back", so a conversation with
+     * a cut turn is not sent to it with tools (spec decision 23). Set by
+     * ai_msg_set_reasoning and by the stream thread; cleared by ai_conv_add and
+     * ai_msg_free; a struct copy carries it. */
+    int reasoning_cut;
+
+    /* For ROLE_ASSISTANT messages that contain tool calls: the provider and
+     * the model that produced them, "" when unknown (older callers, tests).
+     * A plain assistant turn (no tool calls) records its issuer here too
+     * (ai_conv_add_reply); turn_as_text ignores a turn without tool calls, so
+     * there it feeds only the DeepSeek reasoning rule.
+     * Ids, reasoning and signatures are sent back only to the issuer: the
+     * body builder renders a turn recorded under another provider or model
+     * as text (spec 2026-11-05 run-command decision 16). Set by
+     * agentic_add_assistant_tool_msg_ex, copied with the message. */
+    char tool_provider[16];
+    char tool_model[64];
+
+    /* 1 on a USER turn that Nutshell wrote (a policy note, the policy-blocked
+     * and quoted NOTEs, an [EXEC] continue text), 0 on one the user typed and
+     * on every other role. Set only by the note door (ai_conv_add_user_note's
+     * direct append and ai_conv_flush_notes, ai_conv_guard.c); ai_conv_add
+     * clears it; a struct copy (ai_conv_copy, ai_conv_take) carries it. In a
+     * request that offers run_command the frozen snapshot stays on its question
+     * while only such turns follow it, and ai_conv_freeze_snapshot refuses to
+     * attach one to such a turn; a request that does not offer run_command
+     * ignores the mark (spec decision 22, review of B1-B11 and of the fix wave,
+     * 2026-11-11, R48). */
+    int nutshell_note;
 } AiMessage;
 
 /* Cap on a stored reasoning text, terminating NUL included: the same 16 KiB
@@ -76,6 +152,17 @@ typedef struct {
     char model[64];
     AiMessage messages[AI_MAX_MESSAGES];
     int msg_count;
+
+    /* The terminal text the launch took for one user turn, frozen to it
+     * (spec decision 22): heap, snapshot_len bytes, NULL and 0 when none;
+     * snapshot_msg is the index of that user turn, -1 when none. ai_conv_init
+     * and ai_conv_reset free it and set -1, ai_conv_copy duplicates it (a copy
+     * that cannot allocate carries none, spec decision 25), ai_conv_take moves
+     * it. Nothing in the builder reads these: the launch copies them into
+     * AiBodyFrame. */
+    char *snapshot;
+    size_t snapshot_len;
+    int snapshot_msg;
 } AiConversation;
 
 /* Initialize a conversation (zeroes and sets model). */
@@ -86,9 +173,11 @@ void ai_conv_reset(AiConversation *conv);
 
 /* Move a conversation: free dst's messages, give dst every message of src
  * together with the heap buffers they own (overflow content, attachments,
- * tool calls), and leave src empty with its model kept. Afterwards exactly
- * one conversation owns each buffer, so both can be reset or taken again
- * safely. dst == src, or either NULL, is a no-op. */
+ * tool calls, tool-result parts), and leave src empty with its model kept. dst keeps its own
+ * model (the panel's setting is not reverted by a stale copy); only a dst
+ * with an empty model takes src's. Afterwards exactly one conversation owns
+ * each buffer, so both can be reset or taken again safely. dst == src, or
+ * either NULL, is a no-op. */
 void ai_conv_take(AiConversation *dst, AiConversation *src);
 
 /* Deep copy: free dst's messages, then copy src into dst with its own
@@ -96,6 +185,43 @@ void ai_conv_take(AiConversation *dst, AiConversation *src);
  * untouched) or allocation failure (dst left empty with src's model, never
  * half-shared). dst == src is a no-op returning 0. */
 int ai_conv_copy(AiConversation *dst, const AiConversation *src);
+
+/* TEST ONLY. Replace the allocator ai_conv_copy() uses for a message's parts
+ * (the array and each part's content; default malloc, NULL restores it), so a
+ * test can fail one allocation. Not for product code. */
+void ai_prompt_set_alloc_for_test(void *(*alloc)(size_t));
+
+/* Freeze `text` (len bytes) as the conversation's snapshot, attached to the
+ * LAST message when that is a USER turn: any older snapshot is freed, then the
+ * new one is stored with snapshot_msg = msg_count - 1 and 0 is returned. When
+ * the last message is not a user turn, or conv is NULL, nothing changes and 1
+ * is returned. `offers_runcmd` says whether the launch's request offers
+ * run_command (the same test the builder makes on its tools array): only then
+ * is a USER turn Nutshell wrote (nutshell_note) refused too (nothing changes,
+ * 1), because only such a request keeps the snapshot on its question (spec
+ * decision 22, R48); a request without run_command is built as before the
+ * tool existed, with a fresh snapshot on its last USER turn, marked note or
+ * not. A NULL or empty text leaves no snapshot (0). An allocation failure
+ * leaves none either and returns -1: a snapshot that cannot be kept is
+ * recorded as absent, never half there. */
+int ai_conv_freeze_snapshot(AiConversation *conv, const char *text, size_t len,
+                            int offers_runcmd);
+
+/* 1 when the conversation has a frozen snapshot (snapshot != NULL), else 0.
+ * NULL-safe. Keyed on the pointer, never on snapshot_msg: a zero-filled
+ * conversation (a session's ai_state after memset) has snapshot_msg 0 and no
+ * snapshot. */
+int ai_conv_has_snapshot(const AiConversation *conv);
+
+/* Drop the snapshot (free it; snapshot NULL, snapshot_len 0, snapshot_msg -1)
+ * when it no longer belongs to a message: snapshot_msg is negative or
+ * >= msg_count, or the message there is no longer an AI_ROLE_USER turn the
+ * user typed (it is gone, or it is a Nutshell note: nutshell_note set).
+ * A valid snapshot is kept. NULL-safe. EVERY site that pops messages off the
+ * end of a conversation (ai_msg_free(&messages[--msg_count])) must call this
+ * afterwards, or snapshot_msg is left pointing past the end and a later
+ * message appended there inherits the old screen text. */
+void ai_conv_snapshot_trim(AiConversation *conv);
 
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
@@ -139,6 +265,17 @@ void ai_build_system_prompt_ex(char *buf, size_t buf_size,
                                int debug_log_tool,
                                const AiToolRegistry *tools);
 
+/* The tool variant: when tools holds run_command (RUNCMD_TOOL_NAME) the opening,
+ * the "IMPORTANT" text and the tools paragraph's closing sentence tell the
+ * model to call that tool instead of writing [EXEC] markers (spec
+ * 2026-11-05-run-command-tool-design.md section 3). Any other registry, and
+ * NULL, builds the [EXEC] prompt byte for byte. */
+
+/* The note stored for a tool-chat reply whose n [EXEC] markers were not run:
+ * writes it to buf and returns its length; 0 when n <= 0, buf is NULL or cap
+ * is too small (buf is then left an empty string when cap > 0). */
+int ai_build_runcmd_marker_note(int n, char *buf, size_t cap);
+
 /* Build the JSON request body from the conversation.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_request_body(const AiConversation *conv,
@@ -169,6 +306,14 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
 typedef struct {
     const char *snapshot;  /* terminal text for the last user turn; NULL or "": no block */
     const char *delim;     /* this request's delimiter; NULL: no block, tool output unframed */
+    /* Which message carries the snapshot (spec decision 22). 0, the zero
+     * value: the last AI_ROLE_USER message, as always. k > 0: message k - 1,
+     * and only while it is an AI_ROLE_USER message that is not itself a
+     * Nutshell note (nutshell_note 0) and every AI_ROLE_USER message after it
+     * has nutshell_note set (a note of Nutshell's own); a
+     * typed USER turn after it means no block. A launch with a frozen
+     * snapshot passes snapshot_msg + 1. */
+    int snapshot_at;
 } AiBodyFrame;
 
 /* The full builder behind ai_build_request_body_ex and _tools.
@@ -178,9 +323,18 @@ typedef struct {
  * With a delimiter: the snapshot (if non-empty) goes in a data block
  * ("<lead>\n<delim>\n<escaped>\n<delim>") before the content of the LAST
  * AI_ROLE_USER message, in its text part when it has an attachment, and every
- * AI_ROLE_TOOL message is sent as a data block labelled with its tool name,
- * its tool_note after the closing delimiter (an empty result with a note sends
- * the note alone). conv is never modified. Anthropic's "system" is sent as an
+ * AI_ROLE_TOOL message part is sent as a data block labelled with its tool
+ * name, its tool_note after the closing delimiter (an empty result with a note
+ * sends the note alone). A results turn of K parts goes out as one user turn
+ * of K tool_result blocks (Anthropic) or K "tool" messages (the OpenAI form).
+ * A tool turn is instead sent as text (the assistant turn's text then
+ * "\nran: <command>" per run_command call and "\ncalled <tool>" per other
+ * call; its results as one user message "output:\n" and each framed result)
+ * when the request carries no tools array and the turn is a run_command one
+ * or records a provider, when it holds a run_command call and tools_json has
+ * no "run_command", or when the provider or model it records differs from
+ * this request's provider or conv->model. A turn that records no provider is
+ * judged by the first two rules only. conv is never modified. Anthropic's "system" is sent as an
  * array whose block carries cache_control ephemeral whenever a system message
  * is present, frame or not.
  * Returns bytes written (excluding NUL), or 0 on error (including a buffer
@@ -223,15 +377,57 @@ int ai_parse_stream_chunk(const char *json,
  * "tool_calls" -> 2) still fills content_out/thinking_out, and its
  * delta.tool_calls are accumulated: the caller reads the text, then acts on
  * the code. Whether the tool loop runs is ai_tool_round_should_run()'s
- * decision at the end of the round, not this code's. */
+ * decision at the end of the round, not this code's.
+ * input_tokens_out / output_tokens_out (either may be NULL) are set as
+ * ai_parse_stream_chunk() sets them, 0 when the chunk carries no count,
+ * including on the chunk that ends a tool round (Anthropic's message_delta
+ * with stop_reason tool_use, an OpenAI chunk with finish_reason tool_calls),
+ * so a reply that used tools reports its tokens. */
 int ai_parse_stream_chunk_ex(const char *json,
                              char *content_out, size_t content_size,
                              char *thinking_out, size_t thinking_size,
                              AiToolStreamState *tool_stream,
-                             const char *provider);
+                             const char *provider,
+                             int *input_tokens_out, int *output_tokens_out);
 
-/* Returns 1 if the provider supports native tool use, 0 otherwise. */
+/* The setting "Commands as tool calls" (Settings.ai_runcmd_mode). Automatic
+ * resolves through ai_runcmd_auto_default(); On enables any provider; Off
+ * leaves [EXEC] markers wherever they are today. */
+enum { AI_RUNCMD_AUTO = 0, AI_RUNCMD_ON = 1, AI_RUNCMD_OFF = 2 };
+
+/* What Automatic means for a provider: 1 for anthropic, openai and moonshot,
+ * 0 for deepseek, gemini, custom and anything else (NULL included). The one
+ * table; flipping a row is one line. */
+int ai_runcmd_auto_default(const char *provider);
+
+/* 1 if the provider gets native tools (web_search, web_fetch, read_debug_log
+ * and, with ai_provider_runcmd(), run_command) in a request. anthropic,
+ * openai, deepseek and moonshot always; gemini and custom only when mode is
+ * AI_RUNCMD_ON (the user's statement that the endpoint accepts them); any
+ * other provider and NULL never. */
+int ai_provider_tools(const char *provider, int mode);
+
+/* Returns 1 if the provider supports native tool use with the setting left
+ * on Automatic, 0 otherwise: ai_provider_tools(provider, AI_RUNCMD_AUTO). */
 int ai_provider_supports_tools(const char *provider);
+
+/* 1 when a request to this provider offers the run_command tool: Off never;
+ * On wherever ai_provider_tools(provider, AI_RUNCMD_ON) holds; Automatic as
+ * ai_runcmd_auto_default() says. */
+int ai_provider_runcmd(const char *provider, int mode);
+
+/* Which one-time note a send shows when web tools are configured
+ * (tools_configured: the registry is non-empty) and the provider is not
+ * offered them: AI_TOOLS_NOTE_NONE (the provider gets tools, or none are
+ * configured), AI_TOOLS_NOTE_GENERAL (gemini on Automatic or Off, an
+ * unknown provider, NULL), AI_TOOLS_NOTE_CUSTOM (a Custom endpoint not set
+ * to On). ai_provider_tools() decides who gets tools. */
+enum { AI_TOOLS_NOTE_NONE = 0, AI_TOOLS_NOTE_GENERAL = 1, AI_TOOLS_NOTE_CUSTOM = 2 };
+int ai_provider_tools_note(const char *provider, int mode, int tools_configured);
+
+/* The note's text for a value of that enum (ASCII, shown as a status row);
+ * NULL for AI_TOOLS_NOTE_NONE and for anything out of range. */
+const char *ai_provider_tools_note_text(int which);
 
 /* Output limit sent as "max_completion_tokens" to provider "moonshot" (and
  * only to it). Without one the server's default is far lower, and a thinking
@@ -449,8 +645,47 @@ int ai_msg_set_content(AiMessage *msg, const char *data, size_t len);
 
 /* Store `text` as msg's reasoning (see AiMessage), replacing any earlier one.
  * Kept to AI_REASONING_MAX - 1 bytes, cut on a UTF-8 boundary. NULL or ""
- * clears it. Returns 0, or -1 on allocation failure (reasoning cleared). */
+ * clears it. Returns 0, or -1 on allocation failure (reasoning cleared). Sets
+ * msg->reasoning_cut when the cap cut the text or the copy failed; a call
+ * that cuts nothing clears it. */
 int ai_msg_set_reasoning(AiMessage *msg, const char *text);
+
+/* Store a copy of `sig` as msg's thought_sig (see AiMessage), replacing any
+ * earlier one; NULL or "" clears it. No cap: Google states no size. Returns 0,
+ * or -1 on allocation failure (the signature cleared). */
+int ai_msg_set_thought_sig(AiMessage *msg, const char *sig);
+
+/* Move src's reasoning, reasoning_cut, thought_sig and issuer (tool_provider,
+ * tool_model) to
+ * dst, freeing dst's own reasoning and leaving src with none: no allocation, so
+ * it cannot fail. The panel uses it to carry a reply's reasoning from the
+ * stream thread's copy of the conversation to the working copy that stores the
+ * reply again. NULL or dst == src: no-op. */
+void ai_msg_move_reasoning(AiMessage *dst, AiMessage *src);
+
+/* Append a plain assistant reply with its reasoning and its issuer: the
+ * provider and model that wrote it (NULL or "" for unknown), recorded in
+ * tool_provider / tool_model, which on a turn without tool calls are read by
+ * nothing but the DeepSeek reasoning rule (R68: DeepSeek gets back only the
+ * reasoning it wrote). `reasoning` is stored with ai_msg_set_reasoning;
+ * reasoning_cut is set when `reasoning_cut` is nonzero as well as by that
+ * call's own cut. Returns 0, or -1 when ai_conv_add refuses (full, no memory):
+ * nothing is stored then. */
+int ai_conv_add_reply(AiConversation *conv, const char *content,
+                      const char *reasoning, int reasoning_cut,
+                      const char *provider, const char *model);
+
+/* 1 when a request to `provider` with `tools_json` (NULL or "" for none) holds
+ * an assistant turn with reasoning_cut whose reasoning it would send:
+ * provider "deepseek" with a tools array that offers run_command sends every
+ * assistant turn's reasoning_content, and DeepSeek wants it whole, so the
+ * builder returns 0 for such a request (spec decision 23). A turn that goes out
+ * as text counts for nothing, nor does a plain turn another provider or model
+ * wrote (it is sent as "": DeepSeek gets back only the reasoning it wrote,
+ * R68). Any other provider, no tools, or tools without run_command (the option
+ * Off: the request is built as it was before the tool): 0. */
+int ai_body_refuses_cut_reasoning(const AiConversation *conv, const char *provider,
+                                  const char *tools_json);
 
 /* Frees dynamic resources (content_overflow, tool_calls, reasoning,
  * attachment). */
@@ -503,8 +738,38 @@ int ai_format_context_tooltip(int actual_in, int actual_out,
  * Returns 0 for unknown models. */
 int ai_model_context_limit(const char *model);
 
-/* Estimate total tokens in a conversation (chars/4 heuristic). */
+/* Estimate total tokens in a conversation (chars/4 heuristic). It counts
+ * what a request body sends: every message's text, and for a conversation
+ * with tool turns also what ai_tool_wire_bytes() adds (the calls' ids, names
+ * and inputs, the answers' ids and framing, the JSON around them). A
+ * conversation with no tool turns counts its text alone, as it always did. */
 int ai_context_estimate_tokens(const AiConversation *conv);
+
+/* The bytes a request body adds around the text of the tool turns, so the
+ * meter (escaped 0) and the run_command fit (escaped 1: the JSON-escaped
+ * size, newlines as two bytes) count one thing. Per assistant turn with tool
+ * calls: AI_TOOL_WIRE_MSG, then per call its id, name and input_json and
+ * AI_TOOL_WIRE_CALL. Per results turn: AI_TOOL_WIRE_MSG, then per part its id,
+ * AI_TOOL_WIRE_PART and ai_tool_frame_bytes() of its stored content. Zero for
+ * a conversation with neither. The turns' content and notes are not counted
+ * here. age_keep > 0: a run_command part that runcmd_part_ages() says is aged
+ * with that many newest command rounds kept is counted as the stub (the size
+ * of a request once the coming append has aged it); 0: parts as stored. */
+#define AI_TOOL_WIRE_CALL 64u  /* the JSON around one tool_use / tool_calls entry (the larger form) */
+#define AI_TOOL_WIRE_PART 52u  /* the JSON around one tool_result / "tool" message */
+#define AI_TOOL_WIRE_MSG  32u  /* the message around a tool turn's blocks */
+size_t ai_tool_wire_bytes(const AiConversation *conv, int escaped, int age_keep);
+
+/* What the body adds around one tool answer that has content (0 when it has
+ * none: the note is sent alone): the lead sentence, the delimiters and the
+ * newlines between, and for a cut run_command answer (omitted_bytes > 0) the
+ * marker and the second pair of delimiters, with no block for an empty head
+ * or tail. Exactly what runcmd_frame_result() adds to the content and the
+ * note. has_note: a note follows (one more newline). escaped: newlines count
+ * as the two bytes JSON makes of them. */
+size_t ai_tool_frame_bytes(const char *tool_name, size_t content_len,
+                           size_t omit_at, size_t omitted_bytes, int has_note,
+                           int escaped);
 
 /* The same estimate plus the terminal snapshot the next request carries in
  * its last user turn: ai_context_estimate_tokens(conv) + snapshot_len / 4.
@@ -550,6 +815,21 @@ typedef enum {
  * shift_held: 1 if Shift is down, 0 otherwise. */
 AiInputAction ai_input_key_action(int is_enter, int shift_held);
 
+/* Nutshell's own USER notes that cannot enter the conversation yet (spec
+ * 2026-11-05 run-command tool, decision 19): the "policy raised" note, an
+ * older [EXEC] batch's continue text and the like, held while an assistant
+ * turn's tool calls are unanswered or while the session is busy. Fixed inline
+ * slots, no heap. AI_NOTE_TEXT_MAX is the size of the largest text the door
+ * is handed (the continue text's buffer), terminating NUL included. The door
+ * is ai_conv_add_user_note() (ai_conv_guard.h). */
+#define AI_NOTE_QUEUE_MAX 4
+#define AI_NOTE_TEXT_MAX  4096
+
+typedef struct {
+    char text[AI_NOTE_QUEUE_MAX][AI_NOTE_TEXT_MAX];
+    int count;
+} AiNoteQueue;
+
 /* Per-session AI state: wraps a conversation with a validity flag.
  * Sessions embed this so the AI chat window can save/restore conversations
  * when the user switches tabs. */
@@ -565,6 +845,15 @@ typedef struct {
      * session is created, freed with cmd_batch_set_free() when it's
      * destroyed. */
     CmdBatchSet batches;
+    /* The commands of finished or cancelled batches, kept so a rebuilt display
+     * can show what ran again (src/core/cmd_run_log.h, spec 2026-11-05
+     * run-command tool, decision 21). cmd_run_log_init() beside each
+     * cmd_batch_set_init(), cmd_run_log_free() beside each
+     * cmd_batch_set_free(). */
+    CmdRunLog run_log;
+    /* USER notes waiting for the conversation to accept them (see
+     * ai_conv_add_user_note(), ai_conv_guard.h). Zero at creation. */
+    AiNoteQueue notes;
     /* Per-session streaming state (supports concurrent AI requests) */
     volatile int busy;           /* 1 while a stream thread is running */
     char *stream_content;        /* heap-allocated accumulator, NULL when idle */

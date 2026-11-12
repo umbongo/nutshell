@@ -10,7 +10,16 @@
 #define AI_TOOL_RESULT_MAX     (1024 * 1024)  /* 1MB dynamic buffer cap */
 #define AI_TOOL_DESC_MAX       512
 #define AI_TOOL_SCHEMA_MAX     2048
-#define AI_TOOL_NOTE_MAX       256   /* Nutshell's own text about a result */
+#define AI_TOOL_NOTE_MAX       256   /* Nutshell's own text about a stored message */
+/* An AiToolResult can carry a longer note than a stored message keeps: the
+ * composed notes of one round (a refusal, a limit, the truncation line) need
+ * the room. AiMessage.tool_note stays AI_TOOL_NOTE_MAX. */
+#define AI_TOOL_PART_NOTE_MAX  512
+
+/* Most tool calls one streamed reply can carry. A call at or past this index
+ * (OpenAI "index", or the 65th tool_use block of an Anthropic reply) is not
+ * accumulated: the server's own number must not size an allocation. */
+#define AI_TOOL_STREAM_CALLS_MAX 64
 
 #define AI_TOOL_LOOP_MAX       5
 #define AI_TOOL_SEARCH_MAX     3
@@ -39,6 +48,11 @@ typedef struct {
     char id[AI_TOOL_ID_MAX];
     char name[AI_TOOL_NAME_MAX];
     char input_json[AI_TOOL_INPUT_MAX];
+    /* Set by the stream accumulators at the first fragment they refuse for
+     * passing AI_TOOL_INPUT_MAX; nothing more is appended after that, so a
+     * later, smaller fragment cannot splice into a different call. The stream
+     * thread stores such a call's input as "{}". */
+    int overflowed;
 } AiToolCall;
 
 typedef struct {
@@ -50,7 +64,11 @@ typedef struct {
     /* Nutshell's own words about this result (a refusal, a rate limit, the
      * truncation line), never tool output: sent after the data block, not
      * inside it. Inline, so there is nothing to free or copy. */
-    char tool_note[AI_TOOL_NOTE_MAX];
+    char tool_note[AI_TOOL_PART_NOTE_MAX];
+    /* A cut result (run_command's excerpt): content is the head
+     * content[0, omit_at) then the tail, omitted_bytes left out between them.
+     * Both 0: uncut. Stored with the result's part (AiToolPart). */
+    size_t omit_at, omitted_bytes;
 } AiToolResult;
 
 typedef struct {
@@ -175,7 +193,33 @@ typedef struct {
      * as index 0). Both feed the per-round log line, nothing else. */
     char        finish[32];
     int         index_defaulted;
+
+    /* Gemini's thought signature: the first
+     * tool_calls[i].extra_content.google.thought_signature of the response
+     * (only the first call of a parallel set carries one), kept whole in a
+     * heap buffer of exactly its size (Google states no size). NULL and
+     * sig_len 0 when there is none or an allocation failed (the call still
+     * stands);
+     * sig_seen is set at the first one seen, kept or not, so a later one is
+     * never taken in its place. Freed by ai_tools_stream_reset. */
+    char       *sig;
+    size_t      sig_len;
+    int         sig_seen;
 } AiToolStreamState;
+
+/* Prepare one OpenAI-format stream line's JSON (the text after "data: ") for
+ * every parser of the line. The JSON parser holds a string of at most 8191
+ * bytes, and a Gemini thought signature can be longer: a
+ * tool_calls[i].extra_content.google.thought_signature value of more than 8000
+ * raw bytes is cut out of a copy (the copy carries "" in its place) and decoded
+ * on its own into state->sig, unless one was already seen this response (then
+ * it is dropped). Only that key under a "tool_calls" is looked at; text a
+ * model wrote cannot match. Returns the JSON every parser must read: `json`
+ * itself, or the copy (*owned, free it; NULL otherwise). NULL means the line
+ * cannot be read (a cut value, an escape the decoder refuses, out of memory):
+ * the caller skips it and says so. */
+const char *ai_stream_line_prepare(AiToolStreamState *state, const char *json,
+                                   char **owned);
 
 /* Streaming tool detection — Anthropic format */
 int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *state);

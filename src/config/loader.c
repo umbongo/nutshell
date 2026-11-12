@@ -487,6 +487,8 @@ void settings_validate(Settings *s)
     if (s->paste_delay_ms > 5000) s->paste_delay_ms = 5000;
     if (s->ai_max_search_results < 1)  s->ai_max_search_results = 1;
     if (s->ai_max_search_results > 20) s->ai_max_search_results = 20;
+    if (s->ai_runcmd_mode != AI_RUNCMD_ON && s->ai_runcmd_mode != AI_RUNCMD_OFF)
+        s->ai_runcmd_mode = AI_RUNCMD_AUTO;
     if (s->ai_max_context_lines < 1)     s->ai_max_context_lines = 1;
     if (s->ai_max_context_lines > 50000) s->ai_max_context_lines = 50000;
     /* 0 = never expire; 1..14 and negatives take the 15 s floor */
@@ -546,6 +548,7 @@ void config_default_settings(Settings *s)
     /* ai_search_url defaults to empty (already zeroed by memset) */
     s->ai_max_search_results = 7;
     s->ai_web_fetch_enabled = 0;
+    s->ai_runcmd_mode = AI_RUNCMD_AUTO;
     s->ssh_user_idle_timeout_mins = 0;
     s->markdown_render_enabled = 1;
     s->ai_max_context_lines = 1000;
@@ -726,6 +729,12 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
                                                      (double)s->ai_max_search_results);
         s->ai_web_fetch_enabled = json_obj_bool(jset, "ai_web_fetch_enabled",
                                                 s->ai_web_fetch_enabled);
+        /* "Commands as tool calls": an unknown or absent value is Automatic. */
+        s->ai_runcmd_mode = AI_RUNCMD_AUTO;
+        if ((sv = json_obj_str(jset, "ai_runcmd_mode"))) {
+            if (strcmp(sv, "on") == 0)       s->ai_runcmd_mode = AI_RUNCMD_ON;
+            else if (strcmp(sv, "off") == 0) s->ai_runcmd_mode = AI_RUNCMD_OFF;
+        }
         s->ssh_user_idle_timeout_mins =
             (int)json_obj_num(jset, "ssh_user_idle_timeout_mins",
                               (double)s->ssh_user_idle_timeout_mins);
@@ -1060,6 +1069,9 @@ int config_save(const Config *cfg, const char *path)
     fprintf(f, "    \"ai_max_search_results\": %d,\n", s->ai_max_search_results);
     fprintf(f, "    \"ai_web_fetch_enabled\": %s,\n",
             s->ai_web_fetch_enabled ? "true" : "false");
+    fprintf(f, "    \"ai_runcmd_mode\": \"%s\",\n",
+            s->ai_runcmd_mode == AI_RUNCMD_ON ? "on"
+            : s->ai_runcmd_mode == AI_RUNCMD_OFF ? "off" : "automatic");
     fprintf(f, "    \"ssh_user_idle_timeout_mins\": %d,\n",
             s->ssh_user_idle_timeout_mins);
     fprintf(f, "    \"markdown_render_enabled\": %s,\n",

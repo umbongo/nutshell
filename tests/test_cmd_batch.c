@@ -1,7 +1,10 @@
 /* tests/test_cmd_batch.c */
 #include "test_framework.h"
 #include "cmd_batch.h"
+#include "run_command.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 int test_cmd_batch_set_init_empty(void) {
     TEST_BEGIN();
@@ -306,6 +309,225 @@ int test_cmd_batch_full(void) {
     ASSERT_NOT_NULL(cmd_batch_add(&set, NULL, NULL));
     ASSERT_EQ(cmd_batch_full(&set), 1);
     ASSERT_EQ(cmd_batch_full(NULL), 1);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* reply_msg is the producing reply's index, set by the caller; a batch that
+ * was never given one says so (-1) instead of pointing at message 0. */
+int test_cmd_batch_reply_msg_defaults_unset(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->reply_msg, -1);
+    ASSERT_EQ((int)b->reply_hash, 0);   /* the producing reply's hash: unset */
+    b->reply_msg = 6;
+    b->reply_hash = 0xDEADBEEFu;
+    ASSERT_EQ(cmd_batch_find(&set, b->id)->reply_hash, 0xDEADBEEFu);
+    ASSERT_EQ(cmd_batch_find(&set, b->id)->reply_msg, 6);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* ---- cmd_batch_finished: nothing left to ask or to run ---- */
+
+static void put_status(CmdBatch *b, int n, const ApprovalStatus *st)
+{
+    chat_approval_reset(&b->q);
+    for (int i = 0; i < n; i++) {
+        b->q.entries[i].status = st[i];
+        snprintf(b->q.entries[i].command, sizeof(b->q.entries[i].command),
+                 "echo %d", i);
+    }
+    b->q.count = n;
+}
+
+int test_cmd_batch_finished_rule(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+
+    /* All decided and idle: completed, denied and held rows only. */
+    ApprovalStatus idle[] = { APPROVE_COMPLETED, APPROVE_DENIED,
+                              APPROVE_BLOCKED };
+    put_status(b, 3, idle);
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+
+    /* One EXECUTING: still in flight, whatever else is decided. This is the
+     * last pending row denied while another command runs. */
+    ApprovalStatus exec[] = { APPROVE_EXECUTING, APPROVE_DENIED };
+    put_status(b, 2, exec);
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
+    /* One APPROVED, not yet sent. */
+    ApprovalStatus appr[] = { APPROVE_COMPLETED, APPROVE_APPROVED };
+    put_status(b, 2, appr);
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
+    /* All denied. */
+    ApprovalStatus denied[] = { APPROVE_DENIED, APPROVE_DENIED };
+    put_status(b, 2, denied);
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+
+    /* A PENDING row still needs the user. */
+    ApprovalStatus pend[] = { APPROVE_DENIED, APPROVE_PENDING };
+    put_status(b, 2, pend);
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
+    /* An empty queue has nothing left to run; NULL is not a finished batch. */
+    put_status(b, 0, NULL);
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+    ASSERT_EQ(cmd_batch_finished(NULL), 0);
+
+    /* A tool call's row is decided by its click and never dispatched:
+     * APPROVED there does not keep the batch alive (it matches
+     * chat_approval_next_approved, which skips tool rows). */
+    put_status(b, 1, appr + 1);
+    b->q.entries[0].tool = 1;
+    ASSERT_EQ(cmd_batch_finished(b), 1);
+    b->q.entries[0].status = APPROVE_PENDING;
+    ASSERT_EQ(cmd_batch_finished(b), 0);
+
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* CmdBatch.settled says the live view has settled the batch's rows (a rebuild
+ * reads it): a new batch starts unsettled, whether or not the add evicted an
+ * older, settled one, and the flag stays with its own batch. */
+int test_cmd_batch_settled_flag_lifecycle(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *first = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(first);
+    ASSERT_EQ(first->settled, 0);
+
+    first->settled = 1;
+    CmdBatch *second = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(second);
+    ASSERT_EQ(second->settled, 0);
+    ASSERT_EQ(cmd_batch_find(&set, first->id)->settled, 1);
+
+    /* Fill the set with settled batches; the add that evicts the oldest
+     * still hands back an unsettled batch. */
+    for (int i = 0; i < CMD_BATCH_MAX; i++) {
+        int evicted = 0;
+        CmdBatch *b = cmd_batch_add(&set, NULL, &evicted);
+        ASSERT_NOT_NULL(b);
+        ASSERT_EQ(b->settled, 0);
+        b->settled = 1;
+    }
+    ASSERT_EQ(set.count, CMD_BATCH_MAX);
+    int evicted = 0;
+    CmdBatch *b = cmd_batch_add(&set, NULL, &evicted);
+    ASSERT_NOT_NULL(b);
+    ASSERT_TRUE(evicted > 0);
+    ASSERT_EQ(b->settled, 0);
+    ASSERT_EQ(set.b[0]->settled, 1);   /* the survivors keep theirs */
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* ---- run_command's per-batch state (spec decision 6) ---- */
+
+/* A reply with `n` command calls whose captures own heap text. */
+static struct RunCmdReply *make_runcmd_reply(int n)
+{
+    AiToolCall *c = calloc((size_t)n, sizeof(*c));
+    if (!c) return NULL;
+    for (int i = 0; i < n; i++) {
+        snprintf(c[i].id, sizeof(c[i].id), "id%d", i);
+        snprintf(c[i].name, sizeof(c[i].name), "%s", RUNCMD_TOOL_NAME);
+        snprintf(c[i].input_json, sizeof(c[i].input_json), "{\"command\":\"echo %d\"}", i);
+    }
+    RunCmdReply *r = runcmd_plan(c, n, 1);
+    free(c);
+    if (!r) return NULL;
+    for (int i = 0; i < r->n_calls; i++) {
+        r->calls[i].cap.head = malloc(8);
+        r->calls[i].cap.tail = malloc(8);
+        if (r->calls[i].cap.head) memcpy(r->calls[i].cap.head, "head", 5);
+        if (r->calls[i].cap.tail) memcpy(r->calls[i].cap.tail, "tail", 5);
+        r->calls[i].cap.head_len = 4;
+        r->calls[i].cap.tail_len = 4;
+    }
+    return r;
+}
+
+int test_cmd_batch_release_frees_runcmd(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+
+    /* removed */
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    a->runcmd = make_runcmd_reply(2);
+    ASSERT_NOT_NULL(a->runcmd);
+    int aid = a->id;
+    cmd_batch_remove(&set, aid);
+    ASSERT_EQ(set.count, 0);
+
+    /* freed by set_free */
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+    b->runcmd = make_runcmd_reply(3);
+    ASSERT_NOT_NULL(b->runcmd);
+    cmd_batch_set_free(&set);
+    ASSERT_EQ(set.count, 0);
+
+    /* evicted by the 9th add, id reported */
+    cmd_batch_set_init(&set);
+    CmdBatch *first = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(first);
+    first->runcmd = make_runcmd_reply(1);
+    ASSERT_NOT_NULL(first->runcmd);
+    int first_id = first->id;
+    for (int i = 1; i < CMD_BATCH_MAX; i++)
+        ASSERT_NOT_NULL(cmd_batch_add(&set, NULL, NULL));
+    int evicted = 0;
+    CmdBatch *ninth = cmd_batch_add(&set, NULL, &evicted);
+    ASSERT_NOT_NULL(ninth);
+    ASSERT_EQ(evicted, first_id);
+    ASSERT_EQ(set.count, CMD_BATCH_MAX);
+    ASSERT_NULL(cmd_batch_find(&set, first_id));
+    cmd_batch_set_free(&set);
+
+    /* direct release; NULL-safe; a batch with no runcmd */
+    CmdBatch *d = calloc(1, sizeof(*d));
+    ASSERT_NOT_NULL(d);
+    d->runcmd = make_runcmd_reply(2);
+    ASSERT_NOT_NULL(d->runcmd);
+    cmd_batch_release(d);
+    cmd_batch_release(NULL);
+    d = calloc(1, sizeof(*d));
+    ASSERT_NOT_NULL(d);
+    cmd_batch_release(d);
+    TEST_END();
+}
+
+int test_cmd_batch_runcmd_finds(void)
+{
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    ASSERT_NULL(cmd_batch_runcmd(NULL));
+    ASSERT_NULL(cmd_batch_runcmd(&set));
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    ASSERT_NOT_NULL(b);
+    ASSERT_NULL(a->runcmd);
+    ASSERT_NULL(cmd_batch_runcmd(&set));
+    b->runcmd = make_runcmd_reply(1);
+    ASSERT_NOT_NULL(b->runcmd);
+    ASSERT_TRUE(cmd_batch_runcmd(&set) == b);
     cmd_batch_set_free(&set);
     TEST_END();
 }
