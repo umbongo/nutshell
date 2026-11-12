@@ -13,8 +13,9 @@
 # unlocked desktop -- the whole suite runs on a locked or RDP-disconnected
 # session. Screenshots and logs land in tests\integration\artifacts\.
 #
-# Tiers (-Tier gate|ai|nightly|all, default all): gate is the merge gate --
-# every non-AI case plus
+# Tiers (-Tier gate|ai|nightly|all, default all): gate is only the name of the
+# tier for every case that needs no AI key (there has been no merge gate for
+# this harness since 2026-09-15; it is run by hand), including
 # ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key/
 # ai_auto_approve_critical_asks_first (no AI key needed despite the ai_ prefix); ai is the five key-gated ai_* cases;
 # nightly is currently empty (reserved for slow/flaky cases, e.g. idle-timeout
@@ -23,29 +24,11 @@
 # proposed tiers -- none of those cases exist yet, only the tier plumbing does).
 #
 # ---- Layout -----------------------------------------------------------------
-# This script is the driver only: params, Invoke-Case/Invoke-AiCase,
-# Assert-True, Invoke-KnownBugBlock, the shared capture helpers used by more
-# than one case file (Test-NutshellCaptureNonBlank, ConvertTo-NutshellFileToken
-# -- both defined below in this file, so every dot-sourced case file can see
-# them), the results table and the exit code. Helpers needed by only one case
-# file live in that file instead (e.g. Get-TerminalAreaHash in
-# cases\10-terminal.ps1). Case bodies live in
-# tests\integration\cases\*.ps1, dot-sourced below in name order so they run
-# in this script's own scope (Invoke-Case, $Artifacts, $results, etc. are all
-# visible to them without passing anything explicitly):
-#   10-terminal.ps1     connect, ctrl_c, log filename, paste x2, pty resize,
-#                        page up, holds position, inactive tab resize
-#   20-ai.ps1            the five key-gated ai_* cases + ai_panel_opens_without_key + ai_auto_approve_critical_asks_first
-#   30-ui-demo.ps1       ui_gallery, approval_card_run_selected_settles,
-#                        helpers_theme_pixel_matches_token
-#   40-helpers.ps1       the other helpers_* cases
-#   50-window.ps1        launch/window/shutdown/menu (LAUNCH-*, RESIZE-1,
-#                        WINDOW-*, CLOSE-1, MENU-1)
-#   60-tabs-logging.ps1  tabs (TABS-*) and logging (LOG-*)
-#   70-cli.ps1           CLI flags (CLI-1's several small cases)
-#   95-ai-select.ps1     character selection in the AI panel under --ui-demo=chat
-# Add a new case by editing the matching file (or adding a new cases\NN-*.ps1
-# -- any file matching cases\*.ps1 is picked up automatically) rather than
+# This script is the driver only. Case bodies live in
+# tests\integration\cases\*.ps1, dot-sourced below in name order so they run in
+# this script's own scope. See README.md ("Layout") for what each file holds.
+# Add a new case by editing the matching file (or adding a new cases\NN-*.ps1;
+# any file matching cases\*.ps1 is picked up automatically) rather than
 # growing this file.
 
 param(

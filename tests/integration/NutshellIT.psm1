@@ -1552,9 +1552,9 @@ function Open-NutshellSessionManager {
 
 function Select-NutshellSettingsPage {
     <# Select a page in the Settings nav listbox (IDC_SETTINGS_NAV) by its
-       exact display name -- one of the nine selectable entries in
+       exact display name -- one of the ten selectable entries in
        src/core/settings_layout.c's NAV_TABLE: Appearance, Terminal, Logging,
-       SSH, Startup, Provider, Behaviour, "Web Access", About (the other three
+       SSH, Startup, Provider, Behaviour, "Web Access", Debugging, About (the other three
        NAV_TABLE rows are non-selectable group headers: General, Connection,
        AI Assistant). #>
     param([Parameter(Mandatory)] $Dialog, [Parameter(Mandatory)] [string] $Page)

@@ -35,9 +35,9 @@ Invoke-Case "helpers_session_manager_opens_and_lists_profile" @{} {
 
 Invoke-Case "helpers_settings_opens_every_page" @{} {
     param($s)
-    # The nine selectable pages, per src/core/settings_layout.c's NAV_TABLE
+    # The ten selectable pages, per src/core/settings_layout.c's NAV_TABLE
     # (the other three rows are non-selectable group headers).
-    $pages = @("Appearance", "Terminal", "Logging", "SSH", "Startup", "Provider", "Behaviour", "Web Access", "About")
+    $pages = @("Appearance", "Terminal", "Logging", "SSH", "Startup", "Provider", "Behaviour", "Web Access", "Debugging", "About")
     $dlg = Open-NutshellSettings -Session $s -Page $pages[0]
     foreach ($page in $pages) {
         Select-NutshellSettingsPage -Dialog $dlg -Page $page
