@@ -29,7 +29,7 @@ record-keeping of 2026-09-21.
 | `.claude/memory/MEMORY.md` | Durable facts for future sessions. Imported by CLAUDE.md. |
 | `.claude/skills/*/SKILL.md` | Repo procedures. |
 | `.claude/CHANGELOG.md` | Record of every change to memory and skills. |
-| `docs/retrospectives/YYYY-MM-DD-*.md` | Dated retrospectives, marked DRAFT until the maintainer reviews. |
+| `docs/retrospectives/YYYY-MM-DD-*.md` | Dated retrospectives, marked DRAFT until the maintainer reviews; the merge of its PR is the review. |
 | `.github/workflows/*.yml`, `.github/scripts/*` | The workflows. Reviewed at every retrospective (see step 5). |
 
 ## Procedure
@@ -60,7 +60,8 @@ record-keeping of 2026-09-21.
    session (host limits, gate rules, API quirks, ref layout). Remove
    anything the docs now state better. Bump its "Last updated" line.
 4. **Update or add skills** when a procedure was learned the hard way.
-   One skill per job; keep each under about 100 lines.
+   One skill per job; keep each under about 100 lines (`feature-workflow`,
+   at about 185, is the known exception: it restates the whole merge path).
 5. **Review the workflows.** Read every file under `.github/workflows/`
    and `.github/scripts/`, and the "Branches, pull requests and the merge
    gate" and "Software Development Rules" sections of CLAUDE.md. For each,
@@ -80,9 +81,12 @@ record-keeping of 2026-09-21.
    critique dispositions, in the same commit. Move the "Last retrospective"
    marker in `MEMORY.md` to the head of `origin/main` at the time of
    writing (the last merge the retrospective covers); the next
-   retrospective starts from there.
+   retrospective starts from there, so the retrospective's own merge falls
+   in the next one's scope.
 8. **Retrospective (when the maintainer says yes, or asks for one).** Write it under
-   `docs/retrospectives/`, headed DRAFT, with a scope-and-method section,
+   `docs/retrospectives/`, headed `**Status**: DRAFT` (the line becomes
+   `**Status**: Reviewed (merged)` when the maintainer merges its PR;
+   merging is the review, rule of 2026-11-12), with a scope-and-method section,
    measured numbers in a table, findings ranked by cost of inaction, and
    recommendations clearly separated from changes made.
 9. **Verify the gate will pass.** Skip `make test` when the change has no code modifications (docs, `.claude/`, retrospectives only; maintainer's instruction, 2026-10-13); run `check-version.sh` regardless. The hosted `Native tests` check still runs on the PR.

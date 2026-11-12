@@ -4,6 +4,39 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-12 — documentation accuracy pass (after PR #96)
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Models: claude-opus-5-5 (orchestration, these edits); claude-fable-5-2 (findings, the maintainer's decisions).
+
+- **`memory/MEMORY.md`.** Baselines 4,132 hosted (PR #96), 4,091 stub, `wintest`
+  56; 198 exe commits; 93 CRLF files. Open items for v1.2.83: the Thinking row
+  shipped (PR #96), PR #97 open, and the tool-gate, Settings and `vcpkg.json`
+  items the paragraph had left out; line counts re-measured. The classifier
+  refused `gh pr ready` after "proceed and merge" given before the PR existed
+  and accepted it after "Merge it" (reported). The retrospective marker stays
+  at `d966713`: no retrospective was run.
+- **`skills/feature-workflow`.** Step 9 follows CLAUDE.md's new go-ahead rule
+  (the maintainer's decision of 2026-11-12: any explicit instruction to merge
+  counts; a PR number only when more than one PR could be meant). Model table
+  gains the main-session row (Fable, `claude-fable-5-2`) and Haiku's id is
+  the one in use (`claude-haiku-5-5`).
+- **`skills/checkpoint`.** A retrospective is reviewed when its PR is merged
+  (maintainer, 2026-11-12), so the merged file says `Reviewed (merged)`, not
+  DRAFT; the retrospective's own merge falls in the next scope;
+  `feature-workflow` named as the exception to the 100-line guideline.
+- **`skills/critique`.** The critic is not asked again by choice (it would
+  anchor on the reply), not for want of a channel: SendMessage exists.
+- **`skills/repo-status`.** Known state: `main` at v1.2.83, PR #97 open.
+- CLAUDE.md (not memory, recorded here as a process change): the go-ahead
+  rule and the retrospective review rule above; the token gate covers only
+  the `RGB(` and scale rules, the rest is convention, with the known
+  `CreateFont` exceptions named; `Profile` lives in `profile.h` and new fields
+  need `loader.c`; config arrays are not all `char[256]`; four version records,
+  not three; checks run on pushes to a pull request; `wintest` is the whole
+  Win32-only harness; real model ids in the `Models:` example. The `-Werror`
+  sentence is untouched pending the maintainer's decision.
+
 ## 2026-11-12 — retrospective (14 merges)
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.

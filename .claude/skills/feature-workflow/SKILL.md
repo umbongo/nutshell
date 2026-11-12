@@ -24,9 +24,10 @@ the reports and the key learnings.
 
 | Job | Model |
 |---|---|
+| The main session: the maintainer's conversation, briefs, rulings | Fable (`claude-fable-5-2` in the `Models:` lines since 2026-11-10) |
 | Judgement: reviews, critiques, orchestrating a multi-step package | Opus (`claude-opus-5-5`) |
 | Code and tests | Sonnet (`claude-sonnet-5-5`) |
-| Mechanical, single-pattern work: renames, fixtures, doc tables | Haiku (`claude-haiku-4-5-20251001`) |
+| Mechanical, single-pattern work: renames, fixtures, doc tables | Haiku (`claude-haiku-5-5`) |
 | Surveys of the tree that should return conclusions, not files | Explore agent |
 
 A sub-agent may spawn its own.
@@ -129,10 +130,11 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
    docs-only PR straight after the merge; never as a late push to a PR
    whose checks are green (that reruns all seven and moves the head).
 9. **Merge.** **The maintainer's explicit go-ahead is a condition in every
-   permission mode, before any command below.** A go-ahead means the
-   maintainer, in this session, names `ready` or `merge` and the PR number;
-   "go ahead with the fixes", an earlier plan or an unattended-run memory
-   is not one. If the head moves after the maintainer's last test or
+   permission mode, before any command below.** A go-ahead is any explicit
+   instruction to merge from the maintainer in this session ("Merge it",
+   "proceed and merge"); it needs the PR number only when more than one PR
+   could be meant (CLAUDE.md, rule of 2026-11-12). "Go ahead with the
+   fixes", an earlier plan or an unattended-run memory is not one. If the head moves after the maintainer's last test or
    go-ahead (a merge of `main`, a review fix, a rebuilt exe), say what they
    have not seen and HOLD until they say yes again. In auto mode the
    classifier may refuse `gh pr ready` (MEMORY.md); report the green checks
