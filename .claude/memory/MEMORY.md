@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on request after each merge, no cadence).
+Last updated: 2026-11-12 (retrospective of PRs #82-#94: baselines, snapshot `v1.2.60`, the comctl32 manifest, the `pgrep -f` trap, open items).
 
 ## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
@@ -19,11 +19,12 @@ Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on reque
   merge counter any more. The daily Routine "Nutshell: retrospective every
   10 merges" in the maintainer's Claude account was disabled on 2026-11-04
   (deleting it is the maintainer's click at claude.ai/code/routines). The
-  maintainer declined a retrospective on 2026-11-04, the day after the
-  last one.
-- **Last retrospective:** 2026-11-03, marker commit `94d7ae3` (merge of
-  PR #81). The next one covers the merges since it
-  (`git log --merges --first-parent origin/main 94d7ae3..`); move this
+  maintainer declined a retrospective on 2026-11-04 and asked for none
+  until the backlog was cleared (*reported*), so the 2026-11-12 one covered
+  14 merges.
+- **Last retrospective:** 2026-11-12, marker commit `d966713` (merge of
+  PR #94). The next one covers the merges since it
+  (`git log --merges --first-parent origin/main d966713..`); move this
   marker at every retrospective.
 
 ## Working from a cloud (Linux) session
@@ -57,18 +58,35 @@ Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on reque
   the value to restore 96) -- reported 2026-10-19, not measured here, and it
   changes the shared `~/.wine` prefix for every session. No `pwsh` is
   installed, so a harness case file cannot be parsed or run here; only the
-  Windows box can check one.
+  Windows box can check one. Before a push the PRs of 2026-11 ran
+  `make -j test`, `make test SAN=1`, `make lint-gate`, `make fuzz-run` and
+  `xvfb-run -a make wintest` here.
+- **Never wait with `pgrep -f`.** `while pgrep -f 'make fuzz-long'; do
+  sleep 5; done` matches its own `bash -c` command line and never exits:
+  one such loop ran from 2026-11-05 to 2026-11-12 and kept a sub-agent
+  "running" until the maintainer noticed (*reported*). Wait on the PID, use
+  `pgrep -x`, or run the job as a background command and take its
+  completion notification.
+- **Wine is not Windows.** v1.2.49 to v1.2.59 died at launch on the
+  maintainer's Windows 11 24H2 workstation and passed every `wintest`: the
+  manifest did not ask for comctl32 v6, and that build's system32 comctl32
+  5.82 no longer exports `SetWindowSubclass` and its siblings. Wine's does,
+  so it never reproduced (PR #90). A build only counts as started on Windows
+  once it has been run there.
 - **Never-pushed branches** can live in `~/nutshell-wt/*` worktrees, the
   main clone `~/nutshell` or the Windows box; check `automaton`'s
   (`repo-status` step 7) before calling an Open item untouched.
 - **The Windows box** (MSYS2, `mingw32-make`): runs the integration harness
-  and `mingw32-make wintest`, and can build too.
-- Native suite baseline: 3,314 tests, 0 failed, in the hosted `Native
-  tests` run on PR #81's head (real libssh2, 2026-11-03); PR #81's body
-  reports 3,279 on `automaton` with the libssh2 stub. Earlier stub counts:
-  3,035 (2026-10-19), 2,485 (2026-10-13), 1,960 (2026-09-21). The two
-  counts differ by the libssh2-gated files, so compare like with like.
-  `wintest` reported 45 tests on 2026-11-03.
+  and `mingw32-make wintest`, and can build too. Command blocks written for
+  the maintainer there prefix a local file with `.\` and carry no `#`
+  comment lines (maintainer, *reported* 2026-11).
+- Native suite baseline: 4,118 tests, 0 failed, in the hosted `Native
+  tests` run on PR #94's head (real libssh2, 2026-11-12); PR #94's body
+  reports 4,077 on `automaton` with the libssh2 stub. Earlier hosted counts:
+  3,736 (#93), 3,314 (#81). Earlier stub counts: 3,279 (2026-11-03), 3,035
+  (2026-10-19), 2,485 (2026-10-13), 1,960 (2026-09-21). The two counts
+  differ by the libssh2-gated files, so compare like with like. `wintest`:
+  52 tests in PR #94's body (45 on 2026-11-03).
 - After any change to `NutshellIT.psm1`'s `Add-Type` sources, run the
   harness from a fresh PowerShell window; the module stops at load and says
   so (`tests/integration/README.md`).
@@ -76,11 +94,13 @@ Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on reque
 ## Repository facts
 
 - **Branches named with a version number (`v1.0.76`, `v1.1.21`, `v1.2.13`,
-  `v1.2.41`) are snapshots and are never deleted** (maintainer, 2026-10-20),
+  `v1.2.41`, `v1.2.60`) are snapshots and are never deleted** (maintainer, 2026-10-20),
   even though each is contained in `main`. "Clear out merged branches" means
   feature branches only; GitHub deletes those on merge
   (`delete_branch_on_merge` is on; a merged branch that still shows locally
-  needs `git fetch --prune`). `v1.2.41` is a branch only, at `7960bd2`.
+  needs `git fetch --prune`). `v1.2.41` is a branch only, at `7960bd2`;
+  `v1.2.60` is a branch only, at `0f5bf9a` (merge of PR #90, the comctl32
+  fix).
 - `main` was the redesign branch `ui-polish`, renamed on 2026-09-07. The
   pre-redesign main lives on as branch **and** tag `v1.0.76`. `v1.1.21` is
   also both a branch and a tag; the branch is fully contained in `main`.
@@ -91,13 +111,15 @@ Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on reque
   `docs/superpowers/specs/2026-09-06-ui-redesign-notes.md`. Checkpoints are
   committed as `docs: checkpoint YYYY-MM-DD — ...`. Retrospectives go in
   `docs/retrospectives/`.
-- `build/win/nutshell.exe` (about 5.5 MB, UPX-packed, version resource left
-  uncompressed) is committed on every build; 163 commits on `main` touch it
-  (2026-11-03). Git LFS
+- `build/win/nutshell.exe` (about 5.6 MB, UPX-packed, version resource left
+  uncompressed) is committed on every build; 197 commits on `main` touch it
+  (2026-11-12). Git LFS
   is an open question, untracking it is not (the gate reads its version).
-- 86 files are CRLF in the index (2026-11-03); `.gitattributes` holds only
-  `tests/fixtures/*.bin binary`. The notes ask for eol rules and a lone
-  renormalising pull request.
+- 94 files are CRLF in the index (2026-11-12); `.gitattributes` holds only
+  `tests/fixtures/*.bin binary`. Eight of the 94 are fuzz seeds under
+  `tests/fuzz/corpus/` whose CR bytes are test input: mark that tree binary
+  before any renormalise, or it rewrites them. The notes ask for eol rules
+  and a lone renormalising pull request.
 - `.claude/` is gitignored except `memory/`, `skills/` and `CHANGELOG.md`.
 
 ## The merge gate, precisely
@@ -134,7 +156,9 @@ Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on reque
   them. The staging rule is in CLAUDE.md ("Git commits").
 - Nothing rebuilds anywhere in CI. `release.yml` fires on a `v*` tag (or
   manual dispatch), re-verifies tag == `resource.h` == exe version, and
-  publishes the committed exe with `gh release create`.
+  publishes the committed exe with `gh release create`, with
+  `nutshell.exe.sha256` beside it since PR #87. It has not run since
+  v1.1.21, so that addition is untried.
 - CodeQL (`codeql.yml`) runs on pull requests and on pushes to `main`,
   builds `make test` on ubuntu; since 2026-09-24 it installs `libssh2-1-dev`
   too, so the SSH files are scanned for real. `src/ui` is still never
@@ -159,9 +183,11 @@ Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on reque
   `quality.yml`). Only the first two are required.
 - `gh pr edit` fails with a projectCards GraphQL error. Update a body with
   `gh api -X PATCH repos/umbongo/nutshell/pulls/N -F body=@file`.
-- In Claude Code's auto permission mode the classifier refuses
-  `gh pr ready N` as a merge without review (reported 2026-10-19). The
-  maintainer runs `ready` and `merge`.
+- In Claude Code's auto permission mode the classifier refused
+  `gh pr ready N` as a merge without review (reported 2026-10-19); on
+  2026-11-12 it accepted it after the maintainer's explicit go-ahead in the
+  session (*reported*). Without that go-ahead, the maintainer runs `ready`
+  and `merge`.
 - A CodeQL finding on a pull request: read the SARIF before changing code
   (`gh api -H "Accept: application/sarif+json"
   repos/umbongo/nutshell/code-scanning/analyses/<id>`; ids from
@@ -182,18 +208,17 @@ Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on reque
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-03 (`main` at v1.2.49, PR #81; Dependabot #78 open since
-2026-10-21, and this retrospective's draft): the unpushed branch `fix/sgr-codeql-tidy` (SGR leak
-and all six CodeQL alerts fixed, not bumped or built; the maintainer
-decides); `ssh_channel_write` can block the UI thread for up to 5 s per
-write; telnet harness cases never parsed or run; two failing tab-switch
-harness cases; no release since v1.1.21; designed light-theme ANSI palette;
-top-anchored ConPTY reflow (unblocked); selection follow-ups (Alt+drag, the
-scrollback-size setting); the whole-repository security review;
-finished-batch command details; AI panel selection follow-ups; local shell
-follow-ups; paint-path polling; `.gitattributes` renormalise; sub-project 3
-needs a spec first. `src/ui/window.c` is 5,910 lines, `ai_chat.c` 5,926,
-`chat_listview.c` 4,316.
+As of 2026-11-12 (`main` at v1.2.82, PR #94; no open pull request, no open
+CodeQL alert): a backlog of Windows hand checks from PRs #85-#94, most of
+them never run (five of those merges were unattended); the Thinking row's
+three modes (spec first); `ssh_channel_write` can block the UI thread for
+up to 5 s per write; `run_command` live rounds on five of six providers;
+terminal escapes CSI I, HTS, TBC and scroll-region gaps; harness cases never
+run (telnet, `settings_help_tool_count`, `ui_gallery`); no release since
+v1.1.21; web_fetch watchdog and TLS fail-closed; light-theme ANSI palette;
+top-anchored ConPTY reflow; sub-project 3 needs a spec first. `src/ui/window.c`
+is 6,313 lines, `chat_listview.c` 4,760, `ai_chat.c` 3,150 (the seven
+`ai_chat*.c` files 7,404 since the PR #86 split).
 
 ## Local shell and keys, facts that outlive the session
 

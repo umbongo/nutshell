@@ -4,6 +4,37 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-12 — retrospective (14 merges)
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Retrospective: `docs/retrospectives/2026-11-12-fourteen-merges-retrospective.md`.
+Models: claude-opus-5-5 (retrospective); claude-fable-5-2 (brief, session notes).
+
+- **`memory/MEMORY.md`.** Marker moved to `d966713` (PR #94; 14 merges from
+  `94d7ae3`). Baselines 4,118 hosted, 4,077 stub, `wintest` 52. Snapshot branch
+  `v1.2.60` at `0f5bf9a`. Two traps: a `pgrep -f` wait loop matches itself and
+  never ends (one ran 7.5 days, reported); Wine is not Windows (v1.2.49-v1.2.59 did
+  not start on the maintainer's machine, PR #90). Windows command blocks: `.\`
+  and no `#` lines (reported). `gh pr ready` was accepted after the maintainer's
+  go-ahead (reported). Exe 5.6 MB and 197 commits; 94 CRLF files, eight of them fuzz
+  seeds; the release `.sha256` untried; open items and line counts for v1.2.82.
+  Why: the period's measurements and the session's notes, checked against git.
+- **`skills/feature-workflow/SKILL.md`.** Step 7: the background-command check wait
+  and never a `pgrep -f` loop. Step 8: Wine is not Windows; unrun Windows checks go
+  into the notes' Open list in the same PR. Step 9: merging from `automaton` too;
+  `gh pr ready` with the maintainer's go-ahead; say what the maintainer has not seen
+  when the head moved after their test. Why: findings F1, F3, F9 and F10.
+- **`skills/checkpoint/SKILL.md`.** Step 2: read each merged PR body's unrun checks,
+  follow-ups, deferrals and known limits into Open. Why: F1 and F4 (eight of eleven
+  `src/` PRs recorded nothing in the notes; one body claimed an Open item that was
+  not there). "When it runs" and step 7 already matched the rule of 2026-11-04.
+- **`skills/repo-status/SKILL.md`.** Known state on 2026-11-12. Why: stale.
+- **`.github/workflows/quality.yml`** (comment only). "The six libFuzzer targets"
+  became the Makefile's `FUZZ_TARGETS`; there are seven since PR #94. Why: stale
+  documentation; nothing the job does changes.
+- No critique was run in this session; the main session sends the process edits
+  above for one, and the dispositions belong in this entry once they exist.
+
 ## 2026-11-05 — the quality checks in the process texts
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.

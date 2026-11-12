@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-04 (retrospective on request after each merge). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-12 (retrospective: the check wait, Windows checks into the Open list, merging from `automaton`). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules themselves live in CLAUDE.md ("Software Development Rules",
 "Branches, pull requests and the merge gate"); this skill is the walk
 through them in order. Where they disagree, CLAUDE.md wins. It absorbed
@@ -139,23 +139,34 @@ open as drafts and their body ends with the same `Models:` line and the
    `pull_request_read` with `get`; `mergeable_state` should be `clean`,
    and the ruleset also requires the branch be up to date with `main`.
    The checks run on `pull_request` only, so there is no base-branch run
-   to compare against; a red gate is always the PR's.
-8. **Integration tier.** Before marking ready, the maintainer runs the
-   integration tier the change touches by hand on Windows
-   (`tests/integration/Run-Integration.ps1 -Tier gate`); it is a manual
-   tool, not a gate.
+   to compare against; a red gate is always the PR's. A wait that worked on
+   every push of PRs #85-#94: one background command running
+   `gh pr checks N --watch --interval 30`, then the `Tests Run` line of the
+   `Native tests` job log (checkpoint step 1 has the command), then
+   `gh pr view N --json mergeStateStatus,isDraft,headRefOid`; act on its
+   completion notification. Never a `pgrep -f` loop (MEMORY.md).
+8. **Integration tier and Windows checks.** Before marking ready, the
+   maintainer runs the integration tier the change touches by hand on
+   Windows (`tests/integration/Run-Integration.ps1 -Tier gate`); it is a
+   manual tool, not a gate. Wine is not Windows (PR #90). A pull request
+   merged with its Windows checks not run (an unattended merge, say) lists
+   them in its body, and the same list goes into the notes' Open list in
+   the same pull request.
 9. **Merge.** First, where are you: **in a cloud (Linux) session, stop
    here and warn the maintainer** that the pipeline requires a successful
    `make test` and compiled code before it can merge and that this cannot
    be done from a cloud instance (CLAUDE.md, the gate section); do not
-   mark ready, do not enable auto-merge. On the Windows box: `gh pr ready N`, then `gh pr checks N --watch` until every
+   mark ready, do not enable auto-merge. On `automaton` or the Windows box: `gh pr ready N`, then `gh pr checks N --watch` until every
    check is green, then `gh pr merge N --merge --auto`, in that order. The
    reason is in CLAUDE.md ("Branches, pull requests and the merge gate"):
    auto-merge merges at once when the PR is mergeable, and CodeQL is not
    required. It prints nothing on success; read the PR state afterwards.
-   In Claude Code's auto permission mode `gh pr ready` is refused as a
-   merge without review: report the green checks and leave `ready` and
+   In Claude Code's auto permission mode `gh pr ready` can be refused as a
+   merge without review: without the maintainer's go-ahead for this pull
+   request in the session, report the green checks and leave `ready` and
    `merge` to the maintainer, and do not use the MCP calls below instead.
+   With it (as for PR #94), run them. If the head moved after the
+   maintainer last tested a build, say what was not seen and offer to hold.
    Without `gh`, in a session allowed to merge,
    `mcp__github__update_pull_request` to leave draft, then
    `mcp__github__enable_pr_auto_merge` with merge method `merge`. Never

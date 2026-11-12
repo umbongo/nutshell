@@ -5,7 +5,7 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-11-04 (retrospective on request after each merge; no cadence, no Routine). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-12 (step 2 reads the merged PR bodies' unrun checks and follow-ups). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
@@ -55,6 +55,10 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
 2. **Compact the notes document.** Move finished items to "Done" with the
    PR number and commit, keep "Open" in priority order, fix any counts.
    Do not delete history; the done list is the project's memory of why.
+   Read each merged PR body's "not run", "Not verified", "Follow-ups",
+   "Deferred" and "Known limits" sections and carry into Open what the
+   notes lack; on 2026-11-12 eight of eleven `src/` PRs had added nothing
+   to the notes, and one body said its deferral was in Open when it was not.
 3. **Update `MEMORY.md`.** Add only facts that will still be true next
    session (host limits, gate rules, API quirks, ref layout). Remove
    anything the docs now state better. Bump its "Last updated" line.

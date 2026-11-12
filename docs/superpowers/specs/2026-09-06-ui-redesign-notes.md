@@ -4,16 +4,16 @@
 landed at v1.0.92/v1.0.96 (see "Landed since v1.0.96" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **3,314 tests**, 0 failures (hosted `Native tests`, real
-libssh2, PR #81's head, 2026-11-03; 3,279 with the libssh2 stub on `automaton`, as PR #81
-reports). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
-(`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 73 cases in the
-README's case tables plus the five telnet cases, manual only since 2026-09-15, DPI-aware since
+batches). Native suite: **4,118 tests**, 0 failures (hosted `Native tests`, real
+libssh2, PR #94's head, 2026-11-12; 4,077 with the libssh2 stub on `automaton`, as PR #94
+reports; `wintest` 52). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
+(`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 74 cases in the
+README's case tables (`settings_help_tool_count` new in PR #93) plus the five telnet cases, manual only since 2026-09-15, DPI-aware since
 PR #71; `ui_gallery` captures 10 `--ui-demo` states x 4 themes = 40 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.49 (2026-11-03).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.82 (2026-11-12).
 
 ## Decisions so far
 
@@ -310,9 +310,37 @@ Done, in order (details in the commit messages and the specs named):
   Important findings were fixed in e710a16; CodeQL's `cpp/world-writable-file-creation`
   on a test was fixed with `test_fopen_private()` (0499c11). Tested on Windows by the
   maintainer before merge (*reported*); the new harness cases have not been run.
-- 2026-11-03 retrospective (`docs/retrospectives/2026-11-03-ten-merges-retrospective.md`).
-- SSH keyboard-interactive authentication, v1.2.56 (branch `feat/keyboard-interactive-auth`;
-  spec `2026-11-05-keyboard-interactive-design.md`): the server is asked what it offers and
+- 2026-11-03 retrospective (PR #82, 582300b;
+  `docs/retrospectives/2026-11-03-ten-merges-retrospective.md`); retrospectives on request
+  after each merge, the 10-merge cadence dropped (PR #84, 97866f1).
+- SGR colour sub-parameters and the six CodeQL alerts, v1.2.50 (PR #83, 723ee51): the
+  unpushed `fix/sgr-codeql-tidy` commits rebased and finished. A truncated `38;5` or
+  `38;2;r;g` no longer leaks attributes; colon forms parsed; `4:0` clears underline; a
+  leading empty parameter and parameter overflow handled; `config_save` writes its temp
+  file through `open_private_for_write()`; `md_classify_line` checks the bound first.
+  Alerts #11, #13, #14, #15, #22 and #27 closed; none open on 2026-11-12.
+- Guard rails from the 2026-11-04 external code review, v1.2.52 (PR #85, 1f85a3a; spec
+  `2026-11-04-guard-rails-design.md`): auto-approve pauses after 3 unattended rounds;
+  web_fetch resolves every hop and refuses loopback, private and link-local addresses,
+  follows at most 5 redirects, never https to http, 30 s deadline; `[EXEC]` markers in
+  code are "quoted, not run"; a 15 s SSH setup timeout naming the stage; one WinHTTP
+  session helper (automatic proxy, TLS 1.2+); clear-text custom URL warning; JSON depth
+  cap. Merged unattended (maintainer's instruction of 2026-11-04); its Windows checks are
+  in Open.
+- `ai_chat.c` split into seven files plus `ai_chat_internal.h`, no behaviour change,
+  v1.2.54 (PR #86, 0750cab; spec `2026-11-05-ai-chat-split-design.md`).
+- CI and tooling, v1.2.55 (PR #87, 5808d3d; spec `2026-11-05-ci-tooling-design.md`):
+  per-object test build (`make -j test`), `make test SAN=1`, `make lint-gate`, libFuzzer
+  targets with committed seeds (`make fuzz-run`, `make fuzz-long`), `quality.yml`
+  (`Sanitizers`, `Lint`, `Fuzz`) and `fuzz-weekly.yml`, a `.sha256` beside the released
+  exe, dependency versions in About and `-v`, `docs/audit-tags.md`; `tests/fake_dlog.c`
+  pads in one allocation, so the ASan run finishes (629681f); the OSC numeric overflow
+  the fuzzer found is fixed.
+- Trust boundary part A, v1.2.57 (PR #88, 4ba5662; spec `2026-11-05-trust-boundary-design.md`):
+  terminal output leaves the system prompt for a delimited data block in the last user
+  turn; a `sensitive` bit gives credential reads a card at any policy; classifier fixes
+  (`sh -c`/`bash -c`/`eval` bodies, `xargs`/`watch`, `$(...)`, IOS `conf t`/`debug`/`do`);
+  `env rm -rf /` and `echo $(rm F)` now classify CRITICAL.
   the methods are tried in a fixed plan (`src/core/ssh_auth_plan.c`; a saved password goes
   first when password is on offer, else keyboard-interactive does); each server prompt is
   shown one at a time with its text in a scrolling box (`src/core/ssh_kbd.c`,
@@ -324,28 +352,104 @@ Done, in order (details in the commit messages and the specs named):
   after each answered round, typed or sent from the saved password, so a push approval
   gets a minute; a failed login names the offered methods.
   `tests/manual/kbdint_server.py` is a paramiko server for hand checks (not in any gate).
+  Merged as v1.2.59 after a merge of `main` (PR #89, 62202f8); its hand tests are in Open.
+- Startup crash fixed, v1.2.60 (PR #90, 0f5bf9a; snapshot branch `v1.2.60`): every build
+  from v1.2.49 to v1.2.59 died at launch on the maintainer's Windows 11 24H2 workstation;
+  the manifest now asks for comctl32 v6, whose exports the subclassing calls need. Wine
+  never reproduced it.
+- Dependabot #78 (7122a29): codeql-action 4.38.3 to 4.39.1, after 15 days open.
+- Theme text contrast gate, v1.2.62 (PR #92, 35e09e7): `tests/test_theme_contrast.c`
+  checks 72 text and surface pairs on all four themes (4.5 for text, 3.0 for glyphs);
+  token changes on all four, Moss & Mist's accent to deep sage `57705C`; seven exemptions.
+- Trust boundary part B, the tool gate, v1.2.74 (PR #91, d73eeec): every tool carries a
+  safety level, `web_fetch` is UNKNOWN and gets a one-row card unless Auto-approve allows
+  it; the stream thread waits on a decision slot, never the UI thread; an approved fetch
+  is pinned to its host; Moonshot (Kimi) gets the tools; tool approval timeout and
+  automatic tool rounds in Settings; stream parser fixes; `ai_header_layout()` stops the
+  header overdraw. The maintainer ran the gate checks on v1.2.67-v1.2.69 with Kimi.
+- Settings help on hover, v1.2.75 (PR #93, 6432ca0; spec `2026-11-05-settings-help-design.md`):
+  46 tips from `src/core/settings_help.c`, the dialog opens tall enough for the tallest
+  page, Web Access reordered, a second request raises the open dialog. **Scrollback Lines
+  now takes effect** (default 10,000) with rows allocated as lines are kept, which closes
+  the scrollback-size part of the selection follow-ups.
+- `run_command` tool and the command list, v1.2.82 (PR #94, d966713; spec
+  `2026-11-05-run-command-tool-design.md`): commands as structured tool calls (Automatic
+  is On for Anthropic, OpenAI and Moonshot, Off for DeepSeek, Gemini and Custom), command
+  chips and cards that fold once final, a conversation-limit guard, server-sent lines up
+  to 256 KiB, RFC 8259 numbers in `json_validate`. Outside the panel: CSI Z handled, which
+  fixes nano's cursor over SSH (2eaacb1, found by replaying a recorded session against tmux,
+  299 chunks); the window title shows the version (4dcd308); the Settings label column
+  widened, with a `wintest` that measures every label at four scalings (99bea50). The
+  maintainer tested v1.2.77 and v1.2.81 on Windows; v1.2.82 itself was not seen on screen
+  before the merge.
+- 2026-11-12 retrospective (`docs/retrospectives/2026-11-12-fourteen-merges-retrospective.md`).
 
 Open, in priority order:
+- [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
+      body lists them; nothing records a run except where noted. #85: web_fetch refuses
+      `127.0.0.1`, `[::1]`, `169.254.169.254` and a redirect to one; SSH to a silent port
+      fails after about 15 s; the clear-text URL warning; the "quoted, not run" chip. #86: a
+      real session that streams, pastes an image and runs one approved command (likely
+      covered by the v1.2.77 Kimi test, not recorded as such). #87: About at 125 % and
+      200 % and after a DPI change, a real zlib version, `-v` two lines, `mingw32-make test`
+      twice, `cli_version_redirect_file`. #88: the data block seen at a loopback listener,
+      Anthropic `cache_control` returning 200, sensitive cards at Read. #89: the spec's hand
+      tests against `tests/manual/kbdint_server.py`. #92: the four-theme gallery judgement
+      (Moss & Mist's deep-sage accent, the light-theme indicator greens). #93: the spec's
+      13-item checklist and `settings_help_tool_count`. #94: v1.2.82 on screen (title,
+      fold anchor, row heights after a scaling change), Retry, New Chat, undock and redock,
+      an error ending, `cls`/`Clear-Host` capture, `--ui-demo=tool`. All: `--ui-demo=all`
+      on the four themes and a `ui_gallery` run.
+- [ ] **Thinking row: three visual modes** (maintainer, 2026-11-12). Today the row is
+      either collapsed (one line) or open (the whole text). Add a compact mode that
+      shows only four lines of the streaming text at a time, and make a click on the
+      row cycle through the three: collapsed, compact, open. Decided the same day:
+      compact is the default while the text streams; once the reply is idle the row
+      sits fully collapsed; the row's label ("Thinking") changes colour with the
+      mode, from a pastel palette: compact green, collapsed brown, open grey (new
+      theme tokens, one set per theme; no literals in `src/ui`). A mode the user
+      clicks to always sticks, at idle and across restarts: it is one global choice
+      for every Thinking row, saved in the config, and it replaces the session-wide
+      preference from `IDC_CHAT_THINKING_OPENED/CLOSED`. Settings gets a control
+      that resets it to the defaults (compact while streaming, collapsed at idle).
+      Needs a short spec before any code.
+- [ ] `run_command` follow-ups (PR #94): live rounds were run on Moonshot (Kimi) only;
+      Anthropic and OpenAI (Automatic means On) are untested live, DeepSeek, Gemini and
+      Custom stay Off until tried. Duplicate "session ended" rows (*reported*); the `[EXEC]`
+      continue path's failed launch leaves a second approved batch waiting, and its Stop
+      differs from the tool path's; the run log keeps 16 records; a batch broken by other
+      rows never folds (commands plus a web fetch, or prose between commands); the list view
+      has no automated paint test (a `wintest` fixture for the list view and header paint);
+      opening a card while a reply streams stops the list following the stream (by intent).
+- [ ] Tool-gate follow-ups (PR #91): a later chunk with `"id":""` overwrites a stored call
+      id; the indexed path has no upper bound on the index; a pending call in a reply cut off
+      at the output limit is not run; Anthropic `type:"error"` stream events are not shown;
+      DeepSeek's reasoner may need the reasoning pass-back on tool loops; Kimi's reasoning on
+      plain replies is not kept; history carries no tool turns (spec non-goal); a tool row in
+      `--ui-demo`; the four v1.2.74 review leftovers (a font left selected in one header
+      paint path, the status dot's size written twice, the rounds note's spare row, two
+      "web_fetch is off" rows in one round). From PR #88: NX-OS and ASA `do CMD` should use
+      their own tables; a sensitive row in `--ui-demo`; blank class reasons (`sh -c: `).
+- [ ] Terminal escapes (PR #94's nano work): CSI I, HTS and TBC unhandled; `term_put_char`
+      auto-wrap inside a scroll region; entering the alternate screen resets the primary's
+      scroll region (*reported*); replay vim, htop, mc and less against tmux as nano was.
+- [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
+      order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
+      the minimum width the widest Debugging row overflows; hover help for the profile
+      editor; Start Logging fails silently; Refresh models turns a Base URL of `https://host`
+      into `https://models`; a generated README settings block (*reported*).
+- [ ] Other, from the PR #94 session (*reported*): markdown `_` inside a word; resize cost
+      with a full history (PR #93 measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200
+      columns); a user-supplied issue log can hold a typed secret, so `term.rx`/`term.key`
+      payloads are never printed and tests use synthetic text.
 - [ ] web_fetch: a watchdog that closes the request handle at hop end or on cancel; one
       hop can still exceed its timeout against a trickling server (the final review of
       the guard rails branch; the header wait is bounded, the body loop checks the hop's
       clock only between reads).
 - [ ] winhttp_open: fail closed when TLS 1.2 cannot be enforced (today the session keeps
       the OS defaults if the TLS 1.2-only retry is refused).
-- [ ] `tests/fake_dlog.c` pads files one byte per realloc, so the full-suite ASan run
-      (`make test TEST_CC=... -fsanitize=address`) never finishes.
-- [ ] Unpushed branch `fix/sgr-codeql-tidy` (worktree `~/nutshell-wt/tidy` on `automaton`,
-      2026-10-21, commits e5a1229 and 359dbe0, from session 01Cczi6ipaKBtKnozR7vkgFM):
-      fixes the SGR leak and the six CodeQL alerts below, with tests; not version-bumped,
-      no exe, never pushed; merges cleanly with `main` at 94d7ae3. The maintainer decides
-      whether it becomes the next `src/` pull request. On Windows its `config_save` change
-      passes `_S_IREAD | _S_IWRITE` to `_open`, which sets only the read-only attribute:
-      it silences alert #22 but does not narrow the file's ACL there.
-- [ ] Parser: a truncated extended-colour SGR (`38;2;r;g`, `38;5` without its index, or
-      one cut by the 16-parameter cap) leaks its trailing parameters as attributes (`2` ->
-      dim on the light themes, `5` -> blink, `1;4` -> bold/underline); malformed input
-      only; consume the remaining parameters as xterm does. Fixed on the unpushed branch
-      above (e5a1229).
+- [ ] `vcpkg.json` manifest with a baseline (deferred by PR #87, whose body says it is in
+      this list; it was not until 2026-11-12).
 - [ ] `ssh_channel_write` blocks the UI thread for up to its 5 s send timeout per write
       when the remote window is full (found by PR #79, left alone). The same class of
       symptom as #79's lost input: keys stop while the UI thread waits. Move SSH writes off
@@ -371,11 +475,9 @@ Open, in priority order:
 - [ ] Terminal selection follow-ups (spec `2026-10-20-putty-selection-design.md` section 4;
       the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
       combining marks and the reflow drop order in PR #76; middle-click now extends, so
-      middle-button paste is off the list): Alt+drag block selection; mouse reporting to
-      applications; the per-byte paste writes over SSH; the scrollback-size setting
-      (Settings and the help guide offer 100-50,000 lines but every session gets 3,000;
-      `term_init` and `term_reflow_buffer` allocate the whole capacity, so lazy
-      allocation in reflow comes first, spec section 6.2).
+      middle-button paste is off the list; the scrollback-size setting and lazy allocation
+      shipped in PR #93): Alt+drag block selection; mouse reporting to applications; the
+      per-byte paste writes over SSH.
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
       the 100 ms throttle with its starved-timer check, DPI reorder, logging, the
@@ -386,20 +488,13 @@ Open, in priority order:
       (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
       v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are
       tab-switch cases; investigate together (tab B never reports its grid). Not run
-      since, as far as the log shows: PR #76's four gate cases and PR #81's telnet cases.
-- [ ] Six CodeQL alerts open on `main`, none new code: #27 `cpp/offset-use-before-range-check`
-      at `src/core/markdown.h:62` is alert #12 (open since 2026-04-07 at `src/ui/markdown.h`)
-      renumbered when PR #71 moved the parser (56f0805) -- `line[level] == '#' && level < 6`
-      reads before the bound; swapping the operands closes it. The other five are
-      `cpp/world-writable-file-creation` (`loader.c:935`, four in `test_settings.c`).
-      Fix or dismiss each with a reason, in the next `src/` pull request. All six are fixed
-      on the unpushed branch `fix/sgr-codeql-tidy` (359dbe0; see the first item).
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.49, which adds telnet and
-      the password eye since the last count. Tagging is the maintainer's call
-      (`feature-workflow` step 10).
-- [ ] Dependabot #78 (codeql-action 4.38.3 -> 4.39.0) has been open and green since
-      2026-10-21, behind `main`; with one open at a time no other bump can arrive. Update
-      the branch and merge it.
+      since, as far as the log shows: PR #76's four gate cases, PR #81's telnet cases,
+      PR #93's `settings_help_tool_count`, and `ui_gallery` since the PR #92 token changes.
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.82, which adds telnet, the
+      password eye, keyboard-interactive auth, the tool gate and `run_command` since then.
+      The first tag will also be the first run of `release.yml`'s `.sha256` step (PR #87).
+      Tagging is the maintainer's call (`feature-workflow` step 10), best after the Windows
+      checks in the first item.
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
       shows them only as inline `[EXEC]` segments of the AI text. Either keep finished
@@ -421,12 +516,13 @@ Open, in priority order:
       policy, the 1023-byte limit, auto-approve levels), secrets (API keys, profile
       passwords, `secure_zero`, what reaches logs), config loading, host keys, window
       messages, and CI/workflow permissions. Then the general code-health critique
-      (`window.c` and `ai_chat.c` size, `src/ui` logic that belongs in `src/core`).
-      Findings ranked by severity, each answered in writing; folds in the open H3-H8
+      (`window.c` size, `src/ui` logic that belongs in `src/core`; `ai_chat.c` was split
+      in PR #86). The external code review of 2026-11-04 and PRs #85, #87, #88, #89 and
+      #91 covered part of the AI command path, web_fetch and CI; start from what they
+      left. Findings ranked by severity, each answered in writing; folds in the open H3-H8
       items below. Known classifier holes to start from (PR #50 review, 2026-09-23):
-      `env rm -rf /`, `perl -e "unlink ..."`, `echo $(rm -rf /)` and backtick
-      substitution classify READ on Linux and unresolved platforms (wrappers and
-      command substitution are not looked through); no PowerShell ruleset, so
+      `env rm -rf /` and `echo $(rm ...)` are CRITICAL since PR #88; check
+      `perl -e "unlink ..."` and backtick substitution; no PowerShell ruleset, so
       destructive cmdlets are UNKNOWN rather than CRITICAL; the `>>` prompt test uses
       synthetic bytes rather than a captured PSReadLine/ConPTY stream.
 - [ ] Local shell follow-ups: PowerShell as the local shell now has a harness case
@@ -442,18 +538,21 @@ Open, in priority order:
       `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
       `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
-      86 CRLF-indexed files (2026-11-03) in a lone PR when nothing else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
+      94 CRLF-indexed files (2026-11-12) in a lone PR when nothing else is in flight;
+      mark `tests/fuzz/corpus/**` binary first, since eight seeds there carry CR bytes as
+      test input. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
 - [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
-      settings), D (AI extras) — 31 cases planned; the suite has since grown to 78 cases
-      (73 in the README tables plus five telnet), so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
+      settings), D (AI extras) — 31 cases planned; the suite has since grown to 79 cases
+      (74 in the README tables plus five telnet), so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config
       kept beside the exe, absolute save path): H7/H8 window-message hardening;
       release and supply chain (exe tied to source, tag ruleset, immutable releases,
       provenance, secret scanning -- the settings changes need the maintainer's
-      say-so); web_fetch destination filter; then Medium and Low.
+      say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
+      destination filter shipped in PR #85.
 - [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
       two user turns in a row in the conversation; a stream posting during the AI
       panel's destruction leaks its payload (tiny; probably closed by the v1.2.14
@@ -505,7 +604,8 @@ Open, in priority order:
       shadow poisoning now makes harmless.
 - [ ] The AI panel never refreshes `d->dpi` after `WM_CREATE`: paint, hit and tooltip
       rects stay consistent with each other, but the panel does not rescale on a monitor
-      move (found 2026-10-18 during the Auto-approve review).
+      move (found 2026-10-18 during the Auto-approve review). Still true on 2026-11-12:
+      only the chat list view remeasures on `WM_DPICHANGED` (07953d2).
 - [ ] Scrolled-back repaint storm (2026-10-18 `issue3.log` lines 11761-12797, out of scope of
       `2026-10-18-conpty-resize-anchor-design.md`): with `scrollback_offset` 12..6, 186 paints
       in 4.4 s had `dirty_rows` equal to the offset, driven by `poll.invalidate poll_rc=0`
@@ -529,24 +629,11 @@ Open, in priority order:
 - [ ] Main-window chords (Ctrl+Shift+T/W/M, F11, Ctrl+Shift+Space) fire only while the main
       window has focus; from the AI panel's input they are dead. The cheat sheet states the
       condition per row ("from the terminal"); forwarding them is a separate change.
-- [ ] **Thinking row: three visual modes** (maintainer, 2026-11-12). Today the row is
-      either collapsed (one line) or open (the whole text). Add a compact mode that
-      shows only four lines of the streaming text at a time, and make a click on the
-      row cycle through the three: collapsed, compact, open. Decided the same day:
-      compact is the default while the text streams; once the reply is idle the row
-      sits fully collapsed; the row's label ("Thinking") changes colour with the
-      mode, from a pastel palette: compact green, collapsed brown, open grey (new
-      theme tokens, one set per theme; no literals in `src/ui`). A mode the user
-      clicks to always sticks, at idle and across restarts: it is one global choice
-      for every Thinking row, saved in the config, and it replaces the session-wide
-      preference from `IDC_CHAT_THINKING_OPENED/CLOSED`. Settings gets a control
-      that resets it to the defaults (compact while streaming, collapsed at idle).
-      Needs a short spec before any code.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
 decisions and reads the diff in full; `gh pr merge N --merge --auto` merges at once
 when the PR is mergeable and only `Version bump` and `Native tests` are required
-(CodeQL is not), so `gh pr checks N --watch` until every check is green first. Run the harness tier a change touches by hand first. "Create a checkpoint" = compact this
+(CodeQL, `Sanitizers`, `Lint` and `Fuzz` are not), so `gh pr checks N --watch` until every check is green first. Run the harness tier a change touches by hand first. "Create a checkpoint" = compact this
 list, compact memory, delete temp files and worktrees, leave the tree ready for a new
 session.
