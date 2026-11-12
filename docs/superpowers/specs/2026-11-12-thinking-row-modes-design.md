@@ -157,6 +157,22 @@ each is open to reversal.
     `chat_thinking.[ch]`, which stays as it is.
 12. **The config token for "no choice" is `"auto"`**, matching
     `ai_runcmd_mode`'s Automatic.
+13. **The click's save goes through `window.c`**: the panel forwards
+    `IDC_CHAT_THINKING_MODE` to the main window, which writes `g_config`
+    with `config_save(g_config, active_config_path())` and does nothing
+    under `--ui-demo`, so a demo never writes the real config.
+14. **`--ui-demo=chat` and `all` force the demo pref to open** (they showed
+    the Thinking body open before, and the chat selection case crosses it);
+    the other demo states keep the saved pref. In memory only.
+15. **A failed reply ends its row's streaming state**: the error path now
+    sets `thinking_complete`, so the row stops being compact under
+    Automatic.
+16. **A mode change drops the row's wrap cache**, since compact wraps
+    without the open box's scrollbar gutter.
+17. **A click does not hold the clicked row's screen position**; the list
+    re-lays out and, if pinned to the bottom, follows the bottom.
+18. **The Settings combo sits after "Render AI markdown"** on AI Assistant >
+    Behaviour, its items in `ThinkPref` order.
 
 ## Testing
 

@@ -413,7 +413,11 @@ Open, in priority order:
       preference from `IDC_CHAT_THINKING_OPENED/CLOSED`. Settings gets a control
       that resets it to the defaults (compact while streaming, collapsed at idle).
       In progress on `feat/thinking-row-modes`: spec
-      `docs/superpowers/specs/2026-11-12-thinking-row-modes-design.md`.
+      `docs/superpowers/specs/2026-11-12-thinking-row-modes-design.md`. Windows hand checks
+      still to run: the three modes on the four themes (`--ui-demo=thinking`,
+      `thinking-compact`, `thinking-open`), a live reply under Automatic (compact, then
+      collapsed), the click cycle, the choice surviving a restart, Settings > Automatic
+      resetting it, and `settings_help_tool_count` at 83.
 - [ ] `run_command` follow-ups (PR #94): live rounds were run on Moonshot (Kimi) only;
       Anthropic and OpenAI (Automatic means On) are untested live, DeepSeek, Gemini and
       Custom stay Off until tried. Duplicate "session ended" rows (*reported*); the `[EXEC]`
