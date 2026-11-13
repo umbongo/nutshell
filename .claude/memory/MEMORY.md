@@ -212,11 +212,10 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-12 (`main` at v1.2.83, PR #96 `1a03af5`, which shipped the
-Thinking row's three modes; open pull requests: `gh pr list`, on 2026-11-12
-#97 (Dependabot's actions bump) and #98 (`-Werror` for the native test
-build, v1.2.84), which settles whether CLAUDE.md's "-Werror under both"
-holds; no open CodeQL alert): a backlog of Windows hand checks from PRs #85-#96, most of
+As of 2026-11-13 (`main` at v1.2.84: PR #96 shipped the Thinking row's
+three modes, PR #98 made the native test build `-Werror`, PR #99 corrected
+the documentation; open pull requests: `gh pr list`, on 2026-11-13 #97,
+Dependabot's actions bump; no open CodeQL alert): a backlog of Windows hand checks from PRs #85-#96, most of
 them never run (five of those merges were unattended); tool-gate follow-ups
 (PR #91); Settings follow-ups (PR #93); a `vcpkg.json` manifest with a
 baseline (deferred by PR #87); `ssh_channel_write` can block the UI thread for

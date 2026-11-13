@@ -4,6 +4,16 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-13 — after PR #98
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Models: claude-opus-5-5 (these edits).
+
+- **`memory/MEMORY.md`, `skills/repo-status`.** `main` is at v1.2.84 (PR #98
+  merged: the native test build is `-Werror`); #97 is the only open pull
+  request. The notes' Open item for the `-Werror` question is closed and a
+  Done entry records PR #98.
+
 ## 2026-11-12 — documentation accuracy pass, review fixes
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.

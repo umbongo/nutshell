@@ -13,7 +13,7 @@ PR #71; `ui_gallery` captures 19 `--ui-demo` states x 4 themes = 76 images. Next
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.83 (2026-11-12).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.84 (2026-11-13).
 
 ## Decisions so far
 
@@ -397,6 +397,11 @@ Done, in order (details in the commit messages and the specs named):
   clicked row keeps its place on screen, compact ends at the last non-blank text. Gallery
   states `thinking-compact` and `thinking-open`. Its Windows checks are in the first Open
   item.
+- Native test build fails on warnings, v1.2.84 (PR #98, e46b98c): `-Werror` added to
+  `TEST_CFLAGS` (fuzz builds inherit it); no code needed fixing. The MinGW build's stricter
+  `-Wpedantic -Wshadow -Wformat=2 -Wconversion` would add five warnings to the native build
+  (three sign conversions, one non-literal format, one empty translation unit) if wanted later.
+  Windows check owed: `mingw32-make test` under MSYS2's newer gcc with `-Werror`.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -516,10 +521,7 @@ Open, in priority order:
       `thinking-open` (PR #96). The list-view `wintest` cases added since PR #93 (the
       four `test_chat_select_win_thinking_*` and `test_settings_label_win_labels_fit_column`)
       have no recorded run on Windows, only under Wine.
-- [ ] CLAUDE.md says code compiles clean "under both [compilers] with `-Werror`", but the
-      native test build had no `-Werror` (2026-11-12 documentation review). PR #98
-      (v1.2.84) settles it in the Makefile; the documentation pass left the sentence alone.
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.83, which adds telnet, the
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.84, which adds telnet, the
       password eye, keyboard-interactive auth, the tool gate, `run_command` and the Thinking
       row modes since then.
       The first tag will also be the first run of `release.yml`'s `.sha256` step (PR #87).
