@@ -401,7 +401,17 @@ Done, in order (details in the commit messages and the specs named):
   `TEST_CFLAGS` (fuzz builds inherit it); no code needed fixing. The MinGW build's stricter
   `-Wpedantic -Wshadow -Wformat=2 -Wconversion` would add five warnings to the native build
   (three sign conversions, one non-literal format, one empty translation unit) if wanted later.
-  Windows check owed: `mingw32-make test` under MSYS2's newer gcc with `-Werror`.
+  Windows check owed: `mingw32-make test` under MSYS2's newer gcc with `-Werror`. Run on
+  2026-11-13: it failed (next entry); fixed in v1.2.85, still to rerun on Windows after
+  that merges.
+- web_search URL builders, v1.2.85: the first Windows `mingw32-make test` under `-Werror`
+  (MSYS2 gcc, 2026-11-13) failed on four `-Wformat-truncation=` warnings in
+  `src/core/ai_tool_web_search.c` (lines 375, 378, 381 and 509, the `snprintf` calls that
+  build the search URL from a query of up to 1,023 bytes). They sit inside `#ifdef _WIN32`,
+  so the Linux native build never compiles them and the MinGW cross-compile (gcc 13) does
+  not warn. Fixed by checking each `snprintf` result and returning "Search query is too long
+  for a search URL" instead of sending a cut URL. Windows check owed: rerun
+  `mingw32-make test`.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -417,7 +427,8 @@ Open, in priority order:
       (Moss & Mist's deep-sage accent, the light-theme indicator greens). #93: the spec's
       13-item checklist and `settings_help_tool_count` (83 tools since PR #96's combo). #94: v1.2.82 on screen (title,
       fold anchor, row heights after a scaling change), Retry, New Chat, undock and redock,
-      an error ending, `cls`/`Clear-Host` capture, `--ui-demo=tool`. #96: the three modes on the four themes (`--ui-demo=thinking`,
+      an error ending, `cls`/`Clear-Host` capture, `--ui-demo=tool`. #96 (run by the maintainer on Windows on 2026-11-13 and reported fine, *reported*, not
+      itemised): the three modes on the four themes (`--ui-demo=thinking`,
       `thinking-compact`, `thinking-open`), a live reply under Automatic (compact, then
       collapsed), the click cycle and the clicked row keeping its place, the choice
       surviving a restart and an undock and redock, Settings > Automatic resetting it. All:
@@ -469,6 +480,9 @@ Open, in priority order:
       with a full history (PR #93 measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200
       columns); a user-supplied issue log can hold a typed secret, so `term.rx`/`term.key`
       payloads are never printed and tests use synthetic text.
+- [ ] web_search does not URL-encode the query (`src/core/ai_tool_web_search.c`, all four
+      URL builders): a query with spaces, `&`, `#` or `+` reaches DuckDuckGo or the custom
+      URL mangled; found 2026-11-13.
 - [ ] web_fetch: a watchdog that closes the request handle at hop end or on cancel; one
       hop can still exceed its timeout against a trickling server (the final review of
       the guard rails branch; the header wait is bounded, the body loop checks the hop's

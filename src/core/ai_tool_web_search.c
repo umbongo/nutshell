@@ -371,15 +371,24 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
 
     /* Build DDG API URL */
     char url[1024];
+    int url_n;
     if (ctx && strcmp(provider, "custom") == 0 && ctx->search_url[0] != '\0') {
-        snprintf(url, sizeof(url), "%s?q=%s", ctx->search_url, query_copy);
+        url_n = snprintf(url, sizeof(url), "%s?q=%s", ctx->search_url, query_copy);
     } else if (strcmp(provider, "duckduckgo-html") == 0) {
-        snprintf(url, sizeof(url),
-                 "https://html.duckduckgo.com/html/?q=%s", query_copy);
+        url_n = snprintf(url, sizeof(url),
+                         "https://html.duckduckgo.com/html/?q=%s", query_copy);
     } else {
-        snprintf(url, sizeof(url),
-                 "https://api.duckduckgo.com/?q=%s&format=json&no_html=1&no_redirect=1",
-                 query_copy);
+        url_n = snprintf(url, sizeof(url),
+                         "https://api.duckduckgo.com/?q=%s&format=json&no_html=1&no_redirect=1",
+                         query_copy);
+    }
+    if (url_n < 0 || (size_t)url_n >= sizeof(url)) {
+        const char *err = "Search query is too long for a search URL";
+        *result_buf = malloc(strlen(err) + 1);
+        if (!*result_buf) return -1;
+        strcpy(*result_buf, err);
+        *result_len = strlen(err);
+        return -1;
     }
 
     /* Convert URL to wide string */
@@ -505,8 +514,16 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
             free(resp_buf);
 
             char html_url[1024];
-            snprintf(html_url, sizeof(html_url),
+            int html_n = snprintf(html_url, sizeof(html_url),
                      "https://html.duckduckgo.com/html/?q=%s", query_copy);
+            if (html_n < 0 || (size_t)html_n >= sizeof(html_url)) {
+                const char *err = "Search query is too long for a search URL";
+                *result_buf = malloc(strlen(err) + 1);
+                if (!*result_buf) return -1;
+                strcpy(*result_buf, err);
+                *result_len = strlen(err);
+                return -1;
+            }
 
             wchar_t w_html_url[1024];
             MultiByteToWideChar(CP_UTF8, 0, html_url, -1, w_html_url, 1024);
