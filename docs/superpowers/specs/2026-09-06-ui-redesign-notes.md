@@ -410,7 +410,12 @@ Done, in order (details in the commit messages and the specs named):
   build the search URL from a query of up to 1,023 bytes). They sit inside `#ifdef _WIN32`,
   so the Linux native build never compiles them and the MinGW cross-compile (gcc 13) does
   not warn. Fixed by checking each `snprintf` result and returning "Search query is too long
-  for a search URL" instead of sending a cut URL. Windows check owed: rerun
+  for a search URL" instead of sending a cut URL. The branch compiled clean under MSYS2
+  gcc 15.2 on Windows (2026-11-13), then failed to link: `tests/test_settings_label_win.c`
+  (PR #93) was in `wintest` but missing from `WIN_ONLY_TESTS`, so a Windows-host
+  `make test` built it with `_WIN32` defined and it needs `ns_font` from `src/ui`. On Linux
+  it is an empty translation unit, so nothing noticed; Windows-host `make test` had not
+  linked since PR #93. Added to `WIN_ONLY_TESTS`. Windows check owed: rerun
   `mingw32-make test`.
 
 Open, in priority order:

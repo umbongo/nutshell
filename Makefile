@@ -142,7 +142,7 @@ NON_TEST_SRCS = src/main.c $(wildcard src/ui/*.c)
 WIN_ONLY_TESTS = tests/test_icons.c tests/test_local_pty.c tests/win_runner.c \
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
                  tests/test_pw_reveal_win.c tests/test_telnet_io_win.c \
-                 tests/test_ns_tip_win.c
+                 tests/test_ns_tip_win.c tests/test_settings_label_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
