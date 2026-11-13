@@ -402,8 +402,7 @@ Done, in order (details in the commit messages and the specs named):
   `-Wpedantic -Wshadow -Wformat=2 -Wconversion` would add five warnings to the native build
   (three sign conversions, one non-literal format, one empty translation unit) if wanted later.
   Windows check owed: `mingw32-make test` under MSYS2's newer gcc with `-Werror`. Run on
-  2026-11-13: it failed (next entry); fixed in v1.2.85, still to rerun on Windows after
-  that merges.
+  2026-11-13: it failed (next entry); with the v1.2.85 fixes it passes (below).
 - web_search URL builders, v1.2.85: the first Windows `mingw32-make test` under `-Werror`
   (MSYS2 gcc, 2026-11-13) failed on four `-Wformat-truncation=` warnings in
   `src/core/ai_tool_web_search.c` (lines 375, 378, 381 and 509, the `snprintf` calls that
@@ -415,8 +414,8 @@ Done, in order (details in the commit messages and the specs named):
   (PR #93) was in `wintest` but missing from `WIN_ONLY_TESTS`, so a Windows-host
   `make test` built it with `_WIN32` defined and it needs `ns_font` from `src/ui`. On Linux
   it is an empty translation unit, so nothing noticed; Windows-host `make test` had not
-  linked since PR #93. Added to `WIN_ONLY_TESTS`. Windows check owed: rerun
-  `mingw32-make test`.
+  linked since PR #93. Added to `WIN_ONLY_TESTS`. Run on Windows on the branch
+  (2026-11-13, MSYS2 gcc 15.2, real libssh2): `mingw32-make test`, 4,131 tests, 0 failed.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
