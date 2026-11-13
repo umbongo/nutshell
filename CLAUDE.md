@@ -39,7 +39,7 @@ one starts.
 
 - **Always `make clean && make release`** — never `make release` alone.
 - **Always run `make test` after changes** to verify nothing is broken.
-- **Two compilers**: `x86_64-w64-mingw32-gcc` for the Windows cross-compile (`make`), native `gcc` for tests (`make test`). Code must compile clean under both with `-Werror`.
+- **Two compilers**: `x86_64-w64-mingw32-gcc` for the Windows cross-compile (`make`), native `gcc` for tests (`make test`). Both builds use `-Werror` (the native test build since v1.2.84), so code must compile clean under both; the MinGW build also adds `-Wpedantic -Wshadow -Wformat=2 -Wconversion`, which the native build does not.
 - **Linker order matters**: dependency libs (`-lssh2 -lssl -lcrypto -lzlib`/`-lz`) must come before Windows system libs (`-lws2_32 -lgdi32 ...`).
 - **`NON_TEST_SRCS`**: Files in `src/ui/` are excluded from test builds. If you add portable logic that needs testing, put it in `src/core/`, not `src/ui/`.
 - **libssh2 test stub** lives in `tests/stubs/libssh2.h` and is only added to the include path (`-Itests/stubs`) when the test build finds no real libssh2. Never put a stub header in `src/` — it would shadow the real one in the Windows build.
