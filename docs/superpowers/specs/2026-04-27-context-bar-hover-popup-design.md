@@ -5,7 +5,7 @@
 hover into the shipped meter. Kept for history below.
 
 **Date:** 2026-04-27
-**Status:** Draft
+**Status:** Superseded
 **Area:** AI chat panel UI
 
 ## Goal

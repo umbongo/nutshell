@@ -1,6 +1,6 @@
 # Thinking row: three visual modes: design
 
-Date: 2026-11-12. Status: draft for the maintainer's review. Source of truth:
+Date: 2026-11-12. Status: Implemented (v1.2.83, PR #96). Source of truth:
 `main` at `f842775` (v1.2.82). Branch `feat/thinking-row-modes`.
 
 The request (Open list of `2026-09-06-ui-redesign-notes.md`, maintainer,

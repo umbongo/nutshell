@@ -1,8 +1,7 @@
 # Nutshell repository retrospective — 2026-09-21
 
-> **DRAFT.** Prepared by Claude from the repository state on 2026-09-21.
-> Not yet reviewed by the maintainer. Numbers are measured, judgements are
-> the author's.
+**Status**: Reviewed (merged)
+**Method**: prepared by Claude from the repository state on 2026-09-21. Numbers are measured, judgements are the author's.
 
 ## Scope and method
 

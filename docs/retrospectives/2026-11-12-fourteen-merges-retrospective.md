@@ -1,6 +1,6 @@
 # Retrospective, 2026-11-12: fourteen merges, a code review worked through, and a build that never started
 
-**Status**: DRAFT until the maintainer reviews.
+**Status**: Reviewed (merged)
 **Covers**: merges into `main` after the 2026-11-03 marker `94d7ae3` (PR #81) up to
 `d966713` (PR #94): #83, #82, #84, #85, #86, #87, #88, #89, #90, #78, #92, #91, #93 and
 #94, 2026-11-04 to 2026-11-12 (14 merges, in merge order).

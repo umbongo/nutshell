@@ -1,5 +1,7 @@
 # ConPTY Resize: Console Probe and Reflow Fixes Implementation Plan
 
+**Status**: Implemented (v1.2.42, PR #70; probe run PR #77). Slices 3-6 of the spec (`2026-10-18-conpty-resize-anchor-design.md`), the top-anchored reflow, are for later plans and are open (the notes' Open list).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the console probe that tells the maintainer what conhost does to its own buffer on a resize (with and without `PSEUDOCONSOLE_RESIZE_QUIRK`), record the four scenario fixtures, and fix the two reflow faults every session has (a blank wrapped row at exact width; a cursor past the content pulled back onto it).

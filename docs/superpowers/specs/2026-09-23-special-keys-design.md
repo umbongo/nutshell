@@ -1,7 +1,7 @@
 # Special keys: getting Alt, function keys and modifiers to the shell
 
 **Date**: 2026-09-23
-**Status**: DRAFT, research and options, revised after one Opus critique (see the end).
+**Status**: Implemented, v1.2.4.
 No code in this change.
 **Branch**: `special-keys-spec` (docs only)
 **Prompted by**: the maintainer, 2026-09-23, running Microsoft Edit (`edit.exe`, the console

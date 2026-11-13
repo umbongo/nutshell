@@ -1,7 +1,7 @@
 # Command-Line Parameters & Auto-Connect at Startup — Design
 
 **Date:** 2026-08-28
-**Status:** Spec — pending implementation plan
+**Status:** Implemented
 
 ## Problem
 

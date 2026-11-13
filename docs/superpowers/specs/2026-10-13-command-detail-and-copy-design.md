@@ -1,7 +1,7 @@
 # AI Assist: command details popup, copy icons, transcript clipboard
 
 **Date**: 2026-10-13
-**Status**: DRAFT, revised after one Opus critique (dispositions at the end).
+**Status**: Implemented.
 **Branch**: `feat/cmd-detail-popup`
 **Prompted by**: the maintainer, 2026-10-13. Three asks, in their words: (1) the approval
 card truncates commands, so clicking a command must open a popup with a short description of

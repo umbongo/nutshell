@@ -1,6 +1,6 @@
 # Retrospective, 2026-10-19: eleven merges, four features, two CodeQL loops
 
-**Status**: DRAFT until the maintainer reviews.
+**Status**: Reviewed (merged)
 **Covers**: merges into `main` after the 2026-10-13 marker `c593796` (PR #59) up to
 `7960bd2` (PR #71): #60-#69 and #71, 2026-10-13 to 2026-10-19 (11 merges).
 **Method**: full clone on `automaton`, `git log --merges --first-parent c593796..origin/main`,

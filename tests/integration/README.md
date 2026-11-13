@@ -35,7 +35,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 
 | File | Cases |
 |---|---|
-| `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x4 (Enter and Tab in Confirm Paste), PTY resize, Page Up, holds position, inactive-tab resize, terminal selection x9 |
+| `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x4 (Enter and Tab in Confirm Paste), PTY resize, Page Up, holds position, inactive-tab resize, terminal selection x13 |
 | `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` + `ai_auto_approve_critical_asks_first` |
 | `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token`, `helpers_ansi_contrast_floor`, `helpers_theme_switch_repaints` |
 | `cases\40-helpers.ps1` | the other `helpers_*` cases |
@@ -146,8 +146,9 @@ avoided rather than merely guarded against.
 `-Tier gate|ai|nightly|all` (default `all`, i.e. today's behaviour) filters which
 cases run:
 
-- **`gate`** — every case that needs no AI key, i.e. all cases in the table below
-  except the five key-gated `ai_*` ones. About 8–10 minutes with the section
+- **`gate`** — every case that needs no AI key, i.e. every case in `cases\*.ps1`
+  except the five key-gated `ai_*` ones (the ones run through `Invoke-AiCase`).
+  The name is only the tier's label; nothing is gated on it. About 8–10 minutes with the section
   1/4/5/8 additions below (was 3–4 minutes for the original set). This was the
   tier the decommissioned desktop-runner workflow ran per pull request; run it
   yourself before opening the gate on a change that touches what it covers.
@@ -205,13 +206,24 @@ touches before marking its pull request ready.
 | `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
 | `ai_write_command_held_then_runs_after_allow` | a prompted `touch` is held back while the level is Read (Auto-approve on), then runs via "Run N selected" once the level is raised to Write with Auto-approve off |
 | `ai_prompt_while_approval_pending` | a second prompt gets a normal reply while the first prompt's command batch sits pending (default policy, Auto-approve off); "Run N selected" with `lParam` 0 (the integration-harness "oldest pending batch" convention) then still runs the first batch's command — see docs/superpowers/specs/2026-09-09-pending-command-batches.md |
-| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (16 states x 4 themes = 64 captures); no SSH host or AI key needed |
+| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (19 states x 4 themes = 76 captures); no SSH host or AI key needed |
 | `approval_card_run_selected_settles` | "Run N selected" on a live approval card (`--ui-demo=approval`) settles without crashing; no SSH host or AI key needed |
 | `ai_panel_opens_without_key` | the panel opens straight into the no-key empty state with `ai_api_key` empty, no dialog; no AI key needed despite the `ai_` prefix |
 | `ai_auto_approve_critical_asks_first` | with no key: Auto-approve at Critical raises a Yes/No box; a second toggle during the box is ignored; No leaves Critical/off; Yes turns it on; retired id 4040 does nothing (spec 2026-10-18 section 2) |
+| `help_shortcuts_sheet_opens_and_closes` | Help > Keyboard Shortcuts opens the modal sheet (captured by its own handle, main window disabled under it), a second open is ignored, Esc closes it and re-enables the main window |
+| `help_shortcuts_sheet_fits_the_screen` | the sheet lies inside the work area at the current DPI; at 96 DPI on a 1920x1040 or larger work area it is one page, with no scrollbar |
+| `help_shortcuts_sheet_gallery` | `--ui-demo=shortcuts` on all four themes, the sheet captured by handle into `artifacts\gallery\<Theme>-shortcuts.png`; no SSH host or AI key needed |
+| `settings_help_tool_count` | after Edit > Settings, the Settings dialog's hidden `tooltips_class32` windows hold exactly 83 and 1 tools by `TTM_GETTOOLCOUNT`; a second Edit > Settings leaves one Settings window, the same one |
+| `local_shell` | `--local`: echo, exit, silent reconnect |
+| `local_shell_powershell` | a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit |
+| `telnet_autologin_never_logs_password` | against the scripted loopback responder in `cases\85-telnet.ps1`: option negotiation, auto-login at `Username:`/`Password:`, and the password stays out of every log |
+| `telnet_port_refused_reports_in_tab` | a refused connection is reported in the tab; status lines are read back with Edit > Select All and the clipboard |
+| `telnet_port_check_is_passive_and_echoes_locally` | a plain port check sends no option negotiation and the typing is echoed locally |
+| `telnet_password_box_asks_and_sends` | the Password box opens at the device's prompt and its text reaches the device; the password is in neither the session log nor `nutshell.config` |
+| `ssh_password_box_cancel_reports_in_tab` | Cancel in the SSH password box is reported in the tab (needs the SSH host) |
 | `helpers_posted_text_reaches_shell` | posted `Send-NutshellLine`/`Wait-NutshellShell` reach the shell with no foreground/focus dependency (proves the posted-input helpers work end to end) |
 | `helpers_session_manager_opens_and_lists_profile` | `Open-NutshellSessionManager` + `Wait-NutshellDialog` find the dialog, `Get-NutshellListItems` lists the generated profile, `Close-NutshellDialog -Button Cancel` closes it |
-| `helpers_settings_opens_every_page` | `Open-NutshellSettings`/`Select-NutshellSettingsPage` select and capture all nine Settings pages, `Close-NutshellDialog -Button Cancel` closes it |
+| `helpers_settings_opens_every_page` | `Open-NutshellSettings`/`Select-NutshellSettingsPage` select and capture all ten Settings pages, `Close-NutshellDialog -Button Cancel` closes it |
 | `helpers_theme_pixel_matches_token` | `--ui-demo=chat --theme "Onyx Light"`; a sampled background pixel matches `Get-NutshellThemeColor`'s `bg_primary` within tolerance; no SSH host or AI key needed |
 | `helpers_ansi_contrast_floor` | `--ui-demo=ansi`, window at the work area's full height, debugging on with `render` at Trace: the cell size, grid and origin come from the last `render.draw` event (`char_w`, `char_h`, `rows`, `cols`, `x`, `y`); FAIL with the grid in the detail if it is under 17 x 24 or lines 0/1 are not `000000`/`CC3333`. On Onyx Light the 16 palette swatches each read at >= 4.4:1 against `terminal_bg`, line 11 (SGR 93) is `727223` and line 16 (dim 97) is at least 10 L* lighter than line 15; on Onyx Synapse line 11 is the raw `FFFF55` and line 16 `FFFFFF` (spec `2026-10-19-light-theme-ansi-contrast-design.md` section 6); no SSH host or AI key needed |
 | `helpers_theme_switch_repaints` | `--ui-demo=ansi --theme "Onyx Synapse"`, then Settings > Appearance > Onyx Light > Save: lines 11 and 15, far from the cursor, are `727223`/`6C6C6C`, not the old theme's `FFFF55`/`FFFFFF` (the forced repaint after a theme change); no SSH host or AI key needed |
@@ -286,10 +298,13 @@ unchanged source re-imports without complaint.
 The five `ai_*` cases above the `ui_gallery`/`approval_card_run_selected_settles`
 block make real API calls and are **skipped** unless a key is present in the
 environment variable `NUTSHELL_IT_AI_KEY` or in the git-ignored file
-`tests\integration\.ai_key` (create it yourself; never commit it) —
+`tests\integration\.ai_key` (create it yourself; never commit it), or in
+`tests\integration\.ai_config\nutshell.config` (saved from a Nutshell instance run
+in that folder; the key stays encrypted for this machine, and the provider and
+model saved there are used too) —
 `ai_panel_opens_without_key` and `ai_auto_approve_critical_asks_first` are not among them; they need no key. Provider and
-model default to Moonshot / `kimi-k3` and can be changed with `-AiProvider` and
-`-AiModel`. 30 lines of terminal context, no web tools. A full run of the five
+model default to Moonshot / `kimi-k3`, are taken from `.ai_config` when it is the
+key's source, and can be changed with `-AiProvider` and `-AiModel` (which win). 30 lines of terminal context, no web tools. A full run of the five
 key-gated cases makes about nine model calls: `ai_panel_docks_with_key` sends
 none; the other four each send one or two prompts, plus one dispatcher
 follow-up call for every command batch that actually finishes running
@@ -305,7 +320,7 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 
 | Helper | Does |
 |---|---|
-| `Wait-NutshellDialog -Session [-Title] [-TimeoutSec]` | HWND of a top-level window in one of Nutshell's own dialog classes (`#32770`, `NutshellPassDlg`, `Nutshell_Settings`, `Nutshell_PastePreview`, `Nutshell_About`), optionally title-filtered; Zero if none appears |
+| `Wait-NutshellDialog -Session [-Title] [-TimeoutSec]` | HWND of a top-level window in one of Nutshell's own dialog classes (`#32770`, `NutshellPassDlg`, `Nutshell_Settings`, `Nutshell_PastePreview`, `Nutshell_About`, `Nutshell_Shortcuts`), optionally title-filtered; Zero if none appears |
 | `Get-NutshellControl -Dialog -Id` | child HWND by control id — `GetDlgItem`, then a recursive `EnumChildWindows`/`GetDlgCtrlID` fallback for a control nested in a sub-page (e.g. a Settings page) |
 | `Set-NutshellControlText -Control -Text` / `Get-NutshellControlText -Control` | `WM_SETTEXT` (+ an `EN_CHANGE` notification, though no dialog in this codebase actually reads it — see the function's doc comment) / `WM_GETTEXT` |
 | `Invoke-NutshellButton -Control` | `BM_CLICK` — works on every button in this codebase, including owner-drawn ones |
@@ -314,11 +329,11 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Select-NutshellListItem -Control -Index` / `Get-NutshellListItems -Control` | `LB_SETCURSEL` + `LBN_SELCHANGE` / `LB_GETCOUNT`+`LB_GETTEXT` |
 | `Close-NutshellDialog -Dialog [-Button OK\|Cancel\|Yes\|No]` | clicks the standard-id button (`IDOK`=1/`IDCANCEL`=2/`IDYES`=6/`IDNO`=7 — every Nutshell dialog and MessageBox uses these), falling back to a caption-matched `Button` child if the id isn't present |
 | `Open-NutshellSessionManager -Session` | File › New Session, waits for the dialog |
-| `Open-NutshellSettings -Session [-Page]` / `Select-NutshellSettingsPage -Dialog -Page` | Edit › Settings, optionally selecting a nav page by name (`Appearance`, `Terminal`, `Logging`, `SSH`, `Startup`, `Provider`, `Behaviour`, `Web Access`, `About`) |
+| `Open-NutshellSettings -Session [-Page]` / `Select-NutshellSettingsPage -Dialog -Page` | Edit › Settings, optionally selecting a nav page by name (`Appearance`, `Terminal`, `Logging`, `SSH`, `Startup`, `Provider`, `Behaviour`, `Web Access`, `Debugging`, `About`) |
 | `Get-NutshellWindowText -Hwnd` / `Get-NutshellChildWindows -Hwnd` | debugging: a window's text / every descendant as `hwnd`⇥`ctrlId`⇥`class`⇥`text` |
 | `Get-NutshellPixel -Path -X -Y` / `Test-NutshellPixelNear -Path -X -Y -Rgb -Tolerance` | read/compare a pixel in a saved capture |
 | `Get-NutshellThemeColor -Name -Token` | parses `src/core/ui_theme.c`'s per-theme initialisers for one of `bg_primary`, `bg_secondary`, `accent`, `text_main`, `text_dim`, `border`, `terminal_fg`, `terminal_bg`, `success`, `warning`, `danger`, `info`, `link` |
-| `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
+| `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases\10-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
 | `Get-NutshellChatList -Session` / `Get-NutshellChatWordRect -Session -Word -Item [-Thinking]` | the AI panel's message list / where it painted a word (`CLV_MSG_QUERY_WORD`, `--ui-demo` only): `@{X;Y;W;H}` in the list's client pixels, W ending at the word's last character |
 | `Get-NutshellWindowDpi -Session` | the main window's DPI (96 = 100%); 96 when `GetDpiForWindow` is unavailable or returns 0 |
 | `Send-NutshellChatDrag -Session -FromX -FromY -ToX -ToY [-Steps] [-HoldMoves]` | a drag in the message list with sent `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`/`WM_LBUTTONUP` (no foreground; the real cursor is parked in the screen's far corner first); `-HoldMoves` repeats the last point, each past an edge auto-scrolling once |
@@ -329,6 +344,13 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellCellPoint -Geo -Row -Col` | the client pixel at a cell's centre; fractional and out-of-grid rows allowed |
 | `Get-NutshellDebugLogText -Session` / `Wait-NutshellDebugLog -Session -Pattern [-TimeoutSec]` | the case's debug log (`debug_log_dir = "debuglogs"`), and waiting on a regex in it |
 | `Set-NutshellFocus -Session -Hwnd` | keyboard focus to one of the app's windows via `AttachThreadInput` + `SetFocus`; `Send-NutshellChord -Hwnd` posts a chord to a window other than the main one |
+| `Start-NutshellLogging -Session [-TimeoutSec]` | File › Start Logging; returns the log file path once it exists |
+| `Get-NutshellLogText -Session` / `Wait-NutshellLog -Session -Pattern [-TimeoutSec]` | the session log's text (read with sharing while the app holds it), and waiting on a regex in it |
+| `Save-NutshellScreenshot -Session -Path [-Hwnd]` | PNG of the main window, or of the window `-Hwnd` |
+| `Open-NutshellSecondTab -Session [-ConnectWaitSec]` | File › Session Manager...: picks the first saved profile in the Session Manager for a second tab |
+| `Open-NutshellAiPanel -Session` / `Get-NutshellAiPanel -Session` | View › AI Assist, returning the docked panel's HWND (throws if it did not appear) / the panel's HWND, Zero when it is not docked |
+| `Send-NutshellAiPrompt -Session -Text` / `Wait-NutshellAiSendIdle -Session [-TimeoutSec]` | put text in the AI input box and press Send / wait for the Send button to go idle again |
+| `Set-NutshellAiPolicy -Session -Allowed Read\|Unknown\|Write\|Critical [-Auto]` / `Get-NutshellAiPolicy -Session` | set the level and Auto-approve (no `-Auto` means off; `-Allowed Critical -Auto` returns with the confirmation box up, for `Close-NutshellDialog`) / read both back as `@{ Allowed; Auto }` |
 
 **Window geometry is never assumed.** `Set-NutshellWindowSize` treats its
 `-Width`/`-Height` as a *request*: it clamps them to the primary work area
@@ -399,5 +421,4 @@ The block still runs, and the outcome — `[XFAIL]` (still failing) or `[XPASS]`
 but it does not fail the tier, so a run keeps saying "nothing regressed" rather
 than "the same known bugs are still open". Wrap only the
 checks the named bug actually breaks; everything else in the case stays a
-normal assertion. Two cases use this today: `minimise_restore_repaints` and
-`tabs_open_switch_close`.
+normal assertion. No case uses it today.

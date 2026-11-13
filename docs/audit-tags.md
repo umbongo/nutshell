@@ -57,7 +57,7 @@ reused by the 2026-09-24 hardening work and carry a second sense, marked
 
 ## Table 2: the unhyphenated series (C1, H2, M3, ...)
 
-Three origins, which reuse the same letters and numbers:
+Four origins, which reuse the same letters and numbers:
 
 - **2026-09-09 audit**: the never-committed security-audit spec. Its findings
   are C1 to C4, H2, H6 and H9, L3 and L4. C1, C3, C4, H9 and L4 were fixed in
@@ -66,13 +66,21 @@ Three origins, which reuse the same letters and numbers:
 - **2026-09-11 classification coverage spec**
   (`docs/superpowers/specs/2026-09-11-command-classification-coverage.md`): its
   section 2 names the shared classifier mechanics M1, M2 and M4 (the cited
-  `F2`/`F3` are findings in the same spec). Only `cmd_classify.c` and its tests
+  `F1` to `F6`, `F8` and `F9` are findings in the same spec). Only `cmd_classify.c` and its tests
   use these senses.
 - **2026-09-24 security review** (the hardening shipped as v1.2.14 and v1.2.15,
   PR #55; 518914e, 0e0dc74): H1 to H4, M1 to M6 for the local shell, config
   loading and saving, and platform detection. The classifier-holes list from the
   PR #50 review (2026-09-23) fed the same pass (22a734c) but its items carry no
   tags in the code.
+- **2026-11-11 run_command review** (PR #94, d966713; spec
+  `docs/superpowers/specs/2026-11-05-run-command-tool-design.md`): the reviews of
+  the `run_command` tool's implementation tasks (B1 to B16, the spec's own task
+  numbers; B8, B13 and B15 are cited as task headings too) and their fix
+  rounds. Its tags `H3` and `M1` collide with the 2026-09-24 review's `H3` and
+  `M1` (and `M1` with the coverage spec's) in the table below: they belong to
+  the AI command path (`run_command.c`, `cmd_run_log.h`, the agentic loop), not
+  to the local shell or the classifier.
 
 | Tag | Origin | Meaning | Locations |
 |---|---|---|---|
@@ -96,3 +104,7 @@ Three origins, which reuse the same letters and numbers:
 | M4 | 2026-09-11 coverage spec | Verb-anywhere token scan (`seg_has_token_ci`) for RouterOS, whose verb comes last | `src/core/cmd_classify.c:seg_has_token_ci`, `src/core/cmd_classify.c:classify_mikrotik_segment` |
 | M5 | 2026-09-24 review | A failed config save is reported, not swallowed: `config_save` checks `ferror` before `fclose` and uses write-through for the rename, and every save site shows an error | `src/config/loader.c:config_save`, `src/ui/session_manager.c:SessMgrDlgProc`, `src/ui/settings.c:SettingsWndProc`, `src/ui/window.c:WndProc` |
 | M6 | 2026-09-24 review | `term_extract_last_n_dup` is sized to the content, so a wide prompt row keeps its closing `$`, `#` or `>` (the contradiction check had read four rows into 256 bytes) | `tests/test_term_extract.c:test_extract_last_n_dup_wide_row_keeps_prompt` |
+| H3 | 2026-11-11 run_command review (fix round 3) | The rows a reply's card does not show (a call on no card line, such as an over-cap or refused call, and quoted `[EXEC]` commands) are one core text, drawn live under the card and rebuilt identically from the batch or its log record; a reply answered without a card keeps its row for the rebuild | `src/core/run_command.c` (section "Rows for what a reply's card does not show", `row_cut`), `src/core/run_command.h:runcmd_unqueued_row`, `src/core/run_command.h:runcmd_quoted_row`, `src/core/cmd_run_log.h` (the record's rows), `tests/test_cmd_run_log.c:test_cmd_run_log_status_stores_no_card` (section heading), `tests/test_chat_rebuild.c:test_rebuild_replay_no_card_reply_shows_the_live_rows` (section heading), `tests/test_run_command.c` (section heading "H3: the rows of a call that is on no card line") |
+| M1 | 2026-11-11 run_command review | The finish's room: the assistant tool turn is already stored, so only the results and the reply are still to come when the conversation limit is checked | `tests/test_agentic_loop.c:test_agentic_room_for_finish` |
+| I6, M9 | 2026-11-11 run_command review (review of B1-B11) | The conversation snapshot stays on its question while only notes follow (spec decisions 19 and 22) | `tests/test_ai_body_frame.c:frozen_after_round` (section heading) |
+| B16 | 2026-11-11 run_command review | Task B16, the finish function's decisions: a command the dispatcher never wrote is answered as not run, and only a finish that leaves the session in place and starts no request of its own may start the next approved batch (fix round 2) | `tests/test_run_command.c:test_runcmd_results_unsent_command`, `tests/test_run_command.c:test_runcmd_cause_starts_next_table` |

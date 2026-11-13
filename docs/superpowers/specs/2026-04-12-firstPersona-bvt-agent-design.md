@@ -1,7 +1,7 @@
 # firstPersona — Automated BVT Agent for Nutshell
 
 **Location:** `nutshell/firstPersona/`  
-**Status:** Specification v0.1  
+**Status:** Not built in this repository  
 **Author:** Thomas (CSAO / WSU)  
 **Purpose:** First-person automated testing agent for Nutshell UI and behaviour validation
 

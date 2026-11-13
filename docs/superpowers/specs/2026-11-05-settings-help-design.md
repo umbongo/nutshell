@@ -1,8 +1,6 @@
 # Settings help on hover: design
 
-Date: 2026-11-05, revised 2026-11-10. Status: draft for the maintainer's
-review, revised after critique rounds 1 and 2 (dispositions at the end) and
-the 2026-11-10 addenda and the lazy-scrollback critique round. Source of
+Date: 2026-11-05, revised 2026-11-10. Status: Implemented (PR #93). Source of
 truth: `main` at `d73eeec` (v1.2.74), which merged PR #91
 (`feat/trust-boundary-tool-gate`; its `settings.c`, `settings_layout.c`
 and `src/term` are byte for byte those read at `297a9bc` and `f36d4f7`

@@ -1,7 +1,7 @@
 # SSH Keepalives, User-Idle Timeout, and Settings Tooltips — Design
 
 **Date:** 2026-04-27
-**Status:** Spec — pending implementation plan
+**Status:** Implemented
 
 ## Problem
 
@@ -309,7 +309,7 @@ gets manual verification.
 | 15 | leaves `0` unchanged (disable is valid) | pass |
 | 16 | `config_default_settings` sets it to `0` | pass |
 
-### Loader tests — `tests/test_loader.c` (extend)
+### Loader tests — `tests/test_loader.c` (not built; covered by tests/test_config.c)
 
 | # | Case | Expectation |
 |---|---|---|

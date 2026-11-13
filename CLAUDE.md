@@ -11,7 +11,7 @@
 
 The patch number never goes past 99: after `1.0.99` comes `1.1.0` (`1,1,0,0`), not `1.0.100`.
 
-CI enforces this: the `Version bump` check (`.github/scripts/check-version.sh`) fails any pull request that touches `src/`, the `Makefile` or `nutshell.rc` without raising `APP_VERSION`, or that leaves the three version strings disagreeing.
+CI enforces this: the `Version bump` check (`.github/scripts/check-version.sh`) fails any pull request that touches `src/`, the `Makefile` or `nutshell.rc` without raising `APP_VERSION`, or that leaves the four version records disagreeing (`APP_VERSION`, `APP_VERSION_BINARY`, README's `**Version**:` line and the committed exe's FileVersion).
 
 ## Memory and skills
 
@@ -26,7 +26,9 @@ ritual, `critique` for a sub-agent second opinion on a decision). All are
 tracked in git. Every change to memory or a
 skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
 file is the record of change. Retrospectives go in `docs/retrospectives/`,
-headed DRAFT until reviewed. **Whenever a branch has been merged and deleted,
+headed `**Status**: DRAFT until its pull request is merged; the merge is the
+review.` Merging the retrospective's pull request is that review, so nothing
+edits the file at merge (my rule of 2026-11-12). **Whenever a branch has been merged and deleted,
 or its pull request closed unmerged, ask me whether to run a retrospective**
 (the `checkpoint` skill) and run it only on a yes. There is no merge counter
 and no scheduled Routine (my rule of 2026-11-04, replacing "every 10
@@ -46,7 +48,7 @@ one starts.
 
 The Makefile's default path: `x86_64-w64-mingw32-gcc` with the vcpkg libs at `~/vcpkg/`. Only on `automaton` (`hostname`): a cloud Linux session has no MinGW, and its `make clean` would delete the tracked `build/win/nutshell.exe`, so it runs `make test` only. On any host, a `make release` that fails after `make clean` leaves the exe deleted: `git restore build/win/nutshell.exe` before committing anything.
 
-- Commands: `make clean && make release`, `make test` (native gcc; it uses the libssh2 stub when no real libssh2 is installed), and `xvfb-run -a make wintest` to run the GDI+ harness under Wine. If Wine reports that no driver could be loaded, a stale wineserver is the usual cause: `wineserver -k` clears it, but it kills every Wine process in the prefix, so first check `pgrep -a wine` shows no run another session started.
+- Commands: `make clean && make release`, `make test` (native gcc; it uses the libssh2 stub when no real libssh2 is installed), and `xvfb-run -a make wintest` to run the Win32-only harness under Wine (`WIN_ONLY_TESTS` and `WIN_TEST_SRCS` in the Makefile: icons, ConPTY, Win32 drawing, telnet socket I/O and more). If Wine reports that no driver could be loaded, a stale wineserver is the usual cause: `wineserver -k` clears it, but it kills every Wine process in the prefix, so first check `pgrep -a wine` shows no run another session started.
 
 ### Building on Windows (MSYS2 MINGW64)
 
@@ -55,7 +57,7 @@ The Makefile detects a Windows host (`OS=Windows_NT`) and switches to the pacman
 - One-time setup: `pacman -S mingw-w64-x86_64-make mingw-w64-x86_64-libssh2 mingw-w64-x86_64-openssl mingw-w64-x86_64-zlib mingw-w64-x86_64-upx mingw-w64-x86_64-gdb`
 - PATH must have `C:\msys64\mingw64\bin` before `C:\msys64\usr\bin`.
 - **Use `mingw32-make`, never the MSYS `make`** — MSYS make rewrites the temp-dir env for child processes and gcc then fails with "Cannot create temporary file in C:\WINDOWS".
-- Commands: `mingw32-make clean && mingw32-make release`, `mingw32-make test`, `mingw32-make wintest` (the GDI+ icon harness, runs directly on Windows).
+- Commands: `mingw32-make clean && mingw32-make release`, `mingw32-make test`, `mingw32-make wintest` (the Win32-only harness, runs directly on Windows).
 - Debug a crashing test runner with `gdb -batch -ex run -ex bt ./build/test_runner.exe`.
 
 ## Test-Driven Development
@@ -98,7 +100,7 @@ Write tests before implementation code. Include corner cases, positive and negat
 
 ## Config Header
 
-There is a single `config.h` at `src/config/config.h`, used by both the Windows cross-compile and native test builds. When modifying the `Settings` struct or `Profile` struct, this is the only file that needs updating.
+There is a single `config.h` at `src/config/config.h`, used by both the Windows cross-compile and native test builds. The `Settings` struct lives there; the `Profile` struct lives in `src/config/profile.h`. A new field in either also needs its load and save code in `src/config/loader.c`.
 
 ## Cross-Compile Pitfalls
 
@@ -113,8 +115,10 @@ There is a single `config.h` at `src/config/config.h`, used by both the Windows 
 All of `src/ui`'s colours, sizes, fonts, animation and hover state come from
 the six Design-System Foundation modules (see
 `docs/superpowers/specs/2026-09-07-design-system-foundation-design.md`).
-Two native tests in `tests/test_ui_tokens.c` enforce this as an
-exact-allow-list gate, not a ratchet — any violation fails `make test`:
+Two native tests in `tests/test_ui_tokens.c` (`test_ui_tokens_colour_gate`,
+`test_ui_tokens_scale_gate`) enforce the first two rules below as an
+exact-allow-list gate, not a ratchet — any violation fails `make test`. The
+other rules are convention, checked only in review:
 
 - **Never `RGB(` in `src/ui`, outside `ns_draw.c`** (which is excluded
   entirely) **or the 2 allowed literals in `renderer.c`** (the terminal's
@@ -140,7 +144,10 @@ exact-allow-list gate, not a ratchet — any violation fails `make test`:
 - **Never `CreateFont` in `src/ui`.** Use `ns_font(role, dpi)`
   (`src/ui/ns_font.h`), a cache keyed on `(role, dpi, face)`; call
   `ns_font_flush()` after `WM_DPICHANGED` or a font-setting change, not a
-  fresh `CreateFont`.
+  fresh `CreateFont`. Known exceptions today: the terminal fonts in
+  `src/ui/renderer.c`, the AI chat's zoomable fonts (`CreateFont` in
+  `src/ui/ai_chat.c` and `src/ui/ai_chat_view.c`, which follow Ctrl+/Ctrl-
+  rather than a role) and `CreateFontIndirect` in `src/ui/md_render.c`.
 - **Sizes and type from `ns_type.h`**: the `SP_*`/`SZ_*` spacing-and-size
   grid, `R_CTRL`/`R_CARD`/`ns_type_pill()` for radii, `STROKE_*` for line
   widths, and the `NsFontRole` ramp (`FONT_CAPTION`/`FONT_BODY`/
@@ -220,7 +227,7 @@ verifies three things:
   change whenever build inputs changed, and the version resource embedded in
   the committed exe equals `APP_VERSION`. A stale or forgotten binary fails.
 
-Both run on every push, so the flow is simply:
+Both run on every push to a pull request, so the flow is simply:
 
 ```
 git switch -c my-change && git push -u origin my-change
@@ -237,6 +244,12 @@ required, so run `gh pr checks N --watch` until every check is green before
 merging (on 2026-09-23 PR #44 was merged with `analyze` red and `main` did not
 build; `Native tests` now catches that, CodeQL findings it does not). Never
 push to `main` directly; never merge a red check.
+
+**Marking a pull request ready and merging it need my go-ahead in the
+session.** Any explicit instruction to merge counts ("Merge it", "proceed and
+merge"); it needs a pull request number only when more than one pull request
+could be meant (my rule of 2026-11-12). Without one, stop at the green checks
+and say the pull request is ready for me to merge.
 
 `Sanitizers`, `Lint` and `Fuzz` (`.github/workflows/quality.yml`) are
 deterministic, expected green before a merge and not in the ruleset; the
@@ -265,7 +278,7 @@ restart, register or wait on a self-hosted runner for a pull request.
 
 - Use `json_parse()` + `json_obj_get()`/`json_obj_str()` for reading. Always `json_free()` the root.
 - For building JSON output (e.g., AI request bodies), use `snprintf` with manual escaping via `json_escape_string()` (`src/core/json_validate.h`). There is no JSON builder library.
-- Config fields are fixed-size `char[256]` arrays — no heap allocation per field.
+- Config fields are fixed-size arrays, mostly `char[256]` (secret blobs use `CFG_BLOB_MAX`, `Profile.shell` is 1024, `key_path` is `MAX_PATH`) — no heap allocation per field.
 
 ## Secrets
 
@@ -305,5 +318,5 @@ restart, register or wait on a self-hosted runner for a pull request.
 - Name the models with their version, for quality control and performance
   analysis: add a `Models:` line before the trailer listing the full model id
   of every model that touched the change and what it did, e.g.
-  `Models: claude-opus-5 (orchestration, review); claude-sonnet-5 (cases 50-70);
-  claude-fable-5-1 (PR review)`. Pull request bodies carry the same line.
+  `Models: claude-opus-5-5 (orchestration, review); claude-sonnet-5-5 (cases 50-70);
+  claude-fable-5-2 (PR review)`. Pull request bodies carry the same line.

@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-12 (retrospective of PRs #82-#94: baselines, snapshot `v1.2.60`, the comctl32 manifest, the `pgrep -f` trap, open items).
+Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, open items, the merge go-ahead rule; the retrospective of PRs #82-#94 came earlier the same day).
 
 ## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
@@ -82,13 +82,13 @@ Last updated: 2026-11-12 (retrospective of PRs #82-#94: baselines, snapshot `v1.
   and `mingw32-make wintest`, and can build too. Command blocks written for
   the maintainer there prefix a local file with `.\` and carry no `#`
   comment lines (maintainer, *reported* 2026-11).
-- Native suite baseline: 4,118 tests, 0 failed, in the hosted `Native
-  tests` run on PR #94's head (real libssh2, 2026-11-12); PR #94's body
-  reports 4,077 on `automaton` with the libssh2 stub. Earlier hosted counts:
-  3,736 (#93), 3,314 (#81). Earlier stub counts: 3,279 (2026-11-03), 3,035
+- Native suite baseline: 4,132 tests, 0 failed, in the hosted `Native
+  tests` run on PR #96's head (real libssh2, 2026-11-12); 4,091 on
+  `automaton` with the libssh2 stub. Earlier hosted counts: 4,118 (#94),
+  3,736 (#93), 3,314 (#81). Earlier stub counts: 4,077 (#94), 3,279 (2026-11-03), 3,035
   (2026-10-19), 2,485 (2026-10-13), 1,960 (2026-09-21). The two counts
   differ by the libssh2-gated files, so compare like with like. `wintest`:
-  52 tests in PR #94's body (45 on 2026-11-03).
+  56 tests after PR #96 (52 in PR #94's body, 45 on 2026-11-03).
 - After any change to `NutshellIT.psm1`'s `Add-Type` sources, run the
   harness from a fresh PowerShell window; the module stops at load and says
   so (`tests/integration/README.md`).
@@ -114,11 +114,11 @@ Last updated: 2026-11-12 (retrospective of PRs #82-#94: baselines, snapshot `v1.
   committed as `docs: checkpoint YYYY-MM-DD — ...`. Retrospectives go in
   `docs/retrospectives/`.
 - `build/win/nutshell.exe` (about 5.6 MB, UPX-packed, version resource left
-  uncompressed) is committed on every build; 197 commits on `main` touch it
+  uncompressed) is committed on every build; 198 commits on `main` touch it
   (2026-11-12). Git LFS
   is an open question, untracking it is not (the gate reads its version).
-- 94 files are CRLF in the index (2026-11-12); `.gitattributes` holds only
-  `tests/fixtures/*.bin binary`. Eight of the 94 are fuzz seeds under
+- 93 files are CRLF in the index (2026-11-12); `.gitattributes` holds only
+  `tests/fixtures/*.bin binary`. Eight of the 93 are fuzz seeds under
   `tests/fuzz/corpus/` whose CR bytes are test input: mark that tree binary
   before any renormalise, or it rewrites them. The notes ask for eol rules
   and a lone renormalising pull request.
@@ -188,8 +188,10 @@ Last updated: 2026-11-12 (retrospective of PRs #82-#94: baselines, snapshot `v1.
 - In Claude Code's auto permission mode the classifier refused
   `gh pr ready N` as a merge without review (reported 2026-10-19); on
   2026-11-12 it accepted it after the maintainer's explicit go-ahead in the
-  session (*reported*). Without that go-ahead, the maintainer runs `ready`
-  and `merge`.
+  session (*reported*). Later on 2026-11-12 it refused `gh pr ready` after
+  "proceed and merge", given before PR #96 existed, and accepted it after
+  "Merge it" with PR #96 in play. Without a go-ahead (CLAUDE.md, "Branches,
+  pull requests and the merge gate"), the maintainer runs `ready` and `merge`.
 - A CodeQL finding on a pull request: read the SARIF before changing code
   (`gh api -H "Accept: application/sarif+json"
   repos/umbongo/nutshell/code-scanning/analyses/<id>`; ids from
@@ -210,17 +212,20 @@ Last updated: 2026-11-12 (retrospective of PRs #82-#94: baselines, snapshot `v1.
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-12 (`main` at v1.2.82, PR #94; no open pull request, no open
-CodeQL alert): a backlog of Windows hand checks from PRs #85-#94, most of
-them never run (five of those merges were unattended); the Thinking row's
-three modes (spec first); `ssh_channel_write` can block the UI thread for
+As of 2026-11-13 (`main` at v1.2.84: PR #96 shipped the Thinking row's
+three modes, PR #98 made the native test build `-Werror`, PR #99 corrected
+the documentation; open pull requests: `gh pr list`, on 2026-11-13 #97,
+Dependabot's actions bump; no open CodeQL alert): a backlog of Windows hand checks from PRs #85-#96, most of
+them never run (five of those merges were unattended); tool-gate follow-ups
+(PR #91); Settings follow-ups (PR #93); a `vcpkg.json` manifest with a
+baseline (deferred by PR #87); `ssh_channel_write` can block the UI thread for
 up to 5 s per write; `run_command` live rounds on five of six providers;
 terminal escapes CSI I, HTS, TBC and scroll-region gaps; harness cases never
 run (telnet, `settings_help_tool_count`, `ui_gallery`); no release since
 v1.1.21; web_fetch watchdog and TLS fail-closed; light-theme ANSI palette;
 top-anchored ConPTY reflow; sub-project 3 needs a spec first. `src/ui/window.c`
-is 6,313 lines, `chat_listview.c` 4,760, `ai_chat.c` 3,150 (the seven
-`ai_chat*.c` files 7,404 since the PR #86 split).
+is 6,330 lines, `chat_listview.c` 4,856, `ai_chat.c` 3,133 (the seven
+`ai_chat*.c` files 7,387 since the PR #86 split).
 
 ## Local shell and keys, facts that outlive the session
 

@@ -2,8 +2,8 @@
 """Manual keyboard-interactive SSH test server for Nutshell.
 
 A hand-check tool, NOT part of `make test` and never run in CI.  It needs
-paramiko (python3 -m pip install --user paramiko) and nothing else outside
-the standard library.
+paramiko (sudo apt install python3-paramiko, or pip install paramiko in a
+virtual environment) and nothing else outside the standard library.
 
     python3 tests/manual/kbdint_server.py --scenario password
     python3 tests/manual/kbdint_server.py --self-test
@@ -47,7 +47,7 @@ OTP = "123456"
 DUO_DELAY_SECONDS = 5.0
 DUO_INSTRUCTION_BYTES = 300
 
-PARAMIKO_MISSING = "paramiko is not installed; pip install --user paramiko"
+PARAMIKO_MISSING = "paramiko is not installed; sudo apt install python3-paramiko (or pip install paramiko in a venv)"
 
 _DUO_TEXT = (
     "Duo two-factor login for alice\n"

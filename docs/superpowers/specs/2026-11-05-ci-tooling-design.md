@@ -1,7 +1,6 @@
 # PR 2: CI and tooling — design
 
-Date: 2026-11-05. Status: draft for the maintainer's review, revised after
-critique rounds 1 and 2. Decisions taken by the orchestrating session from the CI
+Date: 2026-11-05. Status: Implemented (PR #87). Decisions taken by the orchestrating session from the CI
 and tooling survey of 2026-11-04 (`main` at 1f85a3a, v1.2.52), each checked
 against the code. One pull request, one version bump, one Windows build at
 the end. Branch `chore/ci-tooling`.

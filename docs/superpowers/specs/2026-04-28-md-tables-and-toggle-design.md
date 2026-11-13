@@ -7,7 +7,7 @@ approach proposed here) — see the "Landed since v1.0.96" list in
 > Behaviour > "Render AI markdown") shipped earlier and independently of this
 spec. Kept for history below.
 
-**Status:** Draft, 2026-04-28
+**Status:** Superseded, 2026-04-28
 
 ## Background
 

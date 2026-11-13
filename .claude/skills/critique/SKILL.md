@@ -78,8 +78,9 @@ a `.claude/` artefact (CLAUDE.md names that file the record of change);
 the commit body for anything else. A finding is never dropped silently.
 "Not verified" items that matter get verified by the main session or by an Explore
 agent before the decision is committed. If the critic returns findings
-without a ranking, the main session ranks them from their failure scenarios; there
-is no channel to ask the critic again.
+without a ranking, the main session ranks them from their failure scenarios; it
+does not ask the same critic again (SendMessage could, but a critic that has
+seen the author's reply anchors on it).
 
 If the findings change the decision materially, run one more round with
 a fresh critic on the revised artefact. Two rounds is the ceiling. A
