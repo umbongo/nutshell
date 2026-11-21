@@ -421,7 +421,7 @@ Done, in order (details in the commit messages and the specs named):
   it is an empty translation unit, so nothing noticed; Windows-host `make test` had not
   linked since PR #93. Added to `WIN_ONLY_TESTS`. Run on Windows on the branch
   (2026-11-13, MSYS2 gcc 15.2, real libssh2): `mingw32-make test`, 4,131 tests, 0 failed.
-- v1.2.87 (PR #NNN) two queued `src/` fixes. The Search Engine help tip no longer says
+- v1.2.87 (PR #103) two queued `src/` fixes. The Search Engine help tip no longer says
   Gemini and custom providers get no tools: they get them with Commands as tool calls On,
   and `test_settings_help` asserts it. `src/core/chat_thinking.[ch]` and
   `tests/test_chat_thinking.c` are deleted (the only reference left in `src/` was an unused
