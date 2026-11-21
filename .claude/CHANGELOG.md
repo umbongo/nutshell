@@ -4,6 +4,15 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-21 — PR #103, the two queued `src/` fixes
+
+Session: https://claude.ai/code/session_01AHuBtDmPP3biyCwmkAPJcc, on `automaton`.
+Models: claude-opus-5-5 (main session, merge resolution).
+
+- **`memory/MEMORY.md`.** Open items: `main` at v1.2.87; the two small `src/` fixes
+  (Search Engine help text, dead `chat_thinking.[ch]`) are done in PR #103 and leave the
+  list. Merging `main` after PR #102 resolved the notes' Done/Open conflict the same way.
+
 ## 2026-11-21 — retrospective of PRs #95-#101 and #97
 
 Session: https://claude.ai/code/session_01AHuBtDmPP3biyCwmkAPJcc, on `automaton`.

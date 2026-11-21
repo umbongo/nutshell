@@ -252,15 +252,15 @@ Last updated: 2026-11-21 (retrospective of PRs #95-#101: the merge count in the 
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-21 (`main` at v1.2.86: PR #101 added the Thinking row's
-fourth mode, Extended; PR #100 fixed the Windows-host `make test`; PR #97
+As of 2026-11-21 (`main` at v1.2.87: PR #103 took the two queued `src/`
+fixes, the Search Engine help text and the dead `chat_thinking.[ch]`;
+PR #101 added the Thinking row's fourth mode, Extended; PR #100 fixed the Windows-host `make test`; PR #97
 moved `github/codeql-action` to v4.39.3; open pull requests: `gh pr list`,
 none on 2026-11-21; no open CodeQL alert: #30 was dismissed as a false
 positive on 2026-11-21): a backlog of Windows hand checks from PRs #85-#101, most of
 them never run (five of those merges were unattended; #96's were reported
 fine, not itemised); tool-gate follow-ups (PR #91); Settings follow-ups
-(PR #93); two small `src/` fixes waiting for a code PR (the Search Engine
-help text, the dead `chat_thinking.[ch]`); web_search does not URL-encode
+(PR #93); web_search does not URL-encode
 its query; a `vcpkg.json` manifest with a baseline (deferred by PR #87);
 `ssh_channel_write` can block the UI thread for up to 5 s per write;
 `run_command` live rounds on five of six providers; terminal escapes CSI I,

@@ -435,6 +435,11 @@ Done, in order (details in the commit messages and the specs named):
   appeared because `codeql/cpp-queries` 1.10.1 (CLI 2.27.5) began tracking flow through
   character types (`fprint_json_str`'s `unsigned char c`); main's last clean run used 1.10.0.
   PR #101's run carried the `pr-diff-range` extension and so reported only its changed lines.
+- v1.2.87 (PR #103) two queued `src/` fixes. The Search Engine help tip no longer says
+  Gemini and custom providers get no tools: they get them with Commands as tool calls On,
+  and `test_settings_help` asserts it. `src/core/chat_thinking.[ch]` and
+  `tests/test_chat_thinking.c` are deleted (the only reference left in `src/` was an unused
+  `#include` in `ai_chat_internal.h`, dropped too).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -491,14 +496,6 @@ Open, in priority order:
       neither, though the in-app guide lists both styles; the OSC 0/2 window title is parsed
       into `term->title` and nothing reads it, so it is never shown (a tab title or the
       window caption could).
-- [ ] Dead code: `src/core/chat_thinking.[ch]` (the old Thinking-box timer state) is used
-      only by `tests/test_chat_thinking.c`; no file in `src/` includes it. Delete both with
-      the test, or use it.
-- [ ] Settings help text contradicts itself: the Search Engine tip in
-      `src/core/settings_help.c` says "Gemini and custom providers get no tools", while the
-      Provider and Commands as tool calls tips say they get them with Commands as tool calls
-      On. A `src/` change, so it waits for the next code PR (PRs #100 and #101 were code PRs
-      and did not take it; nor the dead-code item above).
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
