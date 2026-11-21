@@ -426,6 +426,15 @@ Done, in order (details in the commit messages and the specs named):
   it is an empty translation unit, so nothing noticed; Windows-host `make test` had not
   linked since PR #93. Added to `WIN_ONLY_TESTS`. Run on Windows on the branch
   (2026-11-13, MSYS2 gcc 15.2, real libssh2): `mingw32-make test`, 4,131 tests, 0 failed.
+- **CodeQL alert #30 dismissed as a false positive** (2026-11-21, by the maintainer's
+  decision; no code change). `cpp/cleartext-storage-file` at `src/config/loader.c:127`, opened
+  on `main` by the push run after PR #101. Its flow starts at `password_enc_preserved`, which
+  only ever holds an already-encrypted blob the config could not decrypt here (filled only by
+  `preserve_blob_or_drop()`, written back verbatim by `secret_prepare()`); plaintext secrets
+  always go through `crypto_encrypt_dpapi()` and `config_save()` aborts if that fails. It
+  appeared because `codeql/cpp-queries` 1.10.1 (CLI 2.27.5) began tracking flow through
+  character types (`fprint_json_str`'s `unsigned char c`); main's last clean run used 1.10.0.
+  PR #101's run carried the `pr-diff-range` extension and so reported only its changed lines.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -451,13 +460,6 @@ Open, in priority order:
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
       being read in place, and `--ui-demo=thinking-extended` on the four themes).
-- [ ] CodeQL alert #30 (`cpp/cleartext-storage-file`, `src/config/loader.c:127`), opened on
-      `main` by the push run after PR #101 (2026-11-21, CodeQL 2.27.5): the flow starts at
-      `password_enc_preserved` (line 975), the DPAPI blob a config keeps verbatim when it
-      cannot decrypt it, so it writes ciphertext by design and looks like a false positive.
-      The flow's lines date from 2026-03 and 2026-09-24; PR #101's own analysis, with the
-      same bundle, reported nothing, and main's previous push run (2.27.4) did not flag it. Dismiss it with that reason, or change the
-      code if the reading is wrong (2026-11-21 retrospective).
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes

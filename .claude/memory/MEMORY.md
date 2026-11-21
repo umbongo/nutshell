@@ -233,8 +233,12 @@ Last updated: 2026-11-21 (retrospective of PRs #95-#101: the merge count in the 
   PR's own analysis, with the same CodeQL 2.27.5, had `results_count` 0
   (code-scanning analyses API); its flow runs through `loader.c` lines last
   changed in 2026-03 and 2026-09, and main's previous push run (2.27.4) did
-  not flag it. So a new alert on old code shows only on `main`; the
-  `feature-workflow` standing rule reads it after every merge.
+  not flag it. The PR's SARIF carries the `codeql-action/pr-diff-range`
+  extension (diff-informed analysis); #30 came from `codeql/cpp-queries`
+  1.10.1 tracking flow through character types, and was dismissed as a false
+  positive (it writes the preserved DPAPI blob). So a new alert on old code
+  shows only on `main`; the `feature-workflow` standing rule reads it after
+  every merge.
 - Moving a file closes its alerts as "fixed" and opens new numbers for the
   same lines (#12 became #27 when `markdown.h` moved to `src/core`). Check
   an alert's history before calling it new.
@@ -251,8 +255,8 @@ See the "Open" list in the notes document for the authoritative version.
 As of 2026-11-21 (`main` at v1.2.86: PR #101 added the Thinking row's
 fourth mode, Extended; PR #100 fixed the Windows-host `make test`; PR #97
 moved `github/codeql-action` to v4.39.3; open pull requests: `gh pr list`,
-none on 2026-11-21; one open CodeQL alert, #30, a likely false positive to
-triage): a backlog of Windows hand checks from PRs #85-#101, most of
+none on 2026-11-21; no open CodeQL alert: #30 was dismissed as a false
+positive on 2026-11-21): a backlog of Windows hand checks from PRs #85-#101, most of
 them never run (five of those merges were unattended; #96's were reported
 fine, not itemised); tool-gate follow-ups (PR #91); Settings follow-ups
 (PR #93); two small `src/` fixes waiting for a code PR (the Search Engine

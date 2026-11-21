@@ -18,6 +18,10 @@ Retrospective: `docs/retrospectives/2026-11-21-seven-merges-retrospective.md`.
   count never triggers a retrospective; the no-counter rule of 2026-11-04 stands.
   CLAUDE.md's matching sentence was proposed in the PR body and then added on the
   maintainer's yes in the session ("Yes, include the number of merges").
+- **CodeQL alert #30 dismissed** as a false positive by the maintainer after an Opus
+  investigation (cpp-queries 1.10.1 began tracking flow through character types; the flow
+  writes the preserved DPAPI blob). `memory/MEMORY.md`'s open items and CodeQL fact, the
+  notes (Open → Done) and the retrospective's recommendations record it.
 - **`skills/feature-workflow`.** A standing rule reads the CodeQL alerts created after
   any merge to `main`, Dependabot's included, once the push run ends, because a pull
   request's run reports only its changed lines (alert #30 appeared on `main` after PR

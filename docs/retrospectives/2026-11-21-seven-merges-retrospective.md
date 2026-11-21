@@ -158,7 +158,9 @@ changes what the gate enforces. `release.yml` has still not run since v1.1.21.
 ## 5. Recommendations, apart from the changes made
 
 1. One Windows session through the first Open item, then tag a release (F1).
-2. Dismiss CodeQL #30 as a false positive with its reason, or fix it (F3).
+2. Dismiss CodeQL #30 as a false positive with its reason, or fix it (F3). Done in the
+   session: an Opus investigation confirmed a false positive (cpp-queries 1.10.1 began
+   tracking flow through character types) and the maintainer dismissed it on 2026-11-21.
 3. A native test that `WIN_ONLY_TESTS` covers every `tests/*_win.c` in `WIN_TEST_SRCS`;
    a hosted Windows `make test` job only if the maintainer wants a new gate (F2).
 4. A wintest helper for "the first visible item holds" on any row-height change (F4).
@@ -167,7 +169,7 @@ changes what the gate enforces. `release.yml` has still not run since v1.1.21.
    one (F5).
 7. Ask about an open Dependabot PR together with the retrospective (F8).
 8. CLAUDE.md's retrospective sentence gains the maintainer's rule of 2026-11-21 (the ask
-   states the merge count). This PR does not edit CLAUDE.md; the wording is in its body.
+   states the merge count). Done on this PR after the maintainer's yes.
 
 ## 6. Not measured
 
@@ -175,5 +177,6 @@ changes what the gate enforces. `release.yml` has still not run since v1.1.21.
 - What the maintainer deleted to free the disk, and the sizes before the cleanup (all
   *reported*).
 - Whether #96's Windows run covered every item in its list.
-- Why PR #101's CodeQL run did not report #30: the diff-filtering explanation is an
-  inference from `codeql.yml`'s comment and the two analyses, not confirmed with GitHub.
+- Why PR #101's CodeQL run did not report #30: its SARIF carries the `pr-diff-range`
+  extension (diff-informed analysis, measured after this was written); the exact filtering
+  rule is GitHub's documented behaviour, not tested here.
