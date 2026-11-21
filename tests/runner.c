@@ -3665,6 +3665,7 @@ int test_thinking_body_cap(void);
 int test_thinking_compact_offset(void);
 int test_thinking_trimmed_len(void);
 int test_thinking_label_colour(void);
+int test_thinking_follows_tail(void);
 int test_thinking_theme_tokens_distinct(void);
 
 /* test_settings_help.c */
@@ -7973,6 +7974,7 @@ int main(void) {
     failed += test_thinking_compact_offset();
     failed += test_thinking_trimmed_len();
     failed += test_thinking_label_colour();
+    failed += test_thinking_follows_tail();
     failed += test_thinking_theme_tokens_distinct();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();

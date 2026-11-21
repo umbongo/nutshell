@@ -1920,7 +1920,7 @@ next_coalesce:;
             d->stream_phase = 0;
             /* A failed reply stays in the list with whatever reasoning
              * arrived; it counts as finished, or its Thinking row would
-             * stay "streaming" (compact under Automatic) for good. */
+             * stay "streaming" (extended under Automatic) for good. */
             if (d->stream_ai_item) {
                 d->stream_ai_item->u.ai.thinking_complete = 1;
                 d->stream_ai_item->dirty = 1;
@@ -2993,7 +2993,8 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     ai_chat_force_state(hwnd, forced);
 
     /* The Thinking row's mode in the gallery: "thinking" collapsed,
-     * "thinking-compact" compact, "thinking-open" open, and "chat" / "all"
+     * "thinking-compact" compact, "thinking-extended" extended,
+     * "thinking-open" open, and "chat" / "all"
      * open (the chat selection crosses the Thinking body, spec 2026-10-18
      * section 6). In memory only: the panel's pref is set here, never the
      * config's, so a demo run saves nothing. Every other state keeps the

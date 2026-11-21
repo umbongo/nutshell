@@ -41,7 +41,7 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 21);
+    ASSERT_EQ(count, 22);
     ASSERT_STR_EQ(states[count - 1], "all");
     ASSERT_STR_EQ(states[count - 2], "shortcuts");
     ASSERT_STR_EQ(states[count - 3], "policy-compact");
@@ -49,11 +49,12 @@ int test_ui_demo_states_list_ends_in_all(void)
     ASSERT_STR_EQ(states[count - 5], "settings-debug");
     ASSERT_STR_EQ(states[count - 6], "cmddetail");
     ASSERT_STR_EQ(states[count - 7], "thinking-open");
-    ASSERT_STR_EQ(states[count - 8], "thinking-compact");
-    ASSERT_STR_EQ(states[count - 9], "thinking");
-    ASSERT_STR_EQ(states[count - 10], "local");
-    ASSERT_STR_EQ(states[count - 11], "ansi");
-    ASSERT_STR_EQ(states[count - 12], "runlist");   /* not part of "all" */
+    ASSERT_STR_EQ(states[count - 8], "thinking-extended");
+    ASSERT_STR_EQ(states[count - 9], "thinking-compact");
+    ASSERT_STR_EQ(states[count - 10], "thinking");
+    ASSERT_STR_EQ(states[count - 11], "local");
+    ASSERT_STR_EQ(states[count - 12], "ansi");
+    ASSERT_STR_EQ(states[count - 13], "runlist");   /* not part of "all" */
     TEST_END();
 }
 
@@ -470,6 +471,7 @@ int test_ui_demo_scrolls_to_top_chat_all_and_thinking(void)
     ASSERT_TRUE(ui_demo_scrolls_to_top("all"));
     ASSERT_TRUE(ui_demo_scrolls_to_top("thinking"));
     ASSERT_TRUE(ui_demo_scrolls_to_top("thinking-compact"));
+    ASSERT_TRUE(ui_demo_scrolls_to_top("thinking-extended"));
     ASSERT_TRUE(ui_demo_scrolls_to_top("thinking-open"));
     TEST_END();
 }
@@ -496,8 +498,9 @@ int test_ui_demo_scrolls_to_top_false_for_other_states(void)
 int test_ui_demo_thinking_mode_states_match_chat_conversation(void)
 {
     TEST_BEGIN();
-    static const char *const names[2] = { "thinking-compact", "thinking-open" };
-    for (int n = 0; n < 2; n++) {
+    static const char *const names[3] = { "thinking-compact", "thinking-extended",
+                                         "thinking-open" };
+    for (int n = 0; n < 3; n++) {
         AiConversation chat_conv, conv;
         ApprovalQueue approval, approval2;
         ASSERT_TRUE(ui_demo_state_valid(names[n]));
@@ -524,6 +527,7 @@ int test_ui_demo_thinking_pref_per_state(void)
     TEST_BEGIN();
     ASSERT_EQ(ui_demo_thinking_pref("thinking"), THINK_PREF_COLLAPSED);
     ASSERT_EQ(ui_demo_thinking_pref("thinking-compact"), THINK_PREF_COMPACT);
+    ASSERT_EQ(ui_demo_thinking_pref("thinking-extended"), THINK_PREF_EXTENDED);
     ASSERT_EQ(ui_demo_thinking_pref("thinking-open"), THINK_PREF_OPEN);
     ASSERT_EQ(ui_demo_thinking_pref("chat"), THINK_PREF_OPEN);
     ASSERT_EQ(ui_demo_thinking_pref("all"), THINK_PREF_OPEN);

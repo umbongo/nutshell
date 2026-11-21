@@ -844,11 +844,14 @@ int test_config_load_thinking_mode(void)
                             "\"ai_thinking_mode\": \"compact\"",
                             "\"ai_thinking_mode\": \"open\"",
                             "\"ai_thinking_mode\": \"bogus\"", "\"ai_thinking_mode\": \"\"",
-                            "\"ai_thinking_mode\": \"OPEN\"", "\"ai_thinking_mode\": 2" };
+                            "\"ai_thinking_mode\": \"OPEN\"", "\"ai_thinking_mode\": 2",
+                            "\"ai_thinking_mode\": \"extended\"",
+                            "\"ai_thinking_mode\": \"Extended\"" };
     const int want[] = { THINK_PREF_AUTO, THINK_PREF_AUTO, THINK_PREF_COLLAPSED,
                          THINK_PREF_COMPACT, THINK_PREF_OPEN, THINK_PREF_AUTO,
-                         THINK_PREF_AUTO, THINK_PREF_AUTO, THINK_PREF_AUTO };
-    for (int i = 0; i < 9; i++) {
+                         THINK_PREF_AUTO, THINK_PREF_AUTO, THINK_PREF_AUTO, THINK_PREF_EXTENDED,
+                         THINK_PREF_AUTO };
+    for (int i = 0; i < 11; i++) {
         FILE *f = test_fopen_private(TMP_CFG);
         ASSERT_NOT_NULL(f);
         fprintf(f, "{\n  \"settings\": {\n    \"font_size\": 10%s%s\n  }\n}\n",
@@ -869,12 +872,13 @@ int test_config_roundtrip_thinking_mode(void)
 {
     TEST_BEGIN();
     const int vals[] = { THINK_PREF_AUTO, THINK_PREF_COLLAPSED, THINK_PREF_COMPACT,
-                         THINK_PREF_OPEN };
+                         THINK_PREF_OPEN, THINK_PREF_EXTENDED };
     const char *keys[] = { "\"ai_thinking_mode\": \"auto\"",
                            "\"ai_thinking_mode\": \"collapsed\"",
                            "\"ai_thinking_mode\": \"compact\"",
-                           "\"ai_thinking_mode\": \"open\"" };
-    for (int i = 0; i < 4; i++) {
+                           "\"ai_thinking_mode\": \"open\"",
+                           "\"ai_thinking_mode\": \"extended\"" };
+    for (int i = 0; i < 5; i++) {
         Config *orig = config_new_default();
         ASSERT_NOT_NULL(orig);
         orig->settings.ai_thinking_mode = vals[i];
@@ -904,12 +908,15 @@ int test_config_validate_thinking_mode(void)
     TEST_BEGIN();
     Settings s;
     config_default_settings(&s);
-    for (int v = THINK_PREF_AUTO; v <= THINK_PREF_OPEN; v++) {
+    for (int v = THINK_PREF_AUTO; v <= THINK_PREF_MAX; v++) {
         s.ai_thinking_mode = v;
         settings_validate(&s);
         ASSERT_EQ(s.ai_thinking_mode, v);
     }
     s.ai_thinking_mode = -1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_thinking_mode, THINK_PREF_AUTO);
+    s.ai_thinking_mode = THINK_PREF_MAX + 1;
     settings_validate(&s);
     ASSERT_EQ(s.ai_thinking_mode, THINK_PREF_AUTO);
     s.ai_thinking_mode = 99;

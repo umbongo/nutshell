@@ -292,10 +292,11 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Thinking display:",
       NULL,
       "Thinking display:\n\nHow a Thinking row shows the model's reasoning. "
-      "Automatic shows the last four lines while a reply streams and "
+      "Automatic shows the last 25 lines while a reply streams and "
       "collapses the row once it is idle. Always collapsed, Always compact "
-      "and Always open hold that mode for every Thinking row. "
-      "Clicking a Thinking row cycles collapsed, compact, open and saves "
+      "(the last four lines), Always extended (the last 25) and Always open "
+      "hold that mode for every Thinking row. "
+      "Clicking a Thinking row cycles collapsed, compact, extended, open and saves "
       "that choice here; choosing Automatic resets it.\n"
       "Default: Automatic.",
       "Automatic",
