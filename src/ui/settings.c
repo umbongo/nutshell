@@ -1471,6 +1471,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             static const char *const k_think_modes[] = {
                 "Automatic", "Always collapsed", "Always compact", "Always open",
                 "Always extended" };
+            _Static_assert(sizeof k_think_modes / sizeof k_think_modes[0] ==
+                               THINK_PREF_MAX + 1,
+                           "one combo label per ThinkPref value");
             for (int i = 0; i <= THINK_PREF_MAX; i++)
                 SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_think_modes[i]);
             int tsel = nd->cfg->settings.ai_thinking_mode;

@@ -29,6 +29,11 @@ records the decisions.
   "Always extended" as item 4; the index equals the pref. The help text
   (`settings_help.c`) and README say Automatic shows the last 25 lines while
   streaming. The default label stays "Automatic".
+- **Downgrade.** An older build reads `"extended"` as Automatic and writes
+  `"auto"` on its next save, so the choice is lost after a downgrade.
+- **Reader's place.** A layout that re-derives a row's mode (Automatic: the
+  reply completes, Extended to collapsed) holds the first visible item in
+  place when the view is not stuck to the bottom, as a fold does.
 - **Demo:** the existing states show collapsed, compact and open, so a new
   `--ui-demo=thinking-extended` state (the long reasoning, pref Extended) sits
   between `thinking-compact` and `thinking-open`; the gallery grows to 20

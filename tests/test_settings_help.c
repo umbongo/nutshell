@@ -282,7 +282,6 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
                        s->ai_thinking_mode == THINK_PREF_COLLAPSED ? "Always collapsed"
                        : s->ai_thinking_mode == THINK_PREF_COMPACT ? "Always compact"
                        : s->ai_thinking_mode == THINK_PREF_OPEN ? "Always open"
-                       : s->ai_thinking_mode == THINK_PREF_EXTENDED ? "Always extended"
                        : "Automatic");
         return 1;
     }

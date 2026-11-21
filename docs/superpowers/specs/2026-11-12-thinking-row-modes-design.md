@@ -1,5 +1,7 @@
 # Thinking row: three visual modes: design
 
+Amended 2026-11-21 by 2026-11-21-thinking-extended-mode-design.md (Extended mode; Automatic streams in it).
+
 Date: 2026-11-12. Status: Implemented (v1.2.83, PR #96). Source of truth:
 `main` at `f842775` (v1.2.82). Branch `feat/thinking-row-modes`.
 

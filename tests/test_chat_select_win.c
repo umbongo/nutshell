@@ -684,6 +684,60 @@ static int item_top_of(const ChatListView *lv, const ChatMsgItem *target)
     return -1;
 }
 
+/* A Thinking row above the reader changing mode in a layout (Automatic: the
+ * reply completes, extended -> collapsed) must not move what is read: the
+ * first visible row keeps its screen position.  Stuck to the bottom, the view
+ * follows the bottom as before. */
+int test_chat_select_win_thinking_mode_change_holds_reader_place(void)
+{
+    TEST_BEGIN();
+    for (int stuck = 0; stuck < 2; stuck++) {
+        ChatMsgList list;
+        chat_msg_list_init(&list);
+        ChatMsgItem *its[6];
+        for (int i = 0; i < 6; i++) {
+            its[i] = chat_msg_append(&list, CHAT_ITEM_AI_TEXT,
+                "answer\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\n"
+                "line 9\nline 10\nline 11\nline 12");
+            set_think_lines(its[i], 40, 0);
+            its[i]->u.ai.thinking_complete = i >= 2;   /* 0 and 1 stream */
+        }
+        TestView tv;
+        ASSERT_TRUE(view_open_h(&tv, &list, 420, 200, 96, 1));
+        chat_listview_set_thinking_pref(tv.lv, THINK_PREF_AUTO);
+        view_paint(&tv, 420);
+        ChatListView *lv = lv_of(tv.lv);
+        ASSERT_NOT_NULL(lv);
+        if (!lv) return 1;
+        ASSERT_EQ(its[0]->u.ai.thinking_mode, THINK_MODE_EXTENDED);
+        const int h0 = its[0]->measured_height;
+
+        lv->stick_to_bottom = stuck;
+        lv->scroll_y = stuck ? lv->total_height - lv->viewport_height
+                             : item_top_of(lv, its[2]) + 5;
+        ASSERT_TRUE(lv->scroll_y > 0);
+        const int screen_before = item_top_of(lv, its[2]) - lv->scroll_y;
+
+        its[0]->u.ai.thinking_complete = 1;
+        its[1]->u.ai.thinking_complete = 1;
+        its[0]->dirty = 1;
+        its[1]->dirty = 1;
+        chat_listview_invalidate(tv.lv);
+        view_paint(&tv, 420);
+
+        ASSERT_EQ(its[0]->u.ai.thinking_mode, THINK_MODE_COLLAPSED);
+        ASSERT_TRUE(its[0]->measured_height < h0);
+        if (stuck) {
+            ASSERT_EQ(lv->scroll_y, lv->total_height - lv->viewport_height);
+        } else {
+            ASSERT_EQ(item_top_of(lv, its[2]) - lv->scroll_y, screen_before);
+        }
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
+    TEST_END();
+}
+
 /* A click on the row cycles the pref, tells the parent, and (scrolled to
  * the middle) leaves the clicked row at the same screen y although every
  * Thinking row changed height. */
@@ -695,7 +749,7 @@ int test_chat_select_win_thinking_click_cycles_and_anchors(void)
     ChatMsgItem *its[6];
     for (int i = 0; i < 6; i++) {
         its[i] = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "answer text");
-        set_think_lines(its[i], 14, 0);
+        set_think_lines(its[i], 40, 0);   /* the four modes differ in height */
         its[i]->u.ai.thinking_complete = 1;
     }
     TestView tv;
@@ -729,6 +783,7 @@ int test_chat_select_win_thinking_click_cycles_and_anchors(void)
     ASSERT_EQ(g_think_cmds, 1);
     ASSERT_EQ((int)g_think_cmd_pref, THINK_PREF_EXTENDED);
     ASSERT_TRUE(target->measured_height > h_before);
+    const int h_ext = target->measured_height;
     /* the clicked row did not move on screen */
     ASSERT_EQ(item_top_of(lv, target) - lv->scroll_y, screen_before);
 
@@ -742,6 +797,7 @@ int test_chat_select_win_thinking_click_cycles_and_anchors(void)
     ASSERT_EQ(target->u.ai.thinking_mode, THINK_MODE_OPEN);
     ASSERT_EQ(g_think_cmds, 2);
     ASSERT_EQ((int)g_think_cmd_pref, THINK_PREF_OPEN);
+    ASSERT_TRUE(target->measured_height > h_ext);   /* 40 lines > 25 */
     ASSERT_EQ(item_top_of(lv, target) - lv->scroll_y, screen2);
 
     /* next click: open -> collapsed, still anchored */

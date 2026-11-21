@@ -1920,7 +1920,7 @@ next_coalesce:;
             d->stream_phase = 0;
             /* A failed reply stays in the list with whatever reasoning
              * arrived; it counts as finished, or its Thinking row would
-             * stay "streaming" (compact under Automatic) for good. */
+             * stay "streaming" (extended under Automatic) for good. */
             if (d->stream_ai_item) {
                 d->stream_ai_item->u.ai.thinking_complete = 1;
                 d->stream_ai_item->dirty = 1;

@@ -434,6 +434,7 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     if ((int)mode != item->u.ai.thinking_mode) {
         item->u.ai.thinking_mode = (int)mode;
         item->u.ai.think_cache_len = -1;
+        lv->think_mode_changed = 1;
     }
     int expanded = mode != THINK_MODE_COLLAPSED;
 
@@ -1329,6 +1330,24 @@ static void recalc_layout(ChatListView *lv)
         }
     }
 
+    /* A Thinking row whose mode a layout re-derives (Automatic: the reply
+     * completed, extended -> collapsed) changes height, possibly above the
+     * reader. Not pinned to the bottom, note the heights of the last layout
+     * now and hold the first visible item after Pass 1 found a change. */
+    int *old_hts = NULL, old_n = 0;
+    lv->think_mode_changed = 0;
+    if (lv->msg_list && !lv->stick_to_bottom && anchor_id < 0) {
+        for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) old_n++;
+        old_hts = (int *)malloc((size_t)(old_n > 0 ? old_n : 1) * sizeof(int) * 2);
+        if (old_hts) {
+            int k = 0;
+            for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next, k++) {
+                old_hts[k] = it->measured_height;
+                old_hts[old_n + k] = -1;   /* no redirect */
+            }
+        }
+    }
+
     /* Pass 1: measure items (only dirty items need remeasuring).
      * Exception: unsettled command items are always remeasured because
      * Pass 2 overwrites their measured_height with the container height,
@@ -1344,6 +1363,23 @@ static void recalc_layout(ChatListView *lv)
         item = item->next;
     }
     ReleaseDC(lv->hwnd, hdc);
+
+    int think_anchored = 0;
+    if (old_hts && lv->think_mode_changed) {
+        int offset = 0;
+        int ai = stick_scroll_pick_anchor(old_hts, old_hts + old_n, old_n,
+                                          lv->msg_gap, lv->scroll_y, &offset);
+        if (ai >= 0) {
+            ChatMsgItem *it = lv->msg_list->head;
+            for (int k = 0; k < ai && it; k++) it = it->next;
+            if (it) {
+                anchor_id = it->id;
+                anchor_old_top = lv->scroll_y - offset;
+                think_anchored = 1;
+            }
+        }
+    }
+    free(old_hts);
 
     /* Pass 2: compute one scrollable container per run of consecutive
      * unsettled command items sharing a batch id (see cmd_container_measure()
@@ -1416,7 +1452,8 @@ static void recalc_layout(ChatListView *lv)
     /* Content/viewport change: follow the bottom while stuck, otherwise
      * keep the current position (re-clamped to the new valid range). */
     int max_scroll = lv->total_height - lv->viewport_height;
-    if (fold_changed > 0 && anchor_id >= 0 && anchor_new_h > 0)
+    if ((fold_changed > 0 || think_anchored) && anchor_id >= 0 &&
+        anchor_new_h > 0)
         lv->scroll_y = stick_scroll_anchor(lv->stick_to_bottom, lv->scroll_y,
                                            anchor_old_top, anchor_new_top,
                                            anchor_new_h);
@@ -2014,8 +2051,8 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
             int vis_h = tl.body.h;
             /* Only the open box scrolls, so only it has a scrollbar; the
-             * compact box shows its last lines (the offset build_thinking_
-             * layout settled) and reaches the full text width. */
+             * compact and extended boxes show their last lines (the offset build_thinking_
+             * layout settled) and reach the full text width. */
             const int scrolls = tmode == THINK_MODE_OPEN && full_h > vis_h;
             int sb_w = scrolls ? ns_scale(6, CLV_DPI(lv)) : 0;
             RECT clip_rc = body_rc;
@@ -4602,8 +4639,8 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         int scroll_amount = ns_scale(40, CLV_DPI(lv));  /* ~3 lines per notch */
 
-        /* Check if cursor is over an open thinking box (the compact box
-         * has no inner scroll: the wheel goes to the list) */
+        /* Check if cursor is over an open thinking box (the compact and extended boxes
+         * have no inner scroll: the wheel goes to the list) */
         {
             POINT pt;
             pt.x = GET_X_LPARAM(lParam);
