@@ -1463,16 +1463,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         }
         {
             /* "Thinking display": the item index is the ThinkPref value
-             * (Automatic 0, Always collapsed 1, Always compact 2, Always open 3). */
+             * (Automatic 0, Always collapsed 1, Always compact 2, Always open 3,
+             * Always extended 4). */
             HWND lbl = make_label2(nd, SH_AI_THINKING_MODE);
             HWND cmb = make_combo2(nd, IDC_AI_THINKING_MODE, CBS_DROPDOWNLIST,
                                    SH_AI_THINKING_MODE);
             static const char *const k_think_modes[] = {
-                "Automatic", "Always collapsed", "Always compact", "Always open" };
-            for (int i = 0; i < 4; i++)
+                "Automatic", "Always collapsed", "Always compact", "Always open",
+                "Always extended" };
+            for (int i = 0; i <= THINK_PREF_MAX; i++)
                 SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_think_modes[i]);
             int tsel = nd->cfg->settings.ai_thinking_mode;
-            if (tsel < THINK_PREF_AUTO || tsel > THINK_PREF_OPEN) tsel = THINK_PREF_AUTO;
+            if (tsel < THINK_PREF_AUTO || tsel > THINK_PREF_MAX) tsel = THINK_PREF_AUTO;
             SendMessage(cmb, CB_SETCURSEL, (WPARAM)tsel, 0);
             nd->think_initial = tsel;
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
@@ -2100,7 +2102,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             {
                 int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_THINKING_MODE,
                                                   CB_GETCURSEL, 0, 0);
-                if (sel >= THINK_PREF_AUTO && sel <= THINK_PREF_OPEN &&
+                if (sel >= THINK_PREF_AUTO && sel <= THINK_PREF_MAX &&
                     sel != d->think_initial)
                     s->ai_thinking_mode = sel;
             }

@@ -490,7 +490,7 @@ void settings_validate(Settings *s)
     if (s->ai_max_search_results > 20) s->ai_max_search_results = 20;
     if (s->ai_runcmd_mode != AI_RUNCMD_ON && s->ai_runcmd_mode != AI_RUNCMD_OFF)
         s->ai_runcmd_mode = AI_RUNCMD_AUTO;
-    if (s->ai_thinking_mode < THINK_PREF_AUTO || s->ai_thinking_mode > THINK_PREF_OPEN)
+    if (s->ai_thinking_mode < THINK_PREF_AUTO || s->ai_thinking_mode > THINK_PREF_MAX)
         s->ai_thinking_mode = THINK_PREF_AUTO;
     if (s->ai_max_context_lines < 1)     s->ai_max_context_lines = 1;
     if (s->ai_max_context_lines > 50000) s->ai_max_context_lines = 50000;

@@ -344,7 +344,7 @@ static const char *clv_text_prefix(const char *text, size_t n, char **owned)
 static size_t clv_think_shown_len(const char *tt, ThinkMode mode)
 {
     size_t n = strlen(tt);
-    return mode == THINK_MODE_COMPACT ? think_trimmed_len(tt, n) : n;
+    return think_mode_follows_tail(mode) ? think_trimmed_len(tt, n) : n;
 }
 
 /* ── Safety tag colour ──────────────────────────────────────────────── */
@@ -425,7 +425,7 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     NsRect avail = { box_left, content_top, box_right - box_left, 0 };
 
     /* The row's mode comes from the saved pref and from whether the reply
-     * has finished (AUTO: compact while it streams, collapsed after).  It is
+     * has finished (AUTO: extended while it streams, collapsed after).  It is
      * written back so copy and the wheel handler read the same answer; a
      * change drops the cached wrap, which depends on the mode (the compact
      * box has no scrollbar gutter). */
@@ -514,7 +514,7 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
              * harmless. */
             int vis_h = out->body.h;
             int max_scroll = (full_h > vis_h) ? full_h - vis_h : 0;
-            if (mode == THINK_MODE_COMPACT)
+            if (think_mode_follows_tail(mode))
                 item->u.ai.thinking_scroll_y =
                     think_compact_offset(full_h, vis_h);   /* last lines */
             else
@@ -958,7 +958,7 @@ static void update_scrollbar(ChatListView *lv);
 static void clv_apply_thinking_pref(ChatListView *lv, int pref,
                                     const ChatMsgItem *anchor)
 {
-    if (pref < THINK_PREF_AUTO || pref > THINK_PREF_OPEN) pref = THINK_PREF_AUTO;
+    if (pref < THINK_PREF_AUTO || pref > THINK_PREF_MAX) pref = THINK_PREF_AUTO;
     lv->thinking_pref = pref;
     for (ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL; it;
          it = it->next) {
@@ -988,7 +988,7 @@ void chat_listview_set_thinking_pref(HWND hwnd, int pref)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return;
-    if (pref < THINK_PREF_AUTO || pref > THINK_PREF_OPEN) pref = THINK_PREF_AUTO;
+    if (pref < THINK_PREF_AUTO || pref > THINK_PREF_MAX) pref = THINK_PREF_AUTO;
     if (lv->thinking_pref == pref) return;   /* no-op */
     clv_apply_thinking_pref(lv, pref, NULL);
     chat_listview_invalidate(hwnd);

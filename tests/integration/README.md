@@ -206,7 +206,7 @@ touches before marking its pull request ready.
 | `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
 | `ai_write_command_held_then_runs_after_allow` | a prompted `touch` is held back while the level is Read (Auto-approve on), then runs via "Run N selected" once the level is raised to Write with Auto-approve off |
 | `ai_prompt_while_approval_pending` | a second prompt gets a normal reply while the first prompt's command batch sits pending (default policy, Auto-approve off); "Run N selected" with `lParam` 0 (the integration-harness "oldest pending batch" convention) then still runs the first batch's command — see docs/superpowers/specs/2026-09-09-pending-command-batches.md |
-| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (19 states x 4 themes = 76 captures); no SSH host or AI key needed |
+| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (20 states x 4 themes = 80 captures); no SSH host or AI key needed |
 | `approval_card_run_selected_settles` | "Run N selected" on a live approval card (`--ui-demo=approval`) settles without crashing; no SSH host or AI key needed |
 | `ai_panel_opens_without_key` | the panel opens straight into the no-key empty state with `ai_api_key` empty, no dialog; no AI key needed despite the `ai_` prefix |
 | `ai_auto_approve_critical_asks_first` | with no key: Auto-approve at Critical raises a Yes/No box; a second toggle during the box is ignored; No leaves Critical/off; Yes turns it on; retired id 4040 does nothing (spec 2026-10-18 section 2) |

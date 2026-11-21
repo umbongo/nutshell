@@ -26,6 +26,7 @@ int test_chat_select_win_runs_match_paint(void);
 int test_chat_select_win_reason_in_row(void);
 int test_chat_select_win_thinking_pref_modes(void);
 int test_chat_select_win_thinking_compact_box(void);
+int test_chat_select_win_thinking_extended_box(void);
 int test_chat_select_win_thinking_auto_follows_complete(void);
 int test_chat_select_win_thinking_click_cycles_and_anchors(void);
 int test_chat_select_win_mouse_and_keys(void);
@@ -293,6 +294,7 @@ int main(int argc, char **argv)
     failed += test_chat_select_win_reason_in_row();
     failed += test_chat_select_win_thinking_pref_modes();
     failed += test_chat_select_win_thinking_compact_box();
+    failed += test_chat_select_win_thinking_extended_box();
     failed += test_chat_select_win_thinking_auto_follows_complete();
     failed += test_chat_select_win_thinking_click_cycles_and_anchors();
     failed += test_chat_select_win_mouse_and_keys();

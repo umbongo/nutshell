@@ -2993,7 +2993,8 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     ai_chat_force_state(hwnd, forced);
 
     /* The Thinking row's mode in the gallery: "thinking" collapsed,
-     * "thinking-compact" compact, "thinking-open" open, and "chat" / "all"
+     * "thinking-compact" compact, "thinking-extended" extended,
+     * "thinking-open" open, and "chat" / "all"
      * open (the chat selection crosses the Thinking body, spec 2026-10-18
      * section 6). In memory only: the panel's pref is set here, never the
      * config's, so a demo run saves nothing. Every other state keeps the

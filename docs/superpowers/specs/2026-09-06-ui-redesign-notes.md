@@ -9,7 +9,7 @@ libssh2, PR #96's head, 2026-11-12; 4,091 with the libssh2 stub on `automaton`;
 `wintest` 56). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
 (`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 84 registered cases
 (the README's case tables and the telnet file), manual only since 2026-09-15, DPI-aware since
-PR #71; `ui_gallery` captures 19 `--ui-demo` states x 4 themes = 76 images. Next action is sub-project 3 (main window
+PR #71; `ui_gallery` captures 20 `--ui-demo` states x 4 themes = 80 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
@@ -397,6 +397,11 @@ Done, in order (details in the commit messages and the specs named):
   clicked row keeps its place on screen, compact ends at the last non-blank text. Gallery
   states `thinking-compact` and `thinking-open`. Its Windows checks are in the first Open
   item.
+- Extended thinking mode (spec `2026-11-21-thinking-extended-mode-design.md`, amending the
+  modes spec; version assigned at the build): a fourth mode that behaves as compact but
+  shows the last 25 lines (pref `extended`, Settings "Always extended", gallery state
+  `thinking-extended`). Automatic now streams in Extended and collapses when complete;
+  the click cycle is collapsed, compact, extended, open.
 - Native test build fails on warnings, v1.2.84 (PR #98, e46b98c): `-Werror` added to
   `TEST_CFLAGS` (fuzz builds inherit it); no code needed fixing. The MinGW build's stricter
   `-Wpedantic -Wshadow -Wformat=2 -Wconversion` would add five warnings to the native build
@@ -433,13 +438,15 @@ Open, in priority order:
       fold anchor, row heights after a scaling change), Retry, New Chat, undock and redock,
       an error ending, `cls`/`Clear-Host` capture, `--ui-demo=tool`. #96 (run by the maintainer on Windows on 2026-11-13 and reported fine, *reported*, not
       itemised): the three modes on the four themes (`--ui-demo=thinking`,
-      `thinking-compact`, `thinking-open`), a live reply under Automatic (compact, then
+      `thinking-compact`, `thinking-open`), a live reply under Automatic (compact then, since 2026-11-21, extended, then
       collapsed), the click cycle and the clicked row keeping its place, the choice
       surviving a restart and an undock and redock, Settings > Automatic resetting it. All:
-      `--ui-demo=all` on the four themes and a `ui_gallery` run (19 states x 4 themes).
+      `--ui-demo=all` on the four themes and a `ui_gallery` run (20 states x 4 themes).
+- [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
+      cycles collapsed→compact→extended→open, and Settings 'Always extended' persists.
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
-      under Automatic a click on a streaming row goes compact to open (the next mode in
-      the cycle), so hiding the text takes two clicks; Save under Automatic never includes
+      under Automatic a click on a streaming row goes extended to open (the next mode in
+      the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
       the reasoning, since the idle mode is collapsed (before PR #96, opening any row once
       made Save include it). Both are as the spec decided; the maintainer says whether
       either should change.

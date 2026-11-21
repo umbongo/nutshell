@@ -8,8 +8,15 @@ int test_thinking_mode_next_cycle(void)
 {
     TEST_BEGIN();
     ASSERT_EQ(think_mode_next(THINK_MODE_COLLAPSED), THINK_MODE_COMPACT);
-    ASSERT_EQ(think_mode_next(THINK_MODE_COMPACT), THINK_MODE_OPEN);
+    ASSERT_EQ(think_mode_next(THINK_MODE_COMPACT), THINK_MODE_EXTENDED);
+    ASSERT_EQ(think_mode_next(THINK_MODE_EXTENDED), THINK_MODE_OPEN);
     ASSERT_EQ(think_mode_next(THINK_MODE_OPEN), THINK_MODE_COLLAPSED);
+    /* four clicks come back to collapsed */
+    {
+        ThinkMode m = THINK_MODE_COLLAPSED;
+        for (int i = 0; i < 4; i++) m = think_mode_next(m);
+        ASSERT_EQ(m, THINK_MODE_COLLAPSED);
+    }
     /* out of range behaves as collapsed */
     ASSERT_EQ(think_mode_next((ThinkMode)-1), THINK_MODE_COMPACT);
     ASSERT_EQ(think_mode_next((ThinkMode)99), THINK_MODE_COMPACT);
@@ -19,7 +26,7 @@ int test_thinking_mode_next_cycle(void)
 int test_thinking_mode_effective(void)
 {
     TEST_BEGIN();
-    ASSERT_EQ(think_mode_effective(THINK_PREF_AUTO, 1), THINK_MODE_COMPACT);
+    ASSERT_EQ(think_mode_effective(THINK_PREF_AUTO, 1), THINK_MODE_EXTENDED);
     ASSERT_EQ(think_mode_effective(THINK_PREF_AUTO, 0), THINK_MODE_COLLAPSED);
     ASSERT_EQ(think_mode_effective(THINK_PREF_COLLAPSED, 1), THINK_MODE_COLLAPSED);
     ASSERT_EQ(think_mode_effective(THINK_PREF_COLLAPSED, 0), THINK_MODE_COLLAPSED);
@@ -27,8 +34,10 @@ int test_thinking_mode_effective(void)
     ASSERT_EQ(think_mode_effective(THINK_PREF_COMPACT, 0), THINK_MODE_COMPACT);
     ASSERT_EQ(think_mode_effective(THINK_PREF_OPEN, 1), THINK_MODE_OPEN);
     ASSERT_EQ(think_mode_effective(THINK_PREF_OPEN, 0), THINK_MODE_OPEN);
+    ASSERT_EQ(think_mode_effective(THINK_PREF_EXTENDED, 1), THINK_MODE_EXTENDED);
+    ASSERT_EQ(think_mode_effective(THINK_PREF_EXTENDED, 0), THINK_MODE_EXTENDED);
     /* out of range pref acts as AUTO */
-    ASSERT_EQ(think_mode_effective((ThinkPref)-1, 1), THINK_MODE_COMPACT);
+    ASSERT_EQ(think_mode_effective((ThinkPref)-1, 1), THINK_MODE_EXTENDED);
     ASSERT_EQ(think_mode_effective((ThinkPref)99, 0), THINK_MODE_COLLAPSED);
     TEST_END();
 }
@@ -39,6 +48,7 @@ int test_thinking_pref_from_mode(void)
     ASSERT_EQ(think_pref_from_mode(THINK_MODE_COLLAPSED), THINK_PREF_COLLAPSED);
     ASSERT_EQ(think_pref_from_mode(THINK_MODE_COMPACT), THINK_PREF_COMPACT);
     ASSERT_EQ(think_pref_from_mode(THINK_MODE_OPEN), THINK_PREF_OPEN);
+    ASSERT_EQ(think_pref_from_mode(THINK_MODE_EXTENDED), THINK_PREF_EXTENDED);
     ASSERT_EQ(think_pref_from_mode((ThinkMode)42), THINK_PREF_COLLAPSED);
     TEST_END();
 }
@@ -47,9 +57,11 @@ int test_thinking_pref_name_parse(void)
 {
     TEST_BEGIN();
     static const ThinkPref prefs[] = { THINK_PREF_AUTO, THINK_PREF_COLLAPSED,
-                                       THINK_PREF_COMPACT, THINK_PREF_OPEN };
-    static const char *const names[] = { "auto", "collapsed", "compact", "open" };
-    for (int i = 0; i < 4; i++) {
+                                       THINK_PREF_COMPACT, THINK_PREF_OPEN,
+                                       THINK_PREF_EXTENDED };
+    static const char *const names[] = { "auto", "collapsed", "compact", "open",
+                                         "extended" };
+    for (int i = 0; i < 5; i++) {
         ASSERT_STR_EQ(think_pref_name(prefs[i]), names[i]);
         ASSERT_EQ(think_pref_parse(names[i]), prefs[i]);
         ASSERT_EQ(think_pref_parse(think_pref_name(prefs[i])), prefs[i]);
@@ -61,6 +73,11 @@ int test_thinking_pref_name_parse(void)
     ASSERT_EQ(think_pref_parse("bogus"), THINK_PREF_AUTO);
     ASSERT_EQ(think_pref_parse("Open"), THINK_PREF_AUTO);
     ASSERT_EQ(think_pref_parse("COMPACT"), THINK_PREF_AUTO);
+    ASSERT_EQ(think_pref_parse("Extended"), THINK_PREF_AUTO);
+    ASSERT_EQ(think_pref_parse("EXTENDED"), THINK_PREF_AUTO);
+    ASSERT_EQ(THINK_PREF_EXTENDED, 4);
+    ASSERT_EQ(THINK_MODE_EXTENDED, 3);
+    ASSERT_EQ(THINK_PREF_MAX, THINK_PREF_EXTENDED);
     TEST_END();
 }
 
@@ -70,6 +87,9 @@ int test_thinking_body_cap(void)
     ASSERT_EQ(think_mode_body_cap(THINK_MODE_COLLAPSED, 18, 500), 0);
     ASSERT_EQ(think_mode_body_cap(THINK_MODE_COMPACT, 18, 500), THINK_COMPACT_LINES * 18);
     ASSERT_EQ(think_mode_body_cap(THINK_MODE_OPEN, 18, 500), 500);
+    ASSERT_EQ(THINK_EXTENDED_LINES, 25);
+    ASSERT_EQ(think_mode_body_cap(THINK_MODE_EXTENDED, 18, 500), 25 * 18);
+    ASSERT_EQ(think_mode_body_cap(THINK_MODE_EXTENDED, 0, 500), 0);
     ASSERT_EQ(think_mode_body_cap(THINK_MODE_COMPACT, 0, 500), 0);
     ASSERT_EQ(think_mode_body_cap(THINK_MODE_COLLAPSED, 0, 500), 0);
     ASSERT_EQ(think_mode_body_cap(THINK_MODE_OPEN, 0, 500), 500);
@@ -98,8 +118,22 @@ int test_thinking_label_colour(void)
     ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_COMPACT), 0x111111u);
     ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_COLLAPSED), 0x222222u);
     ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_OPEN), 0x333333u);
+    /* Extended shares the compact colour (no token of its own) */
+    ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_EXTENDED), 0x111111u);
     ASSERT_EQ(think_mode_label_colour(&c, (ThinkMode)-3), 0x222222u);
     ASSERT_EQ(think_mode_label_colour(&c, (ThinkMode)50), 0x222222u);
+    TEST_END();
+}
+
+int test_thinking_follows_tail(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(think_mode_follows_tail(THINK_MODE_COMPACT));
+    ASSERT_TRUE(think_mode_follows_tail(THINK_MODE_EXTENDED));
+    ASSERT_TRUE(!think_mode_follows_tail(THINK_MODE_COLLAPSED));
+    ASSERT_TRUE(!think_mode_follows_tail(THINK_MODE_OPEN));
+    ASSERT_TRUE(!think_mode_follows_tail((ThinkMode)-1));
+    ASSERT_TRUE(!think_mode_follows_tail((ThinkMode)77));
     TEST_END();
 }
 
