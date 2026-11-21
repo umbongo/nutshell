@@ -33,7 +33,9 @@ or its pull request closed unmerged, ask me whether to run a retrospective**
 (the `checkpoint` skill) and run it only on a yes. There is no merge counter
 and no scheduled Routine (my rule of 2026-11-04, replacing "every 10
 merges"); the last-retrospective marker in `MEMORY.md` says where the next
-one starts.
+one starts. The ask states how many merges there have been since that
+marker (the command is in the `checkpoint` skill); the number informs my
+answer and never triggers a retrospective (my rule of 2026-11-21).
 
 ## Build Commands
 

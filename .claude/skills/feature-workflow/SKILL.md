@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-12 (retrospective: the check wait, Windows checks into the Open list, merging from `automaton`). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-21 (retrospective: the merge count in the ask, open alerts after a merge, the session's own model, tests that can fail). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules live in CLAUDE.md ("Software Development Rules", "Branches, pull
 requests and the merge gate"); this skill walks through them in order, and
 CLAUDE.md wins where they disagree. History and rationale: the retrospectives.
@@ -24,7 +24,7 @@ the reports and the key learnings.
 
 | Job | Model |
 |---|---|
-| The main session: the maintainer's conversation, briefs, rulings | Fable (`claude-fable-5-2` in the `Models:` lines since 2026-11-10) |
+| The main session: the maintainer's conversation, briefs, rulings | The session's own model, named by its id (`claude-fable-5-2` in PR #99, `claude-opus-5-5` in PR #101) |
 | Judgement: reviews, critiques, orchestrating a multi-step package | Opus (`claude-opus-5-5`) |
 | Code and tests | Sonnet (`claude-sonnet-5-5`) |
 | Mechanical, single-pattern work: renames, fixtures, doc tables | Haiku (`claude-haiku-5-5`) |
@@ -73,9 +73,12 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
 4. **Implementation.** A sub-agent works on the branch: Opus orchestrating
    when the package is multi-step, otherwise Sonnet directly, Haiku for
    the mechanical parts. Tests first (CLAUDE.md, "Test-Driven
-   Development"). `make test` before every push. What returns to the main
-   session is the diff and the test summary line, and mid-run the final
-   review's findings (Allocation, "Quality checks").
+   Development"). A test that tells two states apart needs a fixture in
+   which they differ (PR #101's click-cycle wintest could not fail: at 14
+   lines the extended and open heights were equal). `make test` before
+   every push. What returns to the main session is the diff and the test
+   summary line, and mid-run the final review's findings (Allocation,
+   "Quality checks").
 5. **Draft pull request.** The first push opens it. Before touching it,
    classify the diff:
 
@@ -150,8 +153,8 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
    `mcp__github__update_pull_request` to leave draft, then
    `mcp__github__enable_pr_auto_merge` (method `merge`). Never merge a red
    check; never push to `main`; never rewrite someone else's branch. Once
-   the merge is confirmed and the branch gone, ask the maintainer whether
-   to run a retrospective now.
+   the merge is confirmed and the branch gone, ask about a retrospective
+   and read the new alerts (both in Standing rules).
 10. **Release**, separately: tag `vX.Y.Z` matching `APP_VERSION` and push
     the tag; the release workflow re-verifies and publishes the committed
     exe. Nothing is built at release time.
@@ -172,16 +175,26 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
 - **After every merge-and-delete, or a pull request closed unmerged, ask
   the maintainer whether to run a retrospective** (the `checkpoint`
   skill), in the same session, right after confirming the branch is gone;
-  run it only on a yes. No merge counter, no scheduled Routine
-  (maintainer, 2026-11-04); the marker in `MEMORY.md` is only the scope.
+  run it only on a yes. The ask states the merge count since the last
+  retrospective (maintainer, 2026-11-21; the command and what counts are in
+  `checkpoint`, "When it runs"). The count informs the decision and never
+  triggers one: no merge counter, no scheduled Routine (maintainer,
+  2026-11-04).
+- **New CodeQL alerts after any merge to `main`** (the session's, the
+  maintainer's or Dependabot's): a pull request's run reports only its
+  changed lines, so a new alert on old code shows only in the push run.
+  As a background command:
+  `id=$(gh run list --workflow codeql.yml --commit <merge-sha> --json databaseId -q '.[0].databaseId'); gh run watch "$id" >/dev/null; gh api 'repos/umbongo/nutshell/code-scanning/alerts?state=open' --jq '.[]|select(.created_at > "<merged_at>")|"#\(.number) \(.rule.id) \(.most_recent_instance.location.path)"'`
+  (an empty `id` means the run has not started yet). Report each alert it
+  prints; without `gh`, say it was not read.
 - **Record of change.** Every edit to memory or a skill gets a dated
   entry in `.claude/CHANGELOG.md` in the same commit.
 - **Dependabot.** Weekly, grouped, one open at a time. For an actions-only
   bump: the diff is only `.github/workflows/*.yml` pins with updated
   `# vX.Y.Z` comments; read the upstream changelog (the PR body quotes it);
   all seven checks green on the head; merge with a merge commit. Only the
-  CodeQL push run follows; no release, no bump. A semver-major bump of
-  `actions/checkout` or `upload-artifact` changes the runner's Node
-  runtime; read its release notes first.
+  CodeQL push run follows (read its alerts, above); no release, no bump.
+  A semver-major bump of `actions/checkout` or `upload-artifact` changes
+  the runner's Node runtime; read its release notes first.
 - **Branch survey.** "What are my branches" goes through `repo-status`;
   a cloud clone is shallow, and two names are both a branch and a tag.

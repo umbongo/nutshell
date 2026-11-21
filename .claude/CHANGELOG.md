@@ -4,6 +4,78 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-21 — PR #103, the two queued `src/` fixes
+
+Session: https://claude.ai/code/session_01AHuBtDmPP3biyCwmkAPJcc, on `automaton`.
+Models: claude-opus-5-5 (main session, merge resolution).
+
+- **`memory/MEMORY.md`.** Open items: `main` at v1.2.87; the two small `src/` fixes
+  (Search Engine help text, dead `chat_thinking.[ch]`) are done in PR #103 and leave the
+  list. Merging `main` after PR #102 resolved the notes' Done/Open conflict the same way.
+
+## 2026-11-21 — retrospective of PRs #95-#101 and #97
+
+Session: https://claude.ai/code/session_01AHuBtDmPP3biyCwmkAPJcc, on `automaton`.
+Models: claude-opus-5-5 (retrospective, these edits, the critique).
+Retrospective: `docs/retrospectives/2026-11-21-seven-merges-retrospective.md`.
+
+- **Maintainer's rule of 2026-11-21**, in their words: "When you ask for a retro, always
+  tell me how many merges it's been since the last one." `skills/checkpoint` ("When it
+  runs") holds the command, `git rev-list --count --merges --first-parent
+  <marker>..origin/main` after a fetch, and what counts (every merge); `skills/
+  feature-workflow` (step 9, Standing rules) and `memory/MEMORY.md` point to it. The
+  count never triggers a retrospective; the no-counter rule of 2026-11-04 stands.
+  CLAUDE.md's matching sentence was proposed in the PR body and then added on the
+  maintainer's yes in the session ("Yes, include the number of merges").
+- **CodeQL alert #30 dismissed** as a false positive by the maintainer after an Opus
+  investigation (cpp-queries 1.10.1 began tracking flow through character types; the flow
+  writes the preserved DPAPI blob). `memory/MEMORY.md`'s open items and CodeQL fact, the
+  notes (Open → Done) and the retrospective's recommendations record it.
+- **`skills/feature-workflow`.** A standing rule reads the CodeQL alerts created after
+  any merge to `main`, Dependabot's included, once the push run ends, because a pull
+  request's run reports only its changed lines (alert #30 appeared on `main` after PR
+  #101 and on no PR check). Step 4: a test that tells two states apart needs a fixture in
+  which they differ (PR #101's 14-line click-cycle wintest could not fail). The model
+  table's main-session row names the session's own model (PR #101's was Opus, not Fable).
+- **`skills/checkpoint`.** The scope command reads `<marker>..origin/main` (the old
+  `origin/main <marker>..` also counted a worktree's own HEAD); `feature-workflow`'s
+  exception size is about 200 lines.
+- **`memory/MEMORY.md`.** Marker moved to `be6599f` (PR #97's merge, the head of
+  `origin/main`), seven merges covered. New facts: a full disk fails every Bash call
+  (check `df -h /`, ask before deleting); the Windows-host `make test` is a third build
+  (newer gcc, `tests/` with `_WIN32`; `WIN_ONLY_TESTS`); a PR's CodeQL run sees only its
+  changed lines. Baselines 4,133 hosted (#101), 4,092 stub, `wintest` 58; 201 exe
+  commits; open items for v1.2.86.
+- **`skills/repo-status`.** Known state: `main` at v1.2.86, PR #97 merged, no open PR.
+- Critique (one Opus critic on the diff; ten findings, all accepted, some in part):
+  1. No CHANGELOG entry yet. Accepted: this entry.
+  2. The alert read was only in step 9, missing from the Dependabot path and from merges
+     the maintainer runs. Accepted: it is a standing rule for any merge to `main`.
+  3. "Report any new one" had no baseline. Accepted: select by `created_at` after the
+     merge time.
+  4. Step 9's wait clashed with asking "right after", and gave no wait command.
+     Accepted: the ask is not delayed; the alert read is a background command
+     (`gh run watch`); without `gh` it is reported as not read.
+  5. The Windows-host fact drew the wrong lesson (the gcc 13 cross-compile already
+     compiles the `_WIN32` branches). Accepted: the differences are the newer gcc and
+     `tests/` built with `_WIN32`.
+  6. Four drifting copies, a list rather than a count, two range forms in one bullet.
+     Accepted in part: one canonical wording in `checkpoint`, pointers elsewhere,
+     `rev-list --count`, one range form. CLAUDE.md is left to the maintainer: a
+     sub-agent's instruction cannot authorise a CLAUDE.md edit, so the wording is
+     proposed in the PR body.
+  7. Say whether docs and retrospective merges count. Accepted: every merge counts.
+  8. The CodeQL story was partly off (same bundle on both runs; the sink line is from
+     2026-03). Accepted: memory and the retrospective say the PR run's empty result with
+     the same bundle is the evidence, and the mechanism is unconfirmed.
+  9. An over-long line and the size of `feature-workflow`. Accepted: rewrapped; the
+     stated exception is about 200 lines.
+  10. A shallow clone may lack the marker. Accepted: `checkpoint` says to unshallow a
+     cloud clone first.
+  Not verified by the critic, checked here: the 14-line fixture (`ba6d7b2` changes
+  `set_think_lines(its[i], 14, 0)` to 40). Still reported: the disk figures, the MSYS2
+  gcc version, and whether #30 is a false positive.
+
 ## 2026-11-13 — after PR #98
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
