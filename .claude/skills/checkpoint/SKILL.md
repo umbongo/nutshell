@@ -5,16 +5,22 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-11-12 (a retrospective's merge is its review; step 2 reads the merged PR bodies' unrun checks). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-21 (the ask states the merge count since the marker). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
 - **After a branch is merged and deleted, or its pull request closed
   unmerged** (maintainer's rule of 2026-11-04): the session that confirmed
   it asks whether to run a retrospective now, and runs this skill only on a
-  yes. No merge counter, no Routine. The "Last retrospective" marker in
-  `.claude/memory/MEMORY.md` is the scope:
-  `git log --merges --first-parent origin/main <marker>..`.
+  yes. The ask states how many merges `main` has had since the last
+  retrospective (maintainer, 2026-11-21): after `git fetch origin` (and an
+  unshallow in a cloud clone),
+  `git rev-list --count --merges --first-parent <marker>..origin/main`,
+  every merge counted, docs, Dependabot and the last retrospective's own
+  included. The count informs the decision and never triggers one: no
+  merge counter, no Routine. The "Last retrospective" marker in
+  `.claude/memory/MEMORY.md` is `<marker>`, and the scope is
+  `git log --merges --first-parent <marker>..origin/main`.
 - On request: "create a checkpoint", "do a retrospective".
 
 A checkpoint compacts the todo and memory, deletes temp files and
@@ -59,7 +65,7 @@ worktrees and leaves the tree ready for a new session.
    anything the docs now state better. Bump its "Last updated" line.
 4. **Update or add skills** when a procedure was learned the hard way.
    One skill per job; keep each under about 100 lines (`feature-workflow`,
-   at about 185, is the known exception: it restates the whole merge path).
+   at about 200, is the known exception: it restates the whole merge path).
 5. **Review the workflows.** Read every file under `.github/workflows/`
    and `.github/scripts/`, and the "Branches, pull requests and the merge
    gate" and "Software Development Rules" sections of CLAUDE.md. For each,

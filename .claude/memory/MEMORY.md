@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, open items, the merge go-ahead rule; the retrospective of PRs #82-#94 came earlier the same day).
+Last updated: 2026-11-21 (retrospective of PRs #95-#101: the merge count in the ask, baselines, the full-disk symptom, CodeQL's PR-only view, the Windows-host `make test`, open items).
 
 ## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
@@ -15,6 +15,11 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
   `.claude/skills/`, and the workflows (`.github/workflows/*.yml` and the
   process sections of CLAUDE.md), record it in `.claude/CHANGELOG.md`, and
   open a draft PR. Run it only on a yes.
+- **The ask states how many merges `main` has had since the last
+  retrospective** (maintainer, 2026-11-21): the command and what counts
+  are in the `checkpoint` skill's "When it runs"; `<marker>` is the commit
+  below. The count informs the decision and never triggers one; the
+  no-counter rule stands.
 - This replaced the every-10-merges cadence of 2026-09-21. There is no
   merge counter any more. The daily Routine "Nutshell: retrospective every
   10 merges" in the maintainer's Claude account was disabled on 2026-11-04
@@ -22,9 +27,10 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
   maintainer declined a retrospective on 2026-11-04 and asked for none
   until the backlog was cleared (*reported*), so the 2026-11-12 one covered
   14 merges.
-- **Last retrospective:** 2026-11-12, marker commit `d966713` (merge of
-  PR #94). The next one covers the merges since it
-  (`git log --merges --first-parent origin/main d966713..`); move this
+- **Last retrospective:** 2026-11-21, marker commit `be6599f` (merge of
+  PR #97, Dependabot's CodeQL action bump; it covered seven merges, #95 to
+  #101). The next one covers the merges since it
+  (`git log --merges --first-parent be6599f..origin/main`); move this
   marker at every retrospective.
 
 ## Working from a cloud (Linux) session
@@ -69,12 +75,33 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
   works only for a child of the same shell, `kill -0` loops risk PID
   reuse). Run the job as a background command and take its completion
   notification (or Monitor).
+- **When every Bash call fails, check the disk first** (`df -h /`):
+  Claude Code writes each command's output under `/tmp/claude-1000`, so a
+  full root filesystem fails every Bash call with ENOSPC. On 2026-11-21 the
+  76 GB root was full and `/tmp/claude-1000/-home-thomas-nutshell` alone held
+  2.1 GB of earlier sessions' scratch and task output; Desktop Commander's
+  `start_process` still ran and was used to diagnose (*reported*). Old
+  session directories there are the first candidate, then `~/.vscode-server`,
+  `~/.npm`, `~/.cache` and `/var/log`; ask the maintainer before deleting
+  anything, since other sessions may be live.
 - **Wine is not Windows.** v1.2.49 to v1.2.59 died at launch on the
   maintainer's Windows 11 24H2 workstation and passed every `wintest`: the
   manifest did not ask for comctl32 v6, and that build's system32 comctl32
   5.82 no longer exports `SetWindowSubclass` and its siblings. Wine's does,
   so it never reproduced (PR #90). A build only counts as started on Windows
   once it has been run there.
+- **A Windows-host `make test` is a third build** that neither `automaton`
+  nor CI runs. It differs from the two here in two ways: MSYS2's gcc is
+  newer (15.2 on 2026-11-13, *reported*; the cross-compile is gcc 13), so it
+  warns where they do not, and it builds the native test runner, `tests/`
+  included, with `_WIN32` defined. It broke twice unseen:
+  `tests/test_settings_label_win.c` (PR #93) was missing from
+  `WIN_ONLY_TESTS`, so it did not link from PR #93 to PR #100, and once
+  PR #98 made it `-Werror`, four `-Wformat-truncation` warnings in a `_WIN32`
+  branch of `ai_tool_web_search.c`, which gcc 13 compiles without a word,
+  failed it (fixed in PR #100). A new `tests/*_win.c` file goes into
+  `WIN_ONLY_TESTS`; a change to the build flags, or one a newer gcc may warn
+  on, asks the maintainer for a `mingw32-make test`.
 - **Never-pushed branches** can live in `~/nutshell-wt/*` worktrees, the
   main clone `~/nutshell` or the Windows box; check `automaton`'s
   (`repo-status` step 7) before calling an Open item untouched.
@@ -82,13 +109,15 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
   and `mingw32-make wintest`, and can build too. Command blocks written for
   the maintainer there prefix a local file with `.\` and carry no `#`
   comment lines (maintainer, *reported* 2026-11).
-- Native suite baseline: 4,132 tests, 0 failed, in the hosted `Native
-  tests` run on PR #96's head (real libssh2, 2026-11-12); 4,091 on
-  `automaton` with the libssh2 stub. Earlier hosted counts: 4,118 (#94),
-  3,736 (#93), 3,314 (#81). Earlier stub counts: 4,077 (#94), 3,279 (2026-11-03), 3,035
+- Native suite baseline: 4,133 tests, 0 failed, in the hosted `Native
+  tests` run on PR #101's head (real libssh2, 2026-11-21); 4,092 on
+  `automaton` with the libssh2 stub. Earlier hosted counts: 4,132 (#96 to
+  #100), 4,118 (#94), 3,736 (#93), 3,314 (#81). Earlier stub counts: 4,091
+  (#96 to #100), 4,077 (#94), 3,279 (2026-11-03), 3,035
   (2026-10-19), 2,485 (2026-10-13), 1,960 (2026-09-21). The two counts
   differ by the libssh2-gated files, so compare like with like. `wintest`:
-  56 tests after PR #96 (52 in PR #94's body, 45 on 2026-11-03).
+  58 tests after PR #101 (56 after PR #96, 52 in PR #94's body, 45 on
+  2026-11-03).
 - After any change to `NutshellIT.psm1`'s `Add-Type` sources, run the
   harness from a fresh PowerShell window; the module stops at load and says
   so (`tests/integration/README.md`).
@@ -114,10 +143,10 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
   committed as `docs: checkpoint YYYY-MM-DD — ...`. Retrospectives go in
   `docs/retrospectives/`.
 - `build/win/nutshell.exe` (about 5.6 MB, UPX-packed, version resource left
-  uncompressed) is committed on every build; 198 commits on `main` touch it
-  (2026-11-12). Git LFS
+  uncompressed) is committed on every build; 201 commits on `main` touch it
+  (2026-11-21). Git LFS
   is an open question, untracking it is not (the gate reads its version).
-- 93 files are CRLF in the index (2026-11-12); `.gitattributes` holds only
+- 93 files are CRLF in the index (2026-11-21, unchanged since 2026-11-12); `.gitattributes` holds only
   `tests/fixtures/*.bin binary`. Eight of the 93 are fuzz seeds under
   `tests/fuzz/corpus/` whose CR bytes are test input: mark that tree binary
   before any renormalise, or it rewrites them. The notes ask for eol rules
@@ -199,6 +228,17 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
   sources, not the exe. `cpp/use-after-free` fires on a growable buffer that frees its
   field and later reads it; the form it accepts swaps the new block into
   the field before freeing the old one through a local.
+- **A pull request's CodeQL run reports only alerts on the lines it
+  changed.** Alert #30 opened in the push run on PR #101's merge while the
+  PR's own analysis, with the same CodeQL 2.27.5, had `results_count` 0
+  (code-scanning analyses API); its flow runs through `loader.c` lines last
+  changed in 2026-03 and 2026-09, and main's previous push run (2.27.4) did
+  not flag it. The PR's SARIF carries the `codeql-action/pr-diff-range`
+  extension (diff-informed analysis); #30 came from `codeql/cpp-queries`
+  1.10.1 tracking flow through character types, and was dismissed as a false
+  positive (it writes the preserved DPAPI blob). So a new alert on old code
+  shows only on `main`; the `feature-workflow` standing rule reads it after
+  every merge.
 - Moving a file closes its alerts as "fixed" and opens new numbers for the
   same lines (#12 became #27 when `markdown.h` moved to `src/core`). Check
   an alert's history before calling it new.
@@ -212,20 +252,24 @@ Last updated: 2026-11-12 (documentation accuracy pass after PR #96: baselines, o
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-13 (`main` at v1.2.84: PR #96 shipped the Thinking row's
-three modes, PR #98 made the native test build `-Werror`, PR #99 corrected
-the documentation; open pull requests: `gh pr list`, on 2026-11-13 #97,
-Dependabot's actions bump; no open CodeQL alert): a backlog of Windows hand checks from PRs #85-#96, most of
-them never run (five of those merges were unattended); tool-gate follow-ups
-(PR #91); Settings follow-ups (PR #93); a `vcpkg.json` manifest with a
-baseline (deferred by PR #87); `ssh_channel_write` can block the UI thread for
-up to 5 s per write; `run_command` live rounds on five of six providers;
-terminal escapes CSI I, HTS, TBC and scroll-region gaps; harness cases never
-run (telnet, `settings_help_tool_count`, `ui_gallery`); no release since
-v1.1.21; web_fetch watchdog and TLS fail-closed; light-theme ANSI palette;
-top-anchored ConPTY reflow; sub-project 3 needs a spec first. `src/ui/window.c`
-is 6,330 lines, `chat_listview.c` 4,856, `ai_chat.c` 3,133 (the seven
-`ai_chat*.c` files 7,387 since the PR #86 split).
+As of 2026-11-21 (`main` at v1.2.86: PR #101 added the Thinking row's
+fourth mode, Extended; PR #100 fixed the Windows-host `make test`; PR #97
+moved `github/codeql-action` to v4.39.3; open pull requests: `gh pr list`,
+none on 2026-11-21; no open CodeQL alert: #30 was dismissed as a false
+positive on 2026-11-21): a backlog of Windows hand checks from PRs #85-#101, most of
+them never run (five of those merges were unattended; #96's were reported
+fine, not itemised); tool-gate follow-ups (PR #91); Settings follow-ups
+(PR #93); two small `src/` fixes waiting for a code PR (the Search Engine
+help text, the dead `chat_thinking.[ch]`); web_search does not URL-encode
+its query; a `vcpkg.json` manifest with a baseline (deferred by PR #87);
+`ssh_channel_write` can block the UI thread for up to 5 s per write;
+`run_command` live rounds on five of six providers; terminal escapes CSI I,
+HTS, TBC and scroll-region gaps; harness cases never run (telnet,
+`settings_help_tool_count`, `ui_gallery`); no release since v1.1.21;
+web_fetch watchdog and TLS fail-closed; light-theme ANSI palette;
+top-anchored ConPTY reflow; sub-project 3 needs a spec first.
+`src/ui/window.c` is 6,330 lines, `chat_listview.c` 4,893, `ai_chat.c`
+3,134 (the seven `ai_chat*.c` files 7,388 since the PR #86 split).
 
 ## Local shell and keys, facts that outlive the session
 

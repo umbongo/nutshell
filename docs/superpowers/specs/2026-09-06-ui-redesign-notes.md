@@ -4,16 +4,16 @@
 landed at v1.0.92/v1.0.96 (see "Todo" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **4,132 tests**, 0 failures (hosted `Native tests`, real
-libssh2, PR #96's head, 2026-11-12; 4,091 with the libssh2 stub on `automaton`;
-`wintest` 56). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
+batches). Native suite: **4,133 tests**, 0 failures (hosted `Native tests`, real
+libssh2, PR #101's head, 2026-11-21; 4,092 with the libssh2 stub on `automaton`;
+`wintest` 58). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
 (`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 84 registered cases
 (the README's case tables and the telnet file), manual only since 2026-09-15, DPI-aware since
 PR #71; `ui_gallery` captures 20 `--ui-demo` states x 4 themes = 80 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.84 (2026-11-13).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.86 (2026-11-21).
 
 ## Decisions so far
 
@@ -397,11 +397,16 @@ Done, in order (details in the commit messages and the specs named):
   clicked row keeps its place on screen, compact ends at the last non-blank text. Gallery
   states `thinking-compact` and `thinking-open`. Its Windows checks are in the first Open
   item.
-- Extended thinking mode (spec `2026-11-21-thinking-extended-mode-design.md`, amending the
-  modes spec; v1.2.86): a fourth mode that behaves as compact but
+- Extended thinking mode, v1.2.86 (PR #101, 986a7b7; spec
+  `2026-11-21-thinking-extended-mode-design.md`, amending the modes spec): a fourth mode that behaves as compact but
   shows the last 25 lines (pref `extended`, Settings "Always extended", gallery state
   `thinking-extended`). Automatic now streams in Extended and collapses when complete;
-  the click cycle is collapsed, compact, extended, open.
+  the click cycle is collapsed, compact, extended, open. The review fixes: when a layout
+  changes a row's mode (Automatic collapsing at completion) and the view is not pinned to
+  the bottom, `recalc_layout` holds the first visible item, which had moved by about 24
+  lines; the click-cycle wintest uses 40 lines, because at 14 the extended and open heights
+  were equal and it could not fail; a static assert ties the Settings combo to
+  `THINK_PREF_MAX`. Its Windows check is in Open.
 - Native test build fails on warnings, v1.2.84 (PR #98, e46b98c): `-Werror` added to
   `TEST_CFLAGS` (fuzz builds inherit it); no code needed fixing. The MinGW build's stricter
   `-Wpedantic -Wshadow -Wformat=2 -Wconversion` would add five warnings to the native build
@@ -421,6 +426,15 @@ Done, in order (details in the commit messages and the specs named):
   it is an empty translation unit, so nothing noticed; Windows-host `make test` had not
   linked since PR #93. Added to `WIN_ONLY_TESTS`. Run on Windows on the branch
   (2026-11-13, MSYS2 gcc 15.2, real libssh2): `mingw32-make test`, 4,131 tests, 0 failed.
+- **CodeQL alert #30 dismissed as a false positive** (2026-11-21, by the maintainer's
+  decision; no code change). `cpp/cleartext-storage-file` at `src/config/loader.c:127`, opened
+  on `main` by the push run after PR #101. Its flow starts at `password_enc_preserved`, which
+  only ever holds an already-encrypted blob the config could not decrypt here (filled only by
+  `preserve_blob_or_drop()`, written back verbatim by `secret_prepare()`); plaintext secrets
+  always go through `crypto_encrypt_dpapi()` and `config_save()` aborts if that fails. It
+  appeared because `codeql/cpp-queries` 1.10.1 (CLI 2.27.5) began tracking flow through
+  character types (`fprint_json_str`'s `unsigned char c`); main's last clean run used 1.10.0.
+  PR #101's run carried the `pr-diff-range` extension and so reported only its changed lines.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -443,7 +457,9 @@ Open, in priority order:
       surviving a restart and an undock and redock, Settings > Automatic resetting it. All:
       `--ui-demo=all` on the four themes and a `ui_gallery` run (20 states x 4 themes).
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
-      cycles collapsed→compact→extended→open, and Settings 'Always extended' persists.
+      cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
+      (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
+      being read in place, and `--ui-demo=thinking-extended` on the four themes).
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
@@ -481,7 +497,8 @@ Open, in priority order:
 - [ ] Settings help text contradicts itself: the Search Engine tip in
       `src/core/settings_help.c` says "Gemini and custom providers get no tools", while the
       Provider and Commands as tool calls tips say they get them with Commands as tool calls
-      On. A `src/` change, so it waits for the next code PR.
+      On. A `src/` change, so it waits for the next code PR (PRs #100 and #101 were code PRs
+      and did not take it; nor the dead-code item above).
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
@@ -543,12 +560,14 @@ Open, in priority order:
       since, as far as the log shows: PR #76's four gate cases, the telnet cases and
       `settings_help_tool_count` (see their own items), `ui_gallery` since the PR #92 token
       changes, and its states added since: `runlist` (PR #94), `thinking-compact` and
-      `thinking-open` (PR #96). The list-view `wintest` cases added since PR #93 (the
-      four `test_chat_select_win_thinking_*` and `test_settings_label_win_labels_fit_column`)
-      have no recorded run on Windows, only under Wine.
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.84, which adds telnet, the
+      `thinking-open` (PR #96), `thinking-extended` (PR #101). The list-view `wintest` cases
+      added since PR #93 (the `test_chat_select_win_thinking_*` cases, six of them after
+      PR #101's `extended_box` and `mode_change_holds_reader_place`, and
+      `test_settings_label_win_labels_fit_column`) have no recorded run on Windows, only
+      under Wine.
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.86, which adds telnet, the
       password eye, keyboard-interactive auth, the tool gate, `run_command` and the Thinking
-      row modes since then.
+      row modes (four since PR #101) since then.
       The first tag will also be the first run of `release.yml`'s `.sha256` step (PR #87).
       Tagging is the maintainer's call (`feature-workflow` step 10), best after the Windows
       checks in the first item.
