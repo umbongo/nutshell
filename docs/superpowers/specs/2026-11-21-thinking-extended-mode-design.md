@@ -1,6 +1,6 @@
 # Thinking row: Extended mode: design addendum
 
-Date: 2026-11-21. Status: Implemented (version assigned at the build). Amends
+Date: 2026-11-21. Status: Implemented (v1.2.86). Amends
 `2026-11-12-thinking-row-modes-design.md`. Decided by the maintainer; this
 records the decisions.
 

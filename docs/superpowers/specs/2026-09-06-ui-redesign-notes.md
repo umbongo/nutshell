@@ -398,7 +398,7 @@ Done, in order (details in the commit messages and the specs named):
   states `thinking-compact` and `thinking-open`. Its Windows checks are in the first Open
   item.
 - Extended thinking mode (spec `2026-11-21-thinking-extended-mode-design.md`, amending the
-  modes spec; version assigned at the build): a fourth mode that behaves as compact but
+  modes spec; v1.2.86): a fourth mode that behaves as compact but
   shows the last 25 lines (pref `extended`, Settings "Always extended", gallery state
   `thinking-extended`). Automatic now streams in Extended and collapses when complete;
   the click cycle is collapsed, compact, extended, open.
