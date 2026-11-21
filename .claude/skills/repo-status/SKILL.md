@@ -5,7 +5,7 @@ description: Survey the state of umbongo/nutshell — branches, tags, open pull 
 
 # Repo status — branches, PRs and checks
 
-Last updated: 2026-11-12 (known state). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-21 (known state). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## Why the naive commands mislead here
 
@@ -54,11 +54,11 @@ A short table: branch, tip subject, relation to `main` (ahead/behind or
 which have an open PR, which are stale. Say explicitly when a number could
 not be measured (shallow history) rather than reporting a wrong one.
 
-## Known state on 2026-11-12
+## Known state on 2026-11-21
 
-`main` at v1.2.84 (PR #98, `e46b98c`; the docs pass PR #99 follows it).
-Open pull requests: `gh pr list` (on 2026-11-13: #97, Dependabot's actions
-bump). `v1.2.41` (at `7960bd2`)
+`main` at v1.2.86 (PR #101, `986a7b7`; Dependabot's CodeQL action bump,
+PR #97, merged after it at `be6599f`). Open pull requests: `gh pr list`
+(none on 2026-11-21). `v1.2.41` (at `7960bd2`)
 and `v1.2.60` (at `0f5bf9a`, the comctl32 fix) are snapshot branches with
 no tag. `v1.0.76`
 and `v1.1.21` are still both a branch and a tag, and `git ls-remote --tags
