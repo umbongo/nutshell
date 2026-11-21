@@ -421,6 +421,11 @@ Done, in order (details in the commit messages and the specs named):
   it is an empty translation unit, so nothing noticed; Windows-host `make test` had not
   linked since PR #93. Added to `WIN_ONLY_TESTS`. Run on Windows on the branch
   (2026-11-13, MSYS2 gcc 15.2, real libssh2): `mingw32-make test`, 4,131 tests, 0 failed.
+- v1.2.87 (PR #NNN) two queued `src/` fixes. The Search Engine help tip no longer says
+  Gemini and custom providers get no tools: they get them with Commands as tool calls On,
+  and `test_settings_help` asserts it. `src/core/chat_thinking.[ch]` and
+  `tests/test_chat_thinking.c` are deleted (the only reference left in `src/` was an unused
+  `#include` in `ai_chat_internal.h`, dropped too).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -475,13 +480,6 @@ Open, in priority order:
       neither, though the in-app guide lists both styles; the OSC 0/2 window title is parsed
       into `term->title` and nothing reads it, so it is never shown (a tab title or the
       window caption could).
-- [ ] Dead code: `src/core/chat_thinking.[ch]` (the old Thinking-box timer state) is used
-      only by `tests/test_chat_thinking.c`; no file in `src/` includes it. Delete both with
-      the test, or use it.
-- [ ] Settings help text contradicts itself: the Search Engine tip in
-      `src/core/settings_help.c` says "Gemini and custom providers get no tools", while the
-      Provider and Commands as tool calls tips say they get them with Commands as tool calls
-      On. A `src/` change, so it waits for the next code PR.
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile

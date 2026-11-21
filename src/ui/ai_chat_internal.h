@@ -47,7 +47,6 @@
 #include "string_utils.h"
 #include "paste_filter.h"
 #include "chat_msg.h"
-#include "chat_thinking.h"
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "cmd_detail_dlg.h"

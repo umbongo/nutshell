@@ -375,8 +375,9 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Custom. None removes the tool, so the assistant cannot search. "
       "DuckDuckGo (API) falls back to the HTML page when it finds "
       "nothing. Searches run without asking and the query goes to the "
-      "search service. Gemini and custom providers get no tools, so this "
-      "has no effect with them.\nDefault: DuckDuckGo (API).",
+      "search service. Gemini and custom providers get tools only with "
+      "Commands as tool calls set to On; without it this has no effect "
+      "with them.\nDefault: DuckDuckGo (API).",
       "DuckDuckGo (API)",
       0, 0, 0u),
     E(SH_AI_SEARCH_URL, SETTINGS_PAGE_AI_WEB, SH_KIND_SETTING,

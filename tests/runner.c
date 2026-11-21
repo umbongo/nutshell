@@ -2813,17 +2813,6 @@ int test_tool_rounds_cap_follows_setting(void);
 int test_tool_rounds_cap_clamped(void);
 int test_tool_rounds_pause_row_text(void);
 
-/* test_chat_thinking.c */
-int test_thinking_init(void);
-int test_thinking_first_token(void);
-int test_thinking_elapsed_updates(void);
-int test_thinking_complete(void);
-int test_thinking_toggle(void);
-int test_thinking_toggle_during_streaming(void);
-int test_thinking_tick_idle_noop(void);
-int test_thinking_tick_complete_noop(void);
-int test_thinking_reset(void);
-
 /* test_chat_activity.c */
 int test_activity_init(void);
 int test_activity_phase_transition(void);
@@ -7085,15 +7074,6 @@ int main(void) {
     failed += test_tool_rounds_pause_row_text();
 
     printf("\n--- Thinking Controller ---\n");
-    failed += test_thinking_init();
-    failed += test_thinking_first_token();
-    failed += test_thinking_elapsed_updates();
-    failed += test_thinking_complete();
-    failed += test_thinking_toggle();
-    failed += test_thinking_toggle_during_streaming();
-    failed += test_thinking_tick_idle_noop();
-    failed += test_thinking_tick_complete_noop();
-    failed += test_thinking_reset();
 
     printf("\n--- Activity Monitor ---\n");
     failed += test_activity_init();

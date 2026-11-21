@@ -518,6 +518,13 @@ int test_settings_help_labels_match_sources(void) {
                 printf("  Search text lacks \"%s\"\n", search_provider_label(i));
             ASSERT_TRUE(strstr(e->text, search_provider_label(i)) != NULL);
         }
+    /* gemini and custom get tools with Commands as tool calls On (the
+     * Provider and Commands as tool calls tips say so); the Search Engine
+     * tip must not claim they get none. */
+    if (e != NULL) {
+        ASSERT_TRUE(strstr(e->text, "get no tools") == NULL);
+        ASSERT_TRUE(strstr(e->text, "Commands as tool calls") != NULL);
+    }
     TEST_END();
 }
 
