@@ -11,7 +11,7 @@
 /* ---------------------------------------------------------------------
  * State names, in the order ui_demo_states() reports them.  "all" is
  * always last and always means "union of the panel states" (not "ansi",
- * "local", "thinking", "thinking-compact", "thinking-open", "cmddetail", "settings-debug", "policy-auto",
+ * "local", "thinking", "thinking-compact", "thinking-extended", "thinking-open", "cmddetail", "settings-debug", "policy-auto",
  * "policy-compact", "shortcuts" or "runlist", which reuse or swap content,
  * open a modal window or exist to show one thing). "ansi" sits before "local"
  * so the names tests/test_ui_demo.c anchors from the end of the list keep
@@ -20,8 +20,8 @@
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "batches", "runlist", "ansi", "local", "thinking", "thinking-compact", "thinking-open",
-    "cmddetail",
+    "nokey", "nosession", "batches", "runlist", "ansi", "local", "thinking", "thinking-compact", "thinking-extended",
+    "thinking-open", "cmddetail",
     "settings-debug", "policy-auto", "policy-compact", "shortcuts", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
@@ -65,12 +65,13 @@ int ui_demo_scrolls_to_top(const char *state)
            ui_demo_is_thinking_state(state);
 }
 
-/* "thinking", "thinking-compact" and "thinking-open": "chat"'s turns with
+/* "thinking", "thinking-compact", "thinking-extended" and "thinking-open": "chat"'s turns with
  * the long reasoning block, shown in the named Thinking mode. */
 int ui_demo_is_thinking_state(const char *state)
 {
     return state && (strcmp(state, "thinking") == 0 ||
                      strcmp(state, "thinking-compact") == 0 ||
+                     strcmp(state, "thinking-extended") == 0 ||
                      strcmp(state, "thinking-open") == 0);
 }
 
@@ -79,6 +80,7 @@ int ui_demo_thinking_pref(const char *state)
     if (!state) return -1;
     if (strcmp(state, "thinking") == 0) return THINK_PREF_COLLAPSED;
     if (strcmp(state, "thinking-compact") == 0) return THINK_PREF_COMPACT;
+    if (strcmp(state, "thinking-extended") == 0) return THINK_PREF_EXTENDED;
     /* "chat" and "all" showed their reasoning open before the modes existed
      * (the chat selection crosses the Thinking body); they still do. */
     if (strcmp(state, "thinking-open") == 0 || strcmp(state, "chat") == 0 ||

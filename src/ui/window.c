@@ -4655,7 +4655,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                      * (the demo runs on the user's real config). */
                     if (g_config && g_startup_action != CLI_UI_DEMO) {
                         int tpref = (int)lParam;
-                        if (tpref < THINK_PREF_AUTO || tpref > THINK_PREF_OPEN)
+                        if (tpref < THINK_PREF_AUTO || tpref > THINK_PREF_MAX)
                             tpref = THINK_PREF_AUTO;
                         g_config->settings.ai_thinking_mode = tpref;
                         config_save(g_config, active_config_path());

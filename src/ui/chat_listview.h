@@ -97,6 +97,9 @@ typedef struct {
     int render_markdown;        /* 1 = markdown render on, 0 = plain text */
     int thinking_pref;          /* ThinkPref: how every Thinking row shows its
                                  * text (thinking_mode.h); default THINK_PREF_AUTO */
+    int think_mode_changed;     /* a layout re-derived a Thinking row's mode
+                                 * (reply completed, say); recalc_layout()
+                                 * holds the reader's place on it */
 
     /* Hover tracking for painted elements (approval card rows/actions,
      * the [Retry] link) -- see ns_hover.h and Design-System Foundation
