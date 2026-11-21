@@ -16,7 +16,8 @@ Retrospective: `docs/retrospectives/2026-11-21-seven-merges-retrospective.md`.
   <marker>..origin/main` after a fetch, and what counts (every merge); `skills/
   feature-workflow` (step 9, Standing rules) and `memory/MEMORY.md` point to it. The
   count never triggers a retrospective; the no-counter rule of 2026-11-04 stands.
-  CLAUDE.md's matching sentence is not edited here (proposed in the PR body).
+  CLAUDE.md's matching sentence was proposed in the PR body and then added on the
+  maintainer's yes in the session ("Yes, include the number of merges").
 - **`skills/feature-workflow`.** A standing rule reads the CodeQL alerts created after
   any merge to `main`, Dependabot's included, once the push run ends, because a pull
   request's run reports only its changed lines (alert #30 appeared on `main` after PR
