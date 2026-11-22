@@ -1,9 +1,11 @@
 /* src/ui/ns_check.c -- see ns_check.h. */
 #include <winsock2.h>
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <stdlib.h>
 #include "ns_check.h"
+#include "dpi_util.h"
 #include "ns_check_geom.h"
 #include "ns_draw.h"
 #include "ns_hover.h"
@@ -27,14 +29,6 @@ static void redraw_now(HWND hwnd)
     RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 
-static int window_dpi(HWND hwnd)
-{
-    HDC dc = GetDC(hwnd);
-    int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
-    if (dc) ReleaseDC(hwnd, dc);
-    return dpi > 0 ? dpi : 96;
-}
-
 static void paint(HWND hwnd, HDC target, const NsCheck *nc)
 {
     RECT rc;
@@ -43,7 +37,7 @@ static void paint(HWND hwnd, HDC target, const NsCheck *nc)
     if (w <= 0 || h <= 0) return;
 
     const ThemeTokens *tk = ns_tokens();
-    int dpi = window_dpi(hwnd);
+    int dpi = get_window_dpi(hwnd);
 
     /* Double-buffered: no flicker between the background and the box. */
     HDC dc = CreateCompatibleDC(target);
@@ -72,18 +66,19 @@ static void paint(HWND hwnd, HDC target, const NsCheck *nc)
     ns_check_layout(w, h, dpi, &L);
     RECT box = { L.box_x, L.box_y, L.box_x + L.box_w, L.box_y + L.box_h };
 
-    COLORREF border = theme_cr(enabled ? tk->border : tk->text_disabled);
+    COLORREF outline = theme_cr(enabled ? tk->text_dim : tk->text_disabled);
     if (checked) {
         unsigned int fill_rgb = !enabled ? tk->accent.disabled
                               : pressed  ? tk->accent.pressed
                               : hot      ? tk->accent.hover
                                          : tk->accent.base;
         COLORREF fill = theme_cr(fill_rgb);
+        COLORREF mark = theme_cr(tk->accent.label);
+        if (!enabled) mark = rgb_alpha(mark, fill, 0.5f);
         ns_draw_round_fill(dc, &box, L.radius, fill, 255);
         float xy[6];
         ns_check_mark(L.box_x, L.box_y, L.box_w, xy);
-        ns_draw_polyline(dc, xy, 3, theme_cr(tk->accent.label),
-                         ns_check_mark_width(dpi));
+        ns_draw_polyline(dc, xy, 3, mark, ns_check_mark_width(dpi));
     } else {
         COLORREF inner = page;
         if (pressed)
@@ -91,13 +86,16 @@ static void paint(HWND hwnd, HDC target, const NsCheck *nc)
         else if (hot)
             inner = rgb_alpha(theme_cr(tk->text_main), page, 0.08f);
         ns_draw_round_fill(dc, &box, L.radius, inner, 255);
-        COLORREF stroke = (hot || pressed) && enabled
-                              ? theme_cr(tk->accent.base) : border;
-        ns_draw_round_stroke(dc, &box, L.radius, stroke,
-                             hot || pressed ? STROKE_RULE : STROKE_HAIRLINE);
+        /* The stroke is centred on its path: inset by half its width so it
+         * covers whole pixels inside the box instead of straddling the edge. */
+        RECT sr = { box.left + STROKE_RULE / 2, box.top + STROKE_RULE / 2,
+                    box.right - STROKE_RULE / 2, box.bottom - STROKE_RULE / 2 };
+        ns_draw_round_stroke(dc, &sr, L.radius, (hot || pressed) && enabled
+                                 ? theme_cr(tk->accent.base) : outline,
+                             STROKE_RULE);
     }
     if (focused)
-        ns_draw_focus_ring(dc, &box, theme_cr(tk->focus), dpi);
+        ns_draw_focus_ring(dc, &rc, theme_cr(tk->focus), dpi);
 
     WCHAR text[256];
     int n = GetWindowTextW(hwnd, text, (int)(sizeof text / sizeof text[0]));
@@ -138,6 +136,12 @@ static LRESULT CALLBACK check_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         if (wp) paint(hwnd, (HDC)wp, nc);
         return 0;
     case WM_MOUSEMOVE:
+        {
+            RECT cr;
+            POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            GetClientRect(hwnd, &cr);
+            if (!PtInRect(&cr, pt)) break;   /* captured, pointer outside */
+        }
         if (!nc->tracking) {
             TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, hwnd, 0 };
             nc->tracking = TrackMouseEvent(&t) != 0;
@@ -183,4 +187,10 @@ void ns_check_attach(HWND chk)
         free(nc);
     else
         InvalidateRect(chk, NULL, FALSE);
+}
+
+int ns_check_is_attached(HWND chk)
+{
+    DWORD_PTR ref = 0;
+    return chk && GetWindowSubclass(chk, check_proc, NS_CHECK_SUBCLASS_ID, &ref);
 }

@@ -3781,6 +3781,7 @@ int test_ns_check_layout_box_is_square_and_scaled(void);
 int test_ns_check_layout_inside_control_and_centred(void);
 int test_ns_check_layout_small_control_shrinks_box(void);
 int test_ns_check_layout_empty_and_bad_dpi(void);
+int test_ns_check_layout_narrow_control_clamps_label(void);
 int test_ns_check_mark_inside_box_and_shaped(void);
 int test_ns_check_mark_scales_linearly(void);
 int test_ns_check_mark_width_scales_with_floor(void);
@@ -8031,6 +8032,7 @@ int main(void) {
     failed += test_ns_check_layout_inside_control_and_centred();
     failed += test_ns_check_layout_small_control_shrinks_box();
     failed += test_ns_check_layout_empty_and_bad_dpi();
+    failed += test_ns_check_layout_narrow_control_clamps_label();
     failed += test_ns_check_mark_inside_box_and_shaped();
     failed += test_ns_check_mark_scales_linearly();
     failed += test_ns_check_mark_width_scales_with_floor();

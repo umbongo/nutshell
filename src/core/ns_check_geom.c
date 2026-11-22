@@ -10,18 +10,20 @@ void ns_check_layout(int ctl_w, int ctl_h, int dpi, NsCheckLayout *out)
     memset(out, 0, sizeof *out);
     if (ctl_w <= 0 || ctl_h <= 0) return;
 
+    int margin = ns_scale(SP_XS, dpi);   /* room for the focus ring */
+    if (margin * 2 + 1 > ctl_w) margin = 0;
     int side = ns_scale(SZ_CHECK, dpi);
     if (side > ctl_h) side = ctl_h;
-    if (side > ctl_w) side = ctl_w;
+    if (side > ctl_w - margin) side = ctl_w - margin;
 
-    out->box_x = 0;
+    out->box_x = margin;
     out->box_y = (ctl_h - side) / 2;
     out->box_w = side;
     out->box_h = side;
     out->radius = ns_scale(R_CHECK, dpi);
     if (out->radius * 2 > side) out->radius = side / 2;
 
-    int lx = side + ns_scale(SP_SM, dpi);
+    int lx = out->box_x + side + ns_scale(SP_SM, dpi);
     if (lx > ctl_w) lx = ctl_w;
     out->label_x = lx;
     out->label_y = 0;

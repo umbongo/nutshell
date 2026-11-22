@@ -18,5 +18,8 @@
  * at any time (the label follows WM_GETFONT). */
 void ns_check_attach(HWND chk);
 
+/* Nonzero once `chk` carries the themed painter (the wintests use it). */
+int ns_check_is_attached(HWND chk);
+
 #endif
 #endif

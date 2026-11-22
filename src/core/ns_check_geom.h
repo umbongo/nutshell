@@ -14,7 +14,8 @@ typedef struct {
 
 /* Lays the box and label out in a control of ctl_w x ctl_h pixels: a square
  * of ns_scale(SZ_CHECK, dpi) (shrunk to ctl_h, or ctl_w, when the control is
- * smaller), flush left and centred vertically; the label starts an SP_SM gap
+ * smaller), SP_XS from the left edge (room for the focus ring, which is drawn
+ * around the whole control) and centred vertically; the label starts an SP_SM gap
  * after it and fills the rest of the width and the full height. A control with
  * no area gives an all-zero layout. dpi <= 0 is treated as 96. */
 void ns_check_layout(int ctl_w, int ctl_h, int dpi, NsCheckLayout *out);

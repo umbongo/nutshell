@@ -15,13 +15,14 @@ int test_ns_check_layout_box_is_square_and_scaled(void)
         ns_check_layout(400, ns_scale(SZ_CTRL_H, dpi), dpi, &L);
         ASSERT_EQ(L.box_w, ns_scale(SZ_CHECK, dpi));
         ASSERT_EQ(L.box_h, L.box_w);
-        ASSERT_EQ(L.box_x, 0);
+        ASSERT_EQ(L.box_x, ns_scale(SP_XS, dpi));
         ASSERT_EQ(L.radius, ns_scale(R_CHECK, dpi));
     }
     NsCheckLayout L96;
     ns_check_layout(300, 28, 96, &L96);
-    ASSERT_EQ(L96.box_w, 18);
-    ASSERT_EQ(L96.box_y, 5);
+    ASSERT_EQ(L96.box_w, 20);
+    ASSERT_EQ(L96.box_x, 4);
+    ASSERT_EQ(L96.box_y, 4);
     TEST_END();
 }
 
@@ -39,7 +40,7 @@ int test_ns_check_layout_inside_control_and_centred(void)
         ASSERT_TRUE(L.box_x + L.box_w <= w);
         int top = L.box_y, bottom = h - (L.box_y + L.box_h);
         ASSERT_TRUE(top - bottom <= 1 && bottom - top <= 1);
-        ASSERT_EQ(L.label_x, L.box_w + ns_scale(SP_SM, dpi));
+        ASSERT_EQ(L.label_x, L.box_x + L.box_w + ns_scale(SP_SM, dpi));
         ASSERT_EQ(L.label_x + L.label_w, w);
         ASSERT_EQ(L.label_h, h);
         ASSERT_TRUE(L.label_x >= L.box_x + L.box_w);
@@ -56,10 +57,25 @@ int test_ns_check_layout_small_control_shrinks_box(void)
     ASSERT_EQ(L.box_h, 10);
     ASSERT_EQ(L.box_y, 0);
     ASSERT_TRUE(L.radius * 2 <= 10);
-    ns_check_layout(12, 40, 96, &L);
-    ASSERT_EQ(L.box_w, 12);
-    ASSERT_EQ(L.label_w, 0);
-    ASSERT_TRUE(L.label_x <= 12);
+    ns_check_layout(14, 40, 96, &L);
+    ASSERT_TRUE(L.box_x + L.box_w <= 14);
+    ASSERT_EQ(L.label_w, 14 - L.label_x);
+    ASSERT_TRUE(L.label_x <= 14);
+    ASSERT_TRUE(L.label_w >= 0);
+    TEST_END();
+}
+
+int test_ns_check_layout_narrow_control_clamps_label(void)
+{
+    TEST_BEGIN();
+    for (int w = 1; w <= 40; w++) {
+        NsCheckLayout L;
+        ns_check_layout(w, 28, 96, &L);
+        ASSERT_TRUE(L.box_x + L.box_w <= w);
+        ASSERT_TRUE(L.label_x <= w);
+        ASSERT_TRUE(L.label_w >= 0);
+        ASSERT_EQ(L.label_x + L.label_w, w);
+    }
     TEST_END();
 }
 

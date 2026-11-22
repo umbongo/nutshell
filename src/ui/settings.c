@@ -1048,7 +1048,7 @@ static void debug_build_page(SettingsDlgData *nd)
                                SH_DBG_RECORDER);
         dbg_fill_level_combo(cmb, st->debug_recorder_level);
         EnableWindow(cmb, st->debug_recorder ? TRUE : FALSE);
-        dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb, 250 + 10 + 90, 90, 1);
+        dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb, 300 + 10 + 90, 90, 1);
     }
     {
         HWND chk = make_check2(nd, IDC_DBG_SCREENSHOT, SH_DBG_SCREENSHOT);

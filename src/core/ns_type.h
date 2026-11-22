@@ -24,7 +24,7 @@ enum {
     SZ_ICON      = 20,
     SZ_TAG_H     = 20,
     SZ_AVATAR    = 20,
-    SZ_CHECK     = 18,   /* checkbox square (ns_check) */
+    SZ_CHECK     = 20,   /* checkbox square (ns_check); its check-mark pen scales with DPI, the one stroke exception */
     SZ_BTN_MIN_W = 80
 };
 
