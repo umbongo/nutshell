@@ -22,6 +22,7 @@
 #include "net_guard.h"
 #include "ns_tokens.h"
 #include "ns_draw.h"
+#include "ns_check.h"
 #include "ns_tip.h"
 #include "settings_help.h"
 #include "search_providers.h"
@@ -286,9 +287,9 @@ static HWND make_check2(SettingsDlgData *d, int id, SettingsHelpId help)
 {
     HWND chk = page_ctrl(d, "BUTTON", settings_help_get((int)help)->label,
                          BS_AUTOCHECKBOX, id, help);
-    /* Classic rendering, or comctl32 v6 ignores the WM_CTLCOLORSTATIC text
-     * colour and the label draws black on the dark themes. */
-    ns_control_classic(chk);
+    /* The themed painter draws the box and the label from the tokens, so the
+     * control needs no classic-rendering opt-out. */
+    ns_check_attach(chk);
     return chk;
 }
 

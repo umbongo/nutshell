@@ -3776,6 +3776,15 @@ int test_ui_tokens_resolve_null_safe(void);
 int test_ui_tokens_colour_gate(void);
 int test_ui_tokens_scale_gate(void);
 
+/* test_ns_check_geom.c */
+int test_ns_check_layout_box_is_square_and_scaled(void);
+int test_ns_check_layout_inside_control_and_centred(void);
+int test_ns_check_layout_small_control_shrinks_box(void);
+int test_ns_check_layout_empty_and_bad_dpi(void);
+int test_ns_check_mark_inside_box_and_shaped(void);
+int test_ns_check_mark_scales_linearly(void);
+int test_ns_check_mark_width_scales_with_floor(void);
+
 /* test_pw_prompt_layout.c */
 int test_pw_layout_today_unchanged(void);
 int test_pw_layout_text_row(void);
@@ -8018,6 +8027,13 @@ int main(void) {
     failed += test_ui_tokens_resolve_null_safe();
     failed += test_ui_tokens_colour_gate();
     failed += test_ui_tokens_scale_gate();
+    failed += test_ns_check_layout_box_is_square_and_scaled();
+    failed += test_ns_check_layout_inside_control_and_centred();
+    failed += test_ns_check_layout_small_control_shrinks_box();
+    failed += test_ns_check_layout_empty_and_bad_dpi();
+    failed += test_ns_check_mark_inside_box_and_shaped();
+    failed += test_ns_check_mark_scales_linearly();
+    failed += test_ns_check_mark_width_scales_with_floor();
 
     printf("\n--- Design System: layout ---\n");
     failed += test_ns_button_layout_with_icon_no_overlap_96();

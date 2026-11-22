@@ -24,13 +24,14 @@ enum {
     SZ_ICON      = 20,
     SZ_TAG_H     = 20,
     SZ_AVATAR    = 20,
+    SZ_CHECK     = 18,   /* checkbox square (ns_check) */
     SZ_BTN_MIN_W = 80
 };
 
 /* ---- Corner radii ----------------------------------------------------------
  * R_PILL isn't a constant here: it is always half of an element's own
  * (already-scaled) height, so it is a function, ns_type_pill(height). */
-enum { R_CTRL = 4, R_CARD = 8 };
+enum { R_CTRL = 4, R_CARD = 8, R_CHECK = 4 };
 
 /* ---- Stroke widths (not scaled; the only non-multiples of 4 in this file) - */
 enum { STROKE_HAIRLINE = 1, STROKE_RULE = 2, STROKE_BAR = 3 };
