@@ -49,6 +49,11 @@ void ns_draw_round_fill(HDC hdc, const RECT *rc, int radius_px,
 void ns_draw_round_stroke(HDC hdc, const RECT *rc, int radius_px,
                            COLORREF stroke, int width_px);
 
+/* Anti-aliased open polyline through `n` points (x,y pairs of floats, client
+ * pixels) with round caps and joins: the check mark of ns_check.c. */
+void ns_draw_polyline(HDC hdc, const float *xy, int n, COLORREF colour,
+                       int width_px);
+
 /* A raised card: raised.base fill, border stroke at STROKE_HAIRLINE,
  * corner radius ns_scale(R_CARD, dpi). */
 void ns_draw_card(HDC hdc, const RECT *rc, const ThemeTokens *tokens,

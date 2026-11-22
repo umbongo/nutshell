@@ -35,6 +35,11 @@ int test_chat_select_win_query_word(void);
 int test_chat_select_win_drag_ignores_buttonless_move(void);
 int test_chat_select_win_short_list(void);
 
+/* test_ns_check_win.c */
+int test_ns_check_win_check_state_round_trips(void);
+int test_ns_check_win_click_toggles_and_paints(void);
+int test_ns_check_win_null_and_destroy_are_safe(void);
+
 /* test_pw_reveal_win.c */
 int test_pw_reveal_win_press_shows_release_restores_mask(void);
 int test_pw_reveal_win_text_caret_selection_unchanged(void);
@@ -304,6 +309,9 @@ int main(int argc, char **argv)
     failed += test_chat_select_win_drag_ignores_buttonless_move();
     failed += test_chat_select_win_short_list();
     InitCommonControls();
+    failed += test_ns_check_win_check_state_round_trips();
+    failed += test_ns_check_win_click_toggles_and_paints();
+    failed += test_ns_check_win_null_and_destroy_are_safe();
     failed += test_pw_reveal_win_press_shows_release_restores_mask();
     failed += test_pw_reveal_win_text_caret_selection_unchanged();
     failed += test_pw_reveal_win_capture_lost_masks();

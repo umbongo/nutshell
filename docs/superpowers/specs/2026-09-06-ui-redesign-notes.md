@@ -465,6 +465,12 @@ Open, in priority order:
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
       being read in place, and `--ui-demo=thinking-extended` on the four themes).
+- [ ] Windows hand check: themed checkboxes (feat/checkbox-style, v1.2.89; seen only under
+      Wine at 96 DPI). Settings (every page with a checkbox) and the password prompt on the
+      four themes; at 125 % and 200 % and dragged to a monitor of a different scale; no
+      frame of the native box flashing on click, focus change or Space; the keyboard focus
+      ring on a checked box; no label ellipsised (Debugging's "Keep recent detail for issue
+      marks, at" row was widened to 300 px on an estimate).
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes

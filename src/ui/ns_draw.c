@@ -147,6 +147,28 @@ void ns_draw_card(HDC hdc, const RECT *rc, const ThemeTokens *tokens,
                          STROKE_HAIRLINE);
 }
 
+void ns_draw_polyline(HDC hdc, const float *xy, int n, COLORREF colour,
+                       int width_px)
+{
+    if (!hdc || !xy || n < 2) return;
+    if (width_px < 1) width_px = 1;
+
+    GpGraphics *g = NULL;
+    if (GdipCreateFromHDC(hdc, &g) != 0) return;
+    GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+
+    GpPen *pen = NULL;
+    GdipCreatePen1(argb_of(colour, 255), (REAL)width_px, UnitPixel, &pen);
+    GdipSetPenLineCap197819(pen, LineCapRound, LineCapRound, DashCapRound);
+    GdipSetPenLineJoin(pen, LineJoinRound);
+    for (int i = 0; i + 1 < n; i++)
+        GdipDrawLine(g, pen, xy[2 * i], xy[2 * i + 1],
+                     xy[2 * i + 2], xy[2 * i + 3]);
+
+    GdipDeletePen(pen);
+    GdipDeleteGraphics(g);
+}
+
 /* ── Button ─────────────────────────────────────────────────────────── */
 
 void ns_draw_button(HDC hdc, const RECT *rc, const ThemeSurface *surface,
