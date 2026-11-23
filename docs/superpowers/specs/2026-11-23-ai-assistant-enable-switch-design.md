@@ -63,8 +63,27 @@ The switch is checked at one gate per entry point **(from review)**:
 ## 3. Notices: one format, starting with upgrade and first run
 
 **A shared notice format** **(maintainer)**. Nutshell gets one notice
-component, and every notice uses it: the two below and any added later. Each
-notice has its own text. What stays the same is the form and how it behaves:
+component, and every notice uses it: the two below, the configuration
+warnings, and any added later. Each notice has its own text. What stays the
+same is the form and how it behaves.
+
+**Delivery: a themed modal dialog** **(maintainer: "if that means using
+popups, so be it"; recommended by review)**. It is the only form that works
+both at launch and from inside Settings or the Session Manager, because the
+window that raises it owns it. Reviewed 2026-11-23 by `claude-fable-5-2`
+(effort high), which weighed it against the alternatives:
+
+- **A non-blocking banner in the main window** fails twice. The main loop
+  has no `IsDialogMessage` (`window.c:1257-1261`), so Enter and Escape would
+  go to the shell. A banner would also sit in a disabled main window whenever
+  Settings or the Session Manager is open, including the Session Manager
+  opened at start (`window.c:5276-5278`).
+- **`TaskDialogIndirect`** has no dark mode, and a static import would risk
+  the comctl32 launch failure of PR #90.
+- **`MessageBox`** cannot be themed and has no bold labels or "Review in
+  Settings" button.
+
+The form:
 
 - **Layout:** a title, an opening line, an optional list of items in bold
   label + plain value form, an optional closing line, and up to two buttons
@@ -72,20 +91,63 @@ notice has its own text. What stays the same is the form and how it behaves:
 - **Tone:** information or warning, drawn with the design-system `info` and
   `warning` intents. The tone changes only the accent and icon, never the
   layout.
-- **Behaviour:** themed with the design-system tokens; **non-blocking**
-  (not a modal message box) **(call)**; shown after the main window appears;
-  dismissed by OK, Escape or its close control; one at a time, so a second
-  notice waits until the first is dismissed **(call)**.
-- **The code:** one module that takes the notice's content as data, so a new
-  notice is new text, not a new window. `--ui-demo` shows it, so the gallery
-  covers it on all four themes.
-- **Order:** warnings are shown before information notices.
+- **Controls:** real `STATIC` and `BUTTON` children, as in `pw_prompt.c:107-149`,
+  not painted text, so screen readers and the harness can read it. Colours
+  come from `ns_tokens()`, fonts from `ns_font`, buttons from
+  `ns_draw_button`. It takes the owner's DPI and handles `WM_DPICHANGED` as
+  `cheatsheet_dlg.c:334-345` does. It is centred on its owner and is not
+  topmost.
+- **Keys:** the modal loop handles them, since owner-drawn buttons defeat
+  default-button handling (`window.c:3611-3618`). Enter presses the focused
+  button, Escape or the close box means OK, Tab moves between the buttons,
+  and Ctrl+C copies the notice as plain text.
+- **Modal loop:** a copy of the cheatsheet's (`cheatsheet_dlg.c:396-400`,
+  `pw_prompt.c:243-254, 337-356`): it re-enables the owner only if it was
+  enabled before, ends on `IsWindow` or a closing flag, and reposts a real
+  `WM_QUIT`.
+- **The action button** closes the notice, then posts `IDM_EDIT_SETTINGS`
+  with the page (`window.c:4716`), so Settings never opens nested inside the
+  notice's loop.
+- **Owner and timing:**
+  - At launch the config loads inside `WM_CREATE` (`window.c:4420-4487`),
+    before `ShowWindow` (`window.c:6308`) and before the theme is resolved
+    (`window.c:4528`). `WM_CREATE` therefore only queues its notices, by
+    value. The queue is shown at the top of `WM_STARTUP_CONNECT`
+    (`window.c:5233`), once the main window is visible and before any
+    auto-connect. Today's boxes appear with no main window at all, so this
+    is also a fix.
+  - Elsewhere the owner is the window that raised it: Settings or the
+    Session Manager for their save failures.
+  - Worker threads never show one directly. They post to the UI thread, as
+    `WM_CONN_PROMPT` does (`window.c:5295`).
+- **Order:** one at a time, warnings before information. At most two are due
+  at launch (an invalid config whose save then fails).
+- **The code:** content and ordering as data in `src/core/notice.c`, layout
+  in `src/core/notice_layout.c`, the window (class `Nutshell_Notice`) in
+  `src/ui/notice_dlg.c`, matching the `*_layout.c` + dialog split of
+  `cheatsheet_dlg.c` and `pw_prompt.c` **(from review)**.
+- **Demo:** launch notices are discarded under `--ui-demo`. Two states,
+  `notice-info` and `notice-warning`, open it over the demo window. Like
+  `shortcuts` (`window.c:2641-2644`) they are not part of `all`, because the
+  dialog is modal, and a gallery case modelled on
+  `help_shortcuts_sheet_gallery` captures them on all four themes.
+- **What does not use it:**
+  - Yes/no decisions: `session_manager.c:796,846`, `settings.c:2200`,
+    `ai_chat_status.c:103`, `window.c:2749`, and the host-key prompt
+    (`window.c:5350`), which is security-critical and blocks a worker.
+  - `window.c:6277,6304` (window registration or creation failed), where
+    there is no window or theme yet.
+  - Transient status, which belongs in the tab or panel.
+- **The other OK-only message boxes** (about 18) stay stock in this pull
+  request. Moving them is a mechanical follow-up, recorded in the notes'
+  Open list **(call)**.
 
-**The launch-time configuration warnings move onto the format in this pull
-request** **(maintainer)**. They are the four modal message boxes in
-`window.c`'s config load (`window.c:4426-4487`). Each keeps what it does
-today, including turning saving off for the run; only the form and wording
-change **(call: wording)**:
+**The configuration warnings move onto the format in this pull request**
+**(maintainer)**. They are the four message boxes in `window.c`'s config
+load (`window.c:4426-4487`) and the three "Save Failed" boxes in Settings
+(`settings.c:2248`) and the Session Manager (`session_manager.c:809,911`).
+Each keeps what it does today, including turning saving off for the run;
+only the form and wording change **(call: wording)**:
 
 | Today | Title | Text |
 |---|---|---|
@@ -93,14 +155,14 @@ change **(call: wording)**:
 | File unreadable (`4444`) | Your configuration couldn't be read | nutshell.config may be locked by another program, or larger than expected. This run uses the standard settings and saves nothing, so your file is left untouched. Restart Nutshell once the file can be read. |
 | File invalid (`4457`) | Your configuration couldn't be loaded | nutshell.config wasn't valid, so it was kept beside the new one as `nutshell.config.bad-<timestamp>` (the real name is shown). This run starts with the standard settings. |
 | Save failed at launch (`4484`) | Your configuration couldn't be saved | nutshell.config couldn't be written, so what was just added (the "Local shell" profile, new settings, or a new file) will be gone at the next start. |
+| Save failed in Settings, Session Manager | Your changes couldn't be saved | The existing text for each: which change was not written to disk. |
 
-The last row also covers the upgrade and first-run saves below: when either
-save fails, this warning replaces the information notice.
+The launch save-failure row also covers the upgrade and first-run saves
+below: when either save fails, it replaces the information notice.
 
-The "Save Failed" boxes inside Settings (`settings.c:2248`) and the Session
-Manager (`session_manager.c:809,911`) stay modal message boxes **(call)**.
-They answer a click inside a modal dialog that stays open, where a notice in
-the main window behind it would go unseen.
+- **"Shown once" can be lost** **(call, from review)**. The file is saved
+  before the notice is dismissed, so if the process is killed while it is
+  open, the notice is not shown again. This is accepted.
 
 **The first two notices.** This applies to every version that adds settings
 **(maintainer)**. Today a first run with no `nutshell.config` says nothing
@@ -210,6 +272,7 @@ persist it **(from review)**.
   - Which notice each config load outcome produces (missing, invalid,
     unreadable, no folder, save failed) and their order, with the content
     built as data so it is testable without a window.
+  - The notice layout's geometry.
   - The load and save round-trip, and the voice dependency rule.
 - **The real exe, not a `wintest`** **(from review)**. The `wintest` binary
   does not contain `window.c`, `ai_chat*.c` or the delay-import library, so a
@@ -224,8 +287,23 @@ persist it **(from review)**.
     were never requested by our code. This runs under Wine on `automaton` and
     in the harness on Windows.
 - **`wintest`:** what it can honestly test. For example, `ns_winhttp_open`
-  refusing while off, if it is added to the wintest sources.
-- **Integration harness:** the existing AI cases run with the switch on. A
+  refusing while off, if it is added to the wintest sources. Also the notice
+  dialog: it opens, its text reads back through its `STATIC` children, and it
+  closes on Enter and Escape (`pw_prompt.c`, `ns_font.c` and `ns_draw.c` are
+  already in `WIN_TEST_SRCS`).
+- **Integration harness** **(from review)**: a modal notice blocks
+  auto-connect, so every case needs a complete config.
+  - `Nutshell_Notice` joins `DIALOG_CLASSES` (`NutshellIT.psm1:648`).
+  - The new fields join `New-NutshellTestEnv`'s settings table
+    (`NutshellIT.psm1:706-720`), so no case sees an upgrade notice. LAUNCH-1
+    (`50-window.ps1:67`) then catches any future field that is forgotten.
+  - LAUNCH-2, which asserts that a first run shows no dialog
+    (`50-window.ps1:140`), is rewritten to expect the first-run notice.
+    LAUNCH-3, which matches only a `#32770` titled "Configuration Warning"
+    (`50-window.ps1:44,189-191`), is rewritten for the warning notice.
+  - `automaton` has no `pwsh`, so the case files are checked by a Windows run
+    before the merge.
+- **Integration harness cases:** the existing AI cases run with the switch on. A
   gate case starts with it off and checks that the View menu has no AI items
   and that the self-report is clean. A case with an upgrade-lacking config
   checks that the file was rewritten and the notice shown. A case with no
@@ -236,11 +314,13 @@ persist it **(from review)**.
   - Upgrading the maintainer's real config, which has a key: the assistant
     stays on and the notice reads well.
   - Turning it off mid-reply stops at once.
+  - The notice on Windows 11: dark title bar, per-monitor DPI when dragged
+    between monitors, and Narrator reading it (Wine cannot show these).
 
 ## 7. Left to the builder
 
 - Removing the menu items versus greying them out. Removal is preferred, per
   "as if it did not exist".
-- The notice component's exact visual form within the design system.
+- The notice dialog's exact visual form within the design system.
 - The module boundary for AI init and teardown, and the handle registry for
   cancellation.
