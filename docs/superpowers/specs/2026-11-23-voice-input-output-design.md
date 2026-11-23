@@ -211,17 +211,34 @@ Toggle mode). A thin live level bar under the input is **left to the builder**.
   - Use `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY`
     (Windows 10 and later) so the engine delivers 16 kHz mono 16-bit, with no
     resampler of our own.
-  - "Windows default" means the default **communications** capture endpoint
-    (`eCapture`, `eCommunications`), which is what headsets register as.
+  - "Windows default" means the **default device** (`eCapture`, `eConsole`)
+    **(maintainer)**. The communications role would make Windows duck other
+    audio on every press. Playback uses the same role, so input and output
+    follow the same choice.
   - A chosen device is stored by its endpoint ID, with its full friendly name
-    kept for display. If the ID has gone, Windows default is used and Settings
-    says so.
+    kept for display. If the ID cannot be opened, or its state is not
+    `DEVICE_STATE_ACTIVE` (`GetDevice` succeeds for unplugged endpoints), then
+    Windows default is used and Settings says so. The stored ID is **not**
+    overwritten by that fallback, because endpoint IDs are per PC and the
+    config travels **(from review)**.
   - Device arrival and removal (`IMMNotificationClient`) refreshes an open
-    Settings list. Removal of the active device ends a recording with an error,
-    never a hang.
+    Settings list. Its callbacks arrive on a system thread, so they only
+    `PostMessage` and never unregister inside a callback.
+  - Removal of the active device ends a recording with an error, never a hang.
+    The capture loop waits on the buffer event with a timeout and also on a
+    stop event, because the buffer event simply stops firing when the device
+    goes, and the error shows only at the next `GetBuffer`.
+  - **Microphone privacy:** Windows' privacy block delivers silence, not an
+    error. A capture whose samples are all zero reports "Windows may be
+    blocking the microphone: Settings > Privacy & security > Microphone"
+    instead of "Didn't catch that" **(from review)**.
 - The COM work is in `src/ui`, written in C with `COBJMACROS` against
-  MinGW's `mmdeviceapi.h` / `audioclient.h`. COM is initialised on the audio
-  worker thread, not assumed on the UI thread.
+  MinGW's `mmdeviceapi.h` / `audioclient.h`. **One audio thread**, initialised
+  for the MTA, owns every audio COM object, including enumeration for
+  Settings. The UI thread never touches them; it is only scoped-STA today
+  (`settings.c:967`).
+- Under Wine on `automaton` there is likely no endpoint, so the tests accept
+  `E_NOTFOUND`. Only a Windows hand check counts for real capture.
 - The WAV header writer, the PCM buffer and the level computation (peak or RMS
   for the meter) are pure code in `src/core` with native tests.
 - Audio buffers are wiped with `secure_zero` and freed after the upload, never
@@ -265,8 +282,8 @@ Toggle mode). A thin live level bar under the input is **left to the builder**.
   `response_format=wav` or `pcm`; Gemini returns 24 kHz PCM), so there is no
   decoder **(call)**. MP3 decoding is a non-goal.
 - **Playback** is WASAPI render in shared mode **(maintainer)**, on the default
-  **console** render endpoint (`eRender`, `eConsole`), with the same
-  auto-convert flags and the same worker-thread model as capture.
+  device (`eRender`, `eConsole`), with the same auto-convert flags, on the same
+  audio thread as capture.
 - **Logging:** the text sent for speech is logged only through `DLOG_CONTENT`.
 
 ## 6. Providers
@@ -332,8 +349,12 @@ is off:
   would load the audio stack). The keys and other voice settings are kept, but
   not used.
 
-Ticking it in the dialog enables the page's controls and only then enumerates
-devices. Saving with it on starts the feature without a restart.
+Ticking it in the dialog enables the page's controls. Devices are enumerated
+only after it has been **saved** on, so ticking it and pressing Cancel loads
+nothing **(from review)**. Until then the device list shows "Save to list
+microphones". Saving with it on starts the feature without a restart. On the
+first load of a config without the field, it is added as off and named in the
+configuration upgrade notice (AI switch design, §3).
 
 Saving with it off tears the feature down at once:
 - Any recording is discarded and playback stopped.
@@ -427,18 +448,18 @@ TTS) as provider entries; ElevenLabs and Deepgram adapters.
   - Markdown-to-prose extractor: the skip markers, inline code, links.
   - Sentence chunker against limits.
   - Settings load/save round-trip for every new field and both secrets.
+- **Voice off, against the real exe** (CLAUDE.md, "Optional features"): the
+  self-report shows that our code requested no audio DLL and created no device
+  enumerator. A posted Right Ctrl reaches the input unchanged.
 - `wintest`:
   - WASAPI device enumeration under Wine.
   - The push-to-talk hook driven by posted key messages.
-  - **Voice off**: after the app's voice initialisation runs with the flag off,
-    `GetModuleHandleW(L"mmdevapi.dll")` and `L"audioses.dll"` are NULL, no
-    hook is installed, and a posted Right Ctrl reaches the input unchanged.
   - Headless Wine on `automaton` may have no audio endpoint, so the capture
     and playback tests assert a **defined "no device" outcome** (a clean error,
     no hang, no leak) when enumeration returns none. They exercise the real
     path only when an endpoint exists.
-- The integration harness repeats the voice-off module check against the real
-  exe at startup, with a config that has voice off.
+- The integration harness repeats the voice-off self-report check on Windows,
+  with a config that has voice off.
 - Integration harness: a debug-only way to feed a WAV file in place of the
   microphone is **left to the builder**. A harness case speaks a fixture
   ("list the files in my home directory"), checks that the message appears and

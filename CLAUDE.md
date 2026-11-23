@@ -106,10 +106,17 @@ There is a single `config.h` at `src/config/config.h`, used by both the Windows 
 
 ## Optional features: off unless enabled, not loaded while off
 
-My standing architecture principle (2026-11-23), for every feature or module
-that is not core to an SSH terminal (the AI assistant, voice, and whatever comes
-next). The aim is a small security footprint: code that is not in use must not
-be running.
+My standing architecture principle (2026-11-23). The aim is a small security
+footprint: code that is not in use must not be running.
+
+**What counts as an optional feature:** one that adds any of these:
+- a DLL the terminal does not otherwise need;
+- a network destination other than the session's own host;
+- a device (microphone, speakers, camera and the like).
+
+Today that is the **AI assistant** and **voice**. Telnet, the local shell,
+session logging and the debug recorder are not covered: they add none of the
+three. A new feature is checked against these three tests when it is designed.
 
 - **An Enable switch in Settings.** Each such feature has one, saved in the
   config like any other setting.
@@ -117,25 +124,47 @@ be running.
   feature off. When an update first introduces a feature's switch, a config
   that already shows the feature in use starts with it on, for example the AI
   assistant with a saved API key. That decision is made once, at the first load
-  that lacks the field, and is then written to the config.
-- **Not loaded while off.** With the switch off, the feature:
-  - creates no windows, threads, timers, hooks or COM objects;
-  - makes no network requests;
-  - maps none of its own DLLs, which is why such DLLs are delay-loaded or
-    loaded at run time, never imported statically;
-  - registers no active shortcuts, so its keys behave as if it did not exist.
+  that lacks the field.
+- **New settings are written at launch, and the user is told.** When a config
+  lacks fields this version knows, they are added with their decided values
+  and the file is saved at once. A one-time, non-blocking notice then names
+  each added setting and the value it was given, in plain words. The first
+  use is the AI assistant switch design
+  (`docs/superpowers/specs/2026-11-23-ai-assistant-enable-switch-design.md`
+  §3). An older exe drops fields it does not know, so the next new launch adds
+  them again and says so. That is accepted.
+- **Not loaded while off.** With the switch off, Nutshell's own code:
+  - creates none of the feature's windows, threads, timers, hooks or COM
+    objects;
+  - makes none of its network requests;
+  - asks Windows for none of its DLLs, which is why such DLLs are delay-loaded
+    or loaded at run time, never imported statically;
+  - leaves its shortcuts inactive, so its keys behave as if it did not exist.
 
   Its settings, keys included, are kept but unused. The code is still linked
-  into the exe; "not loaded" means none of it runs.
+  into the exe; "not loaded" means none of it runs. Windows' shell dialogs and
+  extensions may map DLLs on their own, so the promise covers our code, not the
+  process.
+- **One gate per entry point.** Each feature has a single constructor and a
+  single network opener that refuse while it is off, rather than checks
+  scattered through the code.
 - **Loaded the moment it is enabled.** Saving with the switch on starts the
-  feature without a restart. Saving it off tears it down at once: work in
-  flight is cancelled, threads are joined, objects released, hooks removed and
-  windows destroyed. Windows may keep a DLL mapped until exit after that.
+  feature without a restart. Saving it off tears it down at once:
+  - work in flight is really cancelled, never left to time out (close the
+    request handle);
+  - threads are joined;
+  - objects are released, hooks removed and windows destroyed.
+
+  Windows may keep a DLL mapped until exit after that.
 - **A feature that depends on another** (voice on the AI assistant) is off, and
   its switch disabled with the reason, while the one it needs is off.
-- **Tested.** A `wintest` case asserts that, with the switch off, the feature's
-  DLLs are not in the process (`GetModuleHandleW` returns NULL) and its keys
-  pass through unchanged.
+- **Tested against the real exe.** The `wintest` binary does not link the
+  feature's code, so a module check there proves nothing. `nutshell.exe`
+  records every DLL our code requests: a delay-load notification hook, plus
+  the run-time `LoadLibraryExW` sites. A diagnostic self-report prints that
+  list. A test running the exe with the switch off asserts that none of the
+  feature's DLLs were requested. It runs under Wine on `automaton` and in the
+  harness on Windows.
 
 ## Cross-Compile Pitfalls
 
