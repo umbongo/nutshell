@@ -1057,13 +1057,12 @@ static void debug_open_folder(HWND hwnd, SettingsDlgData *d)
     GetDlgItemTextA(d->hPage, IDC_DBG_FOLDER, setting, (int)sizeof(setting));
     settings_exe_dir(exe_dir, sizeof(exe_dir));
     if (!dlog_resolve_dir(setting, exe_dir, dir, sizeof(dir))) {
-        MessageBoxA(hwnd, "That log folder path is not valid.", "Open Log Folder",
-                    MB_OK | MB_ICONWARNING);
+        (void)notice_dlg_msg(hwnd, NOTICE_MSG_LOG_FOLDER_INVALID, NULL, d->theme);
         return;
     }
     const DlogPlatform *pf = dlog_platform_system();
     if (pf && pf->mkdir_p) (void)pf->mkdir_p(dir);
-    (void)open_dir_in_explorer(hwnd, dir, "Open Log Folder");
+    (void)open_dir_in_explorer(hwnd, dir, "Open Log Folder", d->theme);
 }
 
 /* The page's controls, in the order settings_debug_layout() packs them. */
@@ -1816,8 +1815,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             ai_enable_sync(d);
 
             if (strncmp(ctx->result, "Error:", 6) == 0) {
-                MessageBox(hwnd, ctx->result, "Refresh Models",
-                           MB_OK | MB_ICONWARNING);
+                /* ctx stays alive until the release below; d is not read
+                 * again after the notice (the window may be gone). */
+                (void)notice_dlg_msg(hwnd, NOTICE_MSG_MODELS_ERROR,
+                                     ctx->result, d->theme);
             } else {
                 /* Parse newline-separated model IDs into the combo */
                 HWND hCombo = GetDlgItem(d->hPage, IDC_AI_CUSTOM_MODEL);
@@ -1845,8 +1846,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                             (WPARAM)(idx >= 0 ? idx : 0), 0);
 
                 if (added == 0)
-                    MessageBox(hwnd, "No models found.", "Refresh Models",
-                               MB_OK | MB_ICONINFORMATION);
+                    (void)notice_dlg_msg(hwnd, NOTICE_MSG_MODELS_NONE,
+                                         NULL, d->theme);
             }
         }
         models_ctx_release(ctx);   /* the window's reference; wipes the key when last */
@@ -2010,8 +2011,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 }
 
                 if (!models_url || !models_url[0]) {
-                    MessageBox(hwnd, "Cannot determine models URL for this provider.",
-                               "Refresh Models", MB_OK | MB_ICONWARNING);
+                    (void)notice_dlg_msg(hwnd, NOTICE_MSG_MODELS_NO_URL,
+                                         NULL, d->theme);
                     break;
                 }
 
@@ -2019,8 +2020,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 char api_key[256];
                 GetDlgItemText(d->hPage, IDC_AI_KEY_EDIT, api_key, (int)sizeof(api_key));
                 if (!api_key[0]) {
-                    MessageBox(hwnd, "Enter an API key first.",
-                               "Refresh Models", MB_OK | MB_ICONWARNING);
+                    (void)notice_dlg_msg(hwnd, NOTICE_MSG_MODELS_NO_KEY,
+                                         NULL, d->theme);
                     break;
                 }
 

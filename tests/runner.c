@@ -3847,6 +3847,8 @@ int test_ui_tokens_is_dark_matches_theme_is_dark(void);
 int test_ui_tokens_resolve_null_safe(void);
 int test_ui_tokens_colour_gate(void);
 int test_ui_tokens_scale_gate(void);
+int test_ui_tokens_msgbox_gate_counter(void);
+int test_ui_tokens_msgbox_gate(void);
 
 /* test_ns_check_geom.c */
 int test_ns_check_layout_box_is_square_and_scaled(void);
@@ -8192,6 +8194,8 @@ int main(void) {
     failed += test_ui_tokens_resolve_null_safe();
     failed += test_ui_tokens_colour_gate();
     failed += test_ui_tokens_scale_gate();
+    failed += test_ui_tokens_msgbox_gate_counter();
+    failed += test_ui_tokens_msgbox_gate();
     failed += test_ns_check_layout_box_is_square_and_scaled();
     failed += test_ns_check_layout_inside_control_and_centred();
     failed += test_ns_check_layout_small_control_shrinks_box();

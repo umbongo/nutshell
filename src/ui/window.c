@@ -1209,9 +1209,8 @@ static void on_tab_close(int index, void *user_data) {
     key_oneshot_clear();
 
     if (s->conn_state == CONN_CONNECTING) {
-        MessageBoxA(GetParent(g_hwndTabs),
-                    "Connection in progress. Please wait.",
-                    "Close Tab", MB_OK | MB_ICONINFORMATION);
+        (void)notice_dlg_msg(GetParent(g_hwndTabs), NOTICE_MSG_CLOSE_CONNECTING,
+                             NULL, g_theme);
         return;
     }
 
@@ -2289,9 +2288,8 @@ static void on_session_connect(const Profile *info) {
     int idx = tabs_add(g_hwndTabs, title, s);
     if (idx < 0) {
         /* I-3: tab limit reached — clean up and notify user */
-        MessageBoxA(GetParent(g_hwndTabs),
-                    "Maximum number of tabs reached.",
-                    "Tab Limit", MB_OK | MB_ICONINFORMATION);
+        (void)notice_dlg_msg(GetParent(g_hwndTabs), NOTICE_MSG_TAB_LIMIT,
+                             NULL, g_theme);
         if (g_session_list == s) g_session_list = s->next;
         free_session(s);
         return;
@@ -2891,9 +2889,8 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         /* Attempt reconnect using stored profile */
         int is_local = profile_is_local(&s->conn_profile);
         if (!is_local && s->conn_profile.host[0] == '\0') {
-            MessageBoxA(hParent,
-                        "No connection profile available for reconnection.",
-                        "Reconnect", MB_OK | MB_ICONINFORMATION);
+            (void)notice_dlg_msg(hParent, NOTICE_MSG_NO_RECONNECT_PROFILE,
+                                 NULL, g_theme);
             return;
         }
         /* Clean up any leftover transport state */
@@ -4138,10 +4135,7 @@ static void open_debug_log_folder(HWND hwnd)
     DlogStatus st;
     dlog_status(&st);
     if (st.mem_only) {
-        MessageBoxA(hwnd,
-                    "No log folder is writable, so Nutshell is keeping the log "
-                    "in memory only. Mark Issue still works.",
-                    "Debug Log Folder", MB_OK | MB_ICONINFORMATION);
+        (void)notice_dlg_msg(hwnd, NOTICE_MSG_DEBUG_LOG_MEM_ONLY, NULL, g_theme);
         return;
     }
     char dir[DLOG_MAX_PATH];
@@ -4151,14 +4145,14 @@ static void open_debug_log_folder(HWND hwnd)
         get_exe_dir(exe_dir, sizeof(exe_dir));
         if (!g_config || !dlog_resolve_dir(g_config->settings.debug_log_dir, exe_dir,
                                             dir, sizeof(dir))) {
-            MessageBoxA(hwnd, "The log folder path is not valid.", "Debug Log Folder",
-                        MB_OK | MB_ICONWARNING);
+            (void)notice_dlg_msg(hwnd, NOTICE_MSG_DEBUG_LOG_PATH_INVALID,
+                                 NULL, g_theme);
             return;
         }
     }
     const DlogPlatform *pf = dlog_platform_system();
     if (pf && pf->mkdir_p) (void)pf->mkdir_p(dir);
-    (void)open_dir_in_explorer(hwnd, dir, "Debug Log Folder");
+    (void)open_dir_in_explorer(hwnd, dir, "Debug Log Folder", g_theme);
 }
 
 /* WM_KEYDOWN. Returns true when the key was handled (WndProc returns 0). */
@@ -5507,11 +5501,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (pr) {
                 on_session_connect(pr);
             } else {
-                char nf_text[512];
-                (void)snprintf(nf_text, sizeof(nf_text),
-                               "Session \"%s\" not found.", wanted);
-                MessageBoxA(hwnd, nf_text, "Session Not Found",
-                            MB_OK | MB_ICONWARNING);
+                (void)notice_dlg_msg(hwnd, NOTICE_MSG_SESSION_NOT_FOUND,
+                                     wanted, g_theme);
                 PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
             }
             return 0;
@@ -5721,8 +5712,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 snprintf(errmsg, sizeof(errmsg), "\r\n%s\r\n", conn_error);
                 term_process(s->term, errmsg, strlen(errmsg));
                 if (conn_result != 4)   /* 4 = the user cancelled the password box */
-                    MessageBoxA(hwnd, conn_error, "Connection Error",
-                                MB_OK | MB_ICONERROR);
+                    (void)notice_dlg_msg(hwnd, NOTICE_MSG_CONNECTION_ERROR,
+                                         conn_error, g_theme);
                 if (tidx >= 0)
                     tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
             } else {

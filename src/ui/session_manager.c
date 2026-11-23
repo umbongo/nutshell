@@ -766,8 +766,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
             int  sel   = (int)SendMessage(hList, LB_GETCURSEL, 0, 0);
             if (sel < 0) {
-                MessageBoxA(hwnd, "Select a session first.", "Edit",
-                            MB_ICONINFORMATION);
+                (void)notice_dlg_msg(hwnd, NOTICE_MSG_SELECT_TO_EDIT, NULL, st->theme);
             } else {
                 st->edit_idx = sel;
                 form_load(hwnd, st,
@@ -785,8 +784,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
             int  sel   = (int)SendMessage(hList, LB_GETCURSEL, 0, 0);
             if (sel < 0) {
-                MessageBoxA(hwnd, "Select a session to delete.", "Delete",
-                            MB_ICONINFORMATION);
+                (void)notice_dlg_msg(hwnd, NOTICE_MSG_SELECT_TO_DELETE, NULL, st->theme);
                 return TRUE;
             }
             const Profile *pr = (const Profile *)vec_get(
@@ -825,8 +823,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             Profile tmp;
             memset(&tmp, 0, sizeof(tmp));
             if (!form_read(hwnd, st, &tmp)) {
-                MessageBoxA(hwnd, "Please enter a hostname.", "Save",
-                            MB_ICONWARNING);
+                (void)notice_dlg_msg(hwnd, NOTICE_MSG_HOSTNAME_SAVE, NULL, st->theme);
                 return TRUE;
             }
             HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
@@ -945,8 +942,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             Profile tmp;
             memset(&tmp, 0, sizeof(tmp));
             if (!form_read(hwnd, st, &tmp)) {
-                MessageBoxA(hwnd, "Please enter a hostname.", "Connect",
-                            MB_ICONWARNING);
+                (void)notice_dlg_msg(hwnd, NOTICE_MSG_HOSTNAME_CONNECT, NULL, st->theme);
                 return TRUE;
             }
             *st->out_profile = tmp;

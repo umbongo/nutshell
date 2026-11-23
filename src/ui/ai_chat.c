@@ -5,6 +5,7 @@
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
 #include "dll_record.h"
+#include "notice_dlg.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -853,10 +854,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                 fwrite(save_buf, 1, n, f);
                                 fclose(f);
                             } else {
-                                MessageBox(hwnd,
-                                    "Failed to save file.",
-                                    "Save Error",
-                                    MB_OK | MB_ICONERROR);
+                                (void)notice_dlg_msg(hwnd, NOTICE_MSG_CHAT_SAVE_FAILED,
+                                                     NULL, d->theme);
                             }
                         }
                     }
