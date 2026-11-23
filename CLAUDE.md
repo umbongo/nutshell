@@ -104,6 +104,39 @@ Write tests before implementation code. Include corner cases, positive and negat
 
 There is a single `config.h` at `src/config/config.h`, used by both the Windows cross-compile and native test builds. The `Settings` struct lives there; the `Profile` struct lives in `src/config/profile.h`. A new field in either also needs its load and save code in `src/config/loader.c`.
 
+## Optional features: off unless enabled, not loaded while off
+
+My standing architecture principle (2026-11-23), for every feature or module
+that is not core to an SSH terminal (the AI assistant, voice, and whatever comes
+next). The aim is a small security footprint: code that is not in use must not
+be running.
+
+- **An Enable switch in Settings.** Each such feature has one, saved in the
+  config like any other setting.
+- **Off by default; on if already configured.** A new install starts with the
+  feature off. When an update first introduces a feature's switch, a config
+  that already shows the feature in use starts with it on, for example the AI
+  assistant with a saved API key. That decision is made once, at the first load
+  that lacks the field, and is then written to the config.
+- **Not loaded while off.** With the switch off, the feature:
+  - creates no windows, threads, timers, hooks or COM objects;
+  - makes no network requests;
+  - maps none of its own DLLs, which is why such DLLs are delay-loaded or
+    loaded at run time, never imported statically;
+  - registers no active shortcuts, so its keys behave as if it did not exist.
+
+  Its settings, keys included, are kept but unused. The code is still linked
+  into the exe; "not loaded" means none of it runs.
+- **Loaded the moment it is enabled.** Saving with the switch on starts the
+  feature without a restart. Saving it off tears it down at once: work in
+  flight is cancelled, threads are joined, objects released, hooks removed and
+  windows destroyed. Windows may keep a DLL mapped until exit after that.
+- **A feature that depends on another** (voice on the AI assistant) is off, and
+  its switch disabled with the reason, while the one it needs is off.
+- **Tested.** A `wintest` case asserts that, with the switch off, the feature's
+  DLLs are not in the process (`GetModuleHandleW` returns NULL) and its keys
+  pass through unchanged.
+
 ## Cross-Compile Pitfalls
 
 - **winsock2.h before windows.h**: Any file that transitively includes `windows.h` (e.g., via `ssh_session.h`) and also needs winsock must `#include <winsock2.h>` first, or you get redefinition errors.
