@@ -12,7 +12,8 @@ VoiceInput voice_ptt_classify(unsigned msg, uintptr_t wparam, intptr_t lparam, i
     unsigned vk = (unsigned)(wparam & 0xFFFFu);
     switch (msg) {
     case WM_KEYDOWN:
-    case WM_KEYUP: {
+    case WM_KEYUP:
+    case WM_SYSKEYUP: {
         int down = (msg == WM_KEYDOWN);
         int is_ptt = 0;
         if (ptt_key == VOICE_PTT_F8) is_ptt = (vk == VK_F8);

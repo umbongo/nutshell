@@ -19,6 +19,11 @@ int test_voice_classify_right_ctrl(void)
     ASSERT_EQ(voice_ptt_classify(WM_KEYUP, VK_CONTROL, EXT, VOICE_PTT_RIGHT_CTRL), VI_PTT_UP);
     ASSERT_EQ(voice_ptt_classify(WM_KEYDOWN, VK_CONTROL, EXT | REP, VOICE_PTT_RIGHT_CTRL), VI_PTT_REPEAT);
     ASSERT_EQ(voice_ptt_classify(WM_KEYUP, VK_CONTROL, EXT | REP, VOICE_PTT_RIGHT_CTRL), VI_PTT_UP);
+    /* with Alt held Windows delivers the release as WM_SYSKEYUP */
+    ASSERT_EQ(voice_ptt_classify(WM_SYSKEYUP, VK_CONTROL, EXT, VOICE_PTT_RIGHT_CTRL), VI_PTT_UP);
+    ASSERT_EQ(voice_ptt_classify(WM_SYSKEYUP, VK_CONTROL, 0, VOICE_PTT_RIGHT_CTRL), VI_NONE);
+    ASSERT_EQ(voice_ptt_classify(WM_SYSKEYUP, 'A', 0, VOICE_PTT_RIGHT_CTRL), VI_NONE);
+    ASSERT_EQ(voice_ptt_classify(WM_SYSKEYUP, VK_F8, 0, VOICE_PTT_F8), VI_PTT_UP);
     TEST_END();
 }
 
@@ -110,6 +115,39 @@ int test_voice_chord_before_delay_never_opens(void)
     s = st(&p, VE_TICK, 1200, 1, 0);
     ASSERT_EQ(s.action, VA_NONE);
     s = st(&p, VE_KEY_UP, 1300, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_IDLE);
+    /* Right Ctrl, Alt, then the Ctrl release arrives as SYSKEYUP: idle again */
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 150);
+    st(&p, VE_KEY_DOWN, 2000, 1, 0);
+    st(&p, VE_OTHER, 2020, 1, 0);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    VoiceInput in = voice_ptt_classify(WM_SYSKEYUP, VK_CONTROL, EXT, VOICE_PTT_RIGHT_CTRL);
+    ASSERT_EQ(in, VI_PTT_UP);
+    st(&p, VE_KEY_UP, 2100, 1, 0);
+    ASSERT_EQ(p.state, VS_IDLE);
+    st(&p, VE_KEY_DOWN, 3000, 1, 0);
+    s = st(&p, VE_TICK, 3150, 1, 0);
+    ASSERT_EQ(s.action, VA_OPEN);
+    /* Escape while armed (Hold) or in a toggle press spends the key, no open */
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 150);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    s = st(&p, VE_ESCAPE, 20, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(s.consume, 0);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    s = st(&p, VE_TICK, 200, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    s = st(&p, VE_KEY_UP, 300, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_IDLE);
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    s = st(&p, VE_ESCAPE, 20, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(s.consume, 0);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    s = st(&p, VE_KEY_UP, 40, 1, 0);
     ASSERT_EQ(s.action, VA_NONE);
     ASSERT_EQ(p.state, VS_IDLE);
     TEST_END();
