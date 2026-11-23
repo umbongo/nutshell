@@ -510,6 +510,13 @@ Open, in priority order:
       the text unchanged and not clipped on four themes, Enter and Escape both close it,
       focus returns to the owner. The docked AI panel's Save Error notice must disable the
       main window, not only the panel.
+- [ ] **Notice alert sound and activation, on Windows** (the notice move, PR #107; Wine
+      shows neither): each notice plays the system sound for its tone (information or
+      warning, as `MessageBox` did) once, launch notices included; and closing a notice
+      leaves Nutshell in front, not another application, both for a single notice and for
+      two nested ones (e.g. two tabs failing at once). Also: a notice raised while the main
+      window is minimized appears centred on its restored position, with a taskbar on the
+      top or left edge.
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
