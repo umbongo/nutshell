@@ -197,6 +197,14 @@ static void key_label(const ConfigSettingKey *k, char *out, size_t cap)
     if (len > 0 && out[len - 1] == ':') out[len - 1] = '\0';
 }
 
+/* The voice keys other than the switch: folded into its "Voice" line when the
+ * switch itself is missing (they do nothing while voice is off). */
+static int is_voice_subkey(const char *key)
+{
+    return strncmp(key, "voice_", 6) == 0 ? strcmp(key, "voice_enabled") != 0
+                                          : strcmp(key, "stt_api_key") == 0;
+}
+
 int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
                    const Settings *s)
 {
@@ -205,9 +213,16 @@ int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
 
     size_t nkeys = 0;
     const ConfigSettingKey *keys = config_setting_keys(&nkeys);
+    int voice_switch_missing = 0;
+    for (size_t i = 0; i < rep->missing_count; i++)
+        if (rep->missing[i] < nkeys &&
+            strcmp(keys[rep->missing[i]].key, "voice_enabled") == 0)
+            voice_switch_missing = 1;
     size_t total = 0;
     for (size_t i = 0; i < rep->missing_count; i++)
-        if (rep->missing[i] < nkeys) total++;
+        if (rep->missing[i] < nkeys &&
+            !(voice_switch_missing && is_voice_subkey(keys[rep->missing[i]].key)))
+            total++;
     if (total == 0) return 0;
 
     welcome_title(n, version);
@@ -221,12 +236,16 @@ int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
     for (size_t i = 0; i < rep->missing_count; i++) {
         if (rep->missing[i] >= nkeys) continue;
         const ConfigSettingKey *k = &keys[rep->missing[i]];
+        if (voice_switch_missing && is_voice_subkey(k->key)) continue;
         if (total > NOTICE_ITEMS_MAX && shown >= NOTICE_ITEMS_MAX - 1) break;
         char label[64];
         const char *value;
         if (strcmp(k->key, "ai_enabled") == 0) {
             set(label, sizeof(label), "AI assistant");
             value = (s && s->ai_enabled) ? VAL_AI_ON : VAL_OFF;
+        } else if (strcmp(k->key, "voice_enabled") == 0) {
+            set(label, sizeof(label), "Voice");
+            value = VAL_OFF;
         } else {
             key_label(k, label, sizeof(label));
             const SettingsHelp *h = k->sh_id >= 0 ? settings_help_get(k->sh_id) : NULL;

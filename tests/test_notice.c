@@ -79,9 +79,11 @@ int test_notice_first_run_copy(void)
     ASSERT_STR_EQ(n.opening,
         "No configuration was found, so a new one has been created beside "
         "nutshell.exe. These optional features start switched off:");
-    ASSERT_EQ(n.item_count, 1);
+    ASSERT_EQ(n.item_count, 2);
     ASSERT_STR_EQ(n.items[0].label, "AI assistant");
     ASSERT_STR_EQ(n.items[0].value, "off until you choose to turn it on");
+    ASSERT_STR_EQ(n.items[1].label, "Voice");
+    ASSERT_STR_EQ(n.items[1].value, "off until you choose to turn it on");
     ASSERT_STR_EQ(n.closing, "Everything else uses the standard settings.");
     ASSERT_STR_EQ(n.action, "Review in Settings");
     ASSERT_EQ(n.action_page, SETTINGS_PAGE_AI_PROVIDER);

@@ -83,6 +83,22 @@ typedef struct Settings {
                                            * "ai_auto_approve_mode" key and the older
                                            * numeric "ai_auto_approve_default" are migrated
                                            * on load (see loader.c). */
+    /* Voice input (push-to-talk speech-to-text); see voice_config.h. Off by
+     * default, and unavailable while ai_enabled is off. */
+    int  voice_enabled;                  /* "voice_enabled": the Voice switch */
+    int  voice_stt_use_ai;               /* 1 = reuse the AI assistant's provider and key; default 1 */
+    char voice_stt_provider[32];         /* "openai" (default), "groq", "mistral", "gemini", "custom" */
+    char voice_stt_url[CFG_STR_MAX];     /* base URL, Custom only */
+    char voice_stt_model[CFG_STR_MAX];   /* empty = the provider's default model */
+    char voice_stt_language[16];         /* empty = auto-detect */
+    char stt_api_key[CFG_STR_MAX];       /* the speech-to-text key, DPAPI-protected like ai_api_key */
+    char stt_api_key_enc_preserved[CFG_BLOB_MAX]; /* same contract as ai_api_key_enc_preserved */
+    char voice_input_device[CFG_STR_MAX];      /* endpoint ID, empty = Windows default */
+    char voice_input_device_name[CFG_STR_MAX]; /* its friendly name, for display */
+    int  voice_ptt_key;                  /* VoicePttKey; JSON "right_ctrl"/"f8"/"f9" */
+    int  voice_ptt_mode;                 /* VoicePttMode; JSON "hold"/"toggle" */
+    int  voice_mic_delay_ms;             /* 0-400, default 150 */
+    int  voice_review;                   /* 1 = put the transcript in the input for review instead of sending */
 } Settings;
 
 typedef struct {
@@ -119,7 +135,7 @@ typedef enum {
  * none); `label` is NULL when that entry's label (trailing ':' dropped) is
  * the one to show, else the plain label. The read-only legacy
  * "debug_terminal" is not a key. */
-#define CFG_KEYS_MAX 64
+#define CFG_KEYS_MAX 96
 typedef struct {
     const char *key;
     const char *legacy[2];
