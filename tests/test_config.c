@@ -3399,10 +3399,13 @@ int test_config_keys_match_saved_file(void)
         if (strcmp(fk, keys[i].key) != 0)
             printf("  key %zu: file \"%s\", table \"%s\"\n", i, fk, keys[i].key);
         ASSERT_STR_EQ(fk, keys[i].key);
-        /* the label is either the plain one or the help entry's */
+        /* the label is either the plain one or the help entry's; a key with
+         * a help entry may still carry its own label (the voice keys do, so
+         * the upgrade notice says "Voice: ..." rather than the bare "Model") */
         if (keys[i].sh_id >= 0) {
-            ASSERT_NULL(keys[i].label);
             ASSERT_NOT_NULL(settings_help_get(keys[i].sh_id));
+            if (strncmp(keys[i].key, "voice_", 6) != 0 && strcmp(keys[i].key, "stt_api_key") != 0)
+                ASSERT_NULL(keys[i].label);
         } else {
             ASSERT_NOT_NULL(keys[i].label);
         }

@@ -20,6 +20,7 @@ static const SettingsNavEntry NAV_TABLE[] = {
     { SETTINGS_PAGE_NONE,         0, 1, "AI Assistant" },
     { SETTINGS_PAGE_AI_PROVIDER,  1, 0, "Provider" },
     { SETTINGS_PAGE_AI_BEHAVIOUR, 1, 0, "Behaviour" },
+    { SETTINGS_PAGE_VOICE,        1, 0, "Voice" },
     { SETTINGS_PAGE_AI_WEB,       1, 0, "Web Access" },
     { SETTINGS_PAGE_DEBUG,        0, 0, "Debugging" },
     { SETTINGS_PAGE_ABOUT,        0, 0, "About" },
@@ -78,6 +79,7 @@ const char *settings_page_title(int page_id)
         case SETTINGS_PAGE_STARTUP:      return "Connection > Startup";
         case SETTINGS_PAGE_AI_PROVIDER:  return "AI Assistant > Provider";
         case SETTINGS_PAGE_AI_BEHAVIOUR: return "AI Assistant > Behaviour";
+        case SETTINGS_PAGE_VOICE:        return "AI Assistant > Voice";
         case SETTINGS_PAGE_AI_WEB:       return "AI Assistant > Web Access";
         case SETTINGS_PAGE_DEBUG:        return "Debugging";
         case SETTINGS_PAGE_ABOUT:        return "About";

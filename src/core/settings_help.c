@@ -1,6 +1,7 @@
 #include "settings_help.h"
 
 #include "settings_layout.h"
+#include "voice_config.h"
 
 /*
  * The help table, one entry per Settings control, in the order the dialog
@@ -363,6 +364,136 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "after Save; a number outside 1 to 20 is not saved.\nDefault: 3.",
       "3",
       1, 20, SH_F_KEEP_OUT_OF_RANGE),
+
+    /* VOICE */
+    E(SH_VOICE_ENABLE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Enable voice",
+      NULL,
+      "Enable voice\n\nTurns voice input on or off. It is off by default, "
+      "and while it is off Nutshell loads nothing of voice and Right Ctrl, "
+      "F8 and F9 behave as they always did. It needs the AI assistant: with "
+      "the assistant off this box is disabled. Audio is sent to the chosen "
+      "provider only while you hold the push-to-talk key.\nDefault: Off.",
+      "Off",
+      0, 0, 0u),
+    E(SH_VOICE_STT_USE_AI, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Use current AI assistant to convert speech to text",
+      NULL,
+      "Use current AI assistant to convert speech to text\n\nSends your "
+      "recording to the AI assistant's own provider, with its API key, so "
+      "there is nothing more to set up. It is unavailable when that provider "
+      "offers no speech-to-text, and a note beside the box says why. "
+      "Untick it to pick a speech provider and key of your own "
+      "below.\nDefault: On.",
+      "On",
+      0, 0, 0u),
+    E(SH_VOICE_STT_PROVIDER, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Provider:",
+      NULL,
+      "Provider:\n\nThe speech-to-text service that turns your recording "
+      "into text: openai, groq, mistral, gemini, or custom for any "
+      "OpenAI-compatible server given in Base URL. Changing it refills the "
+      "Model list with that provider's models. Shown only when Use current "
+      "AI assistant is unticked.\nDefault: openai.",
+      "openai",
+      0, 0, 0u),
+    E(SH_VOICE_STT_KEY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "API key:",
+      NULL,
+      "API key:\n\nThe key for the speech-to-text provider above. It is "
+      "stored encrypted for your Windows user, like the AI assistant's key, "
+      "and sent only to that provider. The eye button beside the box shows "
+      "or hides it. Shown only when Use current AI assistant is "
+      "unticked.\nDefault: empty.",
+      "empty",
+      0, 0, 0u),
+    E(SH_VOICE_STT_URL, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Base URL:",
+      NULL,
+      "Base URL:\n\nThe base URL of the custom speech-to-text server, such "
+      "as https://host/v1, not a full endpoint; a pasted "
+      "/audio/transcriptions address is accepted and trimmed back. Shown "
+      "only when Provider is custom. Use https: with plain http to anything "
+      "but this PC, your key and recordings cross the network unencrypted, "
+      "and a warning says so.\nDefault: empty.",
+      "empty",
+      0, 0, 0u),
+    E(SH_VOICE_STT_MODEL, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Model:",
+      NULL,
+      "Model:\n\nThe speech-to-text model, typed in or picked from the list "
+      "for the provider. Left empty, each provider uses its default model. "
+      "A typed name must match the provider's model id exactly, and the "
+      "list is only a suggestion, so a newer model can be typed "
+      "in.\nDefault: empty (the provider's default model).",
+      "empty (the provider's default model)",
+      0, 0, 0u),
+    E(SH_VOICE_LANGUAGE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Language:",
+      NULL,
+      "Language:\n\nThe language you speak. Left blank, the provider "
+      "detects it from the recording. A two-letter code such as en or de "
+      "makes recognition faster and more accurate when you always speak "
+      "one language.\nDefault: empty (the provider detects it).",
+      "empty (the provider detects it)",
+      0, 0, 0u),
+    E(SH_VOICE_DEVICE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Input device:",
+      NULL,
+      "Input device:\n\nThe microphone voice input records from. Windows "
+      "default follows whatever Windows uses, and a named microphone is "
+      "used only while it is plugged in; otherwise Windows default is used "
+      "and your choice is kept. The list is filled after Enable voice has "
+      "been saved on.\nDefault: Windows default.",
+      "Windows default",
+      0, 0, 0u),
+    E(SH_VOICE_TEST, SETTINGS_PAGE_VOICE, SH_KIND_ACTION,
+      "Test",
+      NULL,
+      "Test\n\nRecords three seconds from the chosen microphone and shows "
+      "its level in the meter beside it, so you can see the microphone "
+      "works. Nothing is sent anywhere and nothing is kept. The button is "
+      "disabled until voice is saved on.",
+      NULL,
+      0, 0, 0u),
+    E(SH_VOICE_PTT_KEY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Push-to-talk key:",
+      NULL,
+      "Push-to-talk key:\n\nThe key you hold to speak while the AI panel "
+      "has focus: Right Ctrl, F8 or F9. Right Ctrl chords such as "
+      "Ctrl+C still work as they always did, because the microphone opens "
+      "only when the key is pressed alone. Any other key or a mouse click "
+      "while you hold it cancels the recording.\nDefault: Right Ctrl.",
+      "Right Ctrl",
+      0, 0, 0u),
+    E(SH_VOICE_PTT_MODE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Mode:",
+      NULL,
+      "Mode:\n\nHold to talk records while you hold the key and sends when "
+      "you let go. Toggle records from one clean press of the key to the "
+      "next. A recording stops by itself after 60 seconds, and Escape "
+      "throws it away.\nDefault: Hold to talk.",
+      "Hold to talk",
+      0, 0, 0u),
+    E(SH_VOICE_MIC_DELAY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Mic start delay (ms):",
+      NULL,
+      "Mic start delay (ms):\n\nThe microphone opens only once the key has "
+      "been held alone this long, so a shortcut such as Ctrl+C never opens "
+      "it. Set from 0 to 400 milliseconds; a lower number starts "
+      "recording sooner, a higher one is safer against accidental use. It "
+      "applies to Hold to talk only.\nDefault: 150.",
+      "150",
+      VOICE_MIC_DELAY_MIN, VOICE_MIC_DELAY_MAX, 0u),
+    E(SH_VOICE_REVIEW, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Review before sending",
+      NULL,
+      "Review before sending\n\nWhen on, the transcript waits in the "
+      "message box for you to read, edit and press Enter. When off, it is "
+      "sent as soon as it arrives, and every approval still applies as for "
+      "a message you typed.\nDefault: Off.",
+      "Off",
+      0, 0, 0u),
 
     /* AI_WEB */
     E(SH_AI_WEB_FETCH, SETTINGS_PAGE_AI_WEB, SH_KIND_SETTING,

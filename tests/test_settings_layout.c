@@ -159,9 +159,9 @@ int test_sl_min_h_fits_full_nav_list(void) {
 
 /* ---- Nav model ---- */
 
-int test_sl_nav_count_is_13(void) {
+int test_sl_nav_count_is_14(void) {
     TEST_BEGIN();
-    ASSERT_EQ(settings_nav_count(), 13);
+    ASSERT_EQ(settings_nav_count(), 14);
     TEST_END();
 }
 
@@ -205,7 +205,7 @@ int test_sl_nav_children_well_formed(void) {
 
 int test_sl_nav_exact_sequence(void) {
     TEST_BEGIN();
-    ASSERT_EQ(settings_nav_count(), 13);
+    ASSERT_EQ(settings_nav_count(), 14);
 
     struct { int page_id; int depth; int is_header; const char *label; } expect[] = {
         { SETTINGS_PAGE_NONE,         0, 1, "General" },
@@ -218,12 +218,13 @@ int test_sl_nav_exact_sequence(void) {
         { SETTINGS_PAGE_NONE,         0, 1, "AI Assistant" },
         { SETTINGS_PAGE_AI_PROVIDER,  1, 0, "Provider" },
         { SETTINGS_PAGE_AI_BEHAVIOUR, 1, 0, "Behaviour" },
+        { SETTINGS_PAGE_VOICE,        1, 0, "Voice" },
         { SETTINGS_PAGE_AI_WEB,       1, 0, "Web Access" },
         { SETTINGS_PAGE_DEBUG,        0, 0, "Debugging" },
         { SETTINGS_PAGE_ABOUT,        0, 0, "About" },
     };
 
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 14; i++) {
         const SettingsNavEntry *e = settings_nav_at(i);
         ASSERT_NOT_NULL(e);
         ASSERT_EQ(e->page_id, expect[i].page_id);
@@ -292,6 +293,7 @@ int test_sl_page_title_valid(void) {
     ASSERT_STR_EQ(settings_page_title(SETTINGS_PAGE_STARTUP), "Connection > Startup");
     ASSERT_STR_EQ(settings_page_title(SETTINGS_PAGE_AI_PROVIDER), "AI Assistant > Provider");
     ASSERT_STR_EQ(settings_page_title(SETTINGS_PAGE_AI_BEHAVIOUR), "AI Assistant > Behaviour");
+    ASSERT_STR_EQ(settings_page_title(SETTINGS_PAGE_VOICE), "AI Assistant > Voice");
     ASSERT_STR_EQ(settings_page_title(SETTINGS_PAGE_AI_WEB), "AI Assistant > Web Access");
     ASSERT_STR_EQ(settings_page_title(SETTINGS_PAGE_DEBUG), "Debugging");
     ASSERT_STR_EQ(settings_page_title(SETTINGS_PAGE_ABOUT), "About");

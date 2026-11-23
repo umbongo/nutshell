@@ -3792,6 +3792,7 @@ int test_settings_help_font_sizes_and_notes(void);
 int test_settings_help_labels_match_sources(void);
 int test_settings_help_every_id_in_settings_c(void);
 int test_settings_help_ai_enable_entry(void);
+int test_settings_help_voice_entries(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -3805,7 +3806,7 @@ int test_sl_metrics_monotonic_with_dpi(void);
 int test_sl_metrics_never_zero_across_dpis(void);
 int test_sl_min_h_fits_full_nav_list(void);
 int test_sl_label_column_width(void);
-int test_sl_nav_count_is_13(void);
+int test_sl_nav_count_is_14(void);
 int test_sl_nav_at_oob_null(void);
 int test_sl_nav_headers_well_formed(void);
 int test_sl_nav_children_well_formed(void);
@@ -8166,7 +8167,7 @@ int main(void) {
     failed += test_sl_metrics_never_zero_across_dpis();
     failed += test_sl_min_h_fits_full_nav_list();
     failed += test_sl_label_column_width();
-    failed += test_sl_nav_count_is_13();
+    failed += test_sl_nav_count_is_14();
     failed += test_sl_nav_at_oob_null();
     failed += test_sl_nav_headers_well_formed();
     failed += test_sl_nav_children_well_formed();
@@ -8239,6 +8240,7 @@ int main(void) {
     failed += test_settings_help_labels_match_sources();
     failed += test_settings_help_every_id_in_settings_c();
     failed += test_settings_help_ai_enable_entry();
+    failed += test_settings_help_voice_entries();
 
     printf("\n--- Design System: scale & type ---\n");
     failed += test_ns_scale_identity_at_96();

@@ -41,6 +41,7 @@
 #include "paste_filter.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
+#include "voice_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
@@ -2370,6 +2371,9 @@ static void on_settings_clicked_page(int initial_page) {
         ai_feature_on(parent);
     else if (!g_config->settings.ai_enabled && ai_was_enabled)
         ai_feature_off(parent);
+    /* Voice follows the AI decision (it needs the assistant) and its own
+     * switch: the gate is set from the saved settings. */
+    voice_feature_apply(parent);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -2804,8 +2808,14 @@ static void ai_feature_on(HWND hwnd)
         inited = 1;
     }
     ai_gate_set_enabled(g_config->settings.ai_enabled);
+    voice_feature_apply(hwnd);   /* voice needs the assistant: its gate follows */
     if (g_hwndTabs) tabs_set_ai_visible(g_hwndTabs, 1);
     rebuild_app_menu(hwnd);
+}
+
+const Settings *ui_current_settings(void)
+{
+    return g_config ? &g_config->settings : NULL;
 }
 
 /* 1 while the assistant is working: a reply streaming, a dispatch running,
@@ -2834,6 +2844,7 @@ int ui_ai_is_working(void)
 static void ai_feature_off(HWND hwnd)
 {
     ai_gate_set_enabled(0);
+    voice_feature_apply(hwnd);   /* voice needs the assistant: its gate closes with it */
     if (ai_gate_on()) return;   /* --ui-demo override: the demo keeps its panel */
 
     if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
@@ -4739,6 +4750,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * items, its tab button) exists while the switch is off. */
             if (g_config->settings.ai_enabled)
                 ai_feature_on(hwnd);
+            voice_feature_apply(hwnd);   /* after the AI decision; voice is off unless saved on */
             tabs_set_ai_visible(g_hwndTabs, ai_gate_on());
 
             renderer_init(&g_renderer,
