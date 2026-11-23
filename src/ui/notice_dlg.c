@@ -432,7 +432,7 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
                 MONITORINFO pmi;
                 memset(&pmi, 0, sizeof(pmi));
                 pmi.cbSize = sizeof(pmi);
-                if (GetMonitorInfoA(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &pmi))
+                if (GetMonitorInfoA(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &pmi))
                     OffsetRect(&anchor, pmi.rcWork.left - pmi.rcMonitor.left,
                                pmi.rcWork.top - pmi.rcMonitor.top);
             }

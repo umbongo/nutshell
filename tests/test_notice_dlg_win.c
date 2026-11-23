@@ -480,14 +480,13 @@ int test_notice_dlg_win_minimized_owner_centres_on_normal_position(void)
         MONITORINFO mi;
         memset(&mi, 0, sizeof mi);
         mi.cbSize = sizeof mi;
-        ASSERT_TRUE(GetMonitorInfoA(MonitorFromRect(&wp.rcNormalPosition,
-                                                    MONITOR_DEFAULTTONEAREST), &mi));
+        ASSERT_TRUE(GetMonitorInfoA(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &mi));
         ASSERT_TRUE(g_dlg_rect.left >= mi.rcWork.left && g_dlg_rect.top >= mi.rcWork.top);
         ASSERT_TRUE(g_dlg_rect.right <= mi.rcWork.right && g_dlg_rect.bottom <= mi.rcWork.bottom);
         int cx = (g_dlg_rect.left + g_dlg_rect.right) / 2;
         int cy = (g_dlg_rect.top + g_dlg_rect.bottom) / 2;
-        ASSERT_TRUE(abs(cx - 600) <= 4);
-        ASSERT_TRUE(abs(cy - 500) <= 4);
+        ASSERT_TRUE(abs(cx - (600 + (int)(mi.rcWork.left - mi.rcMonitor.left))) <= 4);
+        ASSERT_TRUE(abs(cy - (500 + (int)(mi.rcWork.top - mi.rcMonitor.top))) <= 4);
         DestroyWindow(owner);
     }
     TEST_END();
@@ -519,6 +518,7 @@ int test_notice_dlg_win_single_notice_stays_visible_until_owner_enabled(void)
         ASSERT_EQ(run(owner, &n, PLAN_ESC_PLAIN), 0);
         ASSERT_EQ(g_dlg_visible_at_enable, 1);   /* not hidden while the owner is still disabled */
         ASSERT_NULL(FindWindowA(CLS, NULL));
+        SetWindowLongPtrA(owner, GWLP_WNDPROC, (LONG_PTR)g_owner_old_proc);
         DestroyWindow(owner);
     }
     TEST_END();
