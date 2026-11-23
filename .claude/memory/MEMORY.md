@@ -125,13 +125,15 @@ Last updated: 2026-11-21 (retrospective of PRs #95-#101: the merge count in the 
 ## Repository facts
 
 - **Branches named with a version number (`v1.0.76`, `v1.1.21`, `v1.2.13`,
-  `v1.2.41`, `v1.2.60`) are snapshots and are never deleted** (maintainer, 2026-10-20),
+  `v1.2.41`, `v1.2.60`, `v1.2.89`) are snapshots and are never deleted** (maintainer, 2026-10-20),
   even though each is contained in `main`. "Clear out merged branches" means
   feature branches only; GitHub deletes those on merge
   (`delete_branch_on_merge` is on; a merged branch that still shows locally
   needs `git fetch --prune`). `v1.2.41` is a branch only, at `7960bd2`;
   `v1.2.60` is a branch only, at `0f5bf9a` (merge of PR #90, the comctl32
-  fix).
+  fix). `v1.2.89` is a branch only, at `4c1a4e7` (merge of PR #104), the
+  backup the maintainer asked for on 2026-11-23 before the AI switch and
+  voice work: a backup branch is named `v` + the version on `main`.
 - `main` was the redesign branch `ui-polish`, renamed on 2026-09-07. The
   pre-redesign main lives on as branch **and** tag `v1.0.76`. `v1.1.21` is
   also both a branch and a tag; the branch is fully contained in `main`.

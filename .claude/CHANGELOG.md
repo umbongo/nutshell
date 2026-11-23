@@ -4,6 +4,15 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-23 — the `v1.2.89` backup branch
+
+Session: https://claude.ai/code/session_01AHuBtDU8oXSVxrKcPYYtQG, on `automaton`.
+Models: claude-opus-5-5 (main session).
+
+- **`memory/MEMORY.md`.** Repository facts: `v1.2.89` joins the version-numbered snapshot
+  branches, at `4c1a4e7`, pushed at the maintainer's request before the AI assistant switch
+  and voice work; a backup branch is named `v` + `main`'s version.
+
 ## 2026-11-21 — PR #103, the two queued `src/` fixes
 
 Session: https://claude.ai/code/session_01AHuBtDmPP3biyCwmkAPJcc, on `automaton`.
