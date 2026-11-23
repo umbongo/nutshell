@@ -1,0 +1,478 @@
+#include "voice_audio_win.h"
+
+#define COBJMACROS
+#include <objbase.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <audiosessiontypes.h>
+#include <propidl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "dll_record.h"
+#include "voice_config.h"
+
+/* The GUIDs and the property key are defined here, as copies: linking
+ * libuuid/mmdevapi for them would add an import the exe must not have. */
+static const GUID VA_CLSID_MMDeviceEnumerator =
+    {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
+static const GUID VA_IID_IMMDeviceEnumerator =
+    {0xA95664D2, 0x9614, 0x4F35, {0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6}};
+static const GUID VA_IID_IAudioClient =
+    {0x1CB9AD4C, 0xDBFA, 0x4C32, {0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2}};
+static const GUID VA_IID_IAudioCaptureClient =
+    {0xC8ADBD64, 0xE71E, 0x48A0, {0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17}};
+static const GUID VA_IID_IMMNotificationClient =
+    {0x7991EEC9, 0x7E89, 0x4D85, {0x83, 0x90, 0x6C, 0x70, 0x3C, 0xEC, 0x60, 0xC0}};
+static const GUID VA_IID_IUnknown =
+    {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+/* PKEY_Device_FriendlyName */
+static const PROPERTYKEY VA_PKEY_FriendlyName =
+    {{0xA45C254E, 0xDF1C, 0x4EFD, {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
+
+#define VA_CAP_SAMPLES  ((size_t)VOICE_CAP_MS * WAV_RATE / 1000u)
+#define VA_TEST_MS      3000u
+#define VA_STALL_MS     2000u
+#define VA_LEVEL_MS     50u
+#define VA_QMAX         16
+
+typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH } VaCmdKind;
+typedef struct {
+    VaCmdKind kind;
+    char      id[256];
+    unsigned  token;
+    int       flag;      /* test_only / keep / on */
+} VaCmd;
+
+static HANDLE           g_thread;
+static HANDLE           g_stop, g_wake, g_ready;
+static HWND             g_notify;
+static CRITICAL_SECTION g_cs;
+static int              g_cs_ready;
+static VaCmd            g_q[VA_QMAX];
+static int              g_qn;
+
+/* ---- posting ---------------------------------------------------------- */
+
+static void va_post(VoiceAudioMsg m, LPARAM lp)
+{
+    if (!g_notify || !PostMessage(g_notify, WM_VOICE_AUDIO, (WPARAM)m, lp)) {
+        if (m == VAM_DEVICES) voice_audio_free_devices((VoiceDeviceList *)lp);
+        if (m == VAM_CAPTURED) voice_audio_free_capture((VoiceCapture *)lp);
+    }
+}
+
+static void va_post_err(VoiceAudioErr e) { va_post(VAM_ERROR, (LPARAM)e); }
+
+/* ---- the notification client (a C vtable; callbacks only PostMessage) --- */
+
+typedef struct { const IMMNotificationClientVtbl *lpVtbl; } VaNotify;
+
+static HRESULT STDMETHODCALLTYPE nc_qi(IMMNotificationClient *self, REFIID riid, void **out)
+{
+    if (IsEqualGUID(riid, &VA_IID_IUnknown) ||
+        IsEqualGUID(riid, &VA_IID_IMMNotificationClient)) {
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE nc_addref(IMMNotificationClient *self) { (void)self; return 2; }
+static ULONG STDMETHODCALLTYPE nc_release(IMMNotificationClient *self) { (void)self; return 1; }
+static void nc_changed(void) { va_post(VAM_DEVICES_CHANGED, 0); }
+static HRESULT STDMETHODCALLTYPE nc_state(IMMNotificationClient *s, LPCWSTR id, DWORD st)
+{ (void)s; (void)id; (void)st; nc_changed(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE nc_added(IMMNotificationClient *s, LPCWSTR id)
+{ (void)s; (void)id; nc_changed(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE nc_removed(IMMNotificationClient *s, LPCWSTR id)
+{ (void)s; (void)id; nc_changed(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE nc_default(IMMNotificationClient *s, EDataFlow f, ERole r, LPCWSTR id)
+{ (void)s; (void)f; (void)r; (void)id; nc_changed(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE nc_prop(IMMNotificationClient *s, LPCWSTR id, const PROPERTYKEY key)
+{ (void)s; (void)id; (void)key; return S_OK; }
+
+static const IMMNotificationClientVtbl g_nc_vtbl = {
+    nc_qi, nc_addref, nc_release, nc_state, nc_added, nc_removed, nc_default, nc_prop
+};
+static VaNotify g_nc = { &g_nc_vtbl };
+
+/* ---- audio-thread state ---------------------------------------------- */
+
+typedef struct {
+    IMMDeviceEnumerator *enm;
+    int                  watching;
+    /* a capture in progress */
+    IAudioClient        *client;
+    IAudioCaptureClient *cap;
+    HANDLE               buf_ev;
+    PcmBuf               pcm;
+    unsigned             token;
+    int                  test_only;
+    int                  used_default;
+    ULONGLONG            t_start, t_last_ev, t_last_level;
+    size_t               level_from;   /* first sample not yet in a level */
+    int                  active;
+} VaState;
+
+static void va_close_client(VaState *st)
+{
+    if (st->client) IAudioClient_Stop(st->client);
+    if (st->cap) { IAudioCaptureClient_Release(st->cap); st->cap = NULL; }
+    if (st->client) { IAudioClient_Release(st->client); st->client = NULL; }
+    if (st->buf_ev) { CloseHandle(st->buf_ev); st->buf_ev = NULL; }
+}
+
+/* Ends the capture: the client is stopped and released first (so the
+ * device is closed between recordings), then the result is posted. */
+static void va_finish(VaState *st, int keep)
+{
+    if (!st->active) return;
+    va_close_client(st);
+    st->active = 0;
+    if (keep && !st->test_only) {
+        VoiceCapture *c = (VoiceCapture *)calloc(1, sizeof(*c));
+        if (!c) {
+            pcm_free(&st->pcm);
+            va_post_err(VAE_NO_MEMORY);
+            return;
+        }
+        c->pcm = st->pcm;                    /* ownership moves */
+        memset(&st->pcm, 0, sizeof(st->pcm));
+        c->verdict = pcm_classify(c->pcm.s, c->pcm.n);
+        c->used_default = st->used_default;
+        c->token = st->token;
+        va_post(VAM_CAPTURED, (LPARAM)c);
+    } else {
+        pcm_free(&st->pcm);
+    }
+}
+
+static void va_fail(VaState *st, VoiceAudioErr e)
+{
+    va_finish(st, 0);
+    va_post_err(e);
+}
+
+static int va_utf8_to_wide(const char *u, wchar_t *w, int cap)
+{
+    return MultiByteToWideChar(CP_UTF8, 0, u, -1, w, cap) > 0;
+}
+
+static void va_begin(VaState *st, const VaCmd *c)
+{
+    if (st->active) va_finish(st, 0);
+    if (!st->enm) { va_post_err(VAE_COM_FAILED); return; }
+
+    IMMDevice *dev = NULL;
+    st->used_default = 0;
+    if (c->id[0]) {
+        wchar_t wid[256];
+        if (va_utf8_to_wide(c->id, wid, 256) &&
+            SUCCEEDED(IMMDeviceEnumerator_GetDevice(st->enm, wid, &dev)) && dev) {
+            DWORD state = 0;
+            if (FAILED(IMMDevice_GetState(dev, &state)) || state != DEVICE_STATE_ACTIVE) {
+                IMMDevice_Release(dev);
+                dev = NULL;
+            }
+        } else {
+            dev = NULL;
+        }
+        if (!dev) st->used_default = 1;   /* the stored ID is never touched */
+    }
+    if (!dev) {
+        if (FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(st->enm, eCapture,
+                                                               eConsole, &dev)) || !dev) {
+            va_post_err(VAE_NO_DEVICE);
+            return;
+        }
+    }
+
+    IAudioClient *cl = NULL;
+    HRESULT hr = IMMDevice_Activate(dev, &VA_IID_IAudioClient, CLSCTX_ALL, NULL,
+                                    (void **)&cl);
+    IMMDevice_Release(dev);
+    if (FAILED(hr) || !cl) { va_post_err(VAE_OPEN_FAILED); return; }
+
+    WAVEFORMATEX wfx;
+    memset(&wfx, 0, sizeof(wfx));
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = 1;
+    wfx.nSamplesPerSec = WAV_RATE;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = 2;
+    wfx.nAvgBytesPerSec = WAV_RATE * 2u;
+    hr = IAudioClient_Initialize(cl, AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+            AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            2000000, 0, &wfx, NULL);
+    HANDLE ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+    IAudioCaptureClient *cap = NULL;
+    if (SUCCEEDED(hr) && ev) hr = IAudioClient_SetEventHandle(cl, ev);
+    else hr = E_FAIL;
+    if (SUCCEEDED(hr))
+        hr = IAudioClient_GetService(cl, &VA_IID_IAudioCaptureClient, (void **)&cap);
+    if (SUCCEEDED(hr)) hr = IAudioClient_Start(cl);
+    if (FAILED(hr) || !cap) {
+        if (cap) IAudioCaptureClient_Release(cap);
+        IAudioClient_Release(cl);
+        if (ev) CloseHandle(ev);
+        va_post_err(VAE_OPEN_FAILED);
+        return;
+    }
+    st->client = cl;
+    st->cap = cap;
+    st->buf_ev = ev;
+    pcm_init(&st->pcm, VA_CAP_SAMPLES);
+    st->token = c->token;
+    st->test_only = c->flag;
+    st->active = 1;
+    st->t_start = st->t_last_ev = st->t_last_level = GetTickCount64();
+    st->level_from = 0;
+}
+
+/* Drains every packet. Returns 0 on a device error. */
+static int va_drain(VaState *st)
+{
+    for (;;) {
+        UINT32 frames = 0;
+        HRESULT hr = IAudioCaptureClient_GetNextPacketSize(st->cap, &frames);
+        if (FAILED(hr)) return 0;
+        if (frames == 0) return 1;
+        BYTE *data = NULL;
+        DWORD flags = 0;
+        hr = IAudioCaptureClient_GetBuffer(st->cap, &data, &frames, &flags, NULL, NULL);
+        if (FAILED(hr)) return 0;
+        if (frames > 0) {
+            if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data) {
+                int16_t zeros[480];
+                memset(zeros, 0, sizeof(zeros));
+                UINT32 left = frames;
+                while (left > 0) {
+                    UINT32 n = left > 480 ? 480 : left;
+                    pcm_append(&st->pcm, zeros, n);
+                    left -= n;
+                }
+            } else {
+                pcm_append(&st->pcm, (const int16_t *)data, frames);
+            }
+        }
+        IAudioCaptureClient_ReleaseBuffer(st->cap, frames);
+    }
+}
+
+static void va_level(VaState *st, ULONGLONG now)
+{
+    if (!st->test_only || now - st->t_last_level < VA_LEVEL_MS) return;
+    st->t_last_level = now;
+    size_t from = st->level_from, n = st->pcm.n;
+    double pk = (n > from) ? pcm_peak(st->pcm.s + from, n - from) : 0.0;
+    st->level_from = n;
+    int lv = (int)(pk * 1000.0 + 0.5);
+    if (lv > 1000) lv = 1000;
+    va_post(VAM_LEVEL, (LPARAM)lv);
+}
+
+static void va_enumerate(VaState *st)
+{
+    if (!st->enm) { va_post_err(VAE_COM_FAILED); return; }
+    IMMDeviceCollection *coll = NULL;
+    if (FAILED(IMMDeviceEnumerator_EnumAudioEndpoints(st->enm, eCapture,
+                                                      DEVICE_STATE_ACTIVE, &coll)) || !coll) {
+        va_post_err(VAE_NO_DEVICE);
+        return;
+    }
+    VoiceDeviceList *l = (VoiceDeviceList *)calloc(1, sizeof(*l));
+    if (!l) { IMMDeviceCollection_Release(coll); va_post_err(VAE_NO_MEMORY); return; }
+    UINT cnt = 0;
+    IMMDeviceCollection_GetCount(coll, &cnt);
+    for (UINT i = 0; i < cnt && l->n < 32; i++) {
+        IMMDevice *d = NULL;
+        if (FAILED(IMMDeviceCollection_Item(coll, i, &d)) || !d) continue;
+        LPWSTR id = NULL;
+        if (SUCCEEDED(IMMDevice_GetId(d, &id)) && id && wcslen(id) < 256) {
+            wcscpy(l->dev[l->n].id, id);
+            const char *fallback = "Microphone";
+            snprintf(l->dev[l->n].name, sizeof(l->dev[l->n].name), "%s", fallback);
+            IPropertyStore *ps = NULL;
+            if (SUCCEEDED(IMMDevice_OpenPropertyStore(d, STGM_READ, &ps)) && ps) {
+                PROPVARIANT pv;
+                PropVariantInit(&pv);
+                if (SUCCEEDED(IPropertyStore_GetValue(ps, &VA_PKEY_FriendlyName, &pv)) &&
+                    pv.vt == VT_LPWSTR && pv.pwszVal)
+                    WideCharToMultiByte(CP_UTF8, 0, pv.pwszVal, -1, l->dev[l->n].name,
+                                        (int)sizeof(l->dev[l->n].name), NULL, NULL);
+                PropVariantClear(&pv);
+                IPropertyStore_Release(ps);
+            }
+            l->dev[l->n].name[sizeof(l->dev[l->n].name) - 1] = '\0';
+            l->n++;
+        }
+        if (id) CoTaskMemFree(id);
+        IMMDevice_Release(d);
+    }
+    IMMDeviceCollection_Release(coll);
+    va_post(VAM_DEVICES, (LPARAM)l);
+}
+
+static void va_watch(VaState *st, int on)
+{
+    if (!st->enm) return;
+    if (on && !st->watching) {
+        if (SUCCEEDED(IMMDeviceEnumerator_RegisterEndpointNotificationCallback(
+                st->enm, (IMMNotificationClient *)&g_nc)))
+            st->watching = 1;
+    } else if (!on && st->watching) {
+        IMMDeviceEnumerator_UnregisterEndpointNotificationCallback(
+            st->enm, (IMMNotificationClient *)&g_nc);
+        st->watching = 0;
+    }
+}
+
+static int va_pop(VaCmd *out)
+{
+    int got = 0;
+    EnterCriticalSection(&g_cs);
+    if (g_qn > 0) {
+        *out = g_q[0];
+        memmove(&g_q[0], &g_q[1], (size_t)(g_qn - 1) * sizeof(VaCmd));
+        g_qn--;
+        got = 1;
+    }
+    LeaveCriticalSection(&g_cs);
+    return got;
+}
+
+static DWORD WINAPI va_thread(LPVOID arg)
+{
+    (void)arg;
+    VaState st;
+    memset(&st, 0, sizeof(st));
+    int com = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
+    if (!com) {
+        va_post_err(VAE_COM_FAILED);
+    } else {
+        dll_record_note("mmdevapi.dll");   /* the only place the enumerator is created */
+        if (FAILED(CoCreateInstance(&VA_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                    &VA_IID_IMMDeviceEnumerator, (void **)&st.enm)))
+            { st.enm = NULL; va_post_err(VAE_COM_FAILED); }
+    }
+    va_post(VAM_READY, 0);
+    SetEvent(g_ready);
+
+    for (;;) {
+        HANDLE h[3] = { g_stop, g_wake, st.buf_ev };
+        DWORD nh = st.active ? 3u : 2u;
+        DWORD w = WaitForMultipleObjects(nh, h, FALSE, st.active ? 100u : INFINITE);
+        if (w == WAIT_OBJECT_0) break;
+        VaCmd c;
+        while (va_pop(&c)) {
+            switch (c.kind) {
+            case VC_ENUM:  va_enumerate(&st); break;
+            case VC_BEGIN: va_begin(&st, &c); break;
+            case VC_END:   va_finish(&st, c.flag); break;
+            case VC_WATCH: va_watch(&st, c.flag); break;
+            }
+        }
+        if (st.active) {
+            ULONGLONG now = GetTickCount64();
+            if (w == WAIT_OBJECT_0 + 2) st.t_last_ev = now;
+            if (!va_drain(&st)) { va_fail(&st, VAE_DEVICE_LOST); continue; }
+            va_level(&st, now);
+            if (now - st.t_last_ev > VA_STALL_MS) { va_fail(&st, VAE_DEVICE_LOST); continue; }
+            if (st.test_only && now - st.t_start >= VA_TEST_MS) {
+                va_finish(&st, 0);
+                va_post(VAM_LEVEL, 0);
+            }
+        }
+    }
+
+    va_finish(&st, 0);
+    va_watch(&st, 0);               /* unregistered here, never inside a callback */
+    if (st.enm) IMMDeviceEnumerator_Release(st.enm);
+    if (com) CoUninitialize();
+    return 0;
+}
+
+/* ---- public API (UI thread) ------------------------------------------ */
+
+int voice_audio_start(HWND notify)
+{
+    if (!g_cs_ready) { InitializeCriticalSection(&g_cs); g_cs_ready = 1; }
+    if (g_thread) return 1;
+    g_notify = notify;
+    g_qn = 0;
+    g_stop = CreateEventA(NULL, TRUE, FALSE, NULL);
+    g_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
+    g_ready = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (g_stop && g_wake && g_ready)
+        g_thread = CreateThread(NULL, 0, va_thread, NULL, 0, NULL);
+    if (!g_thread) {
+        if (g_stop) CloseHandle(g_stop);
+        if (g_wake) CloseHandle(g_wake);
+        if (g_ready) CloseHandle(g_ready);
+        g_stop = g_wake = g_ready = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+void voice_audio_stop(void)
+{
+    if (!g_thread) return;
+    SetEvent(g_stop);
+    if (WaitForSingleObject(g_thread, 3000) != WAIT_OBJECT_0) {
+        /* The thread is wedged in a driver call: leave it and its events
+         * (it may still touch them); the handle is all we release. */
+        CloseHandle(g_thread);
+        g_thread = NULL;
+        g_notify = NULL;
+        g_stop = g_wake = g_ready = NULL;
+        return;
+    }
+    CloseHandle(g_thread);
+    CloseHandle(g_stop);
+    CloseHandle(g_wake);
+    CloseHandle(g_ready);
+    g_thread = NULL;
+    g_stop = g_wake = g_ready = NULL;
+    g_notify = NULL;
+}
+
+int voice_audio_wait_ready(DWORD ms)
+{
+    if (!g_thread || !g_ready) return 0;
+    return WaitForSingleObject(g_ready, ms) == WAIT_OBJECT_0;
+}
+
+static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
+{
+    if (!g_thread) return;
+    EnterCriticalSection(&g_cs);
+    if (g_qn < VA_QMAX) {
+        VaCmd *c = &g_q[g_qn++];
+        memset(c, 0, sizeof(*c));
+        c->kind = k;
+        if (id) snprintf(c->id, sizeof(c->id), "%s", id);
+        c->token = token;
+        c->flag = flag;
+    }
+    LeaveCriticalSection(&g_cs);
+    SetEvent(g_wake);
+}
+
+void voice_audio_enumerate(void) { va_push(VC_ENUM, NULL, 0, 0); }
+void voice_audio_capture_begin(const char *id, unsigned token, int test_only)
+{ va_push(VC_BEGIN, id ? id : "", token, test_only ? 1 : 0); }
+void voice_audio_capture_end(int keep) { va_push(VC_END, NULL, 0, keep ? 1 : 0); }
+void voice_audio_watch_devices(int on) { va_push(VC_WATCH, NULL, 0, on ? 1 : 0); }
+
+void voice_audio_free_devices(VoiceDeviceList *l) { free(l); }
+
+void voice_audio_free_capture(VoiceCapture *c)
+{
+    if (!c) return;
+    pcm_free(&c->pcm);
+    free(c);
+}

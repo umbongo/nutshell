@@ -1,16 +1,36 @@
 #include "voice_win.h"
 
 #include "opt_feature.h"
+#include "settings_dlg.h"
+#include "voice_audio_win.h"
 #include "voice_gate.h"
+
+static int g_audio_up;   /* the audio thread was started by voice_feature_apply */
 
 void voice_feature_apply(HWND main)
 {
-    (void)main;
     const Settings *s = ui_current_settings();
-    voice_gate_set_enabled(s != NULL ? opt_feature_active(s, OPT_VOICE) : 0);
+    int on = (s != NULL) ? opt_feature_active(s, OPT_VOICE) : 0;
+    voice_gate_set_enabled(on);
+    if (on) {
+        /* Idempotent: it is called more than once at startup. */
+        if (!g_audio_up && voice_audio_start(main)) g_audio_up = 1;
+    } else if (g_audio_up) {
+        voice_audio_stop();
+        g_audio_up = 0;
+    }
 }
 
 int voice_feature_running(void)
 {
-    return 0;   /* nothing of voice runs yet: the controller only sets the gate */
+    return g_audio_up;
+}
+
+void voice_on_audio_msg(WPARAM wp, LPARAM lp)
+{
+    /* An open Settings page takes the device list, levels and errors; what
+     * nobody wants is freed here. */
+    if (settings_voice_on_audio(wp, lp)) return;
+    if (wp == VAM_DEVICES) voice_audio_free_devices((VoiceDeviceList *)lp);
+    else if (wp == VAM_CAPTURED) voice_audio_free_capture((VoiceCapture *)lp);
 }

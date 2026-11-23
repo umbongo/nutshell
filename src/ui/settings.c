@@ -34,6 +34,7 @@
 #include "search_providers.h"
 #include "settings_entry.h"
 #include "opt_feature.h"
+#include "voice_audio_win.h"
 #include "voice_config.h"
 #include "voice_gate.h"
 #include "voice_stt.h"
@@ -66,6 +67,7 @@
 #define IDC_SSH_IDLE_EDIT   1030
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
+#define IDT_VOICE_TEST      52  /* the 3 s microphone test */
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 static const char *PAGE_CLASS     = "Nutshell_SettingsPage";
@@ -219,6 +221,15 @@ typedef struct {
     SettingsCtrl *ctrl_voice_url_warn;
     int      voice_use_ai_wanted; /* the user's choice, kept while the AI provider cannot do speech */
     int      voice_dev_listed;    /* the device combo lists microphones (voice saved on) */
+    HWND     hDlg;                /* the dialog window (timers, relayout) */
+    HWND     hVoiceTestNote;      /* dim "No microphone was found." under the meter */
+    SettingsCtrl *ctrl_voice_test_note;
+    int      voice_testing;       /* the 3 s test is running */
+    int      voice_level;         /* the meter, 0..1000 */
+    int      voice_dev_touched;   /* the user changed the device combo */
+    int      voice_dev_missing;   /* the saved microphone is not in the list */
+    int      voice_dev_n;         /* microphones listed (entry i is combo item i + 1) */
+    struct { char id[256]; char name[256]; } voice_dev[32];   /* UTF-8 */
     const SttProvider *voice_seeded; /* the provider the Model list was last seeded from */
 
     int      cur_page; /* SETTINGS_PAGE_* currently shown */
@@ -238,6 +249,9 @@ static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
 static void ai_enable_sync(SettingsDlgData *d);
 static void voice_enable_sync(SettingsDlgData *d);
+
+/* The open Settings dialog that listens for WM_VOICE_AUDIO (UI thread only). */
+static SettingsDlgData *g_voice_dlg;
 
 /* ---- Layout helpers ----------------------------------------------------- */
 /* Controls are created with placeholder geometry; relayout() positions them
@@ -951,9 +965,10 @@ static void voice_enable_sync(SettingsDlgData *d)
         EnableWindow(use_ai, (on && voice_use_ai_reason(d) == NULL) ? TRUE : FALSE);
     HWND dev = GetDlgItem(d->hPage, IDC_VOICE_DEVICE);
     if (dev) EnableWindow(dev, (on && d->voice_dev_listed) ? TRUE : FALSE);
-    /* Test comes with the capture thread; until then it is never usable. */
+    /* Test needs the listed microphones (voice saved on) and runs once at a time. */
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
-    if (test) EnableWindow(test, FALSE);
+    if (test)
+        EnableWindow(test, (on && d->voice_dev_listed && !d->voice_testing) ? TRUE : FALSE);
     if (changed && d->cur_page == SETTINGS_PAGE_VOICE) {
         relayout(GetParent(d->hPage), d);
         InvalidateRect(d->hPage, NULL, TRUE);
@@ -977,6 +992,139 @@ static void ai_url_warn_update(SettingsDlgData *d)
  * Every page control is a child of this window. It handles theme colours,
  * owner-draw for the refresh button, forwards WM_COMMAND to the main
  * window, and owns scrolling (both the AI notes edit and the whole page). */
+
+/* ---- Voice page: microphones, Test and the meter ------------------------ */
+
+static void voice_meter_redraw(SettingsDlgData *d)
+{
+    HWND m = GetDlgItem(d->hPage, IDC_VOICE_METER);
+    if (m) InvalidateRect(m, NULL, FALSE);
+}
+
+/* The dim line under the meter ("" hides the row). */
+static void voice_test_note(SettingsDlgData *d, const char *text)
+{
+    if (!d->hVoiceTestNote || !d->ctrl_voice_test_note) return;
+    SetWindowText(d->hVoiceTestNote, text);
+    int show = text[0] ? 1 : 0;
+    if (d->ctrl_voice_test_note->visible != show) {
+        d->ctrl_voice_test_note->visible = show;
+        if (d->cur_page == SETTINGS_PAGE_VOICE) {
+            relayout(d->hDlg, d);
+            InvalidateRect(d->hPage, NULL, TRUE);
+        }
+    }
+}
+
+static void voice_test_end(SettingsDlgData *d)
+{
+    if (!d->voice_testing) return;
+    KillTimer(d->hDlg, IDT_VOICE_TEST);
+    d->voice_testing = 0;
+    d->voice_level = 0;
+    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
+    if (test) SetWindowText(test, settings_help_get((int)SH_VOICE_TEST)->label);
+    voice_meter_redraw(d);
+    voice_enable_sync(d);
+    if (test) InvalidateRect(test, NULL, TRUE);
+}
+
+/* The endpoint ID the device combo currently stands for ("" = Windows default). */
+static const char *voice_dev_selected_id(const SettingsDlgData *d)
+{
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_DEVICE, CB_GETCURSEL, 0, 0);
+    if (sel >= 1 && sel - 1 < d->voice_dev_n) return d->voice_dev[sel - 1].id;
+    if (sel >= 1) return d->cfg->settings.voice_input_device;   /* before the list arrives */
+    return "";
+}
+
+static void voice_test_start(SettingsDlgData *d)
+{
+    if (d->voice_testing || !d->voice_dev_listed) return;
+    voice_test_note(d, "");
+    d->voice_testing = 1;
+    d->voice_level = 0;
+    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
+    if (test) SetWindowText(test, "Testing...");
+    SetTimer(d->hDlg, IDT_VOICE_TEST, 3000, NULL);
+    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1);
+    voice_enable_sync(d);
+    if (test) InvalidateRect(test, NULL, TRUE);
+}
+
+/* The device list arrived: refill the combo and keep the selection by ID. */
+static void voice_dev_take_list(SettingsDlgData *d, const VoiceDeviceList *l)
+{
+    char want[256];
+    snprintf(want, sizeof(want), "%s", d->voice_dev_touched
+                 ? voice_dev_selected_id(d)
+                 : d->cfg->settings.voice_input_device);
+    d->voice_dev_n = 0;
+    for (int i = 0; i < l->n && i < 32; i++) {
+        if (WideCharToMultiByte(CP_UTF8, 0, l->dev[i].id, -1, d->voice_dev[d->voice_dev_n].id,
+                                (int)sizeof(d->voice_dev[0].id), NULL, NULL) <= 0)
+            continue;
+        snprintf(d->voice_dev[d->voice_dev_n].name, sizeof(d->voice_dev[0].name),
+                 "%s", l->dev[i].name);
+        d->voice_dev_n++;
+    }
+    int sel = 0;
+    for (int i = 0; i < d->voice_dev_n; i++)
+        if (want[0] && strcmp(want, d->voice_dev[i].id) == 0) sel = i + 1;
+    d->voice_dev_missing = (want[0] && sel == 0 && !d->voice_dev_touched) ? 1 : 0;
+
+    char first[300];
+    if (d->voice_dev_missing) {
+        const Settings *vs = &d->cfg->settings;
+        snprintf(first, sizeof(first), "Windows default (saved microphone not found: %s)",
+                 vs->voice_input_device_name[0] ? vs->voice_input_device_name
+                                                : vs->voice_input_device);
+    } else {
+        snprintf(first, sizeof(first), "Windows default");
+    }
+    HWND cmb = GetDlgItem(d->hPage, IDC_VOICE_DEVICE);
+    if (!cmb) return;
+    SendMessage(cmb, CB_RESETCONTENT, 0, 0);
+    SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)first);
+    for (int i = 0; i < d->voice_dev_n; i++)
+        SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)d->voice_dev[i].name);
+    SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+}
+
+int settings_voice_on_audio(WPARAM wp, LPARAM lp)
+{
+    SettingsDlgData *d = g_voice_dlg;
+    if (!d || !d->voice_dev_listed || !d->hPage) return 0;
+    switch ((VoiceAudioMsg)wp) {
+    case VAM_DEVICES:
+        voice_dev_take_list(d, (const VoiceDeviceList *)lp);
+        voice_audio_free_devices((VoiceDeviceList *)lp);
+        return 1;
+    case VAM_DEVICES_CHANGED:
+        voice_audio_enumerate();
+        return 1;
+    case VAM_LEVEL:
+        if (d->voice_testing) {
+            d->voice_level = (int)lp < 0 ? 0 : ((int)lp > 1000 ? 1000 : (int)lp);
+            voice_meter_redraw(d);
+        }
+        return 1;
+    case VAM_ERROR:
+        if (d->voice_testing) {
+            voice_test_end(d);
+            switch ((VoiceAudioErr)lp) {
+            case VAE_NO_DEVICE:    voice_test_note(d, "No microphone was found."); break;
+            case VAE_DEVICE_LOST:  voice_test_note(d, "The microphone stopped responding."); break;
+            default:               voice_test_note(d, "The microphone could not be opened."); break;
+            }
+        }
+        return 1;
+    case VAM_READY:
+        return 1;
+    default:
+        return 0;
+    }
+}
 
 static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                                          WPARAM wParam, LPARAM lParam)
@@ -1051,7 +1199,7 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
             }
             if ((int)dis->CtlID == IDC_VOICE_METER) {
                 /* The microphone level: the page background behind the track,
-                 * and the fill at 0 until the capture thread feeds it. */
+                 * and the fill from the Test's levels (0 otherwise). */
                 FillRect(dis->hDC, &dis->rcItem, d->hBrBgPrimary);
                 NsRect bar;
                 bar.x = dis->rcItem.left;
@@ -1059,7 +1207,7 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                 bar.w = dis->rcItem.right - dis->rcItem.left;
                 bar.h = (dis->rcItem.bottom - dis->rcItem.top) / 2;
                 if (bar.w > 0 && bar.h > 0)
-                    ns_draw_meter(dis->hDC, &bar, 0.0, ns_tokens());
+                    ns_draw_meter(dis->hDC, &bar, d->voice_level / 1000.0, ns_tokens());
                 return TRUE;
             }
         }
@@ -1418,6 +1566,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         SettingsDlgData *nd = (SettingsDlgData *)cs->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
 
+        nd->hDlg = hwnd;
         nd->dpi = get_window_dpi(hwnd);
         SettingsMetrics m;
         settings_metrics_init(&m, nd->dpi);
@@ -1930,6 +2079,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, NULL, meter, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
             }
             {
+                /* "No microphone was found." and the like, after a Test. */
+                nd->hVoiceTestNote = make_hint(nd, "");
+                nd->ctrl_voice_test_note = add_ctrl(nd, NULL, nd->hVoiceTestNote, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 0, 1);
+            }
+            {
                 HWND lbl = make_label2(nd, SH_VOICE_PTT_KEY);
                 HWND cmb = make_combo2(nd, IDC_VOICE_PTT_KEY, CBS_DROPDOWNLIST,
                                        SH_VOICE_PTT_KEY);
@@ -1963,6 +2118,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 SendMessage(chk, BM_SETCHECK,
                             vs->voice_review ? BST_CHECKED : BST_UNCHECKED, 0);
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
+            }
+            /* Voice saved on: ask the audio thread for the microphones and
+             * to tell us when one comes or goes. */
+            g_voice_dlg = nd;
+            if (nd->voice_dev_listed) {
+                voice_audio_enumerate();
+                voice_audio_watch_devices(1);
             }
         }
 
@@ -2211,6 +2373,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
     }
 
     case WM_TIMER:
+        if (wParam == IDT_VOICE_TEST && d) {
+            voice_test_end(d);
+            return 0;
+        }
         if (wParam == IDT_SYSNOTES_SCROLL && d) {
             sys_notes_sync_scroll(d);
             return 0;
@@ -2354,9 +2520,29 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             break;
 
+        case IDC_VOICE_DEVICE:
+            if (d && HIWORD(wParam) == CBN_SELCHANGE) d->voice_dev_touched = 1;
+            break;
+
+        case IDC_VOICE_TEST:
+            if (d && HIWORD(wParam) == BN_CLICKED) voice_test_start(d);
+            break;
+
         case IDC_VOICE_PROVIDER:
             if (d && HIWORD(wParam) == CBN_SELCHANGE) {
+                /* A model that is empty or one of the old provider's seeds
+                 * follows the provider; one the user typed is kept. */
+                const SttProvider *prev = d->voice_seeded;
+                char cur[CFG_STR_MAX];
+                cur[0] = '\0';
+                GetDlgItemText(d->hPage, IDC_VOICE_MODEL, cur, (int)sizeof(cur));
+                int follow = (cur[0] == '\0');
+                for (size_t k = 0; !follow && prev && prev->models && prev->models[k]; k++)
+                    if (strcmp(cur, prev->models[k]) == 0) follow = 1;
                 voice_enable_sync(d);
+                if (follow && d->voice_seeded && d->voice_seeded != prev &&
+                    d->voice_seeded->models && d->voice_seeded->models[0])
+                    SetDlgItemText(d->hPage, IDC_VOICE_MODEL, d->voice_seeded->models[0]);
                 relayout(hwnd, d);
                 InvalidateRect(d->hPage, NULL, TRUE);
             }
@@ -2708,12 +2894,24 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             {
                 int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_DEVICE,
                                                   CB_GETCURSEL, 0, 0);
-                /* "Windows default" clears the choice; a listed microphone (the
-                 * one saved, until the capture thread lists more) and the
-                 * "Save to list microphones" placeholder leave it unchanged. */
-                if (d->voice_dev_listed && sel == 0) {
-                    s->voice_input_device[0] = '\0';
-                    s->voice_input_device_name[0] = '\0';
+                /* "Windows default" clears the choice, unless it stands for a saved
+                 * microphone that is not plugged in and the user left it alone;
+                 * a listed microphone sets it; the saved entry shown before the
+                 * list arrives and the "Save to list microphones" placeholder
+                 * leave it unchanged. */
+                if (d->voice_dev_listed) {
+                    if (sel == 0) {
+                        if (!(d->voice_dev_missing && !d->voice_dev_touched)) {
+                            s->voice_input_device[0] = '\0';
+                            s->voice_input_device_name[0] = '\0';
+                        }
+                    } else if (sel - 1 < d->voice_dev_n) {
+                        (void)snprintf(s->voice_input_device, sizeof(s->voice_input_device),
+                                       "%s", d->voice_dev[sel - 1].id);
+                        (void)snprintf(s->voice_input_device_name,
+                                       sizeof(s->voice_input_device_name),
+                                       "%s", d->voice_dev[sel - 1].name);
+                    }
                 }
             }
             {
@@ -2837,6 +3035,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             thread_join_detach_all(&d->models_thread);   /* whatever is left, finished or not */
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
+            if (g_voice_dlg == d) {
+                if (d->voice_testing) { KillTimer(hwnd, IDT_VOICE_TEST); voice_audio_capture_end(0); }
+                if (d->voice_dev_listed) voice_audio_watch_devices(0);
+                g_voice_dlg = NULL;
+            }
             if (d->hTip) DestroyWindow(d->hTip);
             /* d->hDlgFont / d->hBoldFont come from the ns_font cache. */
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);

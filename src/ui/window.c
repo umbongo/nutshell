@@ -41,6 +41,8 @@
 #include "paste_filter.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
+#include "voice_audio_win.h"
+#include "voice_gate.h"
 #include "voice_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
@@ -5417,6 +5419,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_VOICE_AUDIO:
+            voice_on_audio_msg(wParam, lParam);
+            return 0;
+
         case WM_SELF_REPORT:
             /* Hidden --self-report=<path> (spec section 6): the record is
              * complete once WM_STARTUP_CONNECT has run. A failed write is
@@ -5427,6 +5433,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 HINTERNET h = ns_winhttp_open(NULL);
                 if (h) WinHttpCloseHandle(h);
             }
+            /* The audio thread notes mmdevapi.dll as it starts: wait for it
+             * (bounded) so the record is complete. Nothing waits with voice off. */
+            if (voice_gate_on())
+                (void)voice_audio_wait_ready(5000);
             if (!ns_self_report_write(g_self_report_path))
                 g_self_report_failed = 1;
             PostMessage(hwnd, WM_CLOSE, 0, 0);

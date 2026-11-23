@@ -29,5 +29,10 @@ int ui_ai_is_working(void);
  * nothing is written and cfg is not touched. */
 void settings_dlg_show_demo_debug(HWND parent, Config *cfg);
 
+/* A WM_VOICE_AUDIO message (voice_audio_win.h) for an open Settings dialog:
+ * the device list, the Test level and errors. Returns 1 when the dialog took
+ * it (it then owns a VAM_DEVICES payload), else 0 (the caller frees it). */
+int settings_voice_on_audio(WPARAM wp, LPARAM lp);
+
 #endif
 #endif
