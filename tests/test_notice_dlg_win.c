@@ -61,7 +61,8 @@ typedef enum {
     PLAN_TAB_CYCLE,            /* OK -> action -> OK, then Escape */
     PLAN_OWNER_STATE,          /* record the owner's enabled state, Escape */
     PLAN_CLOSE_BOX,            /* WM_CLOSE */
-    PLAN_FIT                   /* every child inside the client area, Escape */
+    PLAN_FIT,                  /* every child inside the client area, Escape */
+    PLAN_CHILD_OWNER           /* record the root's state and the notice's owner, Escape */
 } Plan;
 
 static Plan g_plan;
@@ -76,6 +77,10 @@ static HWND g_focus[4];
 static HWND g_ok_h, g_act_h;
 static int  g_owner_enabled_in_dlg = -1;
 static int  g_fit_ok;
+static HWND g_root;
+static int  g_root_enabled_in_dlg = -1;
+static int  g_child_enabled_in_dlg = -1;
+static HWND g_notice_owner;
 
 static void key(HWND dlg, WPARAM vk)
 {
@@ -149,6 +154,13 @@ static VOID CALLBACK notice_timer(HWND h, UINT m, UINT_PTR id, DWORD t)
         KillTimer(NULL, id);
         PostMessageA(dlg, WM_CLOSE, 0, 0);
         break;
+    case PLAN_CHILD_OWNER:
+        g_root_enabled_in_dlg = IsWindowEnabled(g_root) ? 1 : 0;
+        g_child_enabled_in_dlg = IsWindowEnabled(g_owner) ? 1 : 0;
+        g_notice_owner = GetWindow(dlg, GW_OWNER);
+        KillTimer(NULL, id);
+        key(dlg, VK_ESCAPE);
+        break;
     case PLAN_FIT:
         fit_check(dlg);
         KillTimer(NULL, id);
@@ -167,6 +179,17 @@ static int run(HWND owner, const Notice *n, Plan plan)
     g_owner = owner;
     SetTimer(NULL, 0, 100, notice_timer);
     return notice_dlg_show(owner, n, ui_theme_get(0));
+}
+
+static int run_msg(HWND owner, NoticeMsgId id, Plan plan)
+{
+    tokens();
+    g_plan = plan;
+    g_step = 0;
+    g_dlg = NULL;
+    g_owner = owner;
+    SetTimer(NULL, 0, 100, notice_timer);
+    return notice_dlg_msg(owner, id, NULL, ui_theme_get(0));
 }
 
 /* ---- tests ------------------------------------------------------------ */
@@ -300,6 +323,54 @@ int test_notice_dlg_win_owner_enable_state_is_restored(void)
         ASSERT_FALSE(IsWindowEnabled(owner));
         DestroyWindow(owner);
     }
+    TEST_END();
+}
+
+int test_notice_dlg_win_child_owner_disables_root(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    sample(&n, NOTICE_INFO, 0);
+    HWND top = CreateWindowExA(0, "STATIC", "top", WS_OVERLAPPEDWINDOW,
+                               0, 0, 500, 300, NULL, NULL, GetModuleHandle(NULL), NULL);
+    ASSERT_NOT_NULL(top);
+    if (top) {
+        HWND child = CreateWindowExA(0, "STATIC", "child", WS_CHILD | WS_VISIBLE,
+                                     0, 0, 100, 100, top, NULL, GetModuleHandle(NULL), NULL);
+        ASSERT_NOT_NULL(child);
+        if (child) {
+            g_root = top;
+            g_root_enabled_in_dlg = g_child_enabled_in_dlg = -1;
+            g_notice_owner = NULL;
+            ASSERT_EQ(run(child, &n, PLAN_CHILD_OWNER), 0);
+            ASSERT_EQ(g_root_enabled_in_dlg, 0);
+            ASSERT_TRUE(g_notice_owner == top);
+            ASSERT_TRUE(IsWindowEnabled(top));
+            ASSERT_TRUE(IsWindowEnabled(child));
+        }
+        DestroyWindow(top);
+    }
+    TEST_END();
+}
+
+int test_notice_dlg_win_msg_shows_table_text(void)
+{
+    TEST_BEGIN();
+    g_caption[0] = g_open[0] = 0;
+    g_class[0] = 0;
+    ASSERT_EQ(run_msg(NULL, NOTICE_MSG_TAB_LIMIT, PLAN_READ_THEN_ESC), 0);
+    ASSERT_STR_EQ(g_class, CLS);
+    ASSERT_STR_EQ(g_caption, "Tab Limit");
+    ASSERT_STR_EQ(g_open, "Maximum number of tabs reached.");
+    ASSERT_NULL(FindWindowA(CLS, NULL));
+    TEST_END();
+}
+
+int test_notice_dlg_win_msg_bad_id_shows_nothing(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(notice_dlg_msg(NULL, NOTICE_MSG_COUNT, NULL, ui_theme_get(0)), 0);
+    ASSERT_NULL(FindWindowA(CLS, NULL));
     TEST_END();
 }
 

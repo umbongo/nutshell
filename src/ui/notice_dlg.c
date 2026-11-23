@@ -379,6 +379,10 @@ static LRESULT CALLBACK notice_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
 {
     if (!n) return 0;
+    /* MessageBox takes the root owner: a child window (a tab pane, say) owns
+     * nothing, and disabling only it would leave the top-level usable. */
+    if (owner && IsWindow(owner) && (GetWindowLongA(owner, GWL_STYLE) & WS_CHILD))
+        owner = GetAncestor(owner, GA_ROOT);
     static int registered = 0;
     HINSTANCE inst = GetModuleHandleA(NULL);
     if (!registered) {
@@ -441,4 +445,11 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
      * in it and must not be forwarded. */
     if (gm == 0) PostQuitMessage((int)m.wParam);
     return result;
+}
+
+int notice_dlg_msg(HWND owner, NoticeMsgId id, const char *arg, const ThemeColors *theme)
+{
+    Notice n;
+    if (!notice_msg(&n, id, arg)) return 0;
+    return notice_dlg_show(owner, &n, theme);
 }

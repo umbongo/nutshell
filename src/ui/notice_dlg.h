@@ -5,7 +5,9 @@
  * Real STATIC and BUTTON children (readable by screen readers and the
  * integration harness), colours from ns_tokens(), fonts from ns_font(),
  * buttons from ns_draw_button(). Not topmost; centred on the owner; takes the
- * owner's DPI and follows WM_DPICHANGED. */
+ * owner's DPI and follows WM_DPICHANGED. An owner that is a child window
+ * stands for its root window (as with MessageBox): the root is disabled,
+ * centred on, and restored. */
 #ifndef NUTSHELL_NOTICE_DLG_H
 #define NUTSHELL_NOTICE_DLG_H
 
@@ -38,6 +40,11 @@
  * opens Settings at its default page. The caller opens Settings after this
  * returns, never from inside it. `theme` may be NULL (the first theme). */
 int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme);
+
+/* One-call form for the fixed OK-only messages of notice.h: builds `id` with
+ * notice_msg() (`arg` fills its %s, may be NULL) and shows it. Returns 0 at
+ * once, showing nothing, for a bad id; otherwise what notice_dlg_show returns. */
+int notice_dlg_msg(HWND owner, NoticeMsgId id, const char *arg, const ThemeColors *theme);
 
 #endif /* _WIN32 */
 #endif /* NUTSHELL_NOTICE_DLG_H */
