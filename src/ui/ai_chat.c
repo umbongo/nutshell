@@ -4,6 +4,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
+#include "dll_record.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -2304,7 +2305,9 @@ void ai_chat_init(HINSTANCE hInstance)
      * hardening): search System32 only, never the exe's own directory or
      * the current directory, so a same-named DLL planted in either can't be
      * loaded instead of the real one. */
+    dll_record_note("Riched20.dll");
     LoadLibraryExW(L"Riched20.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    dll_record_note("Msftedit.dll");
     LoadLibraryExW(L"Msftedit.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
 
     /* Register the ChatListView window class */

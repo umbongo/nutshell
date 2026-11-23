@@ -1,5 +1,6 @@
 #include "crypto_dpapi.h"
 #include "crypto.h"
+#include "dll_record.h"
 #include <string.h>
 
 #ifdef _WIN32
@@ -49,6 +50,7 @@ typedef union {
 static int load_crypt32(Crypt32Api *api)
 {
     memset(api, 0, sizeof(*api));
+    dll_record_note("crypt32.dll");
     api->module = LoadLibraryExW(L"crypt32.dll", NULL,
                                   LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!api->module) {

@@ -8,6 +8,7 @@
 #ifdef _WIN32
 
 #include "ns_draw.h"
+#include "dll_record.h"
 #include "ns_scale.h"
 #include "ns_type.h"
 #include <gdiplus.h>
@@ -546,6 +547,7 @@ void ns_control_classic(HWND h)
     if (!h) return;
     if (!resolved) {
         resolved = 1;
+        dll_record_note("uxtheme.dll");
         HMODULE mod = LoadLibraryExW(L"uxtheme.dll", NULL,
                                      LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (mod) {

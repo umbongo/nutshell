@@ -3,6 +3,7 @@
 /* Runtime-resolved DwmSetWindowAttribute. See dwm_util.h. */
 
 #include "dwm_util.h"
+#include "dll_record.h"
 
 typedef HRESULT (WINAPI *DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
 
@@ -23,6 +24,7 @@ void ns_dwm_set_dark_mode(HWND hwnd, BOOL dark)
 
     if (!g_dwm_probed) {
         g_dwm_probed = 1;
+        dll_record_note("dwmapi.dll");
         HMODULE h = LoadLibraryExW(L"dwmapi.dll", NULL,
                                    LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (h) {

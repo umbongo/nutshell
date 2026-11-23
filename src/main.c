@@ -344,6 +344,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     ui_set_startup_action(opts.action, opts.arg, opts.demo_state, opts.theme);
 
+    ui_set_self_report(opts.self_report);
+
     start_debug_log();
 
     /* I-2: initialise WSA once for the process lifetime */
@@ -357,5 +359,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     WSACleanup();
     dlog_shutdown();
-    return 0;
+    return ui_self_report_failed() ? 3 : 0;
 }

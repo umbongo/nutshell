@@ -251,6 +251,7 @@ touches before marking its pull request ready.
 | `cli_unknown_flag_redirect_stderr` | (`CLI-1`, v1.2.32) an unrecognised flag redirected: "Unknown option" lands in the stderr file, the stdout file stays empty, non-zero exit code |
 | `cli_no_connect_opens_idle` | (`CLI-1`) `-nc`: main window, no dialog, and no repaint over 5s (nothing animates a connecting-state tab, since nothing tried to connect) |
 | `cli_host_flag_connects` | (`CLI-1`) `-h tompi` resolves the generated profile by host (`config_find_profile_by_host`) and connects, same as `-sn` |
+| `self_report_ai_off_clean` | (spec section 6, unrun) `nutshell.exe -nc --self-report=self_report.txt` with the AI assistant off: exits 0 after writing the DLL record and module list; winhttp.dll, riched20.dll and msftedit.dll were never requested. Standalone case (the window lives about a second). `make selftest-wine` asserts the same under Wine |
 | `f_keys_reach_shell` | F1-F4 -> SS3 P-S, F5-F10 -> CSI 15/17/18/19/20/21~ (F10 posted as `WM_SYSKEYDOWN`, matching real Windows), Shift+F11 -> CSI 23;2~ (plain F11 stays the fullscreen toggle), F12 -> CSI 24~, read back from `cat -v` |
 | `alt_letter_reaches_shell` | Alt+F (posted as `WM_SYSKEYDOWN`/`WM_SYSKEYUP` with no `WM_SYSCHAR` of its own) produces exactly one `^[f` in `cat -v`, proving the app's own `TranslateMessage` synthesises it once, not twice |
 | `shift_tab_and_ctrl_arrows` | Shift+Tab -> CSI Z; Ctrl+Up/Down/Right/Left -> CSI 1;5 A/B/C/D, read back from `cat -v` |

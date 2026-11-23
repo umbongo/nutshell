@@ -2,6 +2,7 @@
 
 #include <winsock2.h>   /* Must come before windows.h */
 #include "ui.h"
+#include "dll_hook_win.h"
 #include "dlog.h"
 #include "open_dir.h"
 #include "renderer.h"
@@ -96,6 +97,9 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
 #define WM_STARTUP_CONNECT      (WM_USER + 3)
+/* --self-report: posted at the end of the launch-notice step of
+ * WM_STARTUP_CONNECT; writes the DLL record and closes the window. */
+#define WM_SELF_REPORT          (WM_USER + 9)
 /* Posted by connection_thread (worker) to ask the UI thread to show the
  * host-key or passphrase dialog for the job and slot generation packed
  * into `wParam` (CONN_PROMPT_WPARAM() below); lParam is the
@@ -536,6 +540,8 @@ static CliAction g_startup_action = CLI_RUN;
 static char g_startup_arg[256];
 static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
 static char g_startup_theme[CLI_THEME_MAX];
+static char g_self_report_path[CLI_REPORT_MAX];
+static int  g_self_report_failed;
 static HWND g_hwndAiChat = NULL;
 static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
@@ -5398,6 +5404,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_SELF_REPORT:
+            /* Hidden --self-report=<path> (spec section 6): the record is
+             * complete once WM_STARTUP_CONNECT has run. A failed write is
+             * reported through the exit code of the run. */
+            if (!ns_self_report_write(g_self_report_path))
+                g_self_report_failed = 1;
+            PostMessage(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+
         case WM_STARTUP_CONNECT: {
             if (g_startup_action == CLI_UI_DEMO) {
                 notice_queue_init(&g_launch_notices);
@@ -5419,6 +5434,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     PostMessage(hwnd, WM_COMMAND, IDM_EDIT_SETTINGS,
                                 (LPARAM)(open_page > 0 ? open_page : 0));
             }
+            if (g_self_report_path[0])
+                PostMessage(hwnd, WM_SELF_REPORT, 0, 0);
             if (g_startup_action == CLI_UI_DEMO) {
                 create_demo_session(hwnd);
                 return 0;
@@ -6439,6 +6456,17 @@ void ui_set_startup_action(CliAction action, const char *arg,
                    demo_state ? demo_state : "");
     (void)snprintf(g_startup_theme, sizeof(g_startup_theme), "%s",
                    theme ? theme : "");
+}
+
+void ui_set_self_report(const char *path)
+{
+    (void)snprintf(g_self_report_path, sizeof(g_self_report_path), "%s",
+                   path ? path : "");
+}
+
+int ui_self_report_failed(void)
+{
+    return g_self_report_failed;
 }
 
 void ui_init(HINSTANCE instance) {

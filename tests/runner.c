@@ -510,6 +510,17 @@ int test_config_load_ex_unparseable_reports_invalid(void);
 int test_config_load_ex_oversized_reports_unreadable(void);
 int test_config_fallback_path_core(void);
 int test_config_fallback_path_rejects_relative(void);
+/* test_dll_record.c */
+int test_dll_record_note_and_query(void);
+int test_dll_record_case_insensitive(void);
+int test_dll_record_duplicates_once(void);
+int test_dll_record_null_and_empty_ignored(void);
+int test_dll_record_cap_of_64(void);
+int test_dll_record_overlong_name_ignored(void);
+int test_dll_record_format_with_modules(void);
+int test_dll_record_format_modules_only(void);
+int test_dll_record_format_truncates_whole_lines(void);
+
 /* test_cli_args.c */
 int test_cli_no_args(void);
 int test_cli_session_name_short(void);
@@ -546,6 +557,14 @@ int test_cli_local_twice(void);
 int test_cli_local_with_theme_is_error(void);
 int test_cli_local_not_matched_by_prefix(void);
 int test_cli_usage_text_mentions_local(void);
+int test_cli_self_report_with_run(void);
+int test_cli_self_report_with_no_connect(void);
+int test_cli_self_report_equals_form_only(void);
+int test_cli_self_report_rejected_with_ui_demo(void);
+int test_cli_self_report_rejected_with_version(void);
+int test_cli_self_report_rejected_alone_with_connect(void);
+int test_cli_self_report_empty_path_rejected(void);
+int test_cli_self_report_not_in_usage(void);
 
 /* profile lookup (test_config.c) */
 int test_find_profile_by_name_exact(void);
@@ -5031,6 +5050,15 @@ int main(void) {
     failed += test_config_fallback_path_rejects_relative();
 
     printf("\n--- CLI args ---\n");
+    failed += test_dll_record_note_and_query();
+    failed += test_dll_record_case_insensitive();
+    failed += test_dll_record_duplicates_once();
+    failed += test_dll_record_null_and_empty_ignored();
+    failed += test_dll_record_cap_of_64();
+    failed += test_dll_record_overlong_name_ignored();
+    failed += test_dll_record_format_with_modules();
+    failed += test_dll_record_format_modules_only();
+    failed += test_dll_record_format_truncates_whole_lines();
     failed += test_cli_no_args();
     failed += test_cli_session_name_short();
     failed += test_cli_session_name_long();
@@ -5066,6 +5094,14 @@ int main(void) {
     failed += test_cli_local_with_theme_is_error();
     failed += test_cli_local_not_matched_by_prefix();
     failed += test_cli_usage_text_mentions_local();
+    failed += test_cli_self_report_with_run();
+    failed += test_cli_self_report_with_no_connect();
+    failed += test_cli_self_report_equals_form_only();
+    failed += test_cli_self_report_rejected_with_ui_demo();
+    failed += test_cli_self_report_rejected_with_version();
+    failed += test_cli_self_report_rejected_alone_with_connect();
+    failed += test_cli_self_report_empty_path_rejected();
+    failed += test_cli_self_report_not_in_usage();
 
     printf("\n--- Profile lookup ---\n");
     failed += test_find_profile_by_name_exact();

@@ -11,6 +11,14 @@
 void ui_set_startup_action(CliAction action, const char *arg,
                            const char *demo_state, const char *theme);
 
+/* --self-report=<path>: after startup the main window writes the DLL record
+ * and module list to path and closes. Call before ui_init(); "" or NULL
+ * leaves it off. */
+void ui_set_self_report(const char *path);
+
+/* 1 when --self-report was given and writing the file failed. */
+int ui_self_report_failed(void);
+
 void ui_init(HINSTANCE instance);
 void ui_run(void);
 #endif
