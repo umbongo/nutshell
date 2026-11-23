@@ -68,6 +68,12 @@ typedef struct {
  * owes the user. */
 void notice_launch_plan(NoticeQueue *q, const NoticeLaunch *in);
 
+/* Whether the launch saves the config. `added` is a first-run file or
+ * settings an upgrade adds; `local_profile` is the Local shell profile
+ * being created. Under --ui-demo only the profile save is kept: the demo
+ * never writes the added fields or a first-run file. */
+int notice_launch_save_wanted(int demo, int added, int local_profile);
+
 /* title, blank line, opening, "- label: value" lines, blank line, closing;
  * LF line ends, NUL-terminated, truncated at cap. Returns the length
  * written (NUL excluded). */

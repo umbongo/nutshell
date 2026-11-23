@@ -3867,6 +3867,7 @@ int test_notice_upgrade_caps_items(void);
 int test_notice_launch_plan_table(void);
 int test_notice_queue_order_and_full(void);
 int test_notice_plain_text(void);
+int test_notice_launch_save_wanted(void);
 int test_notice_layout_buttons_right_aligned(void);
 int test_notice_layout_rows_in_order_without_overlap(void);
 int test_notice_layout_no_action_and_no_closing(void);
@@ -9015,6 +9016,7 @@ int main(void) {
         failed += test_notice_launch_plan_table();
         failed += test_notice_queue_order_and_full();
         failed += test_notice_plain_text();
+        failed += test_notice_launch_save_wanted();
         failed += test_notice_layout_buttons_right_aligned();
         failed += test_notice_layout_rows_in_order_without_overlap();
         failed += test_notice_layout_no_action_and_no_closing();

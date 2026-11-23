@@ -1,9 +1,25 @@
 /* src/core/ai_netcancel.c -- see ai_netcancel.h */
 #include "ai_netcancel.h"
 #include <stddef.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sched.h>
+#endif
 
-static void nc_relax(void)
+/* Pause, and after 64 consecutive calls yield the thread so a waiter cannot
+ * starve the holder of the lock (or the closing fire) on one core. */
+static void nc_relax(unsigned *spins)
 {
+    if (++*spins >= 64u) {
+        *spins = 0;
+#ifdef _WIN32
+        SwitchToThread();
+#else
+        sched_yield();
+#endif
+        return;
+    }
 #if defined(__x86_64__) || defined(__i386__)
     __builtin_ia32_pause();
 #endif
@@ -11,8 +27,9 @@ static void nc_relax(void)
 
 static void nc_lock(AiNetCancel *c)
 {
+    unsigned spins = 0;
     while (__atomic_exchange_n(&c->lock, 1, __ATOMIC_ACQUIRE))
-        while (__atomic_load_n(&c->lock, __ATOMIC_RELAXED)) nc_relax();   /* held for a few stores only */
+        while (__atomic_load_n(&c->lock, __ATOMIC_RELAXED)) nc_relax(&spins);   /* held for a few stores only */
 }
 
 static void nc_unlock(AiNetCancel *c)
@@ -54,7 +71,8 @@ int ai_nc_disarm(AiNetCancel *c)
     nc_unlock(c);
     if (!mine) {
         /* fire took the handle: wait until its close has returned */
-        while (__atomic_load_n(&c->closing, __ATOMIC_ACQUIRE)) nc_relax();
+        unsigned spins = 0;
+        while (__atomic_load_n(&c->closing, __ATOMIC_ACQUIRE)) nc_relax(&spins);
     }
     return mine;
 }

@@ -323,3 +323,15 @@ int test_notice_plain_text(void)
     ASSERT_EQ(notice_plain_text(&n, NULL, 0), 0u);
     TEST_END();
 }
+
+int test_notice_launch_save_wanted(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(notice_launch_save_wanted(0, 0, 0), 0);
+    ASSERT_EQ(notice_launch_save_wanted(0, 1, 0), 1);
+    ASSERT_EQ(notice_launch_save_wanted(0, 0, 1), 1);
+    ASSERT_EQ(notice_launch_save_wanted(1, 1, 0), 0);   /* demo: no added fields, no first-run file */
+    ASSERT_EQ(notice_launch_save_wanted(1, 0, 0), 0);
+    ASSERT_EQ(notice_launch_save_wanted(1, 1, 1), 1);   /* the Local shell save is kept */
+    TEST_END();
+}

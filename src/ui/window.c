@@ -41,6 +41,7 @@
 #include "paste_filter.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
+#include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
 #include "ui_demo.h"
@@ -2845,6 +2846,7 @@ static void ai_feature_off(HWND hwnd)
     g_hwndAiChat = NULL;
     g_ai_panel_width = 0;
     g_ai_target_width = 0;
+    g_ai_last_width = 0;
     (void)ai_chat_join_streams(2000);   /* the panel's close above orphaned (and fired) every stream */
     /* ... so the discard comes after it, on every session. */
     for (Session *s = g_session_list; s; s = s->next)
@@ -4619,7 +4621,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                  * would leave the profile showing for this run only, gone
                  * again the moment Nutshell restarts, with no indication
                  * why. */
-                if (config_ensure_local_profile(g_config)) launch_need_save = 1;
+                launch_need_save = notice_launch_save_wanted(
+                    g_startup_action == CLI_UI_DEMO, launch_need_save,
+                    config_ensure_local_profile(g_config));
 
                 /* One save covers the new file, the added settings and the
                  * Local shell profile. The notices are only queued here (the
@@ -5408,6 +5412,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Hidden --self-report=<path> (spec section 6): the record is
              * complete once WM_STARTUP_CONNECT has run. A failed write is
              * reported through the exit code of the run. */
+            /* The control: with the gate on, open and close one WinHTTP
+             * session (no request), so the delay-load hook has to fire. */
+            if (ai_gate_on()) {
+                HINTERNET h = ns_winhttp_open(NULL);
+                if (h) WinHttpCloseHandle(h);
+            }
             if (!ns_self_report_write(g_self_report_path))
                 g_self_report_failed = 1;
             PostMessage(hwnd, WM_CLOSE, 0, 0);
@@ -5430,9 +5440,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         open_page = q.n[ni].action_page;
                     }
                 }
-                if (open_settings)
-                    PostMessage(hwnd, WM_COMMAND, IDM_EDIT_SETTINGS,
-                                (LPARAM)(open_page > 0 ? open_page : 0));
+                /* A WM_CLOSE posted while a notice's loop ran has destroyed
+                 * the window (and freed g_config): touch nothing more. */
+                if (!IsWindow(hwnd)) return 0;
+                if (open_settings) {
+                    /* Called directly, so Settings closes before startup
+                     * goes on (auto-connect, Session Manager). */
+                    on_settings_clicked_page(open_page > 0 ? open_page : -1);
+                    if (!IsWindow(hwnd)) return 0;
+                }
             }
             if (g_self_report_path[0])
                 PostMessage(hwnd, WM_SELF_REPORT, 0, 0);
@@ -6428,6 +6444,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * thread blocked in a host-key MessageBox owned by hwnd. */
             pump_wait_ms(3000, conn_jobs_done);
             if (g_config) config_free(g_config);
+            g_config = NULL;
             renderer_free(&g_renderer);
             g_hMenuFont = NULL;
             ns_font_flush();

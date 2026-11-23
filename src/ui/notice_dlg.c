@@ -356,7 +356,7 @@ static LRESULT CALLBACK notice_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * would pull the main window's fonts from under it (as
              * cheatsheet_dlg.c). */
             d->dpi = (int)HIWORD(wp);
-                notice_fit(hwnd, d, (const RECT *)lp);
+            notice_fit(hwnd, d, (const RECT *)lp);
             return 0;
         }
         break;

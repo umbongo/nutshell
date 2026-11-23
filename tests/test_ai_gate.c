@@ -11,7 +11,7 @@ static void gate_reset(void)
 int test_ai_gate_default_off(void)
 {
     TEST_BEGIN();
-    /* No test before this one may have left it on (gate_reset below). */
+    gate_reset();   /* its own starting state, not test order */
     ASSERT_EQ(ai_gate_on(), 0);
     TEST_END();
 }

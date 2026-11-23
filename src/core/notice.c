@@ -288,3 +288,9 @@ size_t notice_plain_text(const Notice *n, char *out, size_t cap)
     out[k.len] = '\0';
     return k.len;
 }
+
+int notice_launch_save_wanted(int demo, int added, int local_profile)
+{
+    if (local_profile) return 1;
+    return (!demo && added) ? 1 : 0;
+}
