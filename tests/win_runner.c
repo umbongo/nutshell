@@ -98,6 +98,7 @@ int test_voice_audio_enumerate_defined(void);
 int test_voice_audio_capture_no_device_or_data(void);
 int test_voice_audio_bad_id_falls_back(void);
 int test_voice_audio_queue_keeps_begin_and_end(void);
+int test_voice_audio_queue_grows_past_initial_capacity(void);
 int test_voice_audio_never_started(void);
 int test_voice_ptt_posted_keys(void);
 int test_voice_stt_refused_when_gate_off(void);
@@ -408,6 +409,7 @@ int main(int argc, char **argv)
     failed += test_voice_audio_capture_no_device_or_data();
     failed += test_voice_audio_bad_id_falls_back();
     failed += test_voice_audio_queue_keeps_begin_and_end();
+    failed += test_voice_audio_queue_grows_past_initial_capacity();
     failed += test_voice_audio_never_started();
     failed += test_voice_ptt_posted_keys();
     failed += test_voice_stt_refused_when_gate_off();

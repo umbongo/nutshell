@@ -81,7 +81,7 @@ static void mic_tip_text(char *out, size_t cap)
 {
     const Settings *s = ui_current_settings();
     snprintf(out, cap, "Talk to the assistant (%s)",
-             voice_ptt_key_label(s ? s->voice_ptt_key : VOICE_PTT_RIGHT_CTRL));
+             voice_ptt_key_label(s ? s->voice_ptt_key : VOICE_PTT_RIGHT_SHIFT));
 }
 
 void ai_chat_voice_attach(HWND panel, int on)

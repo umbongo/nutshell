@@ -59,40 +59,114 @@ int test_voice_config_defaults(void)
     ASSERT_STR_EQ(s.voice_input_device, "");
     ASSERT_STR_EQ(s.voice_input_device_name, "");
     ASSERT_EQ(s.voice_mic_delay_ms, 150);
-    ASSERT_EQ(s.voice_ptt_key, (int)VOICE_PTT_RIGHT_CTRL);
-    ASSERT_EQ(s.voice_ptt_mode, (int)VOICE_MODE_HOLD);
+    ASSERT_EQ(s.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
+    ASSERT_EQ(s.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
     ASSERT_EQ(s.voice_review, 0);
+    /* the defaults are the first entries, so a zeroed field is the default too */
+    ASSERT_EQ((int)VOICE_PTT_RIGHT_SHIFT, 0);
+    ASSERT_EQ((int)VOICE_MODE_TOGGLE, 0);
     TEST_END();
 }
 
 int test_voice_config_json_names(void)
 {
     TEST_BEGIN();
+    ASSERT_STR_EQ(voice_ptt_key_json(VOICE_PTT_RIGHT_SHIFT), "right_shift");
     ASSERT_STR_EQ(voice_ptt_key_json(VOICE_PTT_RIGHT_CTRL), "right_ctrl");
     ASSERT_STR_EQ(voice_ptt_key_json(VOICE_PTT_F8), "f8");
     ASSERT_STR_EQ(voice_ptt_key_json(VOICE_PTT_F9), "f9");
-    ASSERT_STR_EQ(voice_ptt_key_json(-1), "right_ctrl");
-    ASSERT_STR_EQ(voice_ptt_key_json(99), "right_ctrl");
+    ASSERT_STR_EQ(voice_ptt_key_json(-1), "right_shift");
+    ASSERT_STR_EQ(voice_ptt_key_json(99), "right_shift");
+    ASSERT_EQ(voice_ptt_key_from_json("right_shift"), (int)VOICE_PTT_RIGHT_SHIFT);
     ASSERT_EQ(voice_ptt_key_from_json("right_ctrl"), (int)VOICE_PTT_RIGHT_CTRL);
     ASSERT_EQ(voice_ptt_key_from_json("f8"), (int)VOICE_PTT_F8);
     ASSERT_EQ(voice_ptt_key_from_json("f9"), (int)VOICE_PTT_F9);
-    ASSERT_EQ(voice_ptt_key_from_json(NULL), (int)VOICE_PTT_RIGHT_CTRL);
-    ASSERT_EQ(voice_ptt_key_from_json(""), (int)VOICE_PTT_RIGHT_CTRL);
-    ASSERT_EQ(voice_ptt_key_from_json("bogus"), (int)VOICE_PTT_RIGHT_CTRL);
+    ASSERT_EQ(voice_ptt_key_from_json(NULL), (int)VOICE_PTT_RIGHT_SHIFT);
+    ASSERT_EQ(voice_ptt_key_from_json(""), (int)VOICE_PTT_RIGHT_SHIFT);
+    ASSERT_EQ(voice_ptt_key_from_json("bogus"), (int)VOICE_PTT_RIGHT_SHIFT);
+    ASSERT_STR_EQ(voice_ptt_key_label(VOICE_PTT_RIGHT_SHIFT), "Right Shift");
     ASSERT_STR_EQ(voice_ptt_key_label(VOICE_PTT_RIGHT_CTRL), "Right Ctrl");
     ASSERT_STR_EQ(voice_ptt_key_label(VOICE_PTT_F8), "F8");
     ASSERT_STR_EQ(voice_ptt_key_label(VOICE_PTT_F9), "F9");
-    ASSERT_STR_EQ(voice_ptt_key_label(-5), "Right Ctrl");
-    ASSERT_STR_EQ(voice_ptt_key_label(3), "Right Ctrl");
+    ASSERT_STR_EQ(voice_ptt_key_label(-5), "Right Shift");
+    ASSERT_STR_EQ(voice_ptt_key_label(4), "Right Shift");
     ASSERT_STR_EQ(voice_ptt_mode_json(VOICE_MODE_HOLD), "hold");
     ASSERT_STR_EQ(voice_ptt_mode_json(VOICE_MODE_TOGGLE), "toggle");
-    ASSERT_STR_EQ(voice_ptt_mode_json(-1), "hold");
-    ASSERT_STR_EQ(voice_ptt_mode_json(2), "hold");
+    ASSERT_STR_EQ(voice_ptt_mode_json(-1), "toggle");
+    ASSERT_STR_EQ(voice_ptt_mode_json(2), "toggle");
     ASSERT_EQ(voice_ptt_mode_from_json("hold"), (int)VOICE_MODE_HOLD);
     ASSERT_EQ(voice_ptt_mode_from_json("toggle"), (int)VOICE_MODE_TOGGLE);
-    ASSERT_EQ(voice_ptt_mode_from_json(NULL), (int)VOICE_MODE_HOLD);
-    ASSERT_EQ(voice_ptt_mode_from_json(""), (int)VOICE_MODE_HOLD);
-    ASSERT_EQ(voice_ptt_mode_from_json("bogus"), (int)VOICE_MODE_HOLD);
+    ASSERT_EQ(voice_ptt_mode_from_json(NULL), (int)VOICE_MODE_TOGGLE);
+    ASSERT_EQ(voice_ptt_mode_from_json(""), (int)VOICE_MODE_TOGGLE);
+    ASSERT_EQ(voice_ptt_mode_from_json("bogus"), (int)VOICE_MODE_TOGGLE);
+    ASSERT_STR_EQ(voice_ptt_mode_label(VOICE_MODE_TOGGLE), "Toggle");
+    ASSERT_STR_EQ(voice_ptt_mode_label(VOICE_MODE_HOLD), "Hold to talk");
+    ASSERT_STR_EQ(voice_ptt_mode_label(-1), "Toggle");
+    ASSERT_STR_EQ(voice_ptt_mode_label(2), "Toggle");
+    TEST_END();
+}
+
+int test_voice_config_names_round_trip_and_modifier(void)
+{
+    TEST_BEGIN();
+    for (int k = 0; k < (int)VOICE_PTT_COUNT; k++)
+        ASSERT_EQ(voice_ptt_key_from_json(voice_ptt_key_json(k)), k);
+    for (int m = 0; m < (int)VOICE_MODE_COUNT; m++)
+        ASSERT_EQ(voice_ptt_mode_from_json(voice_ptt_mode_json(m)), m);
+    ASSERT_EQ(voice_ptt_key_is_modifier(VOICE_PTT_RIGHT_SHIFT), 1);
+    ASSERT_EQ(voice_ptt_key_is_modifier(VOICE_PTT_RIGHT_CTRL), 1);
+    ASSERT_EQ(voice_ptt_key_is_modifier(VOICE_PTT_F8), 0);
+    ASSERT_EQ(voice_ptt_key_is_modifier(VOICE_PTT_F9), 0);
+    ASSERT_EQ(voice_ptt_key_is_modifier(-1), 0);
+    TEST_END();
+}
+
+/* A config with no voice keys loads as Right Shift / Toggle; saved choices stay. */
+int test_voice_config_load_defaults_and_saved_choices(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}"));
+    Config *cfg = config_load(VCFG);
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
+        ASSERT_EQ(cfg->settings.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
+        config_free(cfg);
+    }
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_ptt_key\": \"right_ctrl\", "
+                           "\"voice_ptt_mode\": \"hold\"}, \"profiles\": []}"));
+    cfg = config_load(VCFG);
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.voice_ptt_key, (int)VOICE_PTT_RIGHT_CTRL);
+        ASSERT_EQ(cfg->settings.voice_ptt_mode, (int)VOICE_MODE_HOLD);
+        ASSERT_EQ(config_save(cfg, VCFG), 0);
+        config_free(cfg);
+    }
+    cfg = config_load(VCFG);
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.voice_ptt_key, (int)VOICE_PTT_RIGHT_CTRL);
+        ASSERT_EQ(cfg->settings.voice_ptt_mode, (int)VOICE_MODE_HOLD);
+        config_free(cfg);
+    }
+    /* every key and mode name survives a save and load */
+    for (int k = 0; k < (int)VOICE_PTT_COUNT; k++) {
+        Config *c = config_new_default();
+        c->settings.voice_ptt_key = k;
+        c->settings.voice_ptt_mode = k % (int)VOICE_MODE_COUNT;
+        ASSERT_EQ(config_save(c, VCFG), 0);
+        config_free(c);
+        c = config_load(VCFG);
+        ASSERT_NOT_NULL(c);
+        if (c) {
+            ASSERT_EQ(c->settings.voice_ptt_key, k);
+            ASSERT_EQ(c->settings.voice_ptt_mode, k % (int)VOICE_MODE_COUNT);
+            config_free(c);
+        }
+    }
+    remove(VCFG);
     TEST_END();
 }
 
@@ -263,8 +337,8 @@ int test_voice_config_validate_clamps(void)
     s.voice_ptt_key = 7;
     s.voice_ptt_mode = 9;
     settings_validate(&s);
-    ASSERT_EQ(s.voice_ptt_key, (int)VOICE_PTT_RIGHT_CTRL);
-    ASSERT_EQ(s.voice_ptt_mode, (int)VOICE_MODE_HOLD);
+    ASSERT_EQ(s.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
+    ASSERT_EQ(s.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
     snprintf(s.voice_stt_provider, sizeof(s.voice_stt_provider), "elevenlabs");
     settings_validate(&s);
     ASSERT_STR_EQ(s.voice_stt_provider, "openai");

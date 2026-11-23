@@ -5,6 +5,23 @@
 
 #define LP_EXTENDED 0x01000000UL
 #define LP_REPEAT   0x40000000UL
+#define SCAN_RSHIFT 0x36UL
+
+static int is_right_shift(unsigned vk, unsigned long lp)
+{
+    if (lp & LP_EXTENDED) return 0;
+    if (vk == VK_RSHIFT) return 1;
+    return vk == VK_SHIFT && ((lp >> 16) & 0xFFUL) == SCAN_RSHIFT;
+}
+
+VoiceInput voice_ptt_chord_filter(VoiceInput in, int ptt_key, unsigned mods)
+{
+    unsigned own = 0;
+    if (ptt_key == VOICE_PTT_RIGHT_SHIFT) own = VOICE_MOD_RSHIFT;
+    else if (ptt_key == VOICE_PTT_RIGHT_CTRL) own = VOICE_MOD_RCTRL;
+    if (in == VI_PTT_DOWN && (mods & ~own)) return VI_OTHER;
+    return in;
+}
 
 VoiceInput voice_ptt_classify(unsigned msg, uintptr_t wparam, intptr_t lparam, int ptt_key)
 {
@@ -18,7 +35,9 @@ VoiceInput voice_ptt_classify(unsigned msg, uintptr_t wparam, intptr_t lparam, i
         int is_ptt = 0;
         if (ptt_key == VOICE_PTT_F8) is_ptt = (vk == VK_F8);
         else if (ptt_key == VOICE_PTT_F9) is_ptt = (vk == VK_F9);
-        else is_ptt = ((vk == VK_CONTROL || vk == VK_RCONTROL) && (lp & LP_EXTENDED));
+        else if (ptt_key == VOICE_PTT_RIGHT_SHIFT) is_ptt = is_right_shift(vk, lp);
+        else if (ptt_key == VOICE_PTT_RIGHT_CTRL)
+            is_ptt = ((vk == VK_CONTROL || vk == VK_RCONTROL) && (lp & LP_EXTENDED));
         if (is_ptt) {
             if (!down) return VI_PTT_UP;
             return (lp & LP_REPEAT) ? VI_PTT_REPEAT : VI_PTT_DOWN;

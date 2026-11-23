@@ -883,22 +883,29 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
 }
 
-# Voice off (the default), the assistant on, the panel open: Right Ctrl does
-# nothing of its own. A posted Right Ctrl down/up (VK_CONTROL with the
-# extended-key bit, through Send-NutshellChord's posting path) sent to the AI
-# input leaves no mark, and the posted 'a' that follows reads back as 'a'
-# there: no push-to-talk filter swallowed or delayed anything. Unrun here (no
+# Voice off, the assistant on, the panel open: neither Right Shift (the
+# default push-to-talk key) nor Right Ctrl (an option) does anything of its
+# own. A posted Right Shift down/up (VK_SHIFT, scan code 0x36, extended bit
+# clear) and a posted Right Ctrl down/up (VK_CONTROL with the extended-key
+# bit), both through Send-NutshellChord's posting path, sent to the AI input
+# leave no mark, and the posted 'a' that follows reads back as 'a' there: no
+# push-to-talk filter swallowed or delayed anything. A posted key-down does not
+# change the keyboard state, so the Shift here does not capitalise the 'a'; the
+# case asserts what is true, that the input reads exactly 'a' and the panel has
+# no mic button (so no recording cue could have appeared). Unrun here (no
 # pwsh); run it on the Windows box.
-Invoke-Case -Name "voice_off_right_ctrl_reaches_input" -Settings @{ ai_enabled = $true; ai_api_key = "" } -ExtraArgs @("-nc") -Body {
+Invoke-Case -Name "voice_off_right_shift_reaches_input" -Settings @{ ai_enabled = $true; ai_api_key = "" } -ExtraArgs @("-nc") -Body {
     param($s)
     $p = Open-NutshellAiPanel -Session $s
     $inputBox = Get-NutshellControl -Dialog $p -Id 4002                                  # IDC_CHAT_INPUT
     Assert-True ($inputBox -ne [IntPtr]::Zero) "the AI panel has no input box"
     Assert-True ([NutshellNative]::GetDlgItem($p, 4016) -eq [IntPtr]::Zero) "the AI panel has a mic button with voice off"   # IDC_CHAT_MIC
+    Send-NutshellChord -Session $s -Key RightShift -Hwnd $inputBox -SettleMs 300
     Send-NutshellChord -Session $s -Key RightCtrl -Hwnd $inputBox -SettleMs 300
     [NutshellNative]::PostMessage($inputBox, $script:WM_CHAR, [IntPtr][int][char]'a', [IntPtr]::Zero) | Out-Null
     Start-Sleep -Milliseconds 400
     $text = Get-NutshellControlText -Control $inputBox
-    Assert-True ($text -eq "a") "the AI input reads '$text' after Right Ctrl and 'a', expected 'a'"
-    "voice off: a posted Right Ctrl down/up and then 'a' left exactly 'a' in the AI input; no mic button"
+    Assert-True ($text -eq "a") "the AI input reads '$text' after Right Shift, Right Ctrl and 'a', expected 'a'"
+    Assert-True ([NutshellNative]::GetDlgItem($p, 4016) -eq [IntPtr]::Zero) "a mic button appeared after Right Shift with voice off"
+    "voice off: a posted Right Shift and Right Ctrl down/up and then 'a' left exactly 'a' in the AI input; no mic button"
 }

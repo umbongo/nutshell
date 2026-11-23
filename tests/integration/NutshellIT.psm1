@@ -638,7 +638,12 @@ $script:VK_MAP = @{
     C = 0x43; T = 0x54; V = 0x56; W = 0x57; F = 0x46; B = 0x42; Space = 0x20
     Plus = 0xBB; Minus = 0xBD
     RightCtrl = 0x11   # VK_CONTROL with the extended-key bit: how Windows reports Right Ctrl
+    RightShift = 0x10  # VK_SHIFT with scan code 0x36 (VK_SCAN below), extended bit clear: how Windows reports Right Shift
 }
+# Keys whose scan code is not what MapVirtualKey gives for the VK: MapVirtualKey
+# answers the left key (0x2A) for VK_SHIFT, and the app tells Right Shift from
+# Left Shift by scan code 0x36.
+$script:VK_SCAN = @{ RightShift = 0x36 }
 $script:VK_EXTENDED = @(0x11, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E)
 
 # Window classes Nutshell's own dialogs use (see src/ui/*.c for each
@@ -736,7 +741,7 @@ function New-NutshellTestEnv {
         voice_stt_provider = "openai"; voice_stt_url = ""; voice_stt_model = ""
         voice_stt_language = ""; stt_api_key = ""
         voice_input_device = ""; voice_input_device_name = ""
-        voice_ptt_key = "right_ctrl"; voice_ptt_mode = "hold"
+        voice_ptt_key = "right_shift"; voice_ptt_mode = "toggle"
         voice_mic_delay_ms = 150; voice_review = $false
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }
@@ -842,8 +847,11 @@ function New-NutshellKeyLParam {
        carries when Alt is down at the time (real Windows sets it on both the
        down and the up); it is meaningless outside a SYS message and callers
        leave it $false there. Not exported -- internal to this module. #>
-    param([Parameter(Mandatory)] [byte] $Vk, [bool] $Extended = $false, [bool] $KeyUp = $false, [bool] $Context = $false)
-    $scan = [NutshellNative]::MapVirtualKey([uint32]$Vk, 0)   # MAPVK_VK_TO_VSC
+    param([Parameter(Mandatory)] [byte] $Vk, [bool] $Extended = $false, [bool] $KeyUp = $false, [bool] $Context = $false,
+          [int] $Scan = -1)
+    # -Scan: an explicit scan code (Right Shift is VK_SHIFT with 0x36); the
+    # default asks MapVirtualKey, which answers the left-hand key.
+    $scan = if ($Scan -ge 0) { [uint32]$Scan } else { [NutshellNative]::MapVirtualKey([uint32]$Vk, 0) }   # MAPVK_VK_TO_VSC
     $l = [uint32]1 -bor ([uint32]$scan -shl 16)
     if ($Extended) { $l = $l -bor 0x01000000 }
     if ($Context) { $l = $l -bor 0x20000000 }
@@ -995,8 +1003,9 @@ function Send-NutshellChord {
             $msgDown = if ($forceSys) { $script:WM_SYSKEYDOWN } else { $script:WM_KEYDOWN }
             $msgUp   = if ($forceSys) { $script:WM_SYSKEYUP }   else { $script:WM_KEYUP }
             $ctx = [bool]$Alt
-            $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false -Context $ctx
-            $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true  -Context $ctx
+            $scan = if ($script:VK_SCAN.ContainsKey($Key)) { [int]$script:VK_SCAN[$Key] } else { -1 }
+            $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false -Context $ctx -Scan $scan
+            $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true  -Context $ctx -Scan $scan
             [NutshellNative]::PostMessage($target, $msgDown, [IntPtr]$vk, $down) | Out-Null
             # The modifier must still be down in the shared table when the app
             # pulls that WM_KEYDOWN/WM_SYSKEYDOWN off its queue, so wait for

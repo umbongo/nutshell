@@ -952,9 +952,11 @@ int test_ai_panel_voice_hint_wordings(void)
 {
     TEST_BEGIN();
     char b[160];
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
-                  "Or hold Right Ctrl and say what you need.");
-    ASSERT_STR_EQ(b, "Or hold Right Ctrl and say what you need.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+                  "Or hold Right Shift and say what you need.");
+    ASSERT_STR_EQ(b, "Or hold Right Shift and say what you need.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+                  "Or press Right Shift, say what you need, and press it again.");
     ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
                   "Or press Right Ctrl, say what you need, and press it again.");
     ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, b, sizeof b),

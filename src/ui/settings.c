@@ -991,6 +991,12 @@ static void voice_enable_sync(SettingsDlgData *d)
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
     if (test)
         EnableWindow(test, (on && d->voice_dev_listed && !d->voice_testing) ? TRUE : FALSE);
+    /* The Mic start delay applies to Hold to talk only. */
+    HWND delay = GetDlgItem(d->hPage, IDC_VOICE_MIC_DELAY);
+    if (delay) {
+        int msel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PTT_MODE, CB_GETCURSEL, 0, 0);
+        EnableWindow(delay, (on && msel == VOICE_MODE_HOLD) ? TRUE : FALSE);
+    }
     if (changed && d->cur_page == SETTINGS_PAGE_VOICE) {
         relayout(GetParent(d->hPage), d);
         InvalidateRect(d->hPage, NULL, TRUE);
@@ -2134,7 +2140,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 for (int i = 0; i < VOICE_PTT_COUNT; i++)
                     SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)voice_ptt_key_label(i));
                 int ksel = vs->voice_ptt_key;
-                if (ksel < 0 || ksel >= VOICE_PTT_COUNT) ksel = VOICE_PTT_RIGHT_CTRL;
+                if (ksel < 0 || ksel >= VOICE_PTT_COUNT) ksel = VOICE_PTT_RIGHT_SHIFT;
                 SendMessage(cmb, CB_SETCURSEL, (WPARAM)ksel, 0);
                 add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
             }
@@ -2142,10 +2148,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 HWND lbl = make_label2(nd, SH_VOICE_PTT_MODE);
                 HWND cmb = make_combo2(nd, IDC_VOICE_PTT_MODE, CBS_DROPDOWNLIST,
                                        SH_VOICE_PTT_MODE);
-                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Hold to talk");
-                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Toggle");
-                SendMessage(cmb, CB_SETCURSEL,
-                            (WPARAM)(vs->voice_ptt_mode == VOICE_MODE_TOGGLE ? 1 : 0), 0);
+                for (int i = 0; i < VOICE_MODE_COUNT; i++)
+                    SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)voice_ptt_mode_label(i));
+                int msel = vs->voice_ptt_mode;
+                if (msel < 0 || msel >= VOICE_MODE_COUNT) msel = VOICE_MODE_TOGGLE;
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)msel, 0);
                 add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
             }
             {
@@ -2561,6 +2568,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 relayout(hwnd, d);
                 InvalidateRect(d->hPage, NULL, TRUE);
             }
+            break;
+
+        case IDC_VOICE_PTT_MODE:
+            if (d && HIWORD(wParam) == CBN_SELCHANGE) voice_enable_sync(d);
             break;
 
         case IDC_VOICE_DEVICE:

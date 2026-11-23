@@ -449,8 +449,10 @@ Done, in order (details in the commit messages and the specs named):
   and the configuration warnings (missing settings are now written at launch). Its Windows
   checks are in Open.
 - Voice input (branch feat/voice-input; spec `2026-11-23-voice-input-output-design.md`,
-  speech-to-text only, no spoken replies): hold Right Ctrl (or F8 or F9, or Toggle mode) with
-  the AI panel focused, speak, release; the words are transcribed by OpenAI, Groq, Mistral,
+  speech-to-text only, no spoken replies): press Right Shift (the default key and Toggle the
+  default mode since the maintainer's decision of 2026-11-23, was Right Ctrl and Hold to talk;
+  Right Ctrl, F8 and F9 and Hold to talk remain as choices, and a config saved by 1.2.92 keeps
+  its saved ones) with the AI panel focused, speak, press again; the words are transcribed by OpenAI, Groq, Mistral,
   Gemini or a custom endpoint (or the AI provider's own) and go through the chat's normal
   send path with every approval unchanged. Off by default, needs the assistant; while off
   nothing of it loads (no audio thread, no COM, no hook, no mic button). Settings has a Voice
@@ -499,7 +501,8 @@ Open, in priority order:
       in Hold and Toggle at Mic start delays 0, 150 and 400. (b) The privacy-blocked path
       (Settings > Privacy & security > Microphone off gives the privacy message). (c)
       Unplugging a USB or Bluetooth mic mid-recording. (d) A Bluetooth headset not dropping to
-      hands-free on a Right Ctrl chord. (e) Right Ctrl chords (Ctrl+C/V, Ctrl+=, Ctrl+wheel,
+      hands-free on a Right Shift chord (and a Right Ctrl one, still an option). (e) Right Shift
+      chords (capitals, Shift+click, Shift+Insert, Ctrl+Shift+C/V, Shift+arrows) and Right Ctrl chords (Ctrl+C/V, Ctrl+=, Ctrl+wheel,
       Ctrl+letter to the shell) in the terminal and the AI input, docked and undocked. (f)
       AltGr on a European layout. (g) F8 and F9. (h) Alt+Tab and a modal opening
       mid-recording. (i) A real STT round trip on OpenAI, Groq, Mistral, Gemini and a Custom
@@ -509,7 +512,7 @@ Open, in priority order:
       and at 125 % and 200 %. (m) `mingw32-make wintest`, including
       `test_voice_stt_cancel_blocked`'s Windows-only "Cancelled" and timing assertions. (n)
       Harness cases never run (no pwsh): `settings_voice_gallery`,
-      `self_report_voice_off_clean`, `voice_off_right_ctrl_reaches_input`, the updated
+      `self_report_voice_off_clean`, `voice_off_right_shift_reaches_input`, the updated
       `settings_help_tool_count` (now "1, 1, 107", the arithmetic unverified) and
       `ui_gallery` with its two new states (22 x 4 = 88 captures). (o) A microphone with a
       non-Latin friendly name in the Settings device list: the combo is ANSI, so the name may
@@ -530,6 +533,19 @@ Open, in priority order:
       settings, an open that returns E_ACCESSDENIED (Activate or Initialize) shows "Windows
       may be blocking the microphone: Settings > Privacy & security > Microphone" (panel and
       Settings > Voice Test); never seen, Wine does not return it.
+      The Right Shift default (feat/voice-rshift-toggle) adds: (w) Right Shift on a real
+      keyboard opens and stops a recording in Toggle (the new default) and in Hold to talk.
+      (x) Capitals typed with Right Shift (terminal and AI input), Shift+click, Shift+Insert,
+      Ctrl+Shift+C/V and Shift+arrows never start a recording, and Left Shift never does.
+      (y) Ctrl+Shift and Win+Shift+S with the other modifier held first never start one: the
+      `GetKeyState` chord path is untested off Windows. (z) Shift+numpad arrows with NumLock
+      on (the driver's fake shifts) neither start nor stop a recording. (aa) A config saved
+      by 1.2.92 keeps Right Ctrl and Hold to talk. (ab) The Settings Voice page on a fresh
+      config lists Right Shift and Toggle first and selects them, and the Mic start delay
+      field is greyed under Toggle and enabled under Hold to talk. (ac) The renamed harness
+      case `voice_off_right_shift_reaches_input` has not been run. Item (u), Win+L during a
+      Toggle recording, matters more now that Toggle is the default; the follow-up is not
+      built.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text

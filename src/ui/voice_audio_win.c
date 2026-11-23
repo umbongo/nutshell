@@ -36,7 +36,6 @@ static const PROPERTYKEY VA_PKEY_FriendlyName =
 #define VA_TEST_MS      3000u
 #define VA_STALL_MS     2000u
 #define VA_LEVEL_MS     50u
-#define VA_QMIN         16   /* initial queue slots; it grows for begin/end, never drops them */
 
 typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH } VaCmdKind;
 typedef struct {
@@ -57,6 +56,7 @@ struct VaCtx {
     CRITICAL_SECTION qcs;
     VaCmd           *q;          /* grown by va_push under qcs */
     int              qn, qcap;
+    int              hold;       /* under qcs: test seam, the thread pops nothing */
     VaNotify         nc;
     int              exited;     /* under g_cs: the thread is done with ctx */
     int              orphaned;   /* under g_cs: stop() gave up waiting */
@@ -387,7 +387,7 @@ static int va_pop(VaCtx *cx, VaCmd *out)
 {
     int got = 0;
     EnterCriticalSection(&cx->qcs);
-    if (cx->qn > 0) {
+    if (cx->qn > 0 && !cx->hold) {
         *out = cx->q[0];
         memmove(&cx->q[0], &cx->q[1], (size_t)(cx->qn - 1) * sizeof(VaCmd));
         cx->qn--;
@@ -544,7 +544,7 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
         }
     }
     if (!done && cx->qn >= cx->qcap) {
-        int ncap = cx->qcap ? cx->qcap * 2 : VA_QMIN;
+        int ncap = cx->qcap ? cx->qcap * 2 : VOICE_AUDIO_QUEUE_MIN;
         VaCmd *nq = (VaCmd *)realloc(cx->q, (size_t)ncap * sizeof(VaCmd));
         if (nq) { cx->q = nq; cx->qcap = ncap; }
     }
@@ -558,6 +558,29 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
     }
     LeaveCriticalSection(&cx->qcs);
     SetEvent(cx->wake);
+}
+
+/* Test seam: while held, the audio thread leaves every queued command alone
+ * (it still honours stop); releasing wakes it to drain them. */
+void voice_audio_test_hold(int on)
+{
+    VaCtx *cx = g_ctx;
+    if (!cx) return;
+    EnterCriticalSection(&cx->qcs);
+    cx->hold = on ? 1 : 0;
+    LeaveCriticalSection(&cx->qcs);
+    SetEvent(cx->wake);
+}
+
+/* Test seam: the queue's current capacity (0 without a thread). */
+int voice_audio_queue_cap(void)
+{
+    VaCtx *cx = g_ctx;
+    if (!cx) return 0;
+    EnterCriticalSection(&cx->qcs);
+    int n = cx->qcap;
+    LeaveCriticalSection(&cx->qcs);
+    return n;
 }
 
 void voice_audio_enumerate(void) { va_push(VC_ENUM, NULL, 0, 0); }
