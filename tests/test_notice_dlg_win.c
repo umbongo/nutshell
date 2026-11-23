@@ -67,6 +67,7 @@ typedef enum {
     PLAN_RECT,                 /* record the notice's window rectangle, Escape */
     PLAN_NEST_OUTER,           /* open an inner notice over this one (see below) */
     PLAN_NEST_INNER,           /* press the outer's OK, see it hidden, Escape */
+    PLAN_ESC_PLAIN,            /* Escape (the owner subclass does the watching) */
     PLAN_REPEAT_ENTER          /* an auto-repeat Enter is ignored, then a real one */
 } Plan;
 
@@ -90,6 +91,16 @@ static RECT g_dlg_rect;
 static HWND g_outer;
 static int  g_outer_visible_after_ok = -1;
 static int  g_repeat_left_open = -1;
+static WNDPROC g_owner_old_proc;
+static int  g_dlg_visible_at_enable = -1;
+
+/* Watches the owner: when it is re-enabled, is the notice still visible? */
+static LRESULT CALLBACK owner_watch(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_ENABLE && wp)
+        g_dlg_visible_at_enable = (g_dlg && IsWindowVisible(g_dlg)) ? 1 : 0;
+    return CallWindowProcA(g_owner_old_proc, h, msg, wp, lp);
+}
 
 static void key(HWND dlg, WPARAM vk)
 {
@@ -166,6 +177,7 @@ static VOID CALLBACK notice_timer(HWND h, UINT m, UINT_PTR id, DWORD t)
         key(dlg, VK_RETURN);
         break;
     case PLAN_ESC:
+    case PLAN_ESC_PLAIN:
         KillTimer(NULL, id);
         key(dlg, VK_ESCAPE);
         break;
@@ -436,8 +448,9 @@ int test_notice_dlg_win_msg_bad_id_shows_nothing(void)
     tokens();
     g_plan = PLAN_READ_THEN_ESC;
     g_step = 0;
-    SetTimer(NULL, 0, 100, notice_timer);
+    UINT_PTR tid = SetTimer(NULL, 0, 100, notice_timer);
     ASSERT_EQ(notice_dlg_msg(NULL, NOTICE_MSG_COUNT, NULL, ui_theme_get(0)), 0);
+    KillTimer(NULL, tid);
     ASSERT_EQ(g_step, 0);   /* the timer never found a window */
     ASSERT_NULL(FindWindowA(CLS, NULL));
     TEST_END();
@@ -456,8 +469,10 @@ int test_notice_dlg_win_minimized_owner_centres_on_normal_position(void)
         memset(&wp, 0, sizeof wp);
         wp.length = sizeof wp;
         wp.showCmd = SW_SHOWMINIMIZED;
+        /* Centre (600,500), 1000x800: a notice even at 200% DPI stays clear
+         * of the work-area edges, so clamping cannot move its centre. */
         wp.rcNormalPosition.left = 100;  wp.rcNormalPosition.top = 100;
-        wp.rcNormalPosition.right = 600; wp.rcNormalPosition.bottom = 400;
+        wp.rcNormalPosition.right = 1100; wp.rcNormalPosition.bottom = 900;
         SetWindowPlacement(owner, &wp);
         ASSERT_TRUE(IsIconic(owner));
         memset(&g_dlg_rect, 0, sizeof g_dlg_rect);
@@ -471,8 +486,8 @@ int test_notice_dlg_win_minimized_owner_centres_on_normal_position(void)
         ASSERT_TRUE(g_dlg_rect.right <= mi.rcWork.right && g_dlg_rect.bottom <= mi.rcWork.bottom);
         int cx = (g_dlg_rect.left + g_dlg_rect.right) / 2;
         int cy = (g_dlg_rect.top + g_dlg_rect.bottom) / 2;
-        ASSERT_TRUE(abs(cx - 350) <= 4);
-        ASSERT_TRUE(abs(cy - 250) <= 4);
+        ASSERT_TRUE(abs(cx - 600) <= 4);
+        ASSERT_TRUE(abs(cy - 500) <= 4);
         DestroyWindow(owner);
     }
     TEST_END();
@@ -487,6 +502,25 @@ int test_notice_dlg_win_close_hides_before_inner_loop_ends(void)
     ASSERT_EQ(run(NULL, &n, PLAN_NEST_OUTER), 0);
     ASSERT_EQ(g_outer_visible_after_ok, 0);
     ASSERT_NULL(FindWindowA(CLS, NULL));
+    TEST_END();
+}
+
+int test_notice_dlg_win_single_notice_stays_visible_until_owner_enabled(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    sample(&n, NOTICE_INFO, 0);
+    HWND owner = CreateWindowExA(0, "STATIC", "owner", WS_OVERLAPPEDWINDOW,
+                                 100, 100, 500, 300, NULL, NULL, GetModuleHandle(NULL), NULL);
+    ASSERT_NOT_NULL(owner);
+    if (owner) {
+        g_dlg_visible_at_enable = -1;
+        g_owner_old_proc = (WNDPROC)SetWindowLongPtrA(owner, GWLP_WNDPROC, (LONG_PTR)owner_watch);
+        ASSERT_EQ(run(owner, &n, PLAN_ESC_PLAIN), 0);
+        ASSERT_EQ(g_dlg_visible_at_enable, 1);   /* not hidden while the owner is still disabled */
+        ASSERT_NULL(FindWindowA(CLS, NULL));
+        DestroyWindow(owner);
+    }
     TEST_END();
 }
 

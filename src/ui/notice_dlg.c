@@ -22,12 +22,15 @@
 #define NOTICE_STYLE (WS_POPUP | WS_CAPTION | WS_SYSMENU)
 #define NOTICE_EXSTYLE WS_EX_DLGMODALFRAME   /* deliberately not topmost */
 
+static int g_notice_depth;   /* notice loops running, outermost first */
+
 typedef struct {
     Notice  n;                 /* a copy: the caller's may not outlive the call */
     const ThemeColors *theme;
     int     dpi;
     int     closing;           /* set by a button, Escape, WM_CLOSE; ends the loop */
     int     result;            /* 1 = action pressed */
+    int     level;             /* nesting depth of its loop, 1 = outermost */
     NoticeLayout lay;
     HWND    h_title, h_opening, h_closing, h_action, h_ok;
     HWND    h_label[NOTICE_ITEMS_MAX], h_value[NOTICE_ITEMS_MAX];
@@ -215,8 +218,10 @@ static void notice_close(HWND hwnd, NoticeDlg *d, int result)
 {
     d->result = result;
     d->closing = 1;
-    /* Gone at once: an outer notice must not stay up while an inner loop runs. */
-    ShowWindow(hwnd, SW_HIDE);
+    /* Gone at once only while a nested notice's loop still runs: an outer
+     * notice must not stay up under it. The innermost one stays visible until
+     * the owner is re-enabled, so activation does not fall to another app. */
+    if (d->level < g_notice_depth) ShowWindow(hwnd, SW_HIDE);
     PostMessageA(hwnd, WM_NULL, 0, 0);
 }
 
@@ -420,7 +425,18 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
         omi.cbSize = sizeof(omi);
         if (GetWindowPlacement(owner, &wp) &&
             wp.rcNormalPosition.right > wp.rcNormalPosition.left)
+        {
             anchor = wp.rcNormalPosition;
+            /* Workspace coordinates, except for a tool window. */
+            if (!(GetWindowLongA(owner, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) {
+                MONITORINFO pmi;
+                memset(&pmi, 0, sizeof(pmi));
+                pmi.cbSize = sizeof(pmi);
+                if (GetMonitorInfoA(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &pmi))
+                    OffsetRect(&anchor, pmi.rcWork.left - pmi.rcMonitor.left,
+                               pmi.rcWork.top - pmi.rcMonitor.top);
+            }
+        }
         else if (GetMonitorInfoA(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &omi))
             anchor = omi.rcWork;
         else
@@ -447,6 +463,7 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
     MessageBeep(d->n.tone == NOTICE_WARNING ? MB_ICONWARNING : MB_ICONINFORMATION);
     NotifyWinEvent(EVENT_SYSTEM_ALERT, dlg, OBJID_CLIENT, CHILDID_SELF);
 
+    d->level = ++g_notice_depth;
     MSG m;
     memset(&m, 0, sizeof(m));
     int gm = 1;
@@ -460,6 +477,7 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
         DispatchMessageA(&m);
     }
 
+    g_notice_depth--;
     int result = d->closing ? d->result : 0;
     if (owner && !was_disabled) EnableWindow(owner, TRUE);
     if (owner && IsWindow(owner)) SetForegroundWindow(owner);   /* before the destroy */

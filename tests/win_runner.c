@@ -78,6 +78,7 @@ int test_notice_dlg_win_msg_bad_id_shows_nothing(void);
 int test_notice_dlg_win_wide_label_and_long_text_stay_inside(void);
 int test_notice_dlg_win_minimized_owner_centres_on_normal_position(void);
 int test_notice_dlg_win_close_hides_before_inner_loop_ends(void);
+int test_notice_dlg_win_single_notice_stays_visible_until_owner_enabled(void);
 int test_notice_dlg_win_held_enter_does_not_dismiss(void);
 int test_ns_font_win_bold_is_cached_and_bold(void);
 
@@ -372,6 +373,7 @@ int main(int argc, char **argv)
     failed += test_notice_dlg_win_wide_label_and_long_text_stay_inside();
     failed += test_notice_dlg_win_minimized_owner_centres_on_normal_position();
     failed += test_notice_dlg_win_close_hides_before_inner_loop_ends();
+    failed += test_notice_dlg_win_single_notice_stays_visible_until_owner_enabled();
     failed += test_notice_dlg_win_held_enter_does_not_dismiss();
     failed += test_ns_font_win_bold_is_cached_and_bold();
     failed += test_telnet_io_win_connect_ok_and_refused();
