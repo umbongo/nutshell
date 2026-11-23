@@ -3685,6 +3685,16 @@ int test_opt_feature_voice_rows(void);
 int test_voice_gate(void);
 int test_notice_upgrade_folds_voice_keys(void);
 int test_notice_upgrade_lists_voice_subkey_when_switch_present(void);
+/* test_voice_stt.c */
+int test_voice_stt_provider_table(void);
+int test_voice_base_url_normalise(void);
+int test_voice_stt_use_ai_reason(void);
+int test_voice_stt_resolve_use_ai(void);
+int test_voice_stt_resolve_separate(void);
+int test_voice_stt_multipart(void);
+int test_voice_stt_gemini_body(void);
+int test_voice_stt_parse(void);
+int test_voice_stt_http_error(void);
 
 /* test_ai_gate.c */
 int test_ai_gate_default_off(void);
@@ -8057,6 +8067,15 @@ int main(void) {
     failed += test_voice_gate();
     failed += test_notice_upgrade_folds_voice_keys();
     failed += test_notice_upgrade_lists_voice_subkey_when_switch_present();
+    failed += test_voice_stt_provider_table();
+    failed += test_voice_base_url_normalise();
+    failed += test_voice_stt_use_ai_reason();
+    failed += test_voice_stt_resolve_use_ai();
+    failed += test_voice_stt_resolve_separate();
+    failed += test_voice_stt_multipart();
+    failed += test_voice_stt_gemini_body();
+    failed += test_voice_stt_parse();
+    failed += test_voice_stt_http_error();
     failed += test_ai_gate_default_off();
     failed += test_ai_gate_enabled();
     failed += test_ai_gate_override_only();
