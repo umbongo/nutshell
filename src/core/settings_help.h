@@ -19,7 +19,7 @@ typedef enum {
     SH_LOG_DIR, SH_LOG_FORMAT,                                         /* Logging */
     SH_SSH_IDLE,                                                       /* SSH */
     SH_SESSION_MGR_STARTUP, SH_AUTOCONNECT, SH_AUTOCONNECT_SESSION,    /* Startup */
-    SH_AI_PROVIDER, SH_AI_KEY, SH_AI_MODEL, SH_AI_REFRESH, SH_AI_BASE_URL, /* Provider */
+    SH_AI_ENABLE, SH_AI_PROVIDER, SH_AI_KEY, SH_AI_MODEL, SH_AI_REFRESH, SH_AI_BASE_URL, /* Provider */
     SH_AI_RUNCMD_MODE,
     SH_AI_CONTEXT_LINES, SH_AI_SYSTEM_NOTES, SH_AI_MARKDOWN,           /* Behaviour */
     SH_AI_THINKING_MODE,

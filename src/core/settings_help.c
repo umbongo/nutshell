@@ -174,6 +174,18 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "empty (none chosen)",
       0, 0, 0u),
 
+    /* AI_ENABLE */
+    E(SH_AI_ENABLE, SETTINGS_PAGE_AI_PROVIDER, SH_KIND_SETTING,
+      "Enable AI assistant",
+      NULL,
+      "Enable AI assistant\n\nTurns the AI assistant on or off. While it is "
+      "off, Nutshell loads none of the assistant, makes none of its "
+      "network requests, and keeps its settings and API key unused. Turning "
+      "it on needs no restart. A key you have already saved stays saved "
+      "while it is off.\nDefault: Off.",
+      "Off",
+      0, 0, 0u),
+
     /* AI_PROVIDER */
     E(SH_AI_PROVIDER, SETTINGS_PAGE_AI_PROVIDER, SH_KIND_SETTING,
       "Provider:",

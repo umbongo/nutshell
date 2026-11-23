@@ -6,6 +6,8 @@
 #include "crypto.h"
 #include "crypto_dpapi.h"
 #include "fake_dpapi.h"
+#include "json_parser.h"
+#include "settings_help.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -950,6 +952,7 @@ int test_config_roundtrip_all_fields(void)
                    "http://localhost:11434/v1/chat/completions");
     (void)snprintf(s->ai_custom_model, sizeof(s->ai_custom_model), "%s", "llama3:70b");
     s->ai_thinking_mode = THINK_PREF_COMPACT;
+    s->ai_enabled = 1;
 
     ASSERT_EQ(config_save(orig, TMP_CFG), 0);
 
@@ -971,6 +974,7 @@ int test_config_roundtrip_all_fields(void)
                   "http://localhost:11434/v1/chat/completions");
     ASSERT_STR_EQ(ls->ai_custom_model, "llama3:70b");
     ASSERT_EQ(ls->ai_thinking_mode, THINK_PREF_COMPACT);
+    ASSERT_EQ(ls->ai_enabled, 1);
 
     config_free(orig);
     config_free(loaded);
@@ -3069,5 +3073,383 @@ int test_config_find_profile_match(void)
     ASSERT_NULL(config_find_profile_match(NULL, &key));
     ASSERT_NULL(config_find_profile_match(cfg, NULL));
     config_free(cfg);
+    TEST_END();
+}
+
+/* ============================================================
+ * ai_enabled, the known-key table and the load report
+ * ============================================================ */
+
+static int cfg_write_text(const char *text)
+{
+    FILE *f = test_fopen_private(TMP_CFG);
+    if (!f) return 0;
+    fputs(text, f);
+    fclose(f);
+    return 1;
+}
+
+static char *cfg_read_text(void)
+{
+    FILE *f = fopen(TMP_CFG, "r");
+    if (!f) return NULL;
+    char *buf = malloc(65536);
+    if (!buf) { fclose(f); return NULL; }
+    size_t n = fread(buf, 1, 65535, f);
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* Index of `key` in the known-key table, or -1. */
+static int cfg_key_index(const char *key)
+{
+    size_t n = 0;
+    const ConfigSettingKey *k = config_setting_keys(&n);
+    for (size_t i = 0; i < n; i++)
+        if (strcmp(k[i].key, key) == 0) return (int)i;
+    return -1;
+}
+
+static int cfg_report_has_missing(const ConfigLoadReport *rep, const char *key)
+{
+    int idx = cfg_key_index(key);
+    for (size_t i = 0; i < rep->missing_count; i++)
+        if ((int)rep->missing[i] == idx) return 1;
+    return 0;
+}
+
+/* Remove the line holding `"<key>":` from the saved file, as an older exe
+ * that does not know the key would never write it. */
+static int cfg_drop_key_line(const char *key)
+{
+    char *txt = cfg_read_text();
+    if (!txt) return 0;
+    char pat[96];
+    (void)snprintf(pat, sizeof(pat), "    \"%s\":", key);
+    char *p = strstr(txt, pat);
+    if (!p) { free(txt); return 0; }
+    char *eol = strchr(p, '\n');
+    if (!eol) { free(txt); return 0; }
+    memmove(p, eol + 1, strlen(eol + 1) + 1);
+    int ok = cfg_write_text(txt);
+    free(txt);
+    return ok;
+}
+
+int test_config_ai_enabled_missing_no_key_off(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(cfg_write_text("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}"));
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.ai_enabled, 0);
+    ASSERT_EQ(rep.ai_enabled_decided, 1);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_ai_enabled_missing_with_key_on(void)
+{
+    TEST_BEGIN();
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("my-api-key", enc, sizeof(enc)), CRYPTO_OK);
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+                   "{\"settings\": {\"ai_api_key\": \"%s\"}, \"profiles\": []}", enc);
+    ASSERT_TRUE(cfg_write_text(json));
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_STR_EQ(cfg->settings.ai_api_key, "my-api-key");
+    ASSERT_EQ(cfg->settings.ai_enabled, 1);
+    ASSERT_EQ(rep.ai_enabled_decided, 1);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_ai_enabled_missing_preserved_blob_on(void)
+{
+    TEST_BEGIN();
+    fake_dpapi_set_identity(0x11);
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("my-api-key", enc, sizeof(enc)), CRYPTO_OK);
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+                   "{\"settings\": {\"ai_api_key\": \"%s\"}, \"profiles\": []}", enc);
+    ASSERT_TRUE(cfg_write_text(json));
+    fake_dpapi_set_identity(0x22);   /* this user cannot decrypt the blob */
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_STR_EQ(cfg->settings.ai_api_key, "");
+    ASSERT_STR_EQ(cfg->settings.ai_api_key_enc_preserved, enc);
+    ASSERT_EQ(cfg->settings.ai_enabled, 1);
+    ASSERT_EQ(rep.ai_enabled_decided, 1);
+    config_free(cfg);
+    fake_dpapi_set_identity(0x42);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_ai_enabled_saved_false_wins_over_key(void)
+{
+    TEST_BEGIN();
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("my-api-key", enc, sizeof(enc)), CRYPTO_OK);
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+                   "{\"settings\": {\"ai_enabled\": false, \"ai_api_key\": \"%s\"}, "
+                   "\"profiles\": []}", enc);
+    ASSERT_TRUE(cfg_write_text(json));
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_STR_EQ(cfg->settings.ai_api_key, "my-api-key");
+    ASSERT_EQ(cfg->settings.ai_enabled, 0);
+    ASSERT_EQ(rep.ai_enabled_decided, 0);
+    ASSERT_EQ(cfg_report_has_missing(&rep, "ai_enabled"), 0);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_ai_enabled_saved_true_without_key(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(cfg_write_text("{\"settings\": {\"ai_enabled\": true}, \"profiles\": []}"));
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.ai_enabled, 1);
+    ASSERT_EQ(rep.ai_enabled_decided, 0);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_ai_enabled_default_off(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_EQ(cfg->settings.ai_enabled, 0);
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(s.ai_enabled, 0);
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_config_ai_enabled_roundtrip(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    cfg->settings.ai_enabled = 1;
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    Config *back = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(back);
+    ASSERT_EQ(back->settings.ai_enabled, 1);
+    back->settings.ai_enabled = 0;
+    ASSERT_EQ(config_save(back, TMP_CFG), 0);
+    Config *back2 = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(back2);
+    ASSERT_EQ(back2->settings.ai_enabled, 0);
+    config_free(cfg);
+    config_free(back);
+    config_free(back2);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* An older exe saves only the fields it knows, dropping ai_enabled; the next
+ * launch of this version decides it again by the first-load rule (spec 3,
+ * "Older versions"): a user who had turned the assistant off but kept the key
+ * gets it back on, and the report says so. Accepted behaviour, named here. */
+int test_config_older_exe_drop_readds_on(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    (void)snprintf(cfg->settings.ai_api_key, sizeof(cfg->settings.ai_api_key), "%s", "k-123");
+    cfg->settings.ai_enabled = 0;
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+    ASSERT_TRUE(cfg_drop_key_line("ai_enabled"));
+
+    ConfigLoadReport rep;
+    Config *back = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(back);
+    ASSERT_EQ(back->settings.ai_enabled, 1);
+    ASSERT_EQ(rep.ai_enabled_decided, 1);
+    ASSERT_EQ(cfg_report_has_missing(&rep, "ai_enabled"), 1);
+    config_free(back);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_report_complete_file_has_no_missing(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+    ConfigLoadReport rep;
+    Config *back = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(back);
+    ASSERT_EQ(rep.status, CONFIG_LOAD_OK);
+    ASSERT_EQ(rep.missing_count, 0u);
+    ASSERT_EQ(rep.ai_enabled_decided, 0);
+    ASSERT_STR_EQ(rep.bad_path, "");
+    config_free(back);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_report_lists_missing_keys_in_order(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+    ASSERT_TRUE(cfg_drop_key_line("ai_thinking_mode"));
+    ASSERT_TRUE(cfg_drop_key_line("ai_enabled"));
+    ConfigLoadReport rep;
+    Config *back = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(back);
+    ASSERT_EQ(rep.missing_count, 2u);
+    /* ai_enabled precedes ai_thinking_mode in the table */
+    ASSERT_EQ((int)rep.missing[0], cfg_key_index("ai_enabled"));
+    ASSERT_EQ((int)rep.missing[1], cfg_key_index("ai_thinking_mode"));
+    ASSERT_TRUE(rep.missing[0] < rep.missing[1]);
+    config_free(back);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_report_legacy_key_counts_present(void)
+{
+    TEST_BEGIN();
+    /* Without a legacy key the policy is missing ... */
+    ASSERT_TRUE(cfg_write_text("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}"));
+    ConfigLoadReport rep;
+    Config *back = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(back);
+    ASSERT_EQ(cfg_report_has_missing(&rep, "ai_policy_default"), 1);
+    ASSERT_EQ(cfg_report_has_missing(&rep, "font"), 0);
+    config_free(back);
+
+    /* ... with ai_auto_approve_mode, the key it is migrated from, it is not */
+    ASSERT_TRUE(cfg_write_text("{\"settings\": {\"ai_auto_approve_mode\": \"safe\"}, \"profiles\": []}"));
+    Config *back2 = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(back2);
+    ASSERT_EQ(cfg_report_has_missing(&rep, "ai_policy_default"), 0);
+    ASSERT_EQ(cfg_report_has_missing(&rep, "font"), 1);
+    config_free(back2);
+
+    /* the numeric pre-v1.1.16 spelling counts too */
+    ASSERT_TRUE(cfg_write_text("{\"settings\": {\"ai_auto_approve_default\": 1}, \"profiles\": []}"));
+    Config *back3 = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(back3);
+    ASSERT_EQ(cfg_report_has_missing(&rep, "ai_policy_default"), 0);
+    config_free(back3);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_report_no_settings_object_all_missing(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(cfg_write_text("{\"profiles\": []}"));
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NOT_NULL(cfg);
+    size_t n = 0;
+    (void)config_setting_keys(&n);
+    ASSERT_TRUE(n > 0);
+    ASSERT_EQ(rep.missing_count, n);
+    for (size_t i = 0; i < rep.missing_count; i++) ASSERT_EQ((size_t)rep.missing[i], i);
+    ASSERT_EQ(rep.ai_enabled_decided, 1);
+    ASSERT_EQ(cfg->settings.ai_enabled, 0);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_keys_match_saved_file(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+    char *txt = cfg_read_text();
+    ASSERT_NOT_NULL(txt);
+    JsonNode *root = json_parse(txt);
+    free(txt);
+    ASSERT_NOT_NULL(root);
+    const JsonNode *jset = json_obj_get(root, "settings");
+    ASSERT_NOT_NULL(jset);
+    size_t n = 0;
+    const ConfigSettingKey *keys = config_setting_keys(&n);
+    ASSERT_TRUE(n <= CFG_KEYS_MAX);
+    ASSERT_EQ(vec_size(&jset->as.obj.keys), n);
+    for (size_t i = 0; i < n && i < vec_size(&jset->as.obj.keys); i++) {
+        const char *fk = (const char *)vec_get(&jset->as.obj.keys, i);
+        if (strcmp(fk, keys[i].key) != 0)
+            printf("  key %zu: file \"%s\", table \"%s\"\n", i, fk, keys[i].key);
+        ASSERT_STR_EQ(fk, keys[i].key);
+        /* the label is either the plain one or the help entry's */
+        if (keys[i].sh_id >= 0) {
+            ASSERT_NULL(keys[i].label);
+            ASSERT_NOT_NULL(settings_help_get(keys[i].sh_id));
+        } else {
+            ASSERT_NOT_NULL(keys[i].label);
+        }
+    }
+    json_free(root);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_report_invalid_names_bad_path(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(cfg_write_text("{ this is not json"));
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NULL(cfg);
+    ASSERT_EQ(rep.status, CONFIG_LOAD_INVALID);
+    ASSERT_TRUE(strncmp(rep.bad_path, TMP_CFG ".bad-", strlen(TMP_CFG ".bad-")) == 0);
+    FILE *f = fopen(rep.bad_path, "r");
+    ASSERT_NOT_NULL(f);
+    if (f) fclose(f);
+    remove(rep.bad_path);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_report_missing_and_unreadable_status(void)
+{
+    TEST_BEGIN();
+    remove(TMP_CFG);
+    ConfigLoadReport rep;
+    memset(&rep, 0xAB, sizeof(rep));
+    Config *cfg = config_load_report(TMP_CFG, &rep);
+    ASSERT_NULL(cfg);
+    ASSERT_EQ(rep.status, CONFIG_LOAD_MISSING);
+    ASSERT_STR_EQ(rep.bad_path, "");
+    ASSERT_EQ(rep.missing_count, 0u);
+    ASSERT_EQ(rep.ai_enabled_decided, 0);
+
+    /* a directory where the file should be cannot be read as a file */
+    ASSERT_NULL(config_load_report(TEST_TMP_DIR, &rep));
+    ASSERT_EQ(rep.status, CONFIG_LOAD_UNREADABLE);
+    ASSERT_STR_EQ(rep.bad_path, "");
+
+    ASSERT_NULL(config_load_report(NULL, &rep));
+    ASSERT_EQ(rep.status, CONFIG_LOAD_MISSING);
+    /* a NULL report is allowed */
+    ASSERT_NULL(config_load_report(TMP_CFG, NULL));
     TEST_END();
 }

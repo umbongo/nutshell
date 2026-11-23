@@ -9,6 +9,7 @@
 #include "secure_zero.h"
 #include "crypto.h"
 #include "settings_entry.h"
+#include "settings_help.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -450,9 +451,10 @@ static int pick_unique_bad_path(const char *path, char *out, size_t out_size)
  * CONFIG_LOAD_UNREADABLE) and not save defaults over it, rather than
  * assuming (as the old, unchecked call did) that the backup always
  * succeeded. */
-static int config_backup_unparseable_file(const char *path)
+static int config_backup_unparseable_file(const char *path, char *bad_out, size_t bad_cap)
 {
     char bad_path[700];
+    if (bad_out && bad_cap > 0u) bad_out[0] = '\0';
     if (!pick_unique_bad_path(path, bad_path, sizeof(bad_path))) {
         return 0;
     }
@@ -465,7 +467,70 @@ static int config_backup_unparseable_file(const char *path)
     int ok = (rename(path, bad_path) == 0) ? 1 : 0;
 #endif
     config_prune_old_backups(path);
+    if (ok && bad_out && bad_cap > 0u) {
+        (void)snprintf(bad_out, bad_cap, "%s", bad_path);
+    }
     return ok;
+}
+
+/* ---- Known settings keys -------------------------------------------------- */
+
+/* The keys config_save() writes, in file order (tests/test_config.c compares
+ * this table with a saved file). `sh_id` names the Settings help entry whose
+ * label the upgrade notice uses; where there is none, a plain label. */
+#define CK(key, l0, l1, sh, label) { key, { l0, l1 }, sh, label }
+static const ConfigSettingKey k_setting_keys[] = {
+    CK("font",                          NULL, NULL, SH_TERMINAL_FONT, NULL),
+    CK("ai_font",                       NULL, NULL, SH_AI_FONT, NULL),
+    CK("font_size",                     NULL, NULL, SH_FONT_SIZE, NULL),
+    CK("scrollback_lines",              NULL, NULL, SH_SCROLLBACK, NULL),
+    CK("paste_delay_ms",                NULL, NULL, SH_PASTE_DELAY, NULL),
+    CK("logging_enabled",               NULL, NULL, SH_NONE, "Session logging"),
+    CK("debug_enabled",                 NULL, NULL, SH_DBG_ENABLE, NULL),
+    CK("debug_levels",                  NULL, NULL, SH_NONE, "Debug log levels"),
+    CK("debug_include_content",         NULL, NULL, SH_DBG_CONTENT, NULL),
+    CK("debug_screenshot",              "debug_issue_screenshot", NULL, SH_DBG_SCREENSHOT, NULL),
+    CK("debug_recorder",                NULL, NULL, SH_DBG_RECORDER, NULL),
+    CK("debug_recorder_level",          NULL, NULL, SH_NONE, "Debug recorder level"),
+    CK("debug_log_dir",                 NULL, NULL, SH_DBG_FOLDER, NULL),
+    CK("debug_max_file_mb",             NULL, NULL, SH_DBG_MAX_FILE, NULL),
+    CK("debug_max_total_mb",            NULL, NULL, SH_DBG_MAX_TOTAL, NULL),
+    CK("log_format",                    NULL, NULL, SH_LOG_FORMAT, NULL),
+    CK("log_dir",                       NULL, NULL, SH_LOG_DIR, NULL),
+    CK("host_key_verification",         NULL, NULL, SH_NONE, "Host key verification"),
+    CK("foreground_colour",             NULL, NULL, SH_NONE, "Foreground colour"),
+    CK("background_colour",             NULL, NULL, SH_NONE, "Background colour"),
+    CK("colour_scheme",                 NULL, NULL, SH_COLOUR_SCHEME, NULL),
+    CK("ai_provider",                   NULL, NULL, SH_AI_PROVIDER, NULL),
+    CK("ai_enabled",                    NULL, NULL, SH_AI_ENABLE, NULL),
+    CK("ai_custom_url",                 NULL, NULL, SH_AI_BASE_URL, NULL),
+    CK("ai_custom_model",               NULL, NULL, SH_AI_MODEL, NULL),
+    CK("ai_api_key",                    NULL, NULL, SH_AI_KEY, NULL),
+    CK("ai_system_notes",               NULL, NULL, SH_AI_SYSTEM_NOTES, NULL),
+    CK("ai_search_provider",            NULL, NULL, SH_AI_SEARCH, NULL),
+    CK("ai_search_url",                 NULL, NULL, SH_AI_SEARCH_URL, NULL),
+    CK("ai_max_search_results",         NULL, NULL, SH_AI_MAX_RESULTS, NULL),
+    CK("ai_web_fetch_enabled",          NULL, NULL, SH_AI_WEB_FETCH, NULL),
+    CK("ai_runcmd_mode",                NULL, NULL, SH_AI_RUNCMD_MODE, NULL),
+    CK("ai_thinking_mode",              NULL, NULL, SH_AI_THINKING_MODE, NULL),
+    CK("ssh_user_idle_timeout_mins",    NULL, NULL, SH_SSH_IDLE, NULL),
+    CK("markdown_render_enabled",       NULL, NULL, SH_AI_MARKDOWN, NULL),
+    CK("ai_max_context_lines",          NULL, NULL, SH_AI_CONTEXT_LINES, NULL),
+    CK("ai_tool_timeout_sec",           NULL, NULL, SH_AI_TOOL_TIMEOUT, NULL),
+    CK("ai_tool_auto_rounds",           NULL, NULL, SH_AI_TOOL_ROUNDS, NULL),
+    CK("auto_connect",                  NULL, NULL, SH_AUTOCONNECT, NULL),
+    CK("auto_connect_session",          NULL, NULL, SH_AUTOCONNECT_SESSION, NULL),
+    CK("paste_confirm",                 NULL, NULL, SH_PASTE_CONFIRM, NULL),
+    CK("open_session_manager_at_start", NULL, NULL, SH_SESSION_MGR_STARTUP, NULL),
+    CK("ai_policy_default",             "ai_auto_approve_mode", "ai_auto_approve_default",
+                                        SH_AI_POLICY_ALLOWED, NULL),
+};
+#undef CK
+
+const ConfigSettingKey *config_setting_keys(size_t *count)
+{
+    if (count) *count = sizeof(k_setting_keys) / sizeof(k_setting_keys[0]);
+    return k_setting_keys;
 }
 
 /* ---- Public API ----------------------------------------------------------- */
@@ -610,9 +675,13 @@ void config_free(Config *cfg)
     free(cfg);
 }
 
-Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
+Config *config_load_report(const char *path, ConfigLoadReport *rep)
 {
-    if (status_out) *status_out = CONFIG_LOAD_MISSING;
+    ConfigLoadReport local;
+    if (!rep) rep = &local;
+    memset(rep, 0, sizeof(*rep));
+    rep->status = CONFIG_LOAD_MISSING;
+    ConfigLoadStatus *status_out = &rep->status;
 
     if (!path) {
         return NULL;
@@ -621,10 +690,8 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
     ConfigReadStatus rs;
     char *src = read_file_status(path, &rs);
     if (!src) {
-        if (status_out) {
-            *status_out = (rs == CONFIG_READ_MISSING) ? CONFIG_LOAD_MISSING
-                                                       : CONFIG_LOAD_UNREADABLE;
-        }
+        *status_out = (rs == CONFIG_READ_MISSING) ? CONFIG_LOAD_MISSING
+                                                  : CONFIG_LOAD_UNREADABLE;
         return NULL;
     }
 
@@ -640,14 +707,13 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
          * succeeded -- a failed backup leaves the original the only copy of
          * whatever was in it, exactly like an unreadable file, so the
          * caller must not save over it either. */
-        int backed_up = config_backup_unparseable_file(path);
-        if (status_out) {
-            *status_out = backed_up ? CONFIG_LOAD_INVALID : CONFIG_LOAD_UNREADABLE;
-        }
+        int backed_up = config_backup_unparseable_file(path, rep->bad_path,
+                                                       sizeof(rep->bad_path));
+        *status_out = backed_up ? CONFIG_LOAD_INVALID : CONFIG_LOAD_UNREADABLE;
         return NULL;
     }
 
-    if (status_out) *status_out = CONFIG_LOAD_OK;
+    *status_out = CONFIG_LOAD_OK;
 
     Config *cfg = config_new_default();
 
@@ -862,6 +928,40 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
         settings_validate(s);
     }
 
+    /* "ai_enabled": a saved value wins. A file that lacks it (a config from
+     * before the switch, or one an older exe re-saved without it) gets the
+     * first-load rule: on when an API key is set up, counting a blob this
+     * user cannot decrypt (kept in ai_api_key_enc_preserved), else off.
+     * This runs after load_secret() so the preserved blob counts. */
+    {
+        Settings *s = &cfg->settings;
+        if (jset && jset->type == JSON_OBJECT && json_obj_get(jset, "ai_enabled")) {
+            s->ai_enabled = json_obj_bool(jset, "ai_enabled", 0);
+        } else {
+            s->ai_enabled = (s->ai_api_key[0] != '\0'
+                             || s->ai_api_key_enc_preserved[0] != '\0') ? 1 : 0;
+            rep->ai_enabled_decided = 1;
+        }
+    }
+
+    /* Which known keys the file lacks, for the upgrade notice. */
+    {
+        const int have_set = jset && jset->type == JSON_OBJECT;
+        size_t nkeys = 0;
+        const ConfigSettingKey *keys = config_setting_keys(&nkeys);
+        for (size_t i = 0u; i < nkeys && rep->missing_count < CFG_KEYS_MAX; i++) {
+            int present = 0;
+            if (have_set) {
+                present = json_obj_get(jset, keys[i].key) != NULL;
+                for (int l = 0; !present && l < 2; l++) {
+                    if (keys[i].legacy[l] && json_obj_get(jset, keys[i].legacy[l]))
+                        present = 1;
+                }
+            }
+            if (!present) rep->missing[rep->missing_count++] = (unsigned char)i;
+        }
+    }
+
     /* ---- Profiles ---- */
     JsonNode *jprofs = json_obj_get(root, "profiles");
     if (jprofs && jprofs->type == JSON_ARRAY) {
@@ -930,6 +1030,14 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
         (void)config_save(cfg, path);
     }
 
+    return cfg;
+}
+
+Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
+{
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(path, &rep);
+    if (status_out) *status_out = rep.status;
     return cfg;
 }
 
@@ -1054,6 +1162,7 @@ int config_save(const Config *cfg, const char *path)
     fputs("    \"ai_provider\": ", f);
     fprint_json_str(f, s->ai_provider);
     fputs(",\n", f);
+    fprintf(f, "    \"ai_enabled\": %s,\n", s->ai_enabled ? "true" : "false");
     fputs("    \"ai_custom_url\": ", f);
     fprint_json_str(f, s->ai_custom_url);
     fputs(",\n", f);
