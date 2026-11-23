@@ -3667,6 +3667,12 @@ int test_about_layout_null_out_is_safe(void);
 int test_build_info_deps_whole_format(void);
 int test_build_info_deps_openssl_part_matches_header(void);
 int test_build_info_deps_truncates(void);
+/* test_wav.c */
+int test_wav_header_fields(void);
+int test_pcm_append_caps(void);
+int test_pcm_to_wav_layout(void);
+int test_pcm_levels(void);
+int test_pcm_classify(void);
 /* test_voice_config.c */
 int test_voice_config_defaults(void);
 int test_voice_config_json_names(void);
@@ -8035,6 +8041,11 @@ int main(void) {
     failed += test_build_info_deps_whole_format();
     failed += test_build_info_deps_openssl_part_matches_header();
     failed += test_build_info_deps_truncates();
+    failed += test_wav_header_fields();
+    failed += test_pcm_append_caps();
+    failed += test_pcm_to_wav_layout();
+    failed += test_pcm_levels();
+    failed += test_pcm_classify();
     failed += test_voice_config_defaults();
     failed += test_voice_config_json_names();
     failed += test_voice_config_roundtrip();
