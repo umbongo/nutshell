@@ -80,6 +80,26 @@ int test_voice_audio_start_stop(void)
     TEST_END();
 }
 
+int test_voice_audio_restart(void)
+{
+    TEST_BEGIN();
+    HWND w = va_window();
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_start(w), 1);   /* already running: harmless */
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_stop();
+    ASSERT_EQ(voice_audio_start(w), 1);   /* a fresh thread with its own state */
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_enumerate();
+    WPARAM wp = 0; LPARAM lp = 0;
+    ASSERT_TRUE(va_wait(BIT(VAM_DEVICES) | BIT(VAM_ERROR), 5000, &wp, &lp));
+    if (wp == VAM_DEVICES) voice_audio_free_devices((VoiceDeviceList *)lp);
+    voice_audio_stop();
+    voice_audio_stop();
+    DestroyWindow(w);
+    TEST_END();
+}
+
 int test_voice_audio_enumerate_defined(void)
 {
     TEST_BEGIN();

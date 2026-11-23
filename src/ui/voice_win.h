@@ -22,6 +22,10 @@ void voice_feature_apply(HWND main);
 /* 1 while the feature is running (audio thread / hook live), else 0. */
 int voice_feature_running(void);
 
+/* Window teardown: stops the audio thread (joined, notification client
+ * unregistered) whatever the settings say. Safe to call twice. */
+void voice_feature_shutdown(void);
+
 /* WM_VOICE_AUDIO from window.c's WndProc; frees any payload nobody took. */
 void voice_on_audio_msg(WPARAM wp, LPARAM lp);
 

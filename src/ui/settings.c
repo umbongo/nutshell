@@ -38,6 +38,7 @@
 #include "voice_config.h"
 #include "voice_gate.h"
 #include "voice_stt.h"
+#include "voice_win.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1019,6 +1020,7 @@ static void voice_test_note(SettingsDlgData *d, const char *text)
 static void voice_test_end(SettingsDlgData *d)
 {
     if (!d->voice_testing) return;
+    voice_audio_capture_end(0);   /* explicit: the test is over, discard */
     KillTimer(d->hDlg, IDT_VOICE_TEST);
     d->voice_testing = 0;
     d->voice_level = 0;
@@ -1041,6 +1043,11 @@ static const char *voice_dev_selected_id(const SettingsDlgData *d)
 static void voice_test_start(SettingsDlgData *d)
 {
     if (d->voice_testing || !d->voice_dev_listed) return;
+    /* The page was built with voice on; it may have gone off since. */
+    if (!voice_gate_on() || !voice_feature_running()) {
+        voice_test_note(d, "Voice is not running.");
+        return;
+    }
     voice_test_note(d, "");
     d->voice_testing = 1;
     d->voice_level = 0;
@@ -1110,7 +1117,9 @@ int settings_voice_on_audio(WPARAM wp, LPARAM lp)
         }
         return 1;
     case VAM_ERROR:
-        if (d->voice_testing) {
+        /* Only a capture error is the Test's result; an enumeration failure
+         * (VAE_COM_FAILED) arriving meanwhile is not. */
+        if (d->voice_testing && (VoiceAudioErr)lp != VAE_COM_FAILED) {
             voice_test_end(d);
             switch ((VoiceAudioErr)lp) {
             case VAE_NO_DEVICE:    voice_test_note(d, "No microphone was found."); break;

@@ -6441,6 +6441,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                 ai_chat_close(g_hwndAiChat);
             g_hwndAiChat = NULL;
+            voice_feature_shutdown();   /* joins the audio thread, drops a posted capture's buffer */
             (void)ai_chat_join_streams(2000);   /* ai_chat_close above orphaned (and fired) every stream */
             {
                 Session *s = g_session_list;

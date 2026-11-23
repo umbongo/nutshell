@@ -21,6 +21,15 @@ void voice_feature_apply(HWND main)
     }
 }
 
+void voice_feature_shutdown(void)
+{
+    voice_gate_set_enabled(0);
+    if (g_audio_up) {
+        voice_audio_stop();
+        g_audio_up = 0;
+    }
+}
+
 int voice_feature_running(void)
 {
     return g_audio_up;
