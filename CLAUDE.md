@@ -182,10 +182,13 @@ three. A new feature is checked against these three tests when it is designed.
 All of `src/ui`'s colours, sizes, fonts, animation and hover state come from
 the six Design-System Foundation modules (see
 `docs/superpowers/specs/2026-09-07-design-system-foundation-design.md`).
-Two native tests in `tests/test_ui_tokens.c` (`test_ui_tokens_colour_gate`,
-`test_ui_tokens_scale_gate`) enforce the first two rules below as an
-exact-allow-list gate, not a ratchet — any violation fails `make test`. The
-other rules are convention, checked only in review:
+Three native tests in `tests/test_ui_tokens.c` (`test_ui_tokens_colour_gate`,
+`test_ui_tokens_scale_gate`, `test_ui_tokens_msgbox_gate`) enforce the first
+two rules below and the notice rule's "a new notice never adds a
+`MessageBox`" as exact-allow-list gates, not ratchets — any violation fails
+`make test`. The message-box allow-list is the remaining yes/no prompts, the
+host-key prompt and the two NULL-owner failures. The other rules are
+convention, checked only in review:
 
 - **Never `RGB(` in `src/ui`, outside `ns_draw.c`** (which is excluded
   entirely) **or the 2 allowed literals in `renderer.c`** (the terminal's

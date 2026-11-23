@@ -296,8 +296,8 @@ Invoke-TelnetCase -Name "telnet_port_refused_reports_in_tab" -Settings $script:T
         "the debug log has no telnet.connect.fail outcome=refused event"
     Start-Sleep -Milliseconds 1000
     Assert-True (-not (Test-TelnetErrorBoxOpen -Session $s)) `
-        "a 'Connection Error' message box opened; a telnet connect failure is reported in the tab only"
-    "a refused telnet connect printed 'Connection refused by 127.0.0.1:$port' in the tab, logged outcome=refused, and opened no message box"
+        "a 'Connection Error' dialog opened; a telnet connect failure is reported in the tab only"
+    "a refused telnet connect printed 'Connection refused by 127.0.0.1:$port' in the tab, logged outcome=refused, and opened no dialog"
 }
 
 # ---- telnet_port_check_is_passive_and_echoes_locally ---------------------------
@@ -369,7 +369,7 @@ Invoke-TelnetCase -Name "telnet_password_box_asks_and_sends" -Steps $tnSteps4 -C
 
 # ---- ssh_password_box_cancel_reports_in_tab -----------------------------------
 # An SSH password-auth profile with nothing saved asks with the same box;
-# Cancel ends the attempt quietly, in the tab, with no message box. Needs the
+# Cancel ends the attempt quietly, in the tab, with no dialog. Needs the
 # real SSH host the driver was given (it only has to reach the auth stage).
 if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "ssh_password_box_cancel_reports_in_tab")) {
     $sshProfile = @{
@@ -387,7 +387,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
             "the tab never showed 'Password entry cancelled.'"
         Start-Sleep -Milliseconds 1000
         Assert-True (-not (Test-TelnetErrorBoxOpen -Session $s)) `
-            "a 'Connection Error' message box opened after the user cancelled the password box"
+            "a 'Connection Error' dialog opened after the user cancelled the password box"
         "Cancel in the SSH Password box printed 'Password entry cancelled.' in the tab and opened no error box"
     } -ExtraArgs @("-sn", "sp") -ExtraProfiles @($sshProfile)
 }

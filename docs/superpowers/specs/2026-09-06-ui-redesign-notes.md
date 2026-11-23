@@ -494,6 +494,29 @@ Open, in priority order:
       frame of the native box flashing on click, focus change or Space; the keyboard focus
       ring on a checked box; no label ellipsised (Debugging's "Keep recent detail for issue
       marks, at" row was widened to 300 px on an estimate).
+- [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
+      unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
+      `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
+      `Nutshell_Notice` when asserting no dialog appeared; the telnet cases
+      `telnet_port_refused_reports_in_tab` and `ssh_password_box_cancel_reports_in_tab`
+      (85-telnet.ps1) only had wording changed, their
+      title match still holds; `NutshellIT.psm1`'s class comment and README's
+      `Wait-NutshellDialog` row mention `Nutshell_Notice`. Run the `gate` tier on Windows.
+- [ ] **Windows hand check of the 19 notices** (the notice move, feat/notice-msgboxes): Close
+      Tab, Tab Limit, Reconnect, Debug Log Folder (two), Session Not Found, Connection
+      Error, Edit, Delete, Save, Connect (Session Manager), Open Log Folder, Refresh Models
+      (four), the two open-folder refusals and Save Error (AI panel). For each: the right
+      owner (centred on it, the owner disabled while it is up), the tone (icon and accent),
+      the text unchanged and not clipped on four themes, Enter and Escape both close it,
+      focus returns to the owner. The docked AI panel's Save Error notice must disable the
+      main window, not only the panel.
+- [ ] **Notice alert sound and activation, on Windows** (the notice move, PR #107; Wine
+      shows neither): each notice plays the system sound for its tone (information or
+      warning, as `MessageBox` did) once, launch notices included; and closing a notice
+      leaves Nutshell in front, not another application, both for a single notice and for
+      two nested ones (e.g. two tabs failing at once). Also: a notice raised while the main
+      window is minimized appears centred on its restored position, with a taskbar on the
+      top or left edge.
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes

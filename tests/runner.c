@@ -3847,6 +3847,8 @@ int test_ui_tokens_is_dark_matches_theme_is_dark(void);
 int test_ui_tokens_resolve_null_safe(void);
 int test_ui_tokens_colour_gate(void);
 int test_ui_tokens_scale_gate(void);
+int test_ui_tokens_msgbox_gate_counter(void);
+int test_ui_tokens_msgbox_gate(void);
 
 /* test_ns_check_geom.c */
 int test_ns_check_layout_box_is_square_and_scaled(void);
@@ -3868,6 +3870,13 @@ int test_notice_launch_plan_table(void);
 int test_notice_queue_order_and_full(void);
 int test_notice_plain_text(void);
 int test_notice_launch_save_wanted(void);
+int test_notice_msg_table_matches_todays_boxes(void);
+int test_notice_msg_every_id_has_title_and_text(void);
+int test_notice_msg_session_not_found_formats_name(void);
+int test_notice_msg_text_args(void);
+int test_notice_msg_title_args(void);
+int test_notice_msg_long_arg_truncates(void);
+int test_notice_msg_bad_id(void);
 int test_notice_layout_buttons_right_aligned(void);
 int test_notice_layout_rows_in_order_without_overlap(void);
 int test_notice_layout_no_action_and_no_closing(void);
@@ -8185,6 +8194,8 @@ int main(void) {
     failed += test_ui_tokens_resolve_null_safe();
     failed += test_ui_tokens_colour_gate();
     failed += test_ui_tokens_scale_gate();
+    failed += test_ui_tokens_msgbox_gate_counter();
+    failed += test_ui_tokens_msgbox_gate();
     failed += test_ns_check_layout_box_is_square_and_scaled();
     failed += test_ns_check_layout_inside_control_and_centred();
     failed += test_ns_check_layout_small_control_shrinks_box();
@@ -9017,6 +9028,13 @@ int main(void) {
         failed += test_notice_queue_order_and_full();
         failed += test_notice_plain_text();
         failed += test_notice_launch_save_wanted();
+        failed += test_notice_msg_table_matches_todays_boxes();
+        failed += test_notice_msg_every_id_has_title_and_text();
+        failed += test_notice_msg_session_not_found_formats_name();
+        failed += test_notice_msg_text_args();
+        failed += test_notice_msg_title_args();
+        failed += test_notice_msg_long_arg_truncates();
+        failed += test_notice_msg_bad_id();
         failed += test_notice_layout_buttons_right_aligned();
         failed += test_notice_layout_rows_in_order_without_overlap();
         failed += test_notice_layout_no_action_and_no_closing();

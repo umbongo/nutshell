@@ -22,12 +22,15 @@
 #define NOTICE_STYLE (WS_POPUP | WS_CAPTION | WS_SYSMENU)
 #define NOTICE_EXSTYLE WS_EX_DLGMODALFRAME   /* deliberately not topmost */
 
+static int g_notice_depth;   /* notice loops running, outermost first */
+
 typedef struct {
     Notice  n;                 /* a copy: the caller's may not outlive the call */
     const ThemeColors *theme;
     int     dpi;
     int     closing;           /* set by a button, Escape, WM_CLOSE; ends the loop */
     int     result;            /* 1 = action pressed */
+    int     level;             /* nesting depth of its loop, 1 = outermost */
     NoticeLayout lay;
     HWND    h_title, h_opening, h_closing, h_action, h_ok;
     HWND    h_label[NOTICE_ITEMS_MAX], h_value[NOTICE_ITEMS_MAX];
@@ -215,6 +218,10 @@ static void notice_close(HWND hwnd, NoticeDlg *d, int result)
 {
     d->result = result;
     d->closing = 1;
+    /* Gone at once only while a nested notice's loop still runs: an outer
+     * notice must not stay up under it. The innermost one stays visible until
+     * the owner is re-enabled, so activation does not fall to another app. */
+    if (d->level < g_notice_depth) ShowWindow(hwnd, SW_HIDE);
     PostMessageA(hwnd, WM_NULL, 0, 0);
 }
 
@@ -243,10 +250,12 @@ static void notice_tab(NoticeDlg *d)
 }
 
 /* A key for the dialog, called from the modal loop. Returns 1 when handled. */
-static int notice_key(HWND hwnd, NoticeDlg *d, WPARAM vk)
+static int notice_key(HWND hwnd, NoticeDlg *d, WPARAM vk, LPARAM lp)
 {
     switch (vk) {
     case VK_RETURN:
+        /* A held Enter (auto-repeat) must not dismiss a notice unread. */
+        if (lp & (1 << 30)) return 1;
         notice_close(hwnd, d, (d->h_action && GetFocus() == d->h_action) ? 1 : 0);
         return 1;
     case VK_ESCAPE:
@@ -379,6 +388,10 @@ static LRESULT CALLBACK notice_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
 {
     if (!n) return 0;
+    /* MessageBox takes the root owner: a child window (a tab pane, say) owns
+     * nothing, and disabling only it would leave the top-level usable. */
+    if (owner && IsWindow(owner) && (GetWindowLongA(owner, GWL_STYLE) & WS_CHILD))
+        owner = GetAncestor(owner, GA_ROOT);
     static int registered = 0;
     HINSTANCE inst = GetModuleHandleA(NULL);
     if (!registered) {
@@ -399,8 +412,38 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
     d->dpi = get_window_dpi(owner);
 
     RECT anchor = { 0, 0, 0, 0 };
-    if (!owner || !IsWindow(owner) || !GetWindowRect(owner, &anchor))
+    if (!owner || !IsWindow(owner)) {
         SystemParametersInfoA(SPI_GETWORKAREA, 0, &anchor, 0);
+    } else if (IsIconic(owner)) {
+        /* A minimized window's rectangle sits near (-32000,-32000): anchor on
+         * where it restores to, else on its monitor's work area. */
+        WINDOWPLACEMENT wp;
+        memset(&wp, 0, sizeof(wp));
+        wp.length = sizeof(wp);
+        MONITORINFO omi;
+        memset(&omi, 0, sizeof(omi));
+        omi.cbSize = sizeof(omi);
+        if (GetWindowPlacement(owner, &wp) &&
+            wp.rcNormalPosition.right > wp.rcNormalPosition.left)
+        {
+            anchor = wp.rcNormalPosition;
+            /* Workspace coordinates, except for a tool window. */
+            if (!(GetWindowLongA(owner, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) {
+                MONITORINFO pmi;
+                memset(&pmi, 0, sizeof(pmi));
+                pmi.cbSize = sizeof(pmi);
+                if (GetMonitorInfoA(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &pmi))
+                    OffsetRect(&anchor, pmi.rcWork.left - pmi.rcMonitor.left,
+                               pmi.rcWork.top - pmi.rcMonitor.top);
+            }
+        }
+        else if (GetMonitorInfoA(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &omi))
+            anchor = omi.rcWork;
+        else
+            SystemParametersInfoA(SPI_GETWORKAREA, 0, &anchor, 0);
+    } else if (!GetWindowRect(owner, &anchor)) {
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &anchor, 0);
+    }
 
     HWND prev_focus = GetFocus();
     HWND dlg = CreateWindowExA(NOTICE_EXSTYLE, NOTICE_CLASS, d->n.title, NOTICE_STYLE,
@@ -416,7 +459,11 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
     ShowWindow(dlg, SW_SHOW);
     UpdateWindow(dlg);
     SetFocus(d->h_ok);
+    /* What MessageBox did: its alert sound and the screen-reader alert. */
+    MessageBeep(d->n.tone == NOTICE_WARNING ? MB_ICONWARNING : MB_ICONINFORMATION);
+    NotifyWinEvent(EVENT_SYSTEM_ALERT, dlg, OBJID_CLIENT, CHILDID_SELF);
 
+    d->level = ++g_notice_depth;
     MSG m;
     memset(&m, 0, sizeof(m));
     int gm = 1;
@@ -424,12 +471,13 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
         /* The buttons are owner-drawn, so IsDialogMessage would not treat
          * OK as the default: the keys are taken here. */
         if (m.message == WM_KEYDOWN && (m.hwnd == dlg || IsChild(dlg, m.hwnd)) &&
-            notice_key(dlg, d, m.wParam))
+            notice_key(dlg, d, m.wParam, m.lParam))
             continue;
         TranslateMessage(&m);
         DispatchMessageA(&m);
     }
 
+    g_notice_depth--;
     int result = d->closing ? d->result : 0;
     if (owner && !was_disabled) EnableWindow(owner, TRUE);
     if (owner && IsWindow(owner)) SetForegroundWindow(owner);   /* before the destroy */
@@ -441,4 +489,11 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
      * in it and must not be forwarded. */
     if (gm == 0) PostQuitMessage((int)m.wParam);
     return result;
+}
+
+int notice_dlg_msg(HWND owner, NoticeMsgId id, const char *arg, const ThemeColors *theme)
+{
+    Notice n;
+    if (!notice_msg(&n, id, arg)) return 0;
+    return notice_dlg_show(owner, &n, theme);
 }
