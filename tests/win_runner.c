@@ -63,6 +63,16 @@ int test_pw_prompt_win_activate_keeps_focus_on_field(void);
 int test_pw_prompt_win_save_ticked_ok_returns_one(void);
 int test_pw_prompt_win_save_unticked_ok_returns_zero(void);
 int test_pw_prompt_win_save_ticked_cancel_returns_zero(void);
+int test_notice_dlg_win_opens_with_class_caption_and_controls(void);
+int test_notice_dlg_win_no_action_button_when_action_empty(void);
+int test_notice_dlg_win_enter_on_ok_returns_zero_and_window_is_gone(void);
+int test_notice_dlg_win_escape_returns_zero(void);
+int test_notice_dlg_win_close_box_returns_zero(void);
+int test_notice_dlg_win_enter_on_focused_action_returns_one(void);
+int test_notice_dlg_win_tab_moves_ok_action_ok(void);
+int test_notice_dlg_win_tab_with_only_ok_stays_on_ok(void);
+int test_notice_dlg_win_owner_enable_state_is_restored(void);
+int test_notice_dlg_win_wide_label_and_long_text_stay_inside(void);
 
 /* test_telnet_io_win.c */
 int test_telnet_io_win_connect_ok_and_refused(void);
@@ -334,6 +344,16 @@ int main(int argc, char **argv)
     failed += test_pw_prompt_win_save_ticked_ok_returns_one();
     failed += test_pw_prompt_win_save_unticked_ok_returns_zero();
     failed += test_pw_prompt_win_save_ticked_cancel_returns_zero();
+    failed += test_notice_dlg_win_opens_with_class_caption_and_controls();
+    failed += test_notice_dlg_win_no_action_button_when_action_empty();
+    failed += test_notice_dlg_win_enter_on_ok_returns_zero_and_window_is_gone();
+    failed += test_notice_dlg_win_escape_returns_zero();
+    failed += test_notice_dlg_win_close_box_returns_zero();
+    failed += test_notice_dlg_win_enter_on_focused_action_returns_one();
+    failed += test_notice_dlg_win_tab_moves_ok_action_ok();
+    failed += test_notice_dlg_win_tab_with_only_ok_stays_on_ok();
+    failed += test_notice_dlg_win_owner_enable_state_is_restored();
+    failed += test_notice_dlg_win_wide_label_and_long_text_stay_inside();
     failed += test_telnet_io_win_connect_ok_and_refused();
     failed += test_telnet_io_win_resolve_fails();
     failed += test_telnet_io_win_negotiates_and_logs_in();

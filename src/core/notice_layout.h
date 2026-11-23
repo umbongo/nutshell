@@ -12,10 +12,12 @@
 
 typedef struct {
     int dpi;
+    int title_h;               /* measured height of one FONT_TITLE line */
     int opening_h;             /* measured height of the opening at text_w */
     int closing_h;             /* 0 = no closing line */
     int item_count;            /* <= NOTICE_ITEMS_MAX */
-    int label_w;               /* widest bold label, measured */
+    int label_w;               /* widest bold label, measured; the dialog caps it
+                                  at 40% of text_w */
     int value_h[NOTICE_ITEMS_MAX]; /* measured at the value column's width */
     int has_action;
 } NoticeLayoutIn;

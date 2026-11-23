@@ -9,6 +9,7 @@ static void mk_in(NoticeLayoutIn *in, int dpi, int items, int action)
 {
     memset(in, 0, sizeof(*in));
     in->dpi = dpi;
+    in->title_h = ns_scale(20, dpi);
     in->opening_h = ns_scale(36, dpi);
     in->closing_h = ns_scale(18, dpi);
     in->item_count = items;
@@ -144,5 +145,45 @@ int test_notice_layout_192_is_twice_96(void)
     ASSERT_TRUE(abs(B.action.w - 2 * A.action.w) <= 1);
     ASSERT_TRUE(abs(B.value[2].y - 2 * A.value[2].y) <= 1);
     ASSERT_TRUE(abs(B.text_w - 2 * A.text_w) <= 1);
+    TEST_END();
+}
+
+/* A label wider than the text column leaves the value column empty, never
+ * negative, and nothing leaves the client area vertically. */
+int test_notice_layout_very_wide_label_keeps_value_width_non_negative(void)
+{
+    TEST_BEGIN();
+    int dpis[2] = { 96, 192 };
+    for (int d = 0; d < 2; d++) {
+        NoticeLayoutIn in;
+        NoticeLayout L;
+        mk_in(&in, dpis[d], 2, 1);
+        in.label_w = ns_scale(900, dpis[d]);
+        notice_layout(&in, &L);
+        for (int i = 0; i < 2; i++) {
+            ASSERT_TRUE(L.value[i].w >= 0);
+            ASSERT_TRUE(L.value[i].x >= L.bar.w);
+            ASSERT_TRUE(L.value[i].y + L.value[i].h <= L.client_h);
+        }
+    }
+    TEST_END();
+}
+
+/* The title row is as tall as the measured title line (and at least the
+ * round glyph), and the opening starts below it. */
+int test_notice_layout_title_row_follows_measured_height(void)
+{
+    TEST_BEGIN();
+    NoticeLayoutIn in;
+    NoticeLayout a, b;
+    mk_in(&in, 96, 1, 0);
+    in.title_h = 40;
+    notice_layout(&in, &a);
+    ASSERT_EQ(a.title.h, 40);
+    ASSERT_TRUE(a.opening.y >= a.title.y + 40);
+    in.title_h = 4;                      /* shorter than the glyph: the glyph wins */
+    notice_layout(&in, &b);
+    ASSERT_EQ(b.title.h, ns_scale(16, 96));
+    ASSERT_TRUE(b.client_h < a.client_h);
     TEST_END();
 }

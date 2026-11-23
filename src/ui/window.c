@@ -22,6 +22,7 @@
 #include "settings_entry.h"
 #include "help_guide.h"
 #include "cheatsheet_dlg.h"
+#include "notice_dlg.h"
 #include "shortcuts.h"
 #include "ssh_session.h"
 #include "ssh_auth_plan.h"
@@ -105,6 +106,10 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
 /* --ui-demo=shortcuts: posted once the demo session exists, to open the
  * keyboard shortcuts sheet over it. */
 #define WM_OPEN_DEMO_SHORTCUTS  (WM_USER + 6)
+/* --ui-demo=notice-info / notice-warning: posted once the demo session
+ * exists, to open the themed notice dialog over it. wParam 0 = the upgrade
+ * sample (info), 1 = the invalid-config sample (warning). */
+#define WM_OPEN_DEMO_NOTICE     (WM_USER + 8)
 /* Posted by the WM_TIMER poll when a telnet session's auto-login has no saved
  * password and the device asked for one: wParam is the Session*, lParam the
  * transport's serial. The handler re-resolves both before it answers. */
@@ -2642,6 +2647,12 @@ static void create_demo_session(HWND hwnd)
      * session, posted for the same reason. */
     if (strcmp(state, "shortcuts") == 0)
         PostMessage(hwnd, WM_OPEN_DEMO_SHORTCUTS, 0, 0);
+    /* --ui-demo=notice-info / notice-warning: the themed notice dialog over
+     * the demo session, posted for the same reason. */
+    if (strcmp(state, "notice-info") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 0, 0);
+    if (strcmp(state, "notice-warning") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 1, 0);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -3631,6 +3642,33 @@ static void show_shortcuts(HWND hwnd)
     HWND floating = (!g_ai_docked && g_hwndAiChat && IsWindow(g_hwndAiChat))
                         ? g_hwndAiChat : NULL;
     cheatsheet_show(hwnd, floating, g_theme);
+}
+
+/* --ui-demo=notice-info (which 0) and notice-warning (which 1): the sample
+ * notices built by the real builders, with a fake report that lists
+ * ai_enabled (decided on) and a sample backup name. The action button's
+ * result is ignored: nothing opens Settings from a demo. */
+static void show_demo_notice(HWND hwnd, int which)
+{
+    Notice n;
+    if (which == 0) {
+        ConfigLoadReport rep;
+        memset(&rep, 0, sizeof(rep));
+        size_t nkeys = 0;
+        const ConfigSettingKey *keys = config_setting_keys(&nkeys);
+        for (size_t i = 0; i < nkeys && rep.missing_count < CFG_KEYS_MAX; i++) {
+            if (strcmp(keys[i].key, "ai_enabled") == 0)
+                rep.missing[rep.missing_count++] = (unsigned char)i;
+        }
+        rep.ai_enabled_decided = 1;
+        Settings s;
+        memset(&s, 0, sizeof(s));
+        s.ai_enabled = 1;
+        (void)notice_upgrade(&n, APP_VERSION, &rep, &s);
+    } else {
+        notice_invalid(&n, "nutshell.config.bad-20261123-101500");
+    }
+    (void)notice_dlg_show(hwnd, &n, g_theme);
 }
 
 /* ---- Keyboard: what each key sends (special-keys spec, 2026-09-23) -------
@@ -5194,6 +5232,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_OPEN_DEMO_SHORTCUTS:
             show_shortcuts(hwnd);
+            return 0;
+
+        case WM_OPEN_DEMO_NOTICE:
+            show_demo_notice(hwnd, (int)wParam);
             return 0;
 
         case WM_TELNET_PASSWORD: {

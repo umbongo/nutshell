@@ -24,7 +24,7 @@ void notice_layout(const NoticeLayoutIn *in, NoticeLayout *out)
     int gap = ns_scale(SP_MD, dpi);
     int small = ns_scale(SP_SM, dpi);
     int row_gap = ns_scale(SP_XS, dpi);
-    int ctlh = ns_scale(SZ_CTRL_H, dpi);
+    int ctlh = ns_scale(SZ_CTRL_H, dpi);   /* buttons */
     int bar_w = ns_scale(NOTICE_BAR_W, dpi);
     int glyph = ns_scale(NOTICE_GLYPH, dpi);
     int n = in->item_count;
@@ -38,10 +38,11 @@ void notice_layout(const NoticeLayoutIn *in, NoticeLayout *out)
     out->text_w = right - x0;
 
     int y = pad;
-    out->icon = rect(x0, y + (ctlh - glyph) / 2, glyph, glyph);
+    int title_row = in->title_h > glyph ? in->title_h : glyph;
+    out->icon = rect(x0, y + (title_row - glyph) / 2, glyph, glyph);
     int tx = x0 + glyph + small;
-    out->title = rect(tx, y, right - tx, ctlh);
-    y += ctlh + gap;
+    out->title = rect(tx, y, right - tx, title_row);
+    y += title_row + gap;
 
     out->opening = rect(x0, y, out->text_w, in->opening_h);
     y += in->opening_h;
@@ -52,7 +53,9 @@ void notice_layout(const NoticeLayoutIn *in, NoticeLayout *out)
         for (int i = 0; i < n; i++) {
             int h = in->value_h[i] > 0 ? in->value_h[i] : 1;
             out->label[i] = rect(x0, y, in->label_w, h);
-            out->value[i] = rect(vx, y, right - vx, h);
+            int vw = right - vx;
+            if (vw < 0) vw = 0;   /* a label wider than the column */
+            out->value[i] = rect(vx, y, vw, h);
             y += h;
             if (i + 1 < n) y += row_gap;
         }

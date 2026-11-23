@@ -665,3 +665,48 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
     [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
 }
+
+# The notice dialog on all four themes, for the eye: --ui-demo=notice-info (the
+# upgrade sample) and --ui-demo=notice-warning (the invalid-config sample) open
+# it over the demo window, so no host and no config theme edit is needed.
+# Captured by handle into artifacts\gallery\<Theme>-notice-info.png and
+# -notice-warning.png beside ui_gallery's.
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "notice_dialog_gallery")) {
+    $name = "notice_dialog_gallery"
+    Write-Host ("[RUN ] " + $name)
+    $galleryDir = Join-Path $Artifacts "gallery"
+    New-Item -ItemType Directory -Force $galleryDir | Out-Null
+    $themes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
+    $ok = $true
+    $notes = New-Object System.Collections.ArrayList
+    foreach ($theme in $themes) {
+        foreach ($variant in @(
+                @{ State = "notice-info";    Title = "^Welcome to Nutshell " },
+                @{ State = "notice-warning"; Title = "^Your configuration couldn.t be loaded$" })) {
+            $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+            $session = $null
+            try {
+                $session = Start-Nutshell -Env $testEnv -ExtraArgs @(("--ui-demo=" + $variant.State), "--theme", $theme)
+                $dlg = Wait-NutshellDialog -Session $session -Title $variant.Title -TimeoutSec 10
+                Assert-True ($dlg -ne [IntPtr]::Zero) ("--ui-demo=" + $variant.State + " opened no notice")
+                Start-Sleep -Milliseconds 400
+                $path = Join-Path $galleryDir ("{0}-{1}.png" -f (ConvertTo-NutshellFileToken $theme), $variant.State)
+                Save-NutshellScreenshot -Session $session -Path $path -Hwnd ([long]$dlg) | Out-Null
+                Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: $path"
+                [void]$notes.Add("${theme} " + $variant.State + ": ok")
+            } catch {
+                $ok = $false
+                [void]$notes.Add("${theme} " + $variant.State + ": " + $_.Exception.Message)
+            } finally {
+                if ($session) { Stop-Nutshell -Session $session }
+                for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+                    Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+                    if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+                }
+            }
+        }
+    }
+    $detail = "notice captured by handle on 4 themes x 2 tones into artifacts\gallery\<Theme>-notice-info.png and -notice-warning.png -- " + ($notes -join "; ")
+    if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
+    [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
+}

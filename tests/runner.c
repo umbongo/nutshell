@@ -3819,6 +3819,8 @@ int test_notice_layout_rows_in_order_without_overlap(void);
 int test_notice_layout_no_action_and_no_closing(void);
 int test_notice_layout_grows_with_items(void);
 int test_notice_layout_192_is_twice_96(void);
+int test_notice_layout_very_wide_label_keeps_value_width_non_negative(void);
+int test_notice_layout_title_row_follows_measured_height(void);
 
 /* test_pw_prompt_layout.c */
 int test_pw_layout_today_unchanged(void);
@@ -4364,6 +4366,7 @@ int test_sdbg_layout_page_height_ticked_vs_unticked(void);
 
 int test_ui_demo_settings_debug_is_an_empty_state(void);
 int test_ui_demo_shortcuts_is_an_empty_state(void);
+int test_ui_demo_notice_states_are_empty_states(void);
 int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
 int test_ui_demo_policy_compact_matches_approval(void);
 int test_ui_demo_policy_for_other_states_is_write_off(void);
@@ -8683,6 +8686,7 @@ int main(void) {
 
     failed += test_ui_demo_settings_debug_is_an_empty_state();
     failed += test_ui_demo_shortcuts_is_an_empty_state();
+    failed += test_ui_demo_notice_states_are_empty_states();
     failed += test_ui_demo_policy_auto_is_executing_with_auto_on();
     failed += test_ui_demo_policy_compact_matches_approval();
     failed += test_ui_demo_policy_for_other_states_is_write_off();
@@ -8916,6 +8920,8 @@ int main(void) {
         failed += test_notice_layout_no_action_and_no_closing();
         failed += test_notice_layout_grows_with_items();
         failed += test_notice_layout_192_is_twice_96();
+        failed += test_notice_layout_very_wide_label_keeps_value_width_non_negative();
+        failed += test_notice_layout_title_row_follows_measured_height();
         failed += test_pw_layout_today_unchanged();
         failed += test_pw_layout_text_row();
         failed += test_pw_text_crlf();

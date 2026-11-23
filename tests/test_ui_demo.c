@@ -41,20 +41,22 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 22);
+    ASSERT_EQ(count, 24);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "shortcuts");
-    ASSERT_STR_EQ(states[count - 3], "policy-compact");
-    ASSERT_STR_EQ(states[count - 4], "policy-auto");
-    ASSERT_STR_EQ(states[count - 5], "settings-debug");
-    ASSERT_STR_EQ(states[count - 6], "cmddetail");
-    ASSERT_STR_EQ(states[count - 7], "thinking-open");
-    ASSERT_STR_EQ(states[count - 8], "thinking-extended");
-    ASSERT_STR_EQ(states[count - 9], "thinking-compact");
-    ASSERT_STR_EQ(states[count - 10], "thinking");
-    ASSERT_STR_EQ(states[count - 11], "local");
-    ASSERT_STR_EQ(states[count - 12], "ansi");
-    ASSERT_STR_EQ(states[count - 13], "runlist");   /* not part of "all" */
+    ASSERT_STR_EQ(states[count - 2], "notice-warning");
+    ASSERT_STR_EQ(states[count - 3], "notice-info");
+    ASSERT_STR_EQ(states[count - 4], "shortcuts");
+    ASSERT_STR_EQ(states[count - 5], "policy-compact");
+    ASSERT_STR_EQ(states[count - 6], "policy-auto");
+    ASSERT_STR_EQ(states[count - 7], "settings-debug");
+    ASSERT_STR_EQ(states[count - 8], "cmddetail");
+    ASSERT_STR_EQ(states[count - 9], "thinking-open");
+    ASSERT_STR_EQ(states[count - 10], "thinking-extended");
+    ASSERT_STR_EQ(states[count - 11], "thinking-compact");
+    ASSERT_STR_EQ(states[count - 12], "thinking");
+    ASSERT_STR_EQ(states[count - 13], "local");
+    ASSERT_STR_EQ(states[count - 14], "ansi");
+    ASSERT_STR_EQ(states[count - 15], "runlist");   /* not part of "all" */
     TEST_END();
 }
 
@@ -576,6 +578,33 @@ int test_ui_demo_shortcuts_is_an_empty_state(void)
     ASSERT_TRUE(!ui_demo_state_valid("shortcut"));
     ASSERT_TRUE(!ui_demo_state_valid("Shortcuts"));
     ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* "notice-info" and "notice-warning" (Task 3 of the AI switch) build an empty
+ * conversation like "shortcuts" (the win32 side opens the themed notice over
+ * it) and are not part of "all". */
+int test_ui_demo_notice_states_are_empty_states(void)
+{
+    TEST_BEGIN();
+    const char *names[2] = { "notice-info", "notice-warning" };
+    for (int i = 0; i < 2; i++) {
+        AiConversation conv;
+        ApprovalQueue approval, approval2;
+        char term_buf[8192];
+        ASSERT_TRUE(ui_demo_state_valid(names[i]));
+        ASSERT_EQ(ui_demo_build(names[i], &conv, &approval, &approval2,
+                                term_buf, sizeof(term_buf)), 0);
+        ASSERT_EQ(conv.msg_count, 1);
+        ASSERT_EQ(approval.count, 0);
+        ASSERT_EQ(approval2.count, 0);
+        ASSERT_TRUE(!ui_demo_scrolls_to_top(names[i]));
+        ASSERT_TRUE(!ui_demo_is_thinking_state(names[i]));
+        ASSERT_EQ(ui_demo_thinking_pref(names[i]), -1);
+        ai_conv_reset(&conv);
+    }
+    ASSERT_TRUE(!ui_demo_state_valid("notice"));
+    ASSERT_TRUE(!ui_demo_state_valid("Notice-info"));
     TEST_END();
 }
 
