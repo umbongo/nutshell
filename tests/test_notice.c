@@ -337,3 +337,134 @@ int test_notice_launch_save_wanted(void)
     ASSERT_EQ(notice_launch_save_wanted(0, 1, 1), 1);
     TEST_END();
 }
+
+/* ---- notice_msg: the OK-only message boxes ---- */
+
+typedef struct { NoticeMsgId id; NoticeTone tone; const char *title; const char *text; } MsgRow;
+
+int test_notice_msg_table_matches_todays_boxes(void)
+{
+    TEST_BEGIN();
+    static const MsgRow rows[] = {
+        { NOTICE_MSG_CLOSE_CONNECTING, NOTICE_INFO, "Close Tab", "Connection in progress. Please wait." },
+        { NOTICE_MSG_TAB_LIMIT, NOTICE_INFO, "Tab Limit", "Maximum number of tabs reached." },
+        { NOTICE_MSG_NO_RECONNECT_PROFILE, NOTICE_INFO, "Reconnect", "No connection profile available for reconnection." },
+        { NOTICE_MSG_DEBUG_LOG_MEM_ONLY, NOTICE_INFO, "Debug Log Folder", "No log folder is writable, so Nutshell is keeping the log in memory only. Mark Issue still works." },
+        { NOTICE_MSG_DEBUG_LOG_PATH_INVALID, NOTICE_WARNING, "Debug Log Folder", "The log folder path is not valid." },
+        { NOTICE_MSG_SELECT_TO_EDIT, NOTICE_INFO, "Edit", "Select a session first." },
+        { NOTICE_MSG_SELECT_TO_DELETE, NOTICE_INFO, "Delete", "Select a session to delete." },
+        { NOTICE_MSG_HOSTNAME_SAVE, NOTICE_WARNING, "Save", "Please enter a hostname." },
+        { NOTICE_MSG_HOSTNAME_CONNECT, NOTICE_WARNING, "Connect", "Please enter a hostname." },
+        { NOTICE_MSG_LOG_FOLDER_INVALID, NOTICE_WARNING, "Open Log Folder", "That log folder path is not valid." },
+        { NOTICE_MSG_MODELS_NONE, NOTICE_INFO, "Refresh Models", "No models found." },
+        { NOTICE_MSG_MODELS_NO_URL, NOTICE_WARNING, "Refresh Models", "Cannot determine models URL for this provider." },
+        { NOTICE_MSG_MODELS_NO_KEY, NOTICE_WARNING, "Refresh Models", "Enter an API key first." },
+        { NOTICE_MSG_CHAT_SAVE_FAILED, NOTICE_WARNING, "Save Error", "Failed to save file." },
+    };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        Notice n;
+        memset(&n, 0x55, sizeof(n));
+        ASSERT_EQ(notice_msg(&n, rows[i].id, NULL), 1);
+        ASSERT_EQ(n.tone, rows[i].tone);
+        ASSERT_STR_EQ(n.title, rows[i].title);
+        ASSERT_STR_EQ(n.opening, rows[i].text);
+        ASSERT_EQ(n.item_count, 0);
+        ASSERT_EQ(n.closing[0], 0);
+        ASSERT_EQ(n.action[0], 0);
+        ASSERT_EQ(n.action_page, -1);
+    }
+    TEST_END();
+}
+
+int test_notice_msg_every_id_has_title_and_text(void)
+{
+    TEST_BEGIN();
+    for (int id = 0; id < (int)NOTICE_MSG_COUNT; id++) {
+        Notice n;
+        ASSERT_EQ(notice_msg(&n, (NoticeMsgId)id, "x"), 1);
+        ASSERT_TRUE(n.title[0] != 0);
+        ASSERT_TRUE(n.opening[0] != 0);
+    }
+    TEST_END();
+}
+
+int test_notice_msg_session_not_found_formats_name(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_SESSION_NOT_FOUND, "web01"), 1);
+    ASSERT_STR_EQ(n.title, "Session Not Found");
+    ASSERT_EQ(n.tone, NOTICE_WARNING);
+    ASSERT_STR_EQ(n.opening, "Session \"web01\" not found.");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_SESSION_NOT_FOUND, "50%s %d"), 1);
+    ASSERT_STR_EQ(n.opening, "Session \"50%s %d\" not found.");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_SESSION_NOT_FOUND, NULL), 1);
+    ASSERT_STR_EQ(n.opening, "Session \"\" not found.");
+    TEST_END();
+}
+
+int test_notice_msg_text_args(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_CONNECTION_ERROR, "Host unreachable"), 1);
+    ASSERT_STR_EQ(n.opening, "Host unreachable");
+    ASSERT_STR_EQ(n.title, "Connection Error");
+    ASSERT_EQ(n.tone, NOTICE_WARNING);
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_CONNECTION_ERROR, NULL), 1);
+    ASSERT_STR_EQ(n.opening, "The connection failed.");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_CONNECTION_ERROR, ""), 1);
+    ASSERT_STR_EQ(n.opening, "The connection failed.");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_MODELS_ERROR, "Error: HTTP 401"), 1);
+    ASSERT_STR_EQ(n.opening, "Error: HTTP 401");
+    ASSERT_STR_EQ(n.title, "Refresh Models");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_MODELS_ERROR, NULL), 1);
+    ASSERT_STR_EQ(n.opening, "Error: the models request failed.");
+    TEST_END();
+}
+
+int test_notice_msg_title_args(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_FOLDER_MISSING, "Debug Log Folder"), 1);
+    ASSERT_STR_EQ(n.title, "Debug Log Folder");
+    ASSERT_STR_EQ(n.opening, "That folder does not exist and could not be created.");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_FOLDER_MISSING, NULL), 1);
+    ASSERT_STR_EQ(n.title, "Open Folder");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_FOLDER_IS_FILE, "Open Log Folder"), 1);
+    ASSERT_STR_EQ(n.title, "Open Log Folder");
+    ASSERT_STR_EQ(n.opening, "That path is a file, not a folder, so it was not opened. Choose a folder for the log.");
+    ASSERT_EQ(n.tone, NOTICE_WARNING);
+    TEST_END();
+}
+
+int test_notice_msg_long_arg_truncates(void)
+{
+    TEST_BEGIN();
+    static char big[2001];
+    memset(big, 'a', 2000);
+    big[2000] = 0;
+    Notice n;
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_CONNECTION_ERROR, big), 1);
+    ASSERT_EQ(strlen(n.opening), sizeof(n.opening) - 1);
+    big[300] = 0;
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_FOLDER_MISSING, big), 1);
+    ASSERT_EQ(strlen(n.title), sizeof(n.title) - 1);
+    TEST_END();
+}
+
+int test_notice_msg_bad_id(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    memset(&n, 0x55, sizeof(n));
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_COUNT, NULL), 0);
+    ASSERT_EQ(n.title[0], 0);
+    memset(&n, 0x55, sizeof(n));
+    int bad = -1;
+    ASSERT_EQ(notice_msg(&n, (NoticeMsgId)bad, NULL), 0);
+    ASSERT_EQ(n.title[0], 0);
+    ASSERT_EQ(notice_msg(NULL, NOTICE_MSG_TAB_LIMIT, NULL), 0);
+    TEST_END();
+}

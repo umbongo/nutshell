@@ -74,6 +74,35 @@ void notice_launch_plan(NoticeQueue *q, const NoticeLaunch *in);
  * user's real config and keeps the Local shell profile in memory. */
 int notice_launch_save_wanted(int demo, int added, int local_profile);
 
+typedef enum {
+    NOTICE_MSG_CLOSE_CONNECTING = 0, /* window.c on_tab_close        */
+    NOTICE_MSG_TAB_LIMIT,            /* window.c tabs_add failed      */
+    NOTICE_MSG_NO_RECONNECT_PROFILE, /* window.c on_status_click      */
+    NOTICE_MSG_DEBUG_LOG_MEM_ONLY,   /* window.c open_debug_log_folder */
+    NOTICE_MSG_DEBUG_LOG_PATH_INVALID,
+    NOTICE_MSG_SESSION_NOT_FOUND,    /* arg: the session name          */
+    NOTICE_MSG_CONNECTION_ERROR,     /* arg: the error text            */
+    NOTICE_MSG_SELECT_TO_EDIT,       /* session_manager.c              */
+    NOTICE_MSG_SELECT_TO_DELETE,
+    NOTICE_MSG_HOSTNAME_SAVE,
+    NOTICE_MSG_HOSTNAME_CONNECT,
+    NOTICE_MSG_LOG_FOLDER_INVALID,   /* settings.c debug_open_folder   */
+    NOTICE_MSG_MODELS_ERROR,         /* arg: ctx->result ("Error: ...") */
+    NOTICE_MSG_MODELS_NONE,
+    NOTICE_MSG_MODELS_NO_URL,
+    NOTICE_MSG_MODELS_NO_KEY,
+    NOTICE_MSG_FOLDER_MISSING,       /* open_dir.h; arg: the title     */
+    NOTICE_MSG_FOLDER_IS_FILE,       /* open_dir.h; arg: the title     */
+    NOTICE_MSG_CHAT_SAVE_FAILED,     /* ai_chat.c Save                 */
+    NOTICE_MSG_COUNT
+} NoticeMsgId;
+
+/* Fills `n` with message `id` (no list, no closing, no action). `arg` is
+ * used only by the ids noted above and is always data, never a format.
+ * Returns 1, or 0 with a blank notice (title "") for an out-of-range id or
+ * NULL `n` (then nothing is written). */
+int notice_msg(Notice *n, NoticeMsgId id, const char *arg);
+
 /* title, blank line, opening, "- label: value" lines, blank line, closing;
  * LF line ends, NUL-terminated, truncated at cap. Returns the length
  * written (NUL excluded). */
