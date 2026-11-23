@@ -73,6 +73,7 @@ int test_notice_dlg_win_tab_moves_ok_action_ok(void);
 int test_notice_dlg_win_tab_with_only_ok_stays_on_ok(void);
 int test_notice_dlg_win_owner_enable_state_is_restored(void);
 int test_notice_dlg_win_wide_label_and_long_text_stay_inside(void);
+int test_ns_font_win_bold_is_cached_and_bold(void);
 
 /* test_telnet_io_win.c */
 int test_telnet_io_win_connect_ok_and_refused(void);
@@ -354,6 +355,7 @@ int main(int argc, char **argv)
     failed += test_notice_dlg_win_tab_with_only_ok_stays_on_ok();
     failed += test_notice_dlg_win_owner_enable_state_is_restored();
     failed += test_notice_dlg_win_wide_label_and_long_text_stay_inside();
+    failed += test_ns_font_win_bold_is_cached_and_bold();
     failed += test_telnet_io_win_connect_ok_and_refused();
     failed += test_telnet_io_win_resolve_fails();
     failed += test_telnet_io_win_negotiates_and_logs_in();

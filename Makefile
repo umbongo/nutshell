@@ -260,6 +260,8 @@ $(call write-stamp,$(FUZZ_SRCS_STAMP),$(FUZZ_SRCS_TEXT))
 # Windows host, under Wine on Linux if available; otherwise prints a skip
 # notice.  Kept separate from `test`, which never touches Win32.
 #
+# tests/test_notice_dlg_win.c stubs config_setting_keys(): config/loader.c must
+# not join WIN_TEST_SRCS while that stub exists.
 # local_pty.c drags in the shell resolver, the ring, the emulator and the
 # two small helpers they use -- term_process() is what the ConPTY bytes are
 # drained into, exactly as the app does it.

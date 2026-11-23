@@ -10,7 +10,8 @@
  * face_id 0 is the proportional UI face (APP_FONT_UI_FACE "Inter") at the
  * role's ramp weight; face_id 2 is the configured mono face (the terminal
  * font from Settings) at the terminal point size, used for FONT_MONO.
- * face_id 1/3 (bold variants) are reserved slots — nothing creates them yet.
+ * face_id 1/3 are the bold variants (FW_BOLD) of those two, made by
+ * ns_font_bold().
  *
  * See docs/superpowers/specs/2026-09-07-design-system-foundation-design.md
  * section 2.
@@ -24,6 +25,11 @@
  * cache owns it; call ns_font_flush() instead when fonts must change.
  * Returns NULL only if the underlying CreateFont call itself fails. */
 HFONT ns_font(NsFontRole role, int dpi);
+
+/* Cached bold variant of ns_font(role, dpi): the same face and size at
+ * FW_BOLD (face_id 1 for the UI face, 3 for mono). Same ownership and flush
+ * rules as ns_font(). */
+HFONT ns_font_bold(NsFontRole role, int dpi);
 
 /* Configure the faces ns_font() draws from: ui_face is the proportional face
  * for face_id 0 (falls back to APP_FONT_UI_FACE if NULL/empty); mono_face and

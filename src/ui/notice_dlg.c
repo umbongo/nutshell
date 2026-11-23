@@ -31,7 +31,6 @@ typedef struct {
     NoticeLayout lay;
     HWND    h_title, h_opening, h_closing, h_action, h_ok;
     HWND    h_label[NOTICE_ITEMS_MAX], h_value[NOTICE_ITEMS_MAX];
-    HFONT   bold;              /* FONT_BODY at weight 700, ours to delete */
     HBRUSH  br_bg;             /* bg_primary.base: window and static text */
 } NoticeDlg;
 
@@ -50,22 +49,10 @@ static void notice_adjust_rect(RECT *rc, DWORD style, DWORD exstyle, int dpi)
     AdjustWindowRectEx(rc, style, FALSE, exstyle);
 }
 
-/* The bold body font for list labels: no ramp role is bold at body size, so
- * it is the ramp's body font with the weight raised (never a fresh face). */
-static void notice_make_bold(NoticeDlg *d)
-{
-    if (d->bold) { DeleteObject((HGDIOBJ)d->bold); d->bold = NULL; }
-    HFONT body = ns_font(FONT_BODY, d->dpi);
-    LOGFONTA lf;
-    if (body && GetObjectA((HGDIOBJ)body, (int)sizeof(lf), &lf) > 0) {
-        lf.lfWeight = FW_BOLD;
-        d->bold = CreateFontIndirectA(&lf);
-    }
-}
-
+/* Bold body font for list labels, from the shared cache at d->dpi. */
 static HFONT notice_label_font(const NoticeDlg *d)
 {
-    return d->bold ? d->bold : ns_font(FONT_BODY, d->dpi);
+    return ns_font_bold(FONT_BODY, d->dpi);
 }
 
 /* Height of `text` wrapped at `width` in `font`, never less than one line. */
@@ -285,7 +272,6 @@ static LRESULT CALLBACK notice_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         d = (NoticeDlg *)cs->lpCreateParams;
         SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)d);
         d->br_bg = CreateSolidBrush(theme_cr(ns_tokens()->bg_primary.base));
-        notice_make_bold(d);
         themed_apply_title_bar(hwnd, d->theme);
         d->h_title = mk_static(hwnd, d->n.title, NOTICE_ID_TITLE, SS_ENDELLIPSIS);
         d->h_opening = mk_static(hwnd, d->n.opening, NOTICE_ID_OPENING, 0);
@@ -370,15 +356,13 @@ static LRESULT CALLBACK notice_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * would pull the main window's fonts from under it (as
              * cheatsheet_dlg.c). */
             d->dpi = (int)HIWORD(wp);
-            notice_make_bold(d);
-            notice_fit(hwnd, d, (const RECT *)lp);
+                notice_fit(hwnd, d, (const RECT *)lp);
             return 0;
         }
         break;
     case WM_DESTROY:
         if (d) {
             if (d->br_bg) { DeleteObject((HGDIOBJ)d->br_bg); d->br_bg = NULL; }
-            if (d->bold)  { DeleteObject((HGDIOBJ)d->bold);  d->bold = NULL; }
         }
         /* No PostQuitMessage: the modal loop ends on IsWindow / the closing
          * flag (see pw_prompt.c's WM_DESTROY). */

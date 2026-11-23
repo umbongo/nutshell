@@ -11,12 +11,14 @@
 #include "notice_dlg.h"
 #include "ui_theme.h"
 #include "ns_tokens.h"
+#include "ns_font.h"
 
 #define CLS "Nutshell_Notice"
 
 /* notice.c's upgrade builder reads the settings key table, which lives in
  * config/loader.c (the whole config stack). The dialog never builds an
- * upgrade notice here, so an empty table stands in. */
+ * upgrade notice here, so an empty table stands in. config/loader.c must not
+ * join WIN_TEST_SRCS while this stub exists (duplicate symbol). */
 const ConfigSettingKey *config_setting_keys(size_t *count)
 {
     if (count) *count = 0;
@@ -314,6 +316,29 @@ int test_notice_dlg_win_wide_label_and_long_text_stay_inside(void)
     g_fit_ok = 0;
     ASSERT_EQ(run(NULL, &n, PLAN_FIT), 0);
     ASSERT_TRUE(g_fit_ok);
+    TEST_END();
+}
+
+/* ns_font_bold: a different, cached handle from the body font, FW_BOLD or
+ * heavier, at the same height. */
+int test_ns_font_win_bold_is_cached_and_bold(void)
+{
+    TEST_BEGIN();
+    int dpis[2] = { 96, 192 };
+    for (int i = 0; i < 2; i++) {
+        HFONT body = ns_font(FONT_BODY, dpis[i]);
+        HFONT bold = ns_font_bold(FONT_BODY, dpis[i]);
+        ASSERT_NOT_NULL(body);
+        ASSERT_NOT_NULL(bold);
+        ASSERT_TRUE(bold != body);
+        ASSERT_TRUE(bold == ns_font_bold(FONT_BODY, dpis[i]));
+        LOGFONTA lb, lr;
+        ASSERT_TRUE(GetObjectA((HGDIOBJ)bold, (int)sizeof lb, &lb) > 0);
+        ASSERT_TRUE(GetObjectA((HGDIOBJ)body, (int)sizeof lr, &lr) > 0);
+        ASSERT_TRUE(lb.lfWeight >= FW_BOLD);
+        ASSERT_EQ(lb.lfHeight, lr.lfHeight);
+    }
+    ASSERT_TRUE(ns_font_bold(FONT_MONO, 96) != ns_font(FONT_MONO, 96));
     TEST_END();
 }
 
