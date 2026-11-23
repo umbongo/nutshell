@@ -69,6 +69,9 @@ notice has its own text. What stays the same is the form and how it behaves:
 - **Layout:** a title, an opening line, an optional list of items in bold
   label + plain value form, an optional closing line, and up to two buttons
   (an optional action such as "Review in Settings", and OK).
+- **Tone:** information or warning, drawn with the design-system `info` and
+  `warning` intents. The tone changes only the accent and icon, never the
+  layout.
 - **Behaviour:** themed with the design-system tokens; **non-blocking**
   (not a modal message box) **(call)**; shown after the main window appears;
   dismissed by OK, Escape or its close control; one at a time, so a second
@@ -76,9 +79,28 @@ notice has its own text. What stays the same is the form and how it behaves:
 - **The code:** one module that takes the notice's content as data, so a new
   notice is new text, not a new window. `--ui-demo` shows it, so the gallery
   covers it on all four themes.
-- The existing configuration warnings (invalid or unreadable file, save
-  failed) stay modal message boxes for now. Moving them onto the format is a
-  separate change **(call)**.
+- **Order:** warnings are shown before information notices.
+
+**The launch-time configuration warnings move onto the format in this pull
+request** **(maintainer)**. They are the four modal message boxes in
+`window.c`'s config load (`window.c:4426-4487`). Each keeps what it does
+today, including turning saving off for the run; only the form and wording
+change **(call: wording)**:
+
+| Today | Title | Text |
+|---|---|---|
+| No folder for the config (`4426`) | Settings can't be saved this run | Nutshell couldn't find a folder for nutshell.config: neither its own folder nor %LOCALAPPDATA% is available. Settings and sessions won't be saved until it is restarted with one available. |
+| File unreadable (`4444`) | Your configuration couldn't be read | nutshell.config may be locked by another program, or larger than expected. This run uses the standard settings and saves nothing, so your file is left untouched. Restart Nutshell once the file can be read. |
+| File invalid (`4457`) | Your configuration couldn't be loaded | nutshell.config wasn't valid, so it was kept beside the new one as `nutshell.config.bad-<timestamp>` (the real name is shown). This run starts with the standard settings. |
+| Save failed at launch (`4484`) | Your configuration couldn't be saved | nutshell.config couldn't be written, so what was just added (the "Local shell" profile, new settings, or a new file) will be gone at the next start. |
+
+The last row also covers the upgrade and first-run saves below: when either
+save fails, this warning replaces the information notice.
+
+The "Save Failed" boxes inside Settings (`settings.c:2248`) and the Session
+Manager (`session_manager.c:809,911`) stay modal message boxes **(call)**.
+They answer a click inside a modal dialog that stays open, where a notice in
+the main window behind it would go unseen.
 
 **The first two notices.** This applies to every version that adds settings
 **(maintainer)**. Today a first run with no `nutshell.config` says nothing
@@ -114,6 +136,9 @@ notice has its own text. What stays the same is the form and how it behaves:
   > No configuration was found, so a new one has been created beside
   > nutshell.exe. These optional features start switched off:
   >
+  > *(When the exe's folder was not usable and the file went to
+  > %LOCALAPPDATA%, the opening line names that folder instead.)*
+  >
   > - **AI assistant**: off until you choose to turn it on
   > - **Voice**: off until you choose to turn it on
   >
@@ -127,9 +152,9 @@ notice has its own text. What stays the same is the form and how it behaves:
   - On a first run it names every optional feature (CLAUDE.md, "Optional
     features") and its starting state, which is off.
   - "Review in Settings" opens the page of the first listed setting.
-- **If the new file cannot be written** on a first run, the notice is not
-  shown. The existing "Could not save" warning appears instead, since a
-  notice saying a file was created would be untrue.
+- **If the file cannot be written** on an upgrade or a first run, the
+  information notice is not shown, since it would be untrue. The "couldn't be
+  saved" warning above appears instead.
 - **Older versions** **(maintainer, from review)**: an older exe saves only the
   fields it knows (`loader.c:1063`), so it drops the new ones. The next launch
   of a newer version adds them again and shows the upgrade notice again. If
@@ -182,6 +207,9 @@ persist it **(from review)**.
   - The re-add after an older exe dropped the field.
   - Which fields the notice lists, and its text, in both variants: an
     upgrade, and a first run with no file.
+  - Which notice each config load outcome produces (missing, invalid,
+    unreadable, no folder, save failed) and their order, with the content
+    built as data so it is testable without a window.
   - The load and save round-trip, and the voice dependency rule.
 - **The real exe, not a `wintest`** **(from review)**. The `wintest` binary
   does not contain `window.c`, `ai_chat*.c` or the delay-import library, so a
@@ -202,6 +230,8 @@ persist it **(from review)**.
   and that the self-report is clean. A case with an upgrade-lacking config
   checks that the file was rewritten and the notice shown. A case with no
   config file checks that one was created and the first-run notice shown.
+  A case with an invalid config checks the warning notice and the `.bad-`
+  copy.
 - **Windows hand checks:**
   - Upgrading the maintainer's real config, which has a key: the assistant
     stays on and the notice reads well.
