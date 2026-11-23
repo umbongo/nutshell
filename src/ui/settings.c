@@ -878,15 +878,25 @@ static void voice_model_seed(SettingsDlgData *d)
     if (!cmb) return;
     const SttProvider *p = voice_effective_provider(d);
     if (p == d->voice_seeded && SendMessage(cmb, CB_GETCOUNT, 0, 0) > 0) return;
+    const SttProvider *prev = d->voice_seeded;
     d->voice_seeded = p;
     char cur[CFG_STR_MAX];
     cur[0] = '\0';
     GetWindowText(cmb, cur, (int)sizeof(cur));
+    /* Empty means "the provider's default model": show that default. A text
+     * that is one of the previous provider's seeds follows the provider too;
+     * one the user typed is kept. */
+    int follow = (cur[0] == '\0');
+    for (size_t k = 0; !follow && prev && prev != p && prev->models && prev->models[k]; k++)
+        if (strcmp(cur, prev->models[k]) == 0) follow = 1;
     SendMessage(cmb, CB_RESETCONTENT, 0, 0);
     if (p && p->models)
         for (size_t i = 0; p->models[i]; i++)
             SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)p->models[i]);
-    SetWindowText(cmb, cur);
+    if (follow && p && p->models && p->models[0])
+        SetWindowText(cmb, p->models[0]);
+    else
+        SetWindowText(cmb, cur);
 }
 
 static int voice_url_is_cleartext(const SettingsDlgData *d)
@@ -1758,7 +1768,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* The master switch: while it is unticked every other AI control
              * on the three AI pages stays created (the help tips stay
              * counted) but disabled (ai_enable_sync). The stored value, never
-             * the --ui-demo override, decides the initial state. */
+             * the --ui-demo override, decides the initial state -- except
+             * --ui-demo=settings-voice (demo == 2), which ticks it in memory. */
             HWND chk = make_check2(nd, IDC_AI_ENABLE, SH_AI_ENABLE);
             SendMessage(chk, BM_SETCHECK,
                         (nd->cfg->settings.ai_enabled || nd->demo == 2) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -2898,6 +2909,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             GetDlgItemText(d->hPage, IDC_VOICE_MODEL,
                            s->voice_stt_model, (int)sizeof(s->voice_stt_model));
+            {
+                /* The shown default is stored as "" so a later default follows. */
+                const SttProvider *ep = voice_effective_provider(d);
+                if (ep && ep->models && ep->models[0] &&
+                    strcmp(s->voice_stt_model, ep->models[0]) == 0)
+                    s->voice_stt_model[0] = '\0';
+            }
             GetDlgItemText(d->hPage, IDC_VOICE_LANG,
                            s->voice_stt_language, (int)sizeof(s->voice_stt_language));
             {

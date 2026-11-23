@@ -518,5 +518,7 @@ int test_cheatsheet_layout_with_the_voice_rows_still_lays_out(void)
     ASSERT_EQ(ln.n_rows, lo.n_rows + 2);
     ASSERT_EQ(check_geometry(&ln), 0);
     ASSERT_TRUE(ln.page_h > lo.page_h);
+    printf("  [cheatsheet] voice on, 1920x1040 @96: page %d px, client %dx%d, %s\n",
+           ln.page_h, ln.client_w, ln.client_h, ln.scrolls ? "scrolls" : "one page");
     TEST_END();
 }

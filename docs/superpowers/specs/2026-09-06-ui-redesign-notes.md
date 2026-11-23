@@ -516,7 +516,8 @@ Open, in priority order:
       come out as question marks. (p) The mic button's busy look when a card finishes. (q)
       The cheat sheet at 1920x1040 and 96 DPI with voice on: its two extra rows push the page
       past one screen (1013 px against 1001), so it scrolls a little; with voice off (the
-      default) it still fits, and `test_cheatsheet_layout_*` measures it that way.
+      default) it still fits, and `test_cheatsheet_layout_*` measures it that way. Shortening the voice
+      row's condition did not change the estimate (still 1013 px), so the real sheet needs a look.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text

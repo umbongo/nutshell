@@ -540,7 +540,7 @@ int test_shortcuts_voice_rows_need_both_switches(void)
         if (strcmp(out[i].chord, "Right Ctrl (hold)") == 0 &&
             strcmp(out[i].action, "Talk to the assistant: speak, then release to send") == 0 &&
             strcmp(out[i].condition,
-                   "Voice on (F8 or F9, or Toggle mode, in Settings > Voice)") == 0)
+                   "Voice on; key and mode in Settings > Voice") == 0)
             hold++;
         if (strcmp(out[i].chord, "Esc") == 0 &&
             strcmp(out[i].action, "Cancel a voice recording") == 0 &&

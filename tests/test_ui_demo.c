@@ -34,7 +34,8 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
  * terminal transcript; "thinking" is "chat" with a longer reasoning block;
  * "cmddetail", "settings-debug", "policy-auto", "policy-compact" and "ansi"
  * reuse or swap content too, and "shortcuts" (2026-10-20) opens the modal
- * keyboard shortcuts sheet. None of those is part of "all". */
+ * keyboard shortcuts sheet. None of those is part of "all"; nor are
+ * "voice-recording", "voice-transcribing" and "settings-voice". */
 int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
