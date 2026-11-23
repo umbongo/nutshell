@@ -240,7 +240,8 @@ static void on_captured(VoiceCapture *c)
      * finish: take the machine out of recording (no action), so a later key-up
      * or Escape cannot finish or discard audio that is already on its way. */
     if (voice_ptt_recording(&g_ptt)) {
-        voice_ptt_capture_ended(&g_ptt, g_ptt.state == VS_REC_HOLD || g_ptt.state == VS_STOP_PRESS);
+        voice_ptt_capture_ended(&g_ptt, g_ptt.state == VS_REC_HOLD || g_ptt.state == VS_STOP_PRESS
+                                       || g_ptt.state == VS_LATCHED_SPENT);
         arm_timer();
     }
     const char *problem = NULL;

@@ -125,8 +125,16 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
   review: Left Ctrl is in every editing chord, and AltGr synthesises Left Ctrl.
   Maintainer's decision of 2026-11-23: the default push-to-talk key is Right
   Shift (was Right Ctrl) and the default mode is Toggle (was Hold to talk);
-  Right Ctrl, F8 and F9 stay as choices; a config saved by 1.2.92 keeps its
-  saved key and mode.
+  Right Ctrl, F8 and F9 stay as choices. A config whose voice settings were
+  never touched (voice off, Right Ctrl + Hold to talk, no marker: what 1.2.92
+  wrote by default) migrates once to Right Shift + Toggle; one with voice on,
+  or with any other key or mode, keeps what it has. The marker is the internal
+  settings key `voice_defaults_rev` (2), written by every save; it is not in
+  the upgrade notice's key list, so its absence alone shows no notice. The
+  loader never saves for it (`--ui-demo` and the read-only session list load
+  the real config): it applies in memory on every load and reports it
+  (`ConfigLoadReport.voice_migrated`); the launch path then saves, silently,
+  unless it is demo mode or saving is disabled.
   - **Detecting Right Shift:** a key-down or key-up of `VK_RSHIFT`, or of
     `VK_SHIFT` with scan code 0x36, with the extended bit clear. Left Shift
     (scan 0x2A) never counts, and neither does an extended-flagged Shift: the
@@ -136,8 +144,10 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
     Ctrl+Shift+C/V and Shift+arrows all begin with the key down, so a press
     counts only if no other modifier (Left Shift, Ctrl, Alt, Win) was already
     held when the key went down (a chord such as Ctrl+Shift or Win+Shift+S is
-    never a press), and the existing rule below discards it if any other input
-    arrives while the key is held.
+    never a press), and the chord-safety rule below applies if any other input
+    arrives while the key is held. The chord filter covers all four keys: a
+    press with another modifier already held is a chord for every key (so
+    Ctrl+F8 or Shift+Right Ctrl does not start a recording).
   - **Never consumed:** like Right Ctrl, Right Shift is never swallowed. Its
     key-down and key-up still reach the terminal or the edit control, so
     capitals and selections work as before.
@@ -155,11 +165,24 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
   window **(call)**.
 - **Chord safety** **(call)**: if any other key, mouse button or wheel event
   arrives while the push-to-talk key is held, it was a shortcut (Ctrl+wheel
-  zooms the chat). Any recording is discarded, never sent, and the input
-  behaves as it does today. In Toggle mode a press counts only if it is
+  zooms the chat). A Hold to talk recording is discarded, never sent, and the
+  input behaves as it does today; a Toggle recording carries on (see the
+  stop-press chord rule below), and a Toggle press that has not yet started
+  one is spent. In Toggle mode a press counts only if it is
   released with no other input in between.
 - **Accidental taps:** a hold shorter than about 300 ms in total is discarded
   in Hold mode **(call)**. Auto-repeat key-downs are ignored.
+- **Stop-press chord rule (Toggle):** during a Toggle recording, another input
+  while the key is down for the stopping press (a capital typed with Right
+  Shift) spends that press but keeps the recording; releasing the key returns to
+  the latched recording, and a later clean press stops it. Escape, losing focus
+  and the cap behave as for any recording. Hold mode is unchanged: another
+  input discards.
+- **Lost key-up (both Shifts):** Windows sends no key-up for the first Shift
+  released while both are down, so the machine can be left with the key
+  spent. A real (non-repeat) key-down in that state means the up was lost and
+  is treated as a fresh press.  In a spent stop press of a Toggle recording the same real key-down is the
+  stopping press again.
 - **Silence gate** **(call, from review)**: if the recording's level never
   rises above a speech threshold, it is not uploaded ("Didn't catch that").
   Whisper-family models return phantom phrases such as "Thank you." on silence,

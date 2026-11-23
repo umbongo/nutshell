@@ -116,7 +116,9 @@ VoiceInput voice_ptt_classify(unsigned msg, uintptr_t wparam, intptr_t lparam, i
 VoiceInput voice_ptt_chord_filter(VoiceInput in, int ptt_key, unsigned mods);
 
 typedef enum { VS_IDLE = 0, VS_ARMED, VS_TOGGLE_PRESS, VS_REC_HOLD, VS_REC_LATCHED,
-               VS_STOP_PRESS, VS_KEY_SPENT } VoiceState;
+               VS_STOP_PRESS, VS_KEY_SPENT, VS_LATCHED_SPENT } VoiceState;
+/* VS_LATCHED_SPENT: a Toggle recording whose stop press was spent by a chord
+ * (a capital typed with Right Shift): still recording, the key still down. */
 typedef enum { VA_NONE = 0, VA_OPEN, VA_FINISH, VA_DISCARD, VA_BUSY } VoiceAction;
 typedef enum { VE_KEY_DOWN, VE_KEY_UP, VE_OTHER, VE_ESCAPE, VE_TICK, VE_MIC_CLICK,
                VE_DEACTIVATE } VoiceEvent;
@@ -136,7 +138,7 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now_ms,
  * key is still down, so its release only returns to idle (VS_KEY_SPENT); else
  * straight to idle. A no-op when the machine is not recording. */
 void voice_ptt_capture_ended(VoicePtt *p, int key_held);
-int voice_ptt_recording(const VoicePtt *p);  /* VS_REC_HOLD, VS_REC_LATCHED or VS_STOP_PRESS */
+int voice_ptt_recording(const VoicePtt *p);  /* VS_REC_HOLD, VS_REC_LATCHED, VS_STOP_PRESS or VS_LATCHED_SPENT */
 /* ms until the next VE_TICK matters (delay end or cap), or -1 when none. */
 long voice_ptt_next_deadline(const VoicePtt *p, unsigned long now_ms);
 

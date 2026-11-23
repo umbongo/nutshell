@@ -151,6 +151,7 @@ typedef struct {
     unsigned char missing[CFG_KEYS_MAX];/* indices into config_setting_keys(), file order */
     size_t missing_count;
     int ai_enabled_decided;             /* 1 when the first-load rule set ai_enabled */
+    int voice_migrated;                 /* 1 when untouched 1.2.92 voice defaults were moved to Right Shift/Toggle in memory (never an upgrade-notice item; the launch path saves) */
 } ConfigLoadReport;
 
 Config *config_new_default(void);

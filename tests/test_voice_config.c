@@ -134,7 +134,10 @@ int test_voice_config_load_defaults_and_saved_choices(void)
         ASSERT_EQ(cfg->settings.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
         config_free(cfg);
     }
-    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_ptt_key\": \"right_ctrl\", "
+    /* with the marker, right_ctrl + hold is a deliberate choice (without it, the
+     * untouched-1.2.92 pair migrates: see test_voice_config_migrates_untouched_defaults) */
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_defaults_rev\": 2, "
+                           "\"voice_ptt_key\": \"right_ctrl\", "
                            "\"voice_ptt_mode\": \"hold\"}, \"profiles\": []}"));
     cfg = config_load(VCFG);
     ASSERT_NOT_NULL(cfg);
@@ -154,6 +157,8 @@ int test_voice_config_load_defaults_and_saved_choices(void)
     /* every key and mode name survives a save and load */
     for (int k = 0; k < (int)VOICE_PTT_COUNT; k++) {
         Config *c = config_new_default();
+        ASSERT_NOT_NULL(c);
+        if (!c) break;
         c->settings.voice_ptt_key = k;
         c->settings.voice_ptt_mode = k % (int)VOICE_MODE_COUNT;
         ASSERT_EQ(config_save(c, VCFG), 0);
@@ -441,5 +446,186 @@ int test_notice_upgrade_lists_voice_subkey_when_switch_present(void)
     ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
     ASSERT_EQ(n.item_count, 1);
     ASSERT_TRUE(strcmp(n.items[0].label, "Voice") != 0);
+    TEST_END();
+}
+
+/* ---- Migration of untouched 1.2.92 voice defaults ---- */
+
+#define VMARK "\"voice_defaults_rev\""
+
+static int vcfg_has_marker(void)
+{
+    char *t = vcfg_read();
+    int has = t && strstr(t, VMARK) != NULL;
+    free(t);
+    return has;
+}
+
+/* Writes a config as the loader saves it for these settings, then removes the
+ * marker line, as a file saved by 1.2.92 lacks it. */
+static int vcfg_write_old(int enabled, int key, int mode)
+{
+    Config *c = config_new_default();
+    if (!c) return 0;
+    c->settings.voice_enabled = enabled;
+    c->settings.voice_ptt_key = key;
+    c->settings.voice_ptt_mode = mode;
+    int rc = config_save(c, VCFG);
+    config_free(c);
+    if (rc != 0) return 0;
+    char *t = vcfg_read();
+    if (!t) return 0;
+    /* the marker is the last member: drop it and the comma before it */
+    char *m = strstr(t, ",\n    " VMARK);
+    if (!m) { free(t); return 0; }
+    char *eol = strchr(m + 2, '\n');
+    if (!eol) { free(t); return 0; }
+    memmove(m, eol, strlen(eol) + 1);
+    int ok = vcfg_write(t);
+    free(t);
+    return ok;
+}
+
+static void vcfg_expect(int key, int mode, int *failed_out)
+{
+    Config *c = config_load(VCFG);
+    if (!c) { (*failed_out)++; return; }
+    if (c->settings.voice_ptt_key != key || c->settings.voice_ptt_mode != mode) (*failed_out)++;
+    config_free(c);
+}
+
+int test_voice_config_migrates_untouched_defaults(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    ASSERT_TRUE(vcfg_write_old(0, VOICE_PTT_RIGHT_CTRL, VOICE_MODE_HOLD));
+    ASSERT_EQ(vcfg_has_marker(), 0);
+    char *before = vcfg_read();
+    ASSERT_NOT_NULL(before);
+    ConfigLoadReport rep;
+    Config *c = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(c);
+    ASSERT_EQ(rep.voice_migrated, 1);
+    ASSERT_EQ(rep.missing_count, 0);
+    if (c) {
+        ASSERT_EQ(c->settings.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
+        ASSERT_EQ(c->settings.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
+        /* the loader saves nothing (--ui-demo and read-only callers load the
+         * real config): the file is byte-for-byte as it was */
+        char *after = vcfg_read();
+        ASSERT_NOT_NULL(after);
+        if (before && after) ASSERT_STR_EQ(after, before);
+        free(after);
+        ASSERT_EQ(vcfg_has_marker(), 0);
+        /* it applies again on every load until a save writes the marker */
+        Config *c2 = config_load(VCFG);
+        ASSERT_NOT_NULL(c2);
+        if (c2) {
+            ASSERT_EQ(c2->settings.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
+            config_free(c2);
+        }
+        /* the launch path asks for a save, except in demo mode */
+        ASSERT_EQ(notice_launch_save_wanted(0, rep.voice_migrated, 0), 1);
+        ASSERT_EQ(notice_launch_save_wanted(1, rep.voice_migrated, 0), 0);
+        ASSERT_EQ(config_save(c, VCFG), 0);
+        config_free(c);
+    }
+    free(before);
+    ASSERT_EQ(vcfg_has_marker(), 1);
+    Config *d = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(d);
+    ASSERT_EQ(rep.voice_migrated, 0);
+    if (d) {
+        ASSERT_EQ(d->settings.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
+        ASSERT_EQ(d->settings.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
+        config_free(d);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_config_migration_leaves_other_choices(void)
+{
+    TEST_BEGIN();
+    int bad = 0;
+    remove(VCFG);
+    /* voice on */
+    ASSERT_TRUE(vcfg_write_old(1, VOICE_PTT_RIGHT_CTRL, VOICE_MODE_HOLD));
+    vcfg_expect(VOICE_PTT_RIGHT_CTRL, VOICE_MODE_HOLD, &bad);
+    /* a non-default key or mode */
+    ASSERT_TRUE(vcfg_write_old(0, VOICE_PTT_F8, VOICE_MODE_HOLD));
+    vcfg_expect(VOICE_PTT_F8, VOICE_MODE_HOLD, &bad);
+    ASSERT_TRUE(vcfg_write_old(0, VOICE_PTT_RIGHT_CTRL, VOICE_MODE_TOGGLE));
+    vcfg_expect(VOICE_PTT_RIGHT_CTRL, VOICE_MODE_TOGGLE, &bad);
+    ASSERT_TRUE(vcfg_write_old(0, VOICE_PTT_RIGHT_SHIFT, VOICE_MODE_HOLD));
+    vcfg_expect(VOICE_PTT_RIGHT_SHIFT, VOICE_MODE_HOLD, &bad);
+    ASSERT_EQ(bad, 0);
+    /* the marker present: right_ctrl + hold is a deliberate choice */
+    Config *c = config_new_default();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        c->settings.voice_ptt_key = VOICE_PTT_RIGHT_CTRL;
+        c->settings.voice_ptt_mode = VOICE_MODE_HOLD;
+        ASSERT_EQ(config_save(c, VCFG), 0);
+        config_free(c);
+    }
+    ASSERT_EQ(vcfg_has_marker(), 1);
+    vcfg_expect(VOICE_PTT_RIGHT_CTRL, VOICE_MODE_HOLD, &bad);
+    vcfg_expect(VOICE_PTT_RIGHT_CTRL, VOICE_MODE_HOLD, &bad);   /* and after a reload */
+    ASSERT_EQ(bad, 0);
+    /* a file with no voice keys at all is not the old pair */
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}"));
+    vcfg_expect(VOICE_PTT_RIGHT_SHIFT, VOICE_MODE_TOGGLE, &bad);
+    ASSERT_EQ(bad, 0);
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_config_new_config_writes_marker(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *c = config_new_default();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(c->settings.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
+        ASSERT_EQ(c->settings.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
+        ASSERT_EQ(config_save(c, VCFG), 0);
+        config_free(c);
+    }
+    ASSERT_EQ(vcfg_has_marker(), 1);
+    char *t = vcfg_read();
+    ASSERT_NOT_NULL(t);
+    if (t) {
+        ASSERT_TRUE(strstr(t, VMARK ": 2") != NULL);
+        free(t);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+/* The marker is internal: a config complete except for it reports nothing
+ * missing, builds no upgrade notice, and the marker is in no notice label. */
+int test_voice_config_marker_is_not_a_notice_key(void)
+{
+    TEST_BEGIN();
+    size_t n = 0;
+    const ConfigSettingKey *keys = config_setting_keys(&n);
+    for (size_t i = 0; i < n; i++) {
+        ASSERT_TRUE(strcmp(keys[i].key, "voice_defaults_rev") != 0);
+        ASSERT_TRUE(!keys[i].label || strstr(keys[i].label, "defaults_rev") == NULL);
+    }
+    remove(VCFG);
+    ASSERT_TRUE(vcfg_write_old(0, VOICE_PTT_RIGHT_CTRL, VOICE_MODE_HOLD));
+    ConfigLoadReport rep;
+    Config *c = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(rep.missing_count, 0);
+        Notice nt;
+        ASSERT_EQ(notice_upgrade(&nt, "1.2.93", &rep, &c->settings), 0);
+        config_free(c);
+    }
+    remove(VCFG);
     TEST_END();
 }

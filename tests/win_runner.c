@@ -101,6 +101,7 @@ int test_voice_audio_queue_keeps_begin_and_end(void);
 int test_voice_audio_queue_grows_past_initial_capacity(void);
 int test_voice_audio_never_started(void);
 int test_voice_ptt_posted_keys(void);
+int test_voice_ptt_posted_right_shift(void);
 int test_voice_stt_refused_when_gate_off(void);
 int test_voice_stt_unresolvable_target(void);
 int test_voice_stt_cancel_unreachable(void);
@@ -412,6 +413,7 @@ int main(int argc, char **argv)
     failed += test_voice_audio_queue_grows_past_initial_capacity();
     failed += test_voice_audio_never_started();
     failed += test_voice_ptt_posted_keys();
+    failed += test_voice_ptt_posted_right_shift();
     failed += test_voice_stt_refused_when_gate_off();
     failed += test_voice_stt_unresolvable_target();
     failed += test_voice_stt_cancel_unreachable();

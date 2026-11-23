@@ -995,7 +995,15 @@ static void voice_enable_sync(SettingsDlgData *d)
     HWND delay = GetDlgItem(d->hPage, IDC_VOICE_MIC_DELAY);
     if (delay) {
         int msel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PTT_MODE, CB_GETCURSEL, 0, 0);
-        EnableWindow(delay, (on && msel == VOICE_MODE_HOLD) ? TRUE : FALSE);
+        const BOOL delay_on = (on && msel == VOICE_MODE_HOLD) ? TRUE : FALSE;
+        EnableWindow(delay, delay_on);
+        for (int i = 0; i < d->n_ctrls; i++) {
+            const SettingsCtrl *c = &d->ctrls[i];
+            if (c->page == SETTINGS_PAGE_VOICE && c->hCtrl == delay && c->hLabel) {
+                EnableWindow(c->hLabel, delay_on);
+                break;
+            }
+        }
     }
     if (changed && d->cur_page == SETTINGS_PAGE_VOICE) {
         relayout(GetParent(d->hPage), d);

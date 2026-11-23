@@ -451,8 +451,9 @@ Done, in order (details in the commit messages and the specs named):
 - Voice input (branch feat/voice-input; spec `2026-11-23-voice-input-output-design.md`,
   speech-to-text only, no spoken replies): press Right Shift (the default key and Toggle the
   default mode since the maintainer's decision of 2026-11-23, was Right Ctrl and Hold to talk;
-  Right Ctrl, F8 and F9 and Hold to talk remain as choices, and a config saved by 1.2.92 keeps
-  its saved ones) with the AI panel focused, speak, press again; the words are transcribed by OpenAI, Groq, Mistral,
+  Right Ctrl, F8 and F9 and Hold to talk remain as choices; a 1.2.92 config whose voice
+  settings were never touched, voice off with Right Ctrl and Hold, migrates once to Right Shift
+  and Toggle, and one with voice on or another key or mode keeps its own) with the AI panel focused, speak, press again; the words are transcribed by OpenAI, Groq, Mistral,
   Gemini or a custom endpoint (or the AI provider's own) and go through the chat's normal
   send path with every approval unchanged. Off by default, needs the assistant; while off
   nothing of it loads (no audio thread, no COM, no hook, no mic button). Settings has a Voice
@@ -539,11 +540,15 @@ Open, in priority order:
       Ctrl+Shift+C/V and Shift+arrows never start a recording, and Left Shift never does.
       (y) Ctrl+Shift and Win+Shift+S with the other modifier held first never start one: the
       `GetKeyState` chord path is untested off Windows. (z) Shift+numpad arrows with NumLock
-      on (the driver's fake shifts) neither start nor stop a recording. (aa) A config saved
-      by 1.2.92 keeps Right Ctrl and Hold to talk. (ab) The Settings Voice page on a fresh
+      on (the driver's fake shifts) neither start nor stop a recording. (aa) A 1.2.92
+      config with untouched voice settings opens as Right Shift and Toggle with no upgrade
+      notice, and one with voice enabled keeps Right Ctrl and Hold to talk.
+      (ab) The Settings Voice page on a fresh
       config lists Right Shift and Toggle first and selects them, and the Mic start delay
       field is greyed under Toggle and enabled under Hold to talk. (ac) The renamed harness
-      case `voice_off_right_shift_reaches_input` has not been run. Item (u), Win+L during a
+      case `voice_off_right_shift_reaches_input` has not been run. (ad) Both Shift keys held
+      then released in either order, then a clean Right Shift press works; a capital typed
+      with Right Shift during a Toggle recording keeps it recording. Item (u), Win+L during a
       Toggle recording, matters more now that Toggle is the default; the follow-up is not
       built.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,

@@ -169,15 +169,17 @@ int test_voice_chord_while_recording_discards(void)
         ASSERT_EQ(s.action, VA_NONE);
         ASSERT_EQ(p.state, VS_IDLE);
     }
-    /* Toggle: a chord during the stop press discards too */
+    /* Toggle: a chord during the stop press spends the press but keeps the
+     * recording (changed from "discards": a capital typed with Right Shift) */
     VoicePtt q; VoiceStep s;
     voice_ptt_init(&q, VOICE_MODE_TOGGLE, 0);
     st(&q, VE_KEY_DOWN, 0, 1, 0);
     st(&q, VE_KEY_UP, 50, 1, 0);
     st(&q, VE_KEY_DOWN, 1000, 1, 0);
     s = st(&q, VE_OTHER, 1010, 1, 0);
-    ASSERT_EQ(s.action, VA_DISCARD);
-    ASSERT_EQ(q.state, VS_KEY_SPENT);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(q.state, VS_LATCHED_SPENT);
+    ASSERT_EQ(voice_ptt_recording(&q), 1);
     TEST_END();
 }
 
@@ -838,6 +840,157 @@ int test_voice_toggle_cap_during_stop_press_audio_first(void)
     ASSERT_EQ(s.action, VA_NONE);
     s = st(&p, VE_KEY_UP, 1050 + VOICE_CAP_MS + 30, 1, 0);
     ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_IDLE);
+    TEST_END();
+}
+
+/* Toggle: a capital typed with Right Shift during a recording keeps it. */
+int test_voice_toggle_chord_in_stop_press_keeps_recording(void)
+{
+    TEST_BEGIN();
+    VoicePtt p; VoiceStep s;
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    ASSERT_EQ(st(&p, VE_KEY_UP, 50, 1, 0).action, VA_OPEN);
+    st(&p, VE_KEY_DOWN, 1000, 1, 0);
+    st(&p, VE_OTHER, 1010, 1, 0);                 /* 'A' down */
+    ASSERT_EQ(p.state, VS_LATCHED_SPENT);
+    s = st(&p, VE_OTHER, 1020, 1, 0);             /* more typing */
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_LATCHED_SPENT);
+    s = st(&p, VE_KEY_UP, 1100, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_REC_LATCHED);
+    ASSERT_EQ(voice_ptt_recording(&p), 1);
+    ASSERT_TRUE(voice_ptt_next_deadline(&p, 1100) > 0);
+    /* a clean press and release now finishes */
+    st(&p, VE_KEY_DOWN, 2000, 1, 0);
+    s = st(&p, VE_KEY_UP, 2050, 1, 0);
+    ASSERT_EQ(s.action, VA_FINISH);
+    ASSERT_EQ(p.state, VS_IDLE);
+    /* a mic click during the spent press is just another event */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_MIC_CLICK, 0, 1, 0);
+    st(&p, VE_KEY_DOWN, 100, 1, 0);
+    s = st(&p, VE_MIC_CLICK, 110, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_LATCHED_SPENT);
+    /* Hold mode is unchanged: a chord during the recording discards */
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    ASSERT_EQ(st(&p, VE_OTHER, 300, 1, 0).action, VA_DISCARD);
+    TEST_END();
+}
+
+int test_voice_toggle_latched_spent_escape_deactivate_cap(void)
+{
+    TEST_BEGIN();
+    VoicePtt p; VoiceStep s;
+    /* Escape discards; the key is down, so its release returns to idle */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0); st(&p, VE_KEY_UP, 10, 1, 0);
+    st(&p, VE_KEY_DOWN, 500, 1, 0); st(&p, VE_OTHER, 510, 1, 0);
+    s = st(&p, VE_ESCAPE, 520, 1, 0);
+    ASSERT_EQ(s.action, VA_DISCARD);
+    ASSERT_EQ(s.consume, 1);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    ASSERT_EQ(st(&p, VE_KEY_UP, 530, 1, 0).action, VA_NONE);
+    ASSERT_EQ(p.state, VS_IDLE);
+    /* deactivate discards */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0); st(&p, VE_KEY_UP, 10, 1, 0);
+    st(&p, VE_KEY_DOWN, 500, 1, 0); st(&p, VE_OTHER, 510, 1, 0);
+    s = st(&p, VE_DEACTIVATE, 520, 1, 0);
+    ASSERT_EQ(s.action, VA_DISCARD);
+    ASSERT_EQ(p.state, VS_IDLE);
+    /* the cap finishes once, key still down */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 1000, 1, 0); st(&p, VE_KEY_UP, 1050, 1, 0);
+    st(&p, VE_KEY_DOWN, 1100, 1, 0); st(&p, VE_OTHER, 1110, 1, 0);
+    ASSERT_EQ(st(&p, VE_TICK, 1050 + VOICE_CAP_MS - 1, 1, 0).action, VA_NONE);
+    ASSERT_EQ(p.state, VS_LATCHED_SPENT);
+    s = st(&p, VE_TICK, 1050 + VOICE_CAP_MS, 1, 0);
+    ASSERT_EQ(s.action, VA_FINISH);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    ASSERT_EQ(st(&p, VE_KEY_UP, 1050 + VOICE_CAP_MS + 5, 1, 0).action, VA_NONE);
+    ASSERT_EQ(p.state, VS_IDLE);
+    /* the audio thread ends the capture first: key held, so key-spent */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0); st(&p, VE_KEY_UP, 10, 1, 0);
+    st(&p, VE_KEY_DOWN, 500, 1, 0); st(&p, VE_OTHER, 510, 1, 0);
+    voice_ptt_capture_ended(&p, p.state == VS_REC_HOLD || p.state == VS_STOP_PRESS
+                                || p.state == VS_LATCHED_SPENT);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    ASSERT_EQ(voice_ptt_recording(&p), 0);
+    TEST_END();
+}
+
+/* Both Shifts down then released: Windows sends no key-up for the first one
+ * released, so the machine can sit in KEY_SPENT. The next real down is a press. */
+int test_voice_key_spent_lost_up_new_down_is_a_press(void)
+{
+    TEST_BEGIN();
+    VoicePtt p; VoiceStep s;
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    st(&p, VE_OTHER, 10, 1, 0);                   /* the left Shift down: a chord */
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    /* a repeat never reaches the machine (VI_PTT_REPEAT feeds nothing), and
+     * other input changes nothing */
+    s = st(&p, VE_OTHER, 20, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    s = st(&p, VE_TICK, 30, 1, 0);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    /* the up was lost: a fresh clean press opens */
+    s = st(&p, VE_KEY_DOWN, 1000, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_TOGGLE_PRESS);
+    s = st(&p, VE_KEY_UP, 1050, 1, 0);
+    ASSERT_EQ(s.action, VA_OPEN);
+    ASSERT_EQ(p.state, VS_REC_LATCHED);
+    /* Hold mode: the same recovery */
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    st(&p, VE_OTHER, 10, 1, 0);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    s = st(&p, VE_KEY_DOWN, 1000, 1, 0);
+    ASSERT_EQ(s.action, VA_OPEN);
+    ASSERT_EQ(p.state, VS_REC_HOLD);
+    /* a down outside the panel just returns to idle */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    st(&p, VE_OTHER, 10, 1, 0);
+    s = st(&p, VE_KEY_DOWN, 100, 0, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_IDLE);
+    /* the normal release still returns to idle */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    st(&p, VE_OTHER, 10, 1, 0);
+    st(&p, VE_KEY_UP, 20, 1, 0);
+    ASSERT_EQ(p.state, VS_IDLE);
+    TEST_END();
+}
+
+/* The lost key-up also happens in a spent stop press: RS down (stop press),
+ * Left Shift down (chord), RS released first (Windows sends no key-up), Left
+ * Shift up (nothing). The next clean press is the stopping press again. */
+int test_voice_latched_spent_lost_up_new_down_is_stop_press(void)
+{
+    TEST_BEGIN();
+    VoicePtt p; VoiceStep s;
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    st(&p, VE_KEY_DOWN, 0, 1, 0);
+    ASSERT_EQ(st(&p, VE_KEY_UP, 50, 1, 0).action, VA_OPEN);
+    st(&p, VE_KEY_DOWN, 1000, 1, 0);                  /* RS: stop press */
+    st(&p, VE_OTHER, 1010, 1, 0);                     /* Left Shift down */
+    ASSERT_EQ(p.state, VS_LATCHED_SPENT);
+    s = st(&p, VE_KEY_DOWN, 2000, 1, 0);              /* the up was lost */
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_STOP_PRESS);
+    s = st(&p, VE_KEY_UP, 2050, 1, 0);
+    ASSERT_EQ(s.action, VA_FINISH);
     ASSERT_EQ(p.state, VS_IDLE);
     TEST_END();
 }

@@ -560,7 +560,7 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
     SetEvent(cx->wake);
 }
 
-/* Test seam: while held, the audio thread leaves every queued command alone
+/* TEST-ONLY seam (wintest), never called by product code: while held, the audio thread leaves every queued command alone
  * (it still honours stop); releasing wakes it to drain them. */
 void voice_audio_test_hold(int on)
 {
@@ -572,7 +572,7 @@ void voice_audio_test_hold(int on)
     SetEvent(cx->wake);
 }
 
-/* Test seam: the queue's current capacity (0 without a thread). */
+/* TEST-ONLY seam (wintest), never called by product code: the queue's current capacity (0 without a thread). */
 int voice_audio_queue_cap(void)
 {
     VaCtx *cx = g_ctx;

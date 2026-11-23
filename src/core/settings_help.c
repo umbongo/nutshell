@@ -373,7 +373,7 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "and while it is off Nutshell loads nothing of voice and Right Shift, "
       "Right Ctrl, F8 and F9 behave as they always did. It needs the AI assistant: with "
       "the assistant off this box is disabled. Audio is sent to the chosen "
-      "provider only while the microphone is recording.\nDefault: Off.",
+      "provider only for a recording you start.\nDefault: Off.",
       "Off",
       0, 0, 0u),
     E(SH_VOICE_STT_USE_AI, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
@@ -463,8 +463,10 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "has focus: Right Shift, Right Ctrl, F8 or F9. Right Shift chords "
       "such as a capital letter, Shift+click, Shift+Insert, Shift+arrows "
       "and Ctrl+Shift+C keep working as they always did, because the "
-      "microphone opens only on a clean press of the key alone. Any other "
-      "key or a mouse click while you hold it cancels the recording.\n"
+      "microphone opens only on a clean press of the key alone; a press with "
+      "another modifier already held (Ctrl+F8, Shift+Right Ctrl) never starts "
+      "one. In Hold to talk, any other key or a mouse click while you "
+      "hold it cancels the recording; in Toggle the recording carries on.\n"
       "Default: Right Shift.",
       "Right Shift",
       0, 0, 0u),

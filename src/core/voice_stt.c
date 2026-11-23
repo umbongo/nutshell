@@ -250,6 +250,7 @@ char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t
                  + 2 + bl + 4;
     if (with_lang) total += part_fixed + K_LEN("language") + strlen(language);
     if (with_fmt) total += part_fixed + K_LEN("response_format") + K_LEN("json");
+#undef K_LEN
     char *b = (char *)malloc(total + 1);
     if (!b) return NULL;
     b[0] = '\0';

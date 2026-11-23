@@ -65,7 +65,8 @@ void voice_ptt_init(VoicePtt *p, int mode, int delay_ms)
 
 int voice_ptt_recording(const VoicePtt *p)
 {
-    return p->state == VS_REC_HOLD || p->state == VS_REC_LATCHED || p->state == VS_STOP_PRESS;
+    return p->state == VS_REC_HOLD || p->state == VS_REC_LATCHED || p->state == VS_STOP_PRESS
+        || p->state == VS_LATCHED_SPENT;
 }
 
 static VoiceStep mk(VoiceAction a, int consume)
@@ -98,7 +99,8 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now, int in_p
     }
     if (ev == VE_ESCAPE) {
         if (rec) {
-            int key_down = (p->state == VS_REC_HOLD || p->state == VS_STOP_PRESS);
+            int key_down = (p->state == VS_REC_HOLD || p->state == VS_STOP_PRESS
+                            || p->state == VS_LATCHED_SPENT);
             p->state = key_down ? VS_KEY_SPENT : VS_IDLE;
             return mk(VA_DISCARD, 1);
         }
@@ -155,11 +157,29 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now, int in_p
         return mk(VA_NONE, 0);
     case VS_STOP_PRESS:
         if (ev == VE_KEY_UP) { p->state = VS_IDLE; return mk(VA_FINISH, 0); }
-        if (ev == VE_OTHER) { p->state = VS_KEY_SPENT; return mk(VA_DISCARD, 0); }
+        /* A chord spends the press but keeps the recording (a capital typed
+         * with Right Shift must not throw the dictation away). */
+        if (ev == VE_OTHER) { p->state = VS_LATCHED_SPENT; return mk(VA_NONE, 0); }
+        if (ev == VE_TICK && cap_reached(p, now)) { p->state = VS_KEY_SPENT; return mk(VA_FINISH, 0); }
+        return mk(VA_NONE, 0);
+    case VS_LATCHED_SPENT:
+        /* A real key-down here means the up was lost (both Shifts): the key
+         * is pressed again, so this is the stopping press once more. */
+        if (ev == VE_KEY_DOWN) { p->state = VS_STOP_PRESS; return mk(VA_NONE, 0); }
+        if (ev == VE_KEY_UP) { p->state = VS_REC_LATCHED; return mk(VA_NONE, 0); }
         if (ev == VE_TICK && cap_reached(p, now)) { p->state = VS_KEY_SPENT; return mk(VA_FINISH, 0); }
         return mk(VA_NONE, 0);
     case VS_KEY_SPENT:
-        if (ev == VE_KEY_UP) p->state = VS_IDLE;
+        if (ev == VE_KEY_UP) { p->state = VS_IDLE; return mk(VA_NONE, 0); }
+        /* A real key-down here means the up was lost (Windows sends no key-up
+         * for the first Shift released while both are down): a fresh press. */
+        if (ev == VE_KEY_DOWN && in_panel) {
+            p->key_down_at = now;
+            if (p->mode == VOICE_MODE_TOGGLE) { p->state = VS_TOGGLE_PRESS; return mk(VA_NONE, 0); }
+            p->state = VS_ARMED;
+            return armed_check(p, now, busy);
+        }
+        if (ev == VE_KEY_DOWN) p->state = VS_IDLE;
         return mk(VA_NONE, 0);
     }
     return mk(VA_NONE, 0);

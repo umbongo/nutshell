@@ -33,12 +33,17 @@ static HWND vp_window(void)
 }
 
 /* Post one message, pull it back off the queue and classify it. */
-static VoiceInput vp_pull(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+static VoiceInput vp_pull_key(HWND w, UINT msg, WPARAM wp, LPARAM lp, int ptt_key)
 {
     MSG m;
     PostMessageA(w, msg, wp, lp);
     if (!PeekMessageA(&m, w, 0, 0, PM_REMOVE)) return VI_NONE;
-    return voice_ptt_classify(m.message, m.wParam, m.lParam, VOICE_PTT_RIGHT_CTRL);
+    return voice_ptt_classify(m.message, m.wParam, m.lParam, ptt_key);
+}
+
+static VoiceInput vp_pull(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+{
+    return vp_pull_key(w, msg, wp, lp, VOICE_PTT_RIGHT_CTRL);
 }
 
 static VoiceStep vp_feed(VoicePtt *p, VoiceInput in, unsigned long t)
@@ -92,6 +97,25 @@ int test_voice_ptt_posted_keys(void)
     ASSERT_EQ(st.action, VA_DISCARD);
     ASSERT_TRUE(!voice_ptt_recording(&p));
 
+    DestroyWindow(w);
+    TEST_END();
+}
+
+/* Right Shift through a real queue: VK_SHIFT with scan 0x36 and no extended bit
+ * is the key; Left Shift (0x2A) and an extended 0x36 (a driver's fake shift)
+ * are not. */
+int test_voice_ptt_posted_right_shift(void)
+{
+    TEST_BEGIN();
+    HWND w = vp_window();
+    ASSERT_NOT_NULL(w);
+    const int k = VOICE_PTT_RIGHT_SHIFT;
+    ASSERT_EQ(vp_pull_key(w, WM_KEYDOWN, VK_SHIFT, 0x00360001, k), VI_PTT_DOWN);
+    ASSERT_EQ(vp_pull_key(w, WM_KEYUP, VK_SHIFT, (LPARAM)0xC0360001, k), VI_PTT_UP);
+    ASSERT_EQ(vp_pull_key(w, WM_KEYDOWN, VK_SHIFT, 0x00360001 | 0x40000000, k), VI_PTT_REPEAT);
+    ASSERT_EQ(vp_pull_key(w, WM_KEYDOWN, VK_SHIFT, 0x002A0001, k), VI_OTHER);
+    ASSERT_EQ(vp_pull_key(w, WM_KEYUP, VK_SHIFT, (LPARAM)0xC02A0001, k), VI_NONE);
+    ASSERT_EQ(vp_pull_key(w, WM_KEYDOWN, VK_SHIFT, 0x01360001, k), VI_OTHER);
     DestroyWindow(w);
     TEST_END();
 }
