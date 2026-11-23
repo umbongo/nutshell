@@ -428,8 +428,8 @@ endif
 # every DLL Nutshell's own code asked Windows for (the delay-load hook and
 # the run-time LoadLibraryExW sites) and the process module list, then exits.
 # With the AI assistant off winhttp.dll, riched20.dll and msftedit.dll must
-# never have been requested; with it on (the control) riched20.dll and
-# msftedit.dll must have been. Uses $(TARGET) as it stands: a UPX-packed exe
+# never have been requested; with it on (the control) riched20.dll,
+# msftedit.dll and winhttp.dll (one session opened and closed) must have been. Uses $(TARGET) as it stands: a UPX-packed exe
 # (make release) works as well as an unpacked one. A private Wine prefix
 # keeps the shared ~/.wine untouched; the first run takes a minute.
 SELFTEST_DIR    = build/selftest
