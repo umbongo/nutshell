@@ -30,7 +30,8 @@ typedef struct {
     NoticeTone tone;
     MsgArg arg;
     const char *title;    /* ARG_TITLE: the fallback title */
-    const char *opening;  /* ARG_TEXT: the fallback; ARG_NAME: see notice_msg */
+    const char *opening;  /* ARG_TEXT: the fallback; ARG_NAME: the text before the name */
+    const char *suffix;   /* ARG_NAME: the text after the name, else NULL */
 } MsgRow;
 
 static const MsgRow k_msgs[NOTICE_MSG_COUNT] = {
@@ -51,7 +52,7 @@ static const MsgRow k_msgs[NOTICE_MSG_COUNT] = {
         "The log folder path is not valid." },
     /* window.c, a session name that is not saved; the opening names it */
     [NOTICE_MSG_SESSION_NOT_FOUND] = { NOTICE_WARNING, ARG_NAME, "Session Not Found",
-        "Session \"%s\" not found." },  /* formatted in notice_msg */
+        "Session \"", "\" not found." },  /* prefix, name, suffix */
     /* window.c, a failed connection; the opening is the error text */
     [NOTICE_MSG_CONNECTION_ERROR] = { NOTICE_WARNING, ARG_TEXT, "Connection Error",
         "The connection failed." },
@@ -105,8 +106,8 @@ int notice_msg(Notice *n, NoticeMsgId id, const char *arg)
     blank(n, r->tone);
     set(n->title, sizeof(n->title), r->arg == ARG_TITLE && have ? arg : r->title);
     if (r->arg == ARG_NAME)
-        (void)snprintf(n->opening, sizeof(n->opening), "Session \"%s\" not found.",
-                       arg ? arg : "");
+        (void)snprintf(n->opening, sizeof(n->opening), "%s%s%s", r->opening,
+                       arg ? arg : "", r->suffix ? r->suffix : "");
     else
         set(n->opening, sizeof(n->opening),
             r->arg == ARG_TEXT && have ? arg : r->opening);

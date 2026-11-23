@@ -32,8 +32,12 @@
  * it), 0 for OK, Enter on OK, Escape, the close box or a WM_QUIT (which is
  * reposted for the main loop).
  *
+ * Like MessageBox it plays the alert sound (MessageBeep, by tone) and raises
+ * EVENT_SYSTEM_ALERT for screen readers when it opens. A minimized owner
+ * anchors the placement on its restored rectangle.
+ *
  * Keys, handled in the loop because owner-drawn buttons defeat default-button
- * handling: Enter presses the focused button, Escape = OK, Tab and Shift+Tab
+ * handling: Enter (not an auto-repeat) presses the focused button, Escape = OK, Tab and Shift+Tab
  * move between the buttons, Ctrl+C copies the notice as plain text (CRLF).
  *
  * When n->action_page is -1 an action press still returns 1: the caller then

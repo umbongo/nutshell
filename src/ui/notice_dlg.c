@@ -215,6 +215,8 @@ static void notice_close(HWND hwnd, NoticeDlg *d, int result)
 {
     d->result = result;
     d->closing = 1;
+    /* Gone at once: an outer notice must not stay up while an inner loop runs. */
+    ShowWindow(hwnd, SW_HIDE);
     PostMessageA(hwnd, WM_NULL, 0, 0);
 }
 
@@ -243,10 +245,12 @@ static void notice_tab(NoticeDlg *d)
 }
 
 /* A key for the dialog, called from the modal loop. Returns 1 when handled. */
-static int notice_key(HWND hwnd, NoticeDlg *d, WPARAM vk)
+static int notice_key(HWND hwnd, NoticeDlg *d, WPARAM vk, LPARAM lp)
 {
     switch (vk) {
     case VK_RETURN:
+        /* A held Enter (auto-repeat) must not dismiss a notice unread. */
+        if (lp & (1 << 30)) return 1;
         notice_close(hwnd, d, (d->h_action && GetFocus() == d->h_action) ? 1 : 0);
         return 1;
     case VK_ESCAPE:
@@ -403,8 +407,27 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
     d->dpi = get_window_dpi(owner);
 
     RECT anchor = { 0, 0, 0, 0 };
-    if (!owner || !IsWindow(owner) || !GetWindowRect(owner, &anchor))
+    if (!owner || !IsWindow(owner)) {
         SystemParametersInfoA(SPI_GETWORKAREA, 0, &anchor, 0);
+    } else if (IsIconic(owner)) {
+        /* A minimized window's rectangle sits near (-32000,-32000): anchor on
+         * where it restores to, else on its monitor's work area. */
+        WINDOWPLACEMENT wp;
+        memset(&wp, 0, sizeof(wp));
+        wp.length = sizeof(wp);
+        MONITORINFO omi;
+        memset(&omi, 0, sizeof(omi));
+        omi.cbSize = sizeof(omi);
+        if (GetWindowPlacement(owner, &wp) &&
+            wp.rcNormalPosition.right > wp.rcNormalPosition.left)
+            anchor = wp.rcNormalPosition;
+        else if (GetMonitorInfoA(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &omi))
+            anchor = omi.rcWork;
+        else
+            SystemParametersInfoA(SPI_GETWORKAREA, 0, &anchor, 0);
+    } else if (!GetWindowRect(owner, &anchor)) {
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &anchor, 0);
+    }
 
     HWND prev_focus = GetFocus();
     HWND dlg = CreateWindowExA(NOTICE_EXSTYLE, NOTICE_CLASS, d->n.title, NOTICE_STYLE,
@@ -420,6 +443,9 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
     ShowWindow(dlg, SW_SHOW);
     UpdateWindow(dlg);
     SetFocus(d->h_ok);
+    /* What MessageBox did: its alert sound and the screen-reader alert. */
+    MessageBeep(d->n.tone == NOTICE_WARNING ? MB_ICONWARNING : MB_ICONINFORMATION);
+    NotifyWinEvent(EVENT_SYSTEM_ALERT, dlg, OBJID_CLIENT, CHILDID_SELF);
 
     MSG m;
     memset(&m, 0, sizeof(m));
@@ -428,7 +454,7 @@ int notice_dlg_show(HWND owner, const Notice *n, const ThemeColors *theme)
         /* The buttons are owner-drawn, so IsDialogMessage would not treat
          * OK as the default: the keys are taken here. */
         if (m.message == WM_KEYDOWN && (m.hwnd == dlg || IsChild(dlg, m.hwnd)) &&
-            notice_key(dlg, d, m.wParam))
+            notice_key(dlg, d, m.wParam, m.lParam))
             continue;
         TranslateMessage(&m);
         DispatchMessageA(&m);
