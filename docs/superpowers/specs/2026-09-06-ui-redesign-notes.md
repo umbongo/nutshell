@@ -518,6 +518,12 @@ Open, in priority order:
       past one screen (1013 px against 1001), so it scrolls a little; with voice off (the
       default) it still fits, and `test_cheatsheet_layout_*` measures it that way. Shortening the voice
       row's condition did not change the estimate (still 1013 px), so the real sheet needs a look.
+      (r) The upgrade notice on the maintainer's real config shows one "Voice: off until you
+      choose to turn it on" line, not the 12 voice sub-settings. (s) Enable voice, Save, reopen
+      Settings: the microphones are listed with no restart; turning voice (or the assistant)
+      off while recording and while transcribing stops at once, and no transcript arrives
+      later. (t) Changing the STT provider on the Voice page moves a default model to the new
+      provider's default and keeps a typed one.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
