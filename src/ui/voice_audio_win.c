@@ -86,18 +86,13 @@ static void va_post(VaCtx *c, VoiceAudioMsg m, LPARAM lp)
     if (!h || !PostMessage(h, WM_VOICE_AUDIO, (WPARAM)m, lp)) {
         if (m == VAM_DEVICES) voice_audio_free_devices((VoiceDeviceList *)lp);
         if (m == VAM_CAPTURED) voice_audio_free_capture((VoiceCapture *)lp);
-        if (m == VAM_ERROR) voice_audio_free_error((VoiceAudioErrMsg *)lp);
     }
 }
 
 /* token: the push-to-talk recording the error belongs to, 0 for none. */
 static void va_post_err(VaCtx *c, VoiceAudioErr e, unsigned token)
 {
-    VoiceAudioErrMsg *m = (VoiceAudioErrMsg *)calloc(1, sizeof(*m));
-    if (!m) return;
-    m->err = e;
-    m->token = token;
-    va_post(c, VAM_ERROR, (LPARAM)m);   /* frees m itself when the post fails */
+    va_post(c, VAM_ERROR, VOICE_ERR_PACK(e, token));   /* nothing to allocate or free */
 }
 
 /* ---- the notification client (a C vtable; callbacks only PostMessage) --- */
@@ -224,7 +219,7 @@ static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
             2000000, 0, &wfx, NULL);
     ev = CreateEventA(NULL, FALSE, FALSE, NULL);
     if (SUCCEEDED(hr) && ev) hr = IAudioClient_SetEventHandle(cl, ev);
-    else hr = E_FAIL;
+    else if (SUCCEEDED(hr)) hr = E_FAIL;   /* no event: keep a real failure (E_ACCESSDENIED) as it is */
     if (SUCCEEDED(hr))
         hr = IAudioClient_GetService(cl, &VA_IID_IAudioCaptureClient, (void **)&cap);
     if (SUCCEEDED(hr)) hr = IAudioClient_Start(cl);
@@ -572,7 +567,6 @@ void voice_audio_capture_end(int keep) { va_push(VC_END, NULL, 0, keep ? 1 : 0);
 void voice_audio_watch_devices(int on) { va_push(VC_WATCH, NULL, 0, on ? 1 : 0); }
 
 void voice_audio_free_devices(VoiceDeviceList *l) { free(l); }
-void voice_audio_free_error(VoiceAudioErrMsg *e) { free(e); }
 
 void voice_audio_free_capture(VoiceCapture *c)
 {

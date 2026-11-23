@@ -47,7 +47,8 @@ static void arm_timer(void)
 
 static unsigned next_token(void)
 {
-    if (++g_token_seq == 0) g_token_seq = 1;
+    /* Never 0 in the low 24 bits either: an audio error compares masked tokens. */
+    if (((++g_token_seq) & VOICE_TOKEN_MASK) == 0) g_token_seq++;
     return g_token_seq;
 }
 
@@ -78,9 +79,11 @@ static void act(VoiceStep st, VoiceEvent ev)
         break;
     }
     case VA_FINISH:
+        /* Nothing is open (the thread ended it at the cap and on_captured has
+         * it): no end, no pending, no Transcribing. The upload path in
+         * on_captured sets those once the upload really starts. */
+        if (!g_capturing) break;
         voice_audio_capture_end(1);
-        g_pending = 1;
-        ai_chat_voice_set_ui(panel, AIV_TRANSCRIBING, CUE_TRANSCRIBING);
         break;
     case VA_DISCARD:
         voice_audio_capture_end(0);
@@ -101,7 +104,7 @@ static VoiceStep step_now(VoiceEvent ev, int in_panel)
 {
     HWND panel = ui_ai_panel();
     VoiceStep st = voice_ptt_step(&g_ptt, ev, (unsigned long)GetTickCount(), in_panel,
-                                  ai_chat_voice_busy(panel) || g_pending || no_session(panel));
+                                  ai_chat_voice_busy(panel) || g_pending || g_capturing || no_session(panel));
     act(st, ev);
     arm_timer();
     return st;
@@ -217,6 +220,13 @@ static void on_captured(VoiceCapture *c)
         return;
     }
     g_capturing = 0;
+    /* The thread may have ended the capture at the cap before the machine's
+     * finish: take the machine out of recording (no action), so a later key-up
+     * or Escape cannot finish or discard audio that is already on its way. */
+    if (voice_ptt_recording(&g_ptt)) {
+        voice_ptt_capture_ended(&g_ptt, g_ptt.state == VS_REC_HOLD || g_ptt.state == VS_STOP_PRESS);
+        arm_timer();
+    }
     const char *problem = NULL;
     int problem_is_error = 0;
     switch (c->verdict) {
@@ -250,6 +260,8 @@ static void on_captured(VoiceCapture *c)
                 voice_audio_free_capture(c);
                 return;
             }
+            g_pending = 1;   /* the upload runs */
+            ai_chat_voice_set_ui(panel, AIV_TRANSCRIBING, CUE_TRANSCRIBING);
         }
     }
     voice_audio_free_capture(c);   /* the PCM is wiped either way */
@@ -301,11 +313,9 @@ void voice_on_audio_msg(WPARAM wp, LPARAM lp)
         return;
     }
     if (wp == VAM_ERROR) {
-        VoiceAudioErrMsg *m = (VoiceAudioErrMsg *)lp;
-        if (!m) return;
-        const VoiceAudioErr err = m->err;
-        const VoiceErrRoute route = voice_err_route(m->token, g_token, g_capturing && g_audio_up);
-        voice_audio_free_error(m);
+        const VoiceAudioErr err = VOICE_ERR_CODE(lp);
+        const VoiceErrRoute route = voice_err_route(VOICE_ERR_TOKEN(lp), g_token,
+                                                    g_capturing && g_audio_up);
         if (route == VOICE_ERR_CAPTURE) on_capture_error(err);
         else if (route == VOICE_ERR_SETTINGS) (void)settings_voice_on_audio(wp, (LPARAM)err);
         return;   /* a stale recording's error changes nothing */

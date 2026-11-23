@@ -3708,6 +3708,7 @@ int test_voice_deliver(void);
 int test_voice_binding_same(void);
 int test_voice_err_route(void);
 int test_voice_busy_text(void);
+int test_voice_ptt_capture_ended_first(void);
 int test_voice_cue_text(void);
 /* test_voice_stt.c */
 int test_voice_stt_provider_table(void);
@@ -3716,6 +3717,7 @@ int test_voice_stt_use_ai_reason(void);
 int test_voice_stt_resolve_use_ai(void);
 int test_voice_stt_resolve_separate(void);
 int test_voice_stt_multipart(void);
+int test_voice_stt_multipart_exact_size_long_fields(void);
 int test_voice_stt_gemini_body(void);
 int test_voice_stt_parse(void);
 int test_voice_stt_http_error(void);
@@ -8118,6 +8120,7 @@ int main(void) {
     failed += test_voice_binding_same();
     failed += test_voice_err_route();
     failed += test_voice_busy_text();
+    failed += test_voice_ptt_capture_ended_first();
     failed += test_voice_cue_text();
     failed += test_voice_stt_provider_table();
     failed += test_voice_base_url_normalise();
@@ -8125,6 +8128,7 @@ int main(void) {
     failed += test_voice_stt_resolve_use_ai();
     failed += test_voice_stt_resolve_separate();
     failed += test_voice_stt_multipart();
+    failed += test_voice_stt_multipart_exact_size_long_fields();
     failed += test_voice_stt_gemini_body();
     failed += test_voice_stt_parse();
     failed += test_voice_stt_http_error();

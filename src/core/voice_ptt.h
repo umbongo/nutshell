@@ -100,6 +100,11 @@ void voice_ptt_init(VoicePtt *p, int mode, int delay_ms);
  * running commands or has a card waiting. */
 VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now_ms,
                          int in_panel, int busy);
+/* The audio thread ended the capture itself (the cap) before the machine's own
+ * finish: take the machine out of recording without an action. key_held: the
+ * key is still down, so its release only returns to idle (VS_KEY_SPENT); else
+ * straight to idle. A no-op when the machine is not recording. */
+void voice_ptt_capture_ended(VoicePtt *p, int key_held);
 int voice_ptt_recording(const VoicePtt *p);  /* VS_REC_HOLD, VS_REC_LATCHED or VS_STOP_PRESS */
 /* ms until the next VE_TICK matters (delay end or cap), or -1 when none. */
 long voice_ptt_next_deadline(const VoicePtt *p, unsigned long now_ms);
@@ -120,6 +125,7 @@ int voice_binding_same(const VoiceBinding *a, const VoiceBinding *b);  /* all th
  * token 0, for an open Settings page. VOICE_ERR_STALE: another recording's
  * (a discarded or finished one): ignored, it must not touch the current state. */
 typedef enum { VOICE_ERR_STALE = 0, VOICE_ERR_CAPTURE, VOICE_ERR_SETTINGS } VoiceErrRoute;
+#define VOICE_TOKEN_MASK 0xFFFFFFu   /* recording tokens are compared in their low 24 bits */
 VoiceErrRoute voice_err_route(unsigned err_token, unsigned cur_token, int capturing);
 
 /* The status line for a start refused at the start point: "Connect a session

@@ -187,8 +187,16 @@ int voice_binding_same(const VoiceBinding *a, const VoiceBinding *b)
         && a->session_gen == b->session_gen && a->conv_gen == b->conv_gen;
 }
 
+void voice_ptt_capture_ended(VoicePtt *p, int key_held)
+{
+    if (!voice_ptt_recording(p)) return;
+    p->state = key_held ? VS_KEY_SPENT : VS_IDLE;
+}
+
 VoiceErrRoute voice_err_route(unsigned err_token, unsigned cur_token, int capturing)
 {
+    err_token &= VOICE_TOKEN_MASK;
+    cur_token &= VOICE_TOKEN_MASK;
     if (err_token == 0) return VOICE_ERR_SETTINGS;
     if (capturing && cur_token != 0 && err_token == cur_token) return VOICE_ERR_CAPTURE;
     return VOICE_ERR_STALE;

@@ -462,6 +462,53 @@ int test_voice_err_route(void)
     /* token 0 is Settings' (the Test, enumeration), recording or not */
     ASSERT_EQ((int)voice_err_route(0, 5, 1), (int)VOICE_ERR_SETTINGS);
     ASSERT_EQ((int)voice_err_route(0, 0, 0), (int)VOICE_ERR_SETTINGS);
+    /* tokens are compared in their low 24 bits (the error packs no more) */
+    ASSERT_EQ((int)voice_err_route(0x01000005u & VOICE_TOKEN_MASK, 0x01000005u, 1), (int)VOICE_ERR_CAPTURE);
+    ASSERT_EQ((int)voice_err_route(0x05u, 0x01000005u, 1), (int)VOICE_ERR_CAPTURE);
+    ASSERT_EQ((int)voice_err_route(0x01000000u, 0x05u, 1), (int)VOICE_ERR_SETTINGS);   /* masks to 0 */
+    TEST_END();
+}
+
+/* The audio thread ended the capture at the cap before the machine's own
+ * finish: on_captured calls voice_ptt_capture_ended, and nothing the machine
+ * does afterwards may finish or discard the audio already submitted. */
+int test_voice_ptt_capture_ended_first(void)
+{
+    TEST_BEGIN();
+    VoicePtt p; VoiceStep s;
+    /* Hold: key still down */
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 0);
+    ASSERT_EQ(st(&p, VE_KEY_DOWN, 1000, 1, 0).action, VA_OPEN);
+    voice_ptt_capture_ended(&p, p.state == VS_REC_HOLD);
+    ASSERT_EQ(p.state, VS_KEY_SPENT);
+    ASSERT_EQ(voice_ptt_recording(&p), 0);
+    ASSERT_TRUE(voice_ptt_next_deadline(&p, 1000 + VOICE_CAP_MS) < 0);   /* no cap timer */
+    s = st(&p, VE_TICK, 1000 + VOICE_CAP_MS + 5, 1, 0);                   /* the cap tick */
+    ASSERT_EQ(s.action, VA_NONE);
+    s = st(&p, VE_ESCAPE, 1000 + VOICE_CAP_MS + 6, 1, 0);                 /* no discard either */
+    ASSERT_EQ(s.action, VA_NONE);
+    s = st(&p, VE_KEY_UP, 1000 + VOICE_CAP_MS + 10, 1, 0);                /* release: idle, no finish */
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(p.state, VS_IDLE);
+    s = st(&p, VE_KEY_DOWN, 1000 + VOICE_CAP_MS + 500, 1, 0);             /* a fresh press opens */
+    ASSERT_EQ(s.action, VA_OPEN);
+
+    /* Toggle (latched, key up): straight to idle */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    ASSERT_EQ(st(&p, VE_KEY_DOWN, 1000, 1, 0).action, VA_NONE);
+    ASSERT_EQ(st(&p, VE_KEY_UP, 1050, 1, 0).action, VA_OPEN);
+    ASSERT_EQ(p.state, VS_REC_LATCHED);
+    voice_ptt_capture_ended(&p, 0);
+    ASSERT_EQ(p.state, VS_IDLE);
+    s = st(&p, VE_TICK, 1050 + VOICE_CAP_MS + 5, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(st(&p, VE_KEY_DOWN, 90000, 1, 0).action, VA_NONE);          /* a new press... */
+    ASSERT_EQ(st(&p, VE_KEY_UP, 90050, 1, 0).action, VA_OPEN);            /* ...opens normally */
+
+    /* not recording: a no-op */
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 0);
+    voice_ptt_capture_ended(&p, 1);
+    ASSERT_EQ(p.state, VS_IDLE);
     TEST_END();
 }
 

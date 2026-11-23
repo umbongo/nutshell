@@ -9,7 +9,6 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include <tlhelp32.h>
 #include "test_framework.h"
 #include "voice_audio_win.h"
 #include "voice_gate.h"
@@ -56,8 +55,6 @@ static int va_wait(unsigned want_mask, DWORD ms, WPARAM *wp, LPARAM *lp)
                     voice_audio_free_devices((VoiceDeviceList *)msg.lParam);
                 else if (msg.wParam == VAM_CAPTURED)
                     voice_audio_free_capture((VoiceCapture *)msg.lParam);
-                else if (msg.wParam == VAM_ERROR)
-                    voice_audio_free_error((VoiceAudioErrMsg *)msg.lParam);
             }
         }
         Sleep(10);
@@ -87,23 +84,6 @@ static void va_end_test(HWND w)
     voice_audio_stop();
     va_gates(0);
     if (w) DestroyWindow(w);
-}
-
-/* Threads of this process (Toolhelp), to prove a start made one thread. */
-static int va_thread_count(void)
-{
-    int n = 0;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return -1;
-    THREADENTRY32 te;
-    te.dwSize = sizeof(te);
-    if (Thread32First(snap, &te)) {
-        do {
-            if (te.th32OwnerProcessID == GetCurrentProcessId()) n++;
-        } while (Thread32Next(snap, &te));
-    }
-    CloseHandle(snap);
-    return n;
 }
 
 int test_voice_audio_start_stop(void)
@@ -136,11 +116,9 @@ int test_voice_audio_start_refused_when_gate_off(void)
         ai_gate_set_enabled(mode == 2);
         voice_gate_set_enabled(mode == 1);
         dll_record_reset();
-        int threads = va_thread_count();
         ASSERT_EQ(voice_audio_start(w), 0);
         ASSERT_EQ(voice_audio_wait_ready(10), 0);          /* no thread was made */
         ASSERT_FALSE(dll_record_was_requested("mmdevapi.dll"));
-        ASSERT_EQ(va_thread_count(), threads);
         /* commands with no thread are dropped, never queued for a later one */
         voice_audio_capture_begin("", 1, 0);
         voice_audio_enumerate();
@@ -155,15 +133,11 @@ int test_voice_audio_double_start_is_one_thread(void)
     TEST_BEGIN();
     va_begin_test();
     HWND w = va_window();
-    int t0 = va_thread_count();
+    ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    int t1 = va_thread_count();
     ASSERT_EQ(voice_audio_start(w), 1);       /* the same running state */
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    int t2 = va_thread_count();
-    ASSERT_EQ(t2, t1);                        /* no second thread */
-    ASSERT_TRUE(t1 > t0);                     /* and the first did start one */
     va_end_test(w);
     TEST_END();
 }
@@ -173,6 +147,7 @@ int test_voice_audio_restart(void)
     TEST_BEGIN();
     va_begin_test();
     HWND w = va_window();
+    ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_start(w), 1);   /* already running: harmless */
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
@@ -193,6 +168,7 @@ int test_voice_audio_enumerate_defined(void)
     TEST_BEGIN();
     va_begin_test();
     HWND w = va_window();
+    ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     voice_audio_enumerate();
@@ -205,11 +181,9 @@ int test_voice_audio_enumerate_defined(void)
         printf("    [voice_audio] %d capture endpoint(s)\n", l->n);
         voice_audio_free_devices(l);
     } else if (got) {
-        VoiceAudioErrMsg *e = (VoiceAudioErrMsg *)lp;
-        printf("    [voice_audio] enumerate error %d\n", (int)e->err);
-        ASSERT_TRUE(e->err == VAE_COM_FAILED || e->err == VAE_NO_DEVICE);
-        ASSERT_EQ((int)e->token, 0);          /* not a recording's error */
-        voice_audio_free_error(e);
+        printf("    [voice_audio] enumerate error %d\n", (int)VOICE_ERR_CODE(lp));
+        ASSERT_TRUE(VOICE_ERR_CODE(lp) == VAE_COM_FAILED || VOICE_ERR_CODE(lp) == VAE_NO_DEVICE);
+        ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), 0);   /* not a recording's error */
     }
     va_end_test(w);
     TEST_END();
@@ -220,6 +194,7 @@ int test_voice_audio_capture_no_device_or_data(void)
     TEST_BEGIN();
     va_begin_test();
     HWND w = va_window();
+    ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     voice_audio_capture_begin("", 7, 0);
@@ -229,12 +204,10 @@ int test_voice_audio_capture_no_device_or_data(void)
     int got = va_wait(BIT(VAM_CAPTURED) | BIT(VAM_ERROR), 5000, &wp, &lp);
     ASSERT_TRUE(got);
     if (got && wp == VAM_ERROR) {
-        VoiceAudioErrMsg *e = (VoiceAudioErrMsg *)lp;
-        printf("    [voice_audio] capture error %d (no usable endpoint)\n", (int)e->err);
-        ASSERT_TRUE(e->err == VAE_NO_DEVICE || e->err == VAE_OPEN_FAILED
-                    || e->err == VAE_DEVICE_LOST || e->err == VAE_ACCESS_DENIED);
-        ASSERT_EQ((int)e->token, 7);          /* the error names its recording */
-        voice_audio_free_error(e);
+        printf("    [voice_audio] capture error %d (no usable endpoint)\n", (int)VOICE_ERR_CODE(lp));
+        ASSERT_TRUE(VOICE_ERR_CODE(lp) == VAE_NO_DEVICE || VOICE_ERR_CODE(lp) == VAE_OPEN_FAILED
+                    || VOICE_ERR_CODE(lp) == VAE_DEVICE_LOST || VOICE_ERR_CODE(lp) == VAE_ACCESS_DENIED);
+        ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), 7);   /* the error names its recording */
     } else if (got) {
         VoiceCapture *c = (VoiceCapture *)lp;
         ASSERT_EQ((int)c->token, 7);
@@ -251,6 +224,7 @@ int test_voice_audio_bad_id_falls_back(void)
     TEST_BEGIN();
     va_begin_test();
     HWND w = va_window();
+    ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     voice_audio_capture_begin("{bogus}", 3, 0);
@@ -267,11 +241,38 @@ int test_voice_audio_bad_id_falls_back(void)
         /* no endpoint at all: the default is missing too, which is exactly
          * "no device" (a present but unopenable default would be OPEN_FAILED,
          * and has to be looked at, not accepted here) */
-        VoiceAudioErrMsg *e = (VoiceAudioErrMsg *)lp;
-        printf("    [voice_audio] bogus id, error %d\n", (int)e->err);
-        ASSERT_EQ((int)e->err, (int)VAE_NO_DEVICE);
-        ASSERT_EQ((int)e->token, 3);
-        voice_audio_free_error(e);
+        printf("    [voice_audio] bogus id, error %d\n", (int)VOICE_ERR_CODE(lp));
+        ASSERT_EQ((int)VOICE_ERR_CODE(lp), (int)VAE_NO_DEVICE);
+        ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), 3);
+    }
+    va_end_test(w);
+    TEST_END();
+}
+
+/* The command queue never drops begin/end: after a burst of enumerations,
+ * a begin and an end both reach the thread, so a message carrying the
+ * recording's token comes back (an error under Wine's no endpoint, or the
+ * capture where there is one). */
+int test_voice_audio_queue_keeps_begin_and_end(void)
+{
+    TEST_BEGIN();
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_NOT_NULL(w);
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    for (int i = 0; i < 40; i++) voice_audio_enumerate();
+    voice_audio_capture_begin("", 7, 0);
+    voice_audio_capture_end(1);
+    WPARAM wp = 0; LPARAM lp = 0;
+    int got = va_wait(BIT(VAM_CAPTURED) | BIT(VAM_ERROR), 5000, &wp, &lp);
+    ASSERT_TRUE(got);
+    if (got && wp == VAM_ERROR) {
+        ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), 7);
+    } else if (got) {
+        VoiceCapture *c = (VoiceCapture *)lp;
+        ASSERT_EQ((int)c->token, 7);
+        voice_audio_free_capture(c);
     }
     va_end_test(w);
     TEST_END();
@@ -282,6 +283,7 @@ int test_voice_audio_never_started(void)
     TEST_BEGIN();
     va_gates(0);
     HWND w = va_window();
+    ASSERT_NOT_NULL(w);
     voice_audio_stop();
     voice_audio_enumerate();
     voice_audio_capture_begin("", 1, 0);

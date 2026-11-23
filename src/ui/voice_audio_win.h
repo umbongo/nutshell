@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include "wav.h"
+#include "voice_ptt.h"
 
 /*
  * voice_audio_win -- every WASAPI object lives on ONE audio thread
@@ -21,15 +22,20 @@ typedef enum {
     VAM_DEVICES,          /* lParam = VoiceDeviceList* (receiver frees with voice_audio_free_devices) */
     VAM_LEVEL,            /* lParam = level 0..1000 (peak of the last ~50 ms) */
     VAM_CAPTURED,         /* lParam = VoiceCapture* (receiver frees with voice_audio_free_capture) */
-    VAM_ERROR,            /* lParam = VoiceAudioErrMsg* (receiver frees with voice_audio_free_error) */
+    VAM_ERROR,            /* lParam = VOICE_ERR_PACK(err, token): nothing to free */
     VAM_DEVICES_CHANGED   /* lParam 0: from IMMNotificationClient; re-enumerate */
 } VoiceAudioMsg;
 
 typedef enum { VAE_NONE = 0, VAE_NO_DEVICE, VAE_DEVICE_LOST, VAE_OPEN_FAILED,
                VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED } VoiceAudioErr;
 /* An error and the recording token it belongs to (0: not a push-to-talk
- * recording: a Settings Test, an enumeration or the thread itself). */
-typedef struct { VoiceAudioErr err; unsigned token; } VoiceAudioErrMsg;
+ * recording: a Settings Test, an enumeration or the thread itself) packed
+ * into one lParam: the token's low 24 bits (VOICE_TOKEN_MASK) above the
+ * error code in the low byte. Tokens wrap, so every comparison is masked. */
+#define VOICE_ERR_PACK(err, token) \
+    ((LPARAM)((((uintptr_t)((token) & VOICE_TOKEN_MASK)) << 8) | ((uintptr_t)(err) & 0xFFu)))
+#define VOICE_ERR_CODE(lp)  ((VoiceAudioErr)((uintptr_t)(lp) & 0xFFu))
+#define VOICE_ERR_TOKEN(lp) ((unsigned)(((uintptr_t)(lp) >> 8) & VOICE_TOKEN_MASK))
 
 typedef struct { int n; struct { wchar_t id[256]; char name[256]; } dev[32]; } VoiceDeviceList;
 typedef struct { PcmBuf pcm; PcmVerdict verdict; int used_default; unsigned token; } VoiceCapture;
@@ -43,6 +49,5 @@ void voice_audio_capture_end(int keep);       /* keep=1 -> VAM_CAPTURED; 0 -> di
 void voice_audio_watch_devices(int on);       /* register/unregister the notification client */
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
-void voice_audio_free_error(VoiceAudioErrMsg *e);
 
 #endif /* NUTSHELL_VOICE_AUDIO_WIN_H */

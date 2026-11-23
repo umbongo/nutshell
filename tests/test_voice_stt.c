@@ -198,6 +198,39 @@ int test_voice_stt_resolve_separate(void)
     TEST_END();
 }
 
+/* The body is sized exactly up front (no realloc, so no unwiped copy of the
+ * audio): the builder returns NULL if its own size was off, so a long model,
+ * language and boundary, with and without each optional part, must build. */
+int test_voice_stt_multipart_exact_size_long_fields(void)
+{
+    TEST_BEGIN();
+    unsigned char wav[5000];
+    memset(wav, 'W', sizeof wav);
+    char model[201], lang[61], bnd[71];
+    memset(model, 'm', 200); model[200] = '\0';
+    memset(lang, 'l', 60); lang[60] = '\0';
+    memset(bnd, 'b', 70); bnd[70] = '\0';
+    const char *models[2] = { model, "gpt-4o-transcribe" };
+    const char *langs[2] = { lang, "" };
+    for (int m = 0; m < 2; m++) {
+        for (int g = 0; g < 2; g++) {
+            size_t len = 0;
+            char *b = voice_stt_multipart(bnd, wav, sizeof wav, models[m], langs[g], &len);
+            ASSERT_NOT_NULL(b);
+            if (!b) continue;
+            ASSERT_EQ(b[len], '\0');
+            ASSERT_EQ(strlen(b), len);
+            ASSERT_TRUE(len > sizeof wav + 200);
+            ASSERT_TRUE(strstr(b, models[m]) != NULL);
+            ASSERT_EQ(strstr(b, lang) != NULL, g == 0);
+            ASSERT_EQ(strstr(b, "response_format") != NULL, m == 0);
+            ASSERT_TRUE(len >= 4 && strcmp(b + len - 4, "--\r\n") == 0);
+            free(b);
+        }
+    }
+    TEST_END();
+}
+
 int test_voice_stt_multipart(void)
 {
     TEST_BEGIN();
