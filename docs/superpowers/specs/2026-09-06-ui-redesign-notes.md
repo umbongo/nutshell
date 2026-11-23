@@ -499,7 +499,7 @@ Open, in priority order:
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
       `Nutshell_Notice` when asserting no dialog appeared; the telnet cases
       `telnet_port_refused_reports_in_tab` and `ssh_password_box_cancel_reports_in_tab`
-      (85-telnet.ps1; `telnet_password_box_asks_and_sends` has a comment change) only had wording changed, their
+      (85-telnet.ps1) only had wording changed, their
       title match still holds; `NutshellIT.psm1`'s class comment and README's
       `Wait-NutshellDialog` row mention `Nutshell_Notice`. Run the `gate` tier on Windows.
 - [ ] **Windows hand check of the 19 notices** (the notice move, feat/notice-msgboxes): Close

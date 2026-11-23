@@ -417,6 +417,7 @@ int test_notice_msg_text_args(void)
     ASSERT_STR_EQ(n.opening, "The connection failed.");
     ASSERT_EQ(notice_msg(&n, NOTICE_MSG_MODELS_ERROR, "Error: HTTP 401"), 1);
     ASSERT_STR_EQ(n.opening, "Error: HTTP 401");
+    ASSERT_EQ(n.tone, NOTICE_WARNING);
     ASSERT_STR_EQ(n.title, "Refresh Models");
     ASSERT_EQ(notice_msg(&n, NOTICE_MSG_MODELS_ERROR, NULL), 1);
     ASSERT_STR_EQ(n.opening, "Error: the models request failed.");
@@ -429,6 +430,7 @@ int test_notice_msg_title_args(void)
     Notice n;
     ASSERT_EQ(notice_msg(&n, NOTICE_MSG_FOLDER_MISSING, "Debug Log Folder"), 1);
     ASSERT_STR_EQ(n.title, "Debug Log Folder");
+    ASSERT_EQ(n.tone, NOTICE_WARNING);
     ASSERT_STR_EQ(n.opening, "That folder does not exist and could not be created.");
     ASSERT_EQ(notice_msg(&n, NOTICE_MSG_FOLDER_MISSING, NULL), 1);
     ASSERT_STR_EQ(n.title, "Open Folder");

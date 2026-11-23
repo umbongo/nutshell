@@ -898,7 +898,8 @@ static int count_msgbox_calls(const char *src)
 
     static const char *const names[] = {
         "MessageBoxIndirectA", "MessageBoxIndirectW", "MessageBoxExA",
-        "MessageBoxExW", "MessageBoxA", "MessageBoxW", "MessageBox"
+        "MessageBoxExW", "MessageBoxTimeoutA", "MessageBoxTimeoutW",
+        "MessageBoxA", "MessageBoxW", "MessageBox"
     };
     int count = 0;
     for (i = 0; i < n; i++) {
@@ -928,6 +929,8 @@ int test_ui_tokens_msgbox_gate_counter(void)
     ASSERT_EQ(count_msgbox_calls("c = '\"'; MessageBoxA(h);"), 1);
     ASSERT_EQ(count_msgbox_calls("/* a\n MessageBox(\n */ MessageBoxIndirectW(&p);"), 1);
     ASSERT_EQ(count_msgbox_calls("s = \"a\\\"MessageBoxA(\"; MessageBoxA(h);"), 1);
+    ASSERT_EQ(count_msgbox_calls("MessageBoxTimeoutA(h,0,0,0,0,0);"), 1);
+    ASSERT_EQ(count_msgbox_calls("MessageBoxTimeoutW (h,0,0,0,0,0);"), 1);
     TEST_END();
 }
 
@@ -940,6 +943,8 @@ int test_ui_tokens_msgbox_gate(void)
         TEST_END();
     }
     int mismatches = 0;
+    int seen[MSGBOX_ALLOWLIST_N];
+    memset(seen, 0, sizeof(seen));
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
         const char *name = ent->d_name;
@@ -947,10 +952,18 @@ int test_ui_tokens_msgbox_gate(void)
         if (nlen < 3) continue;
         if (strcmp(name + nlen - 2, ".c") != 0 && strcmp(name + nlen - 2, ".h") != 0)
             continue;
+        for (size_t k = 0; k < MSGBOX_ALLOWLIST_N; k++)
+            if (strcmp(MSGBOX_ALLOWLIST[k].file, name) == 0) seen[k] = 1;
         char path[600];
         snprintf(path, sizeof(path), "src/ui/%s", name);
         char *content = read_whole_file(path);
-        if (!content) continue;
+        if (!content) {
+            if (msgbox_allowed_for(name) != 0) {
+                printf("  [msgbox gate] %s is allow-listed but cannot be read\n", name);
+                mismatches++;
+            }
+            continue;
+        }
         int calls = count_msgbox_calls(content);
         int allowed = msgbox_allowed_for(name);
         if (calls != 0 || allowed != 0)
@@ -961,6 +974,12 @@ int test_ui_tokens_msgbox_gate(void)
         free(content);
     }
     closedir(d);
+    for (size_t k = 0; k < MSGBOX_ALLOWLIST_N; k++)
+        if (!seen[k]) {
+            printf("  [msgbox gate] %s is allow-listed but missing from src/ui\n",
+                   MSGBOX_ALLOWLIST[k].file);
+            mismatches++;
+        }
     ASSERT_EQ(mismatches, 0);
     TEST_END();
 }
