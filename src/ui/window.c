@@ -528,6 +528,9 @@ static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup *
  * set, which config_save() already refuses to write to (see its own top-of
  * -function comment), so nothing needs to check this flag directly. */
 static int g_config_save_disabled = 0;
+/* Launch notices queued by WM_CREATE (by value), shown at the top of
+ * WM_STARTUP_CONNECT once the window and theme exist. */
+static NoticeQueue g_launch_notices;
 static CliAction g_startup_action = CLI_RUN;
 static char g_startup_arg[256];
 static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
@@ -4455,18 +4458,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                 }
 
-                ConfigLoadStatus load_status = CONFIG_LOAD_MISSING;
+                ConfigLoadReport load_rep;
+                memset(&load_rep, 0, sizeof(load_rep));
+                load_rep.status = CONFIG_LOAD_MISSING;
                 g_config = (g_config_path[0] != '\0')
-                          ? config_load_ex(g_config_path, &load_status)
+                          ? config_load_report(g_config_path, &load_rep)
                           : NULL;
+                ConfigLoadStatus load_status = load_rep.status;
+                int launch_no_folder = 0;
+                int launch_need_save = 0;
                 if (!g_config) {
                     if (g_config_path[0] == '\0') {
-                        MessageBoxA(hwnd,
-                            "Could not find a folder to store " CONFIG_FILENAME " in "
-                            "(neither the program's own folder nor %LOCALAPPDATA% "
-                            "is available).\n\nSettings and sessions will not be "
-                            "saved this run.",
-                            "Configuration Warning", MB_OK | MB_ICONWARNING);
+                        launch_no_folder = 1;
                         g_config_save_disabled = 1;
                     } else if (load_status == CONFIG_LOAD_UNREADABLE) {
                         /* M3/M4: the file is there, but this process could
@@ -4479,28 +4482,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                          * instead (every save site is passed "" in place
                          * of g_config_path -- see g_config_save_disabled's
                          * own comment). */
-                        MessageBoxA(hwnd,
-                            "Could not read " CONFIG_FILENAME " (it may be locked "
-                            "by another program, or larger than expected).\n\n"
-                            "Starting with default settings for this run only -- "
-                            "nothing will be saved until the file is readable "
-                            "again and Nutshell is restarted.",
-                            "Configuration Warning", MB_OK | MB_ICONWARNING);
                         g_config_save_disabled = 1;
                     } else {
                         /* CONFIG_LOAD_MISSING (first run) or CONFIG_LOAD_INVALID
                          * (unparseable, but backed up successfully): safe to
                          * save fresh defaults over `path`. */
-                        if (load_status == CONFIG_LOAD_INVALID) {
-                            MessageBoxA(hwnd,
-                                "Could not load " CONFIG_FILENAME ": it was not "
-                                "valid. The previous file was kept alongside it "
-                                "as " CONFIG_FILENAME ".bad-<timestamp>."
-                                "\n\nStarting with default settings.",
-                                "Configuration Warning", MB_OK | MB_ICONWARNING);
-                        }
+                        launch_need_save = 1;
                     }
                     g_config = config_new_default();
+                } else if (load_rep.missing_count > 0) {
+                    /* An upgrade: the file lacks settings this version
+                     * knows; add them to the file now. */
+                    launch_need_save = 1;
                 }
 
                 /* Default log_dir to the exe directory when not set */
@@ -4517,12 +4510,35 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                  * would leave the profile showing for this run only, gone
                  * again the moment Nutshell restarts, with no indication
                  * why. */
-                if (config_ensure_local_profile(g_config) && !g_config_save_disabled &&
-                    config_save(g_config, g_config_path) != 0) {
-                    MessageBoxA(hwnd,
-                        "Could not save " CONFIG_FILENAME ". The \"Local shell\" "
-                        "profile just added will not persist to the next run.",
-                        "Save Failed", MB_OK | MB_ICONWARNING);
+                if (config_ensure_local_profile(g_config)) launch_need_save = 1;
+
+                /* One save covers the new file, the added settings and the
+                 * Local shell profile. The notices are only queued here (the
+                 * theme is not resolved yet); WM_STARTUP_CONNECT shows them. */
+                {
+                    NoticeLaunch nl;
+                    char fb_folder[MAX_PATH];
+                    memset(&nl, 0, sizeof(nl));
+                    nl.status = load_status;
+                    nl.no_folder = launch_no_folder;
+                    nl.rep = &load_rep;
+                    nl.version = APP_VERSION;
+                    nl.s = &g_config->settings;
+                    fb_folder[0] = '\0';
+                    if (exe_dir[0] == '\0' && g_config_path[0] != '\0') {
+                        char *sep = strrchr(g_config_path, '\\');
+                        size_t flen = sep ? (size_t)(sep - g_config_path) : 0u;
+                        if (flen > 0u && flen < sizeof(fb_folder)) {
+                            memcpy(fb_folder, g_config_path, flen);
+                            fb_folder[flen] = '\0';
+                            nl.fallback_folder = fb_folder;
+                        }
+                    }
+                    if (launch_need_save && !g_config_save_disabled) {
+                        nl.saved = 1;
+                        nl.save_ok = (config_save(g_config, g_config_path) == 0);
+                    }
+                    notice_launch_plan(&g_launch_notices, &nl);
                 }
 
                 /* The debug log follows the saved settings (hand-edited until the
@@ -5273,6 +5289,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_STARTUP_CONNECT: {
+            if (g_startup_action == CLI_UI_DEMO) {
+                notice_queue_init(&g_launch_notices);
+            } else if (g_launch_notices.count > 0) {
+                /* Warnings first (the queue is in show order), one at a
+                 * time. An action result opens Settings only after every
+                 * notice has been shown and closed. */
+                int open_settings = 0, open_page = -1;
+                NoticeQueue q = g_launch_notices;
+                notice_queue_init(&g_launch_notices);
+                for (int ni = 0; ni < q.count; ni++) {
+                    if (notice_dlg_show(hwnd, &q.n[ni], g_theme) &&
+                        !open_settings) {
+                        open_settings = 1;
+                        open_page = q.n[ni].action_page;
+                    }
+                }
+                if (open_settings)
+                    PostMessage(hwnd, WM_COMMAND, IDM_EDIT_SETTINGS,
+                                (LPARAM)(open_page > 0 ? open_page : 0));
+            }
             if (g_startup_action == CLI_UI_DEMO) {
                 create_demo_session(hwnd);
                 return 0;

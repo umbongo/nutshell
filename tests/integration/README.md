@@ -230,8 +230,9 @@ touches before marking its pull request ready.
 | `helpers_ansi_contrast_floor` | `--ui-demo=ansi`, window at the work area's full height, debugging on with `render` at Trace: the cell size, grid and origin come from the last `render.draw` event (`char_w`, `char_h`, `rows`, `cols`, `x`, `y`); FAIL with the grid in the detail if it is under 17 x 24 or lines 0/1 are not `000000`/`CC3333`. On Onyx Light the 16 palette swatches each read at >= 4.4:1 against `terminal_bg`, line 11 (SGR 93) is `727223` and line 16 (dim 97) is at least 10 L* lighter than line 15; on Onyx Synapse line 11 is the raw `FFFF55` and line 16 `FFFFFF` (spec `2026-10-19-light-theme-ansi-contrast-design.md` section 6); no SSH host or AI key needed |
 | `helpers_theme_switch_repaints` | `--ui-demo=ansi --theme "Onyx Synapse"`, then Settings > Appearance > Onyx Light > Save: lines 11 and 15, far from the cursor, are `727223`/`6C6C6C`, not the old theme's `FFFF55`/`FFFFFF` (the forced repaint after a theme change); no SSH host or AI key needed |
 | `launch_main_window_no_dialog` | (`LAUNCH-1`) `-nc` launch: `Nutshell_Window` appears, no dialog within 3s, `IDM_FILE_EXIT` → exit code 0 within 5s |
-| `launch_without_config_writes_defaults` | (`LAUNCH-2`) no `nutshell.config`: `config_load()` returns `NULL`, so a "Configuration Warning" MessageBox appears (not mentioned in the original plan — documented in the case); dismissed, no config is written until Settings › Save, then it exists with default keys |
-| `launch_with_corrupt_config_survives` | (`LAUNCH-3`) same Configuration Warning path for a truncated-JSON config; app keeps running with defaults, no crash |
+| `launch_without_config_writes_defaults` | (`LAUNCH-2`) no `nutshell.config` (a first run): the file is saved at once with the "Local shell" profile and `ai_enabled` false, and the themed first-run notice (`Nutshell_Notice`, caption `Welcome to Nutshell <ver>`) appears over the visible main window with its `AI assistant` item reading `off until you choose to turn it on`; OK closes it, then Settings › Save writes the default keys |
+| `launch_with_corrupt_config_survives` | (`LAUNCH-3`) a truncated-JSON config: the warning notice titled `Your configuration couldn't be loaded` appears, names the `nutshell.config.bad-*` backup that exists beside the exe, is dismissed with OK, and the app keeps running with defaults, no crash |
+| `launch_upgrade_adds_fields` | (`LAUNCH-4`) a complete config minus `ai_enabled`: the file is saved at once with `"ai_enabled": false`, and the upgrade notice (`Welcome to Nutshell <ver>`, "introduces new settings") lists exactly one item, `AI assistant`: `off until you choose to turn it on`; OK closes it and the main window is enabled again |
 | `resize_range_paints_cleanly` | (`RESIZE-1`) 640×400 → 1024×768 → 1920×1080 → 1024×768 → 640×400: every capture non-blank, `tput cols` tracks the direction of each resize |
 | `minimise_restore_repaints` | (`WINDOW-1`) SW_MINIMIZE then SW_RESTORE: iconic/restored state and the "repaints identically" comparison all asserted normally. Regression guard for the `WM_SIZE` `SIZE_MINIMIZED` bug this case found, fixed in v1.1.12 (see the case comment) |
 | `fullscreen_toggle_changes_pty` | (`WINDOW-2`) `IDM_VIEW_FULLSCREEN` twice: `tput cols` grows then returns to its original value |
@@ -397,7 +398,7 @@ throw (via `Assert-True`) on failure and return a short string on success.
 `Invoke-Case` also takes `-ExtraArgs` (launch with these args instead of
 `-sn <profile>`, e.g. `@("-h", "tompi")` or `@("-nc")`) and `-NoConfig` (skip
 writing `nutshell.config` — see `New-NutshellTestEnv`'s `-NoConfig` switch, used
-by the `LAUNCH-2`/`LAUNCH-3` first-run/corrupt-config cases), and `-ExtraProfiles`
+by the `LAUNCH-2`/`LAUNCH-3` first-run/corrupt-config cases; the generated config is otherwise complete, every key `config_save()` writes, so a launch shows no `Welcome` notice), and `-ExtraProfiles`
 (an array of hashtables, each one more saved profile appended after the
 generated SSH one, e.g. `@(@{ name = "ps"; kind = "local"; shell = "powershell.exe -NoLogo" })`
 with `-ExtraArgs @("-sn", "ps")`). A case that needs to

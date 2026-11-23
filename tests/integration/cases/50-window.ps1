@@ -1,5 +1,5 @@
 # 50-window.ps1 -- launch, window, shutdown, menu (integration-coverage.md section 1):
-# LAUNCH-1..3, RESIZE-1, WINDOW-1..2, CLOSE-1, MENU-1, and HELP-1 (the keyboard shortcuts sheet).
+# LAUNCH-1..4, RESIZE-1, WINDOW-1..2, CLOSE-1, MENU-1, and HELP-1 (the keyboard shortcuts sheet).
 # Dot-sourced by Run-Integration.ps1; depends on its Invoke-Case/Assert-True/
 # Test-NutshellCaptureNonBlank/$Artifacts/$HostName/$User/$KeyPath/$Exe/
 # $ActiveTiers/$Only/$results/$WM_COMMAND/$WM_CLOSE.
@@ -64,6 +64,38 @@ function Wait-NutshellMainWindowOnly {
     return [IntPtr]::Zero
 }
 
+function Get-NutshellNoticeText {
+    <# Reads a Nutshell_Notice (src/ui/notice_dlg.h control ids: title 100,
+       opening 101, closing 102, label i = 110 + i, value i = 140 + i) through
+       its real STATIC children. Returns Title (the caption), Opening, Closing
+       and Items (objects with Label and Value). #>
+    param([Parameter(Mandatory)] $Dialog)
+    $read = {
+        param([int] $Id)
+        $c = Get-NutshellControl -Dialog $Dialog -Id $Id
+        if ($c -eq [IntPtr]::Zero) { return $null }
+        return (Get-NutshellControlText -Control $c)
+    }
+    $items = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt 24; $i++) {
+        $label = & $read (110 + $i)
+        if ($null -eq $label) { break }
+        [void]$items.Add([pscustomobject]@{ Label = $label; Value = (& $read (140 + $i)) })
+    }
+    return [pscustomobject]@{
+        Title = (Get-NutshellWindowText -Hwnd $Dialog)
+        Opening = (& $read 101); Closing = (& $read 102); Items = @($items)
+    }
+}
+
+function Wait-NutshellNotice {
+    <# The Nutshell_Notice a launch raises (shown at the top of
+       WM_STARTUP_CONNECT, after the main window is up), by title regex. #>
+    param([Parameter(Mandatory)] $Process, [Parameter(Mandatory)] [string] $Title, [int] $TimeoutSec = 10)
+    $sess = [pscustomobject]@{ Process = $Process }
+    return (Wait-NutshellDialog -Session $sess -Title $Title -TimeoutSec $TimeoutSec)
+}
+
 # ---- LAUNCH-1: launch, main window, no dialog, clean exit -----------------------
 # Standalone (not Invoke-Case): needs to observe the process exit *itself*
 # (exit code 0) rather than have Stop-Nutshell force-kill it, and -nc avoids
@@ -113,15 +145,14 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
 }
 
 # ---- LAUNCH-2: no config file (first run) ----------------------------------------
-# Since v1.2.15 config_load_ex() (src/config/loader.c) tells a missing file
-# (first run) from an unreadable or invalid one, and src/ui/window.c's
-# WM_CREATE warns only for the latter two. A first run shows no dialog: it
-# starts from config_new_default(), adds the saved "Local shell" profile
-# (config_ensure_local_profile, since v1.2.1) and saves, so the file exists
-# as soon as the main window does. This case asserts that, then that
-# Settings > Save (IDOK) still writes recognisable default keys.
-# open_session_manager_at_start defaults to 0 (loader.c), so no Session
-# Manager auto-opens.
+# A missing config is a first run: WM_CREATE starts from config_new_default(),
+# adds the saved "Local shell" profile and saves at once, so the file exists
+# as soon as the main window does, and the "Welcome to Nutshell <ver>" notice
+# (Nutshell_Notice, shown at the top of WM_STARTUP_CONNECT) lists what starts
+# off, the AI assistant among it. This case asserts the file while the notice
+# is still open, the notice's text, then (OK) that Settings > Save (IDOK)
+# still writes recognisable default keys. open_session_manager_at_start
+# defaults to 0 (loader.c), so no Session Manager auto-opens.
 if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "launch_without_config_writes_defaults")) {
     $name = "launch_without_config_writes_defaults"
     Write-Host ("[RUN ] " + $name)
@@ -131,7 +162,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     $ok = $false; $detail = ""
     try {
         Assert-True (-not (Test-Path $cfgPath)) "test bug: nutshell.config already exists before launch"
-        # Wait for whichever shows up first, so an unexpected dialog is
+        # Wait for whichever shows up first, so an unexpected message box is
         # reported rather than timing out behind it.
         $launch = Start-NutshellUntilDialogOrWindow -Env $testEnv -ExtraArgs @()
         if ($launch.Dialog -ne [IntPtr]::Zero) {
@@ -143,11 +174,27 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
         $mainHwnd = Wait-NutshellMainWindowOnly -Process $launch.Process -TimeoutSec 10
         Assert-True ($mainHwnd -ne [IntPtr]::Zero) "main window never appeared on a first run"
         $session = [pscustomobject]@{ Process = $launch.Process; Main = $mainHwnd; Env = $testEnv; Log = $null }
+
+        $notice = Wait-NutshellNotice -Process $session.Process -Title "Welcome to Nutshell"
+        Assert-True ($notice -ne [IntPtr]::Zero) "no first-run 'Welcome to Nutshell' notice appeared"
+        $text = Get-NutshellNoticeText -Dialog $notice
+        Assert-True ($text.Title -match '^Welcome to Nutshell \d+\.\d+\.\d+$') "first-run notice title was '$($text.Title)'"
+        Assert-True ($text.Opening -match "No configuration was found") "first-run notice opening was '$($text.Opening)'"
+        $ai = @($text.Items | Where-Object { $_.Label -match "AI assistant" })
+        Assert-True ($ai.Count -eq 1) "first-run notice lists $($ai.Count) 'AI assistant' items, expected 1"
+        Assert-True ($ai[0].Value -eq "off until you choose to turn it on") "AI assistant value was '$($ai[0].Value)'"
+        Assert-True (Test-Path $cfgPath) "no nutshell.config while the first-run notice is open -- the file should be saved before the notice shows"
+        Close-NutshellDialog -Dialog $notice -Button OK
+        $deadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $deadline -and [NutshellNative]::IsWindow($notice)) { Start-Sleep -Milliseconds 100 }
+        Assert-True (-not [NutshellNative]::IsWindow($notice)) "OK did not close the first-run notice"
+
         Assert-True $session.Process.Responding "app stopped responding on a first run"
         Start-Sleep -Milliseconds 500
         Assert-True (Test-Path $cfgPath) "no nutshell.config after a first run -- the Local shell profile should have been saved"
         $first = Get-Content $cfgPath -Raw | ConvertFrom-Json
         Assert-True ($null -ne $first.profiles -and @($first.profiles).Count -ge 1) "first-run config has no profiles -- the Local shell profile is missing"
+        Assert-True ($first.settings.ai_enabled -eq $false) "first-run config does not hold ai_enabled = false"
 
         $set = Open-NutshellSettings -Session $session
         Close-NutshellDialog -Dialog $set -Button OK   # Settings' IDOK is Save
@@ -156,7 +203,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
         $json = Get-Content $cfgPath -Raw | ConvertFrom-Json
         Assert-True ($null -ne $json.settings) "written config has no 'settings' object"
         Assert-True ($null -ne $json.settings.font -and $json.settings.font -ne "") "written config's settings.font is empty -- doesn't look like real defaults"
-        $detail = "no dialog on a first run; config saved at start with the Local shell profile; Settings > Save wrote default keys (font='$($json.settings.font)')"
+        $detail = "first run: file saved at start with the Local shell profile and ai_enabled false; Welcome notice listed AI assistant 'off until you choose to turn it on'; OK closed it; Settings > Save wrote default keys (font='$($json.settings.font)')"
         $ok = $true
     } catch {
         $detail = $_.Exception.Message
@@ -183,12 +230,20 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     $session = $null; $launch = $null
     $ok = $false; $detail = ""
     try {
-        # Same reason as LAUNCH-2: the warning MessageBoxA blocks WM_CREATE,
-        # so the main window isn't visible yet when it's up.
+        # The warning is a Nutshell_Notice shown at the top of
+        # WM_STARTUP_CONNECT, over the visible main window.
         $launch = Start-NutshellUntilDialogOrWindow -Env $testEnv -ExtraArgs @()
-        Assert-True ($launch.Dialog -ne [IntPtr]::Zero) "no Configuration Warning dialog appeared for a truncated config (main window appeared first: $($launch.Main -ne [IntPtr]::Zero))"
-        $dlgTitle = Get-NutshellWindowText -Hwnd $launch.Dialog
-        Assert-True ($dlgTitle -match "Configuration Warning") "dialog title was '$dlgTitle', expected 'Configuration Warning'"
+        Assert-True ($launch.Dialog -eq [IntPtr]::Zero) "a message box appeared instead of the themed notice for a truncated config"
+        $mainHwnd = Wait-NutshellMainWindowOnly -Process $launch.Process -TimeoutSec 10
+        Assert-True ($mainHwnd -ne [IntPtr]::Zero) "main window never appeared for a truncated config"
+        $noticeDlg = Wait-NutshellNotice -Process $launch.Process -Title "Your configuration couldn't be loaded"
+        Assert-True ($noticeDlg -ne [IntPtr]::Zero) "no 'Your configuration couldn't be loaded' notice appeared for a truncated config"
+        $launch.Dialog = $noticeDlg
+        $text = Get-NutshellNoticeText -Dialog $noticeDlg
+        $bad = @(Get-ChildItem -Path $testEnv.Root -Filter "nutshell.config.bad-*" -ErrorAction SilentlyContinue)
+        Assert-True ($bad.Count -eq 1) "expected one nutshell.config.bad-* backup beside the exe, found $($bad.Count)"
+        Assert-True ($text.Opening.Contains($bad[0].Name)) "the notice does not name the backup '$($bad[0].Name)': $($text.Opening)"
+        $dlgTitle = $text.Title
         $r = New-Object NutshellNative+RECT
         [NutshellNative]::GetWindowRect($launch.Dialog, [ref]$r) | Out-Null
         $bmp = New-Object System.Drawing.Bitmap ($r.R - $r.L), ($r.B - $r.T)
@@ -198,15 +253,70 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
         $g.Dispose(); $bmp.Dispose()
         Close-NutshellDialog -Dialog $launch.Dialog -Button OK
 
-        $mainHwnd = Wait-NutshellMainWindowOnly -Process $launch.Process -TimeoutSec 10
-        Assert-True ($mainHwnd -ne [IntPtr]::Zero) "main window never appeared after dismissing the warning"
         $session = [pscustomobject]@{ Process = $launch.Process; Main = $mainHwnd; Env = $testEnv; Log = $null }
         Start-Sleep -Milliseconds 500
         $session.Process.Refresh()
         Assert-True (-not $session.Process.HasExited) "process exited after a corrupt config, instead of falling back to defaults"
         Assert-True $session.Process.Responding "process stopped responding after a corrupt config"
         Assert-True ([NutshellNative]::IsWindowVisible($session.Main)) "main window not visible after dismissing the warning"
-        $detail = "truncated JSON: Configuration Warning shown, dismissed, app kept running with defaults (no crash within 5s)"
+        $detail = "truncated JSON: 'couldn't be loaded' notice shown (naming the .bad- backup), dismissed, app kept running with defaults (no crash within 5s)"
+        $ok = $true
+    } catch {
+        $detail = $_.Exception.Message
+        if ($session) { try { Save-NutshellScreenshot -Session $session -Path (Join-Path $Artifacts "$name-FAIL.png") | Out-Null } catch {} }
+    } finally {
+        if ($session) { Stop-Nutshell -Session $session }
+        elseif ($launch -and $launch.Process -and -not $launch.Process.HasExited) { Stop-Process -Id $launch.Process.Id -Force -ErrorAction SilentlyContinue }
+        for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+            Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+            if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
+    [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
+}
+
+# ---- LAUNCH-4: an older config gains the new settings, with a notice -------------
+# A complete config minus ai_enabled (what a file from before the switch
+# looks like, with no API key): WM_CREATE adds the missing key, saves at once,
+# and WM_STARTUP_CONNECT shows the upgrade notice ("Welcome to Nutshell <ver>")
+# listing it. The file already holds "ai_enabled": false while the notice is
+# open.
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "launch_upgrade_adds_fields")) {
+    $name = "launch_upgrade_adds_fields"
+    Write-Host ("[RUN ] " + $name)
+    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+    $cfgPath = Join-Path $testEnv.Root "nutshell.config"
+    $launch = $null; $session = $null
+    $ok = $false; $detail = ""
+    try {
+        $old = Get-Content $cfgPath -Raw | ConvertFrom-Json
+        Assert-True ($old.settings.PSObject.Properties.Name -contains "ai_enabled") "test bug: the generated config has no ai_enabled to remove"
+        $old.settings.PSObject.Properties.Remove("ai_enabled")
+        [IO.File]::WriteAllText($cfgPath, ($old | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding $false))
+
+        $launch = Start-NutshellUntilDialogOrWindow -Env $testEnv -ExtraArgs @("-nc")
+        Assert-True ($launch.Dialog -eq [IntPtr]::Zero) "a message box appeared on an upgrade launch"
+        $mainHwnd = Wait-NutshellMainWindowOnly -Process $launch.Process -TimeoutSec 10
+        Assert-True ($mainHwnd -ne [IntPtr]::Zero) "main window never appeared on an upgrade launch"
+        $session = [pscustomobject]@{ Process = $launch.Process; Main = $mainHwnd; Env = $testEnv; Log = $null }
+
+        $notice = Wait-NutshellNotice -Process $session.Process -Title "Welcome to Nutshell"
+        Assert-True ($notice -ne [IntPtr]::Zero) "no upgrade 'Welcome to Nutshell' notice appeared"
+        $text = Get-NutshellNoticeText -Dialog $notice
+        Assert-True ($text.Opening -match "introduces new settings") "upgrade notice opening was '$($text.Opening)'"
+        Assert-True ($text.Items.Count -eq 1) "upgrade notice lists $($text.Items.Count) items, expected 1 (only ai_enabled was removed)"
+        Assert-True ($text.Items[0].Label -match "AI assistant") "upgrade notice item label was '$($text.Items[0].Label)'"
+        Assert-True ($text.Items[0].Value -eq "off until you choose to turn it on") "upgrade notice value was '$($text.Items[0].Value)' (no API key was set)"
+
+        $now = Get-Content $cfgPath -Raw
+        Assert-True ($now -match '"ai_enabled":\s*false') "the config does not hold ai_enabled = false while the notice is open"
+        Close-NutshellDialog -Dialog $notice -Button OK
+        Start-Sleep -Milliseconds 500
+        $session.Process.Refresh()
+        Assert-True (-not $session.Process.HasExited) "process exited after the upgrade notice"
+        Assert-True ([NutshellNative]::IsWindowEnabled($session.Main)) "the main window is still disabled after the notice closed"
+        $detail = "config minus ai_enabled: file saved at once with ai_enabled false; upgrade notice listed 'AI assistant: off until you choose to turn it on'; OK closed it"
         $ok = $true
     } catch {
         $detail = $_.Exception.Message

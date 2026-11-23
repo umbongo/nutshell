@@ -5,6 +5,7 @@
 #include "ns_font.h"
 #include "ns_scale.h"
 #include "ui_theme.h"
+#include "notice_dlg.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
@@ -2244,10 +2245,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
              * for this session because nutshell.config could not be read
              * at startup (see window.c's WM_CREATE / M3). */
             if (config_save(d->cfg, d->config_path) != 0) {
-                MessageBox(hwnd,
+                Notice sf;
+                notice_save_failed(&sf,
                     "Could not save nutshell.config. Your settings changes "
-                    "have not been written to disk.",
-                    "Save Failed", MB_OK | MB_ICONWARNING);
+                    "have not been written to disk.");
+                (void)notice_dlg_show(hwnd, &sf, d->theme);
             }
             DestroyWindow(hwnd);
             break;
