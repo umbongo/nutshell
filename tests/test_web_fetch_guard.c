@@ -32,6 +32,9 @@ typedef struct {
     int    nresp;
     int    get_fail;        /* the get returns -1 instead of a response */
     int    cancel_in_get;   /* the get raises the cancel flag */
+    AiNetCancel *nc_target;  /* token the hooks below fire */
+    int    fire_in_get;     /* the get fires nc_target (after answering) */
+    int    fire_in_resolve_n;   /* resolve number N (1-based) fires nc_target */
 
     int    force_resolve;   /* resolve returns force_ret whatever the host */
     int    force_ret;
@@ -82,6 +85,8 @@ static int fk_resolve(void *ctx, const char *host, NetAddr *out, int max)
     if (f->resolves < FK_MAX_CALLS)
         snprintf(f->resolved[f->resolves], NET_HOST_MAX, "%s", host);
     f->resolves++;
+    if (f->fire_in_resolve_n == f->resolves && f->nc_target)
+        ai_nc_fire(f->nc_target);
     if (f->cancel_in_resolve && f->cancel_target) *f->cancel_target = 1;
     if (f->force_resolve) return f->force_ret;
 
@@ -108,6 +113,7 @@ static int fk_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     f->gets++;
     f->now += f->step;
     if (f->cancel_in_get && cancel) *cancel = 1;
+    if (f->fire_in_get && f->nc_target) ai_nc_fire(f->nc_target);
     if (f->get_fail || f->nresp == 0) return -1;
 
     const FkResp *r = &f->resp[idx < f->nresp ? idx : f->nresp - 1];
@@ -1007,6 +1013,80 @@ int test_web_fetch_pinned_host_spellings(void)
     ASSERT_EQ(rc, -1);
     ASSERT_EQ(f.gets, 1);
     ASSERT_EQ(f.resolves, 1);
+    free(buf);
+    TEST_END();
+}
+
+/* ---- the stream's cancel token (AiNetCancel) --------------------------- */
+
+int test_web_fetch_nc_fired_before_first_hop(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>x</p>");
+    AiNetCancel nc;
+    ai_nc_init(&nc);
+    ai_nc_fire(&nc);
+    ctx.nc = &nc;
+    char *buf = NULL;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "cancelled") != NULL);
+    ASSERT_EQ(f.gets, 0);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_nc_fired_during_get(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>x</p>");
+    AiNetCancel nc;
+    ai_nc_init(&nc);
+    ctx.nc = &nc;
+    f.nc_target = &nc;
+    f.fire_in_get = 1;   /* the UI closed the request while the get ran */
+    char *buf = NULL;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) {
+        ASSERT_TRUE(strstr(buf, "cancelled") != NULL);
+        ASSERT_TRUE(strstr(buf, "HTTP request failed") == NULL);
+    }
+    ASSERT_EQ(f.gets, 1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_nc_fired_between_hops(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 302, "http://pub.test/next", "");
+    fk_resp(&f, 200, NULL, "<p>x</p>");
+    AiNetCancel nc;
+    ai_nc_init(&nc);
+    ctx.nc = &nc;
+    f.nc_target = &nc;
+    f.fire_in_resolve_n = 2;   /* fired while hop 2's host is looked up */
+    char *buf = NULL;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "cancelled") != NULL);
+    ASSERT_EQ(f.gets, 1);       /* the second request never went out */
+    ASSERT_EQ(f.ends, 1);
     free(buf);
     TEST_END();
 }

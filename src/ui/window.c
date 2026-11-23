@@ -2818,8 +2818,11 @@ int ui_ai_is_working(void)
 
 /* The switch goes off: no panel, no conversation, no menu items, no tab
  * button, and the gate closed so nothing starts a request. Replies in flight
- * are aborted and orphaned by the panel's WM_DESTROY (their threads hold a
- * WorkerLife and free themselves); cancelling them at once is a later task. */
+ * are aborted and orphaned by the panel's WM_DESTROY, which fires each
+ * stream's cancel token: the request handle a worker is blocked on is closed
+ * at once, so its call returns. The worker threads are then joined for a
+ * bounded 2 s; one still running after that is an orphan that frees itself
+ * (WorkerLife) and posts nothing. */
 static void ai_feature_off(HWND hwnd)
 {
     ai_gate_set_enabled(0);
@@ -2836,6 +2839,7 @@ static void ai_feature_off(HWND hwnd)
     g_hwndAiChat = NULL;
     g_ai_panel_width = 0;
     g_ai_target_width = 0;
+    (void)ai_chat_join_streams(2000);
     /* ... so the discard comes after it, on every session. */
     for (Session *s = g_session_list; s; s = s->next)
         ai_session_discard(&s->ai_state);
@@ -6387,7 +6391,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                 ai_chat_close(g_hwndAiChat);
             g_hwndAiChat = NULL;
-            ai_chat_wait_for_streams(2000);
+            (void)ai_chat_join_streams(2000);
             {
                 Session *s = g_session_list;
                 while (s) {

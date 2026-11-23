@@ -56,9 +56,33 @@ static int parse_url(const char *url, wchar_t *host, size_t host_sz,
     return 0;
 }
 
-int ai_http_post(const char *url, const char * const *headers,
-                 const char *body, size_t body_len,
-                 AiHttpResponse *resp)
+/* The request handle is armed on the caller's token while its calls block;
+ * the UI thread firing the token closes it and wakes the call. Whoever the
+ * disarm says owns the handle closes it: after a fire it is already closed,
+ * and its value may have been reused, so it is never touched again. With no
+ * token (NULL) disarm says "yours" and this is a plain close. */
+static void http_close_cb(uintptr_t h)
+{
+    WinHttpCloseHandle((HINTERNET)h);
+}
+
+static void req_close(HINTERNET req, AiNetCancel *nc)
+{
+    if (ai_nc_disarm(nc)) WinHttpCloseHandle(req);
+}
+
+/* Arm a fresh request handle. 0 to go on; -1 when the token had already
+ * fired: the handle is closed here and the caller closes the rest. */
+static int req_arm(HINTERNET req, AiNetCancel *nc)
+{
+    if (ai_nc_arm(nc, (uintptr_t)req, http_close_cb) == 0) return 0;
+    WinHttpCloseHandle(req);
+    return -1;
+}
+
+static int ai_http_post_impl(const char *url, const char * const *headers,
+                             const char *body, size_t body_len,
+                             AiHttpResponse *resp, AiNetCancel *nc)
 {
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
@@ -105,6 +129,12 @@ int ai_http_post(const char *url, const char * const *headers,
         WinHttpCloseHandle(hSession);
         return -1;
     }
+    if (req_arm(hRequest, nc) != 0) {
+        snprintf(resp->error, sizeof(resp->error), "cancelled");
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
 
     /* Set headers */
     WinHttpAddRequestHeaders(hRequest,
@@ -135,7 +165,7 @@ int ai_http_post(const char *url, const char * const *headers,
     if (!sent) {
         snprintf(resp->error, sizeof(resp->error), "WinHttpSendRequest failed: %lu",
                  GetLastError());
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -144,7 +174,7 @@ int ai_http_post(const char *url, const char * const *headers,
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
         snprintf(resp->error, sizeof(resp->error),
                  "WinHttpReceiveResponse failed: %lu", GetLastError());
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -163,7 +193,7 @@ int ai_http_post(const char *url, const char * const *headers,
     char *buf = malloc(cap);
     if (!buf) {
         snprintf(resp->error, sizeof(resp->error), "Out of memory");
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -192,16 +222,17 @@ int ai_http_post(const char *url, const char * const *headers,
         resp->body_len = total;
     }
 
-    WinHttpCloseHandle(hRequest);
+    req_close(hRequest, nc);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     return 0;
 }
 
-int ai_http_post_stream(const char *url, const char * const *headers,
-                        const char *body, size_t body_len,
-                        AiStreamCallback cb, void *userdata,
-                        int *status_out, char *error, size_t error_size)
+static int ai_http_post_stream_impl(const char *url, const char * const *headers,
+                                    const char *body, size_t body_len,
+                                    AiStreamCallback cb, void *userdata,
+                                    int *status_out, char *error, size_t error_size,
+                                    AiNetCancel *nc)
 {
     if (status_out) *status_out = 0;
     if (error && error_size > 0) error[0] = '\0';
@@ -248,6 +279,12 @@ int ai_http_post_stream(const char *url, const char * const *headers,
         WinHttpCloseHandle(hSession);
         return -1;
     }
+    if (req_arm(hRequest, nc) != 0) {
+        if (error) snprintf(error, error_size, "cancelled");
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
 
     WinHttpAddRequestHeaders(hRequest,
         L"Content-Type: application/json\r\n",
@@ -276,7 +313,7 @@ int ai_http_post_stream(const char *url, const char * const *headers,
     if (!sent) {
         if (error) snprintf(error, error_size, "WinHttpSendRequest failed: %lu",
                             GetLastError());
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -285,7 +322,7 @@ int ai_http_post_stream(const char *url, const char * const *headers,
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
         if (error) snprintf(error, error_size,
                             "WinHttpReceiveResponse failed: %lu", GetLastError());
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -303,6 +340,7 @@ int ai_http_post_stream(const char *url, const char * const *headers,
         char chunk_buf[4096];
         DWORD bytes_read;
         for (;;) {
+            if (ai_nc_cancelled(nc)) break;   /* a fired token closed hRequest */
             DWORD avail = 0;
             if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
             if (avail == 0) break;
@@ -318,7 +356,7 @@ int ai_http_post_stream(const char *url, const char * const *headers,
                 error[err_pos] = '\0';
             }
         }
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -329,6 +367,7 @@ int ai_http_post_stream(const char *url, const char * const *headers,
     char chunk_buf[4096];
     DWORD bytes_read;
     for (;;) {
+        if (ai_nc_cancelled(nc)) { ret = -1; break; }   /* hRequest is closed */
         DWORD avail = 0;
         if (!WinHttpQueryDataAvailable(hRequest, &avail)) {
             ret = -1;   /* the body broke after a 200: not a clean end */
@@ -354,14 +393,14 @@ int ai_http_post_stream(const char *url, const char * const *headers,
     if (ret != 0 && error && error_size > 0)
         snprintf(error, error_size, "connection lost during reply");
 
-    WinHttpCloseHandle(hRequest);
+    req_close(hRequest, nc);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     return ret;
 }
 
-int ai_http_get(const char *url, const char * const *headers,
-                AiHttpResponse *resp)
+static int ai_http_get_impl(const char *url, const char * const *headers,
+                            AiHttpResponse *resp, AiNetCancel *nc)
 {
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
@@ -408,6 +447,12 @@ int ai_http_get(const char *url, const char * const *headers,
         WinHttpCloseHandle(hSession);
         return -1;
     }
+    if (req_arm(hRequest, nc) != 0) {
+        snprintf(resp->error, sizeof(resp->error), "cancelled");
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
 
     /* Add all caller-supplied headers */
     if (headers) {
@@ -433,7 +478,7 @@ int ai_http_get(const char *url, const char * const *headers,
     if (!sent) {
         snprintf(resp->error, sizeof(resp->error), "WinHttpSendRequest failed: %lu",
                  GetLastError());
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -442,7 +487,7 @@ int ai_http_get(const char *url, const char * const *headers,
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
         snprintf(resp->error, sizeof(resp->error),
                  "WinHttpReceiveResponse failed: %lu", GetLastError());
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -459,7 +504,7 @@ int ai_http_get(const char *url, const char * const *headers,
     char *buf = malloc(cap);
     if (!buf) {
         snprintf(resp->error, sizeof(resp->error), "Out of memory");
-        WinHttpCloseHandle(hRequest);
+        req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -488,19 +533,57 @@ int ai_http_get(const char *url, const char * const *headers,
         resp->body_len = total;
     }
 
-    WinHttpCloseHandle(hRequest);
+    req_close(hRequest, nc);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     return 0;
+}
+
+/* The public calls: a call that failed after its token fired failed because
+ * the handle was closed under it, so it says "cancelled" whatever WinHTTP
+ * reported. */
+static void note_cancel(AiNetCancel *nc, char *err, size_t cap)
+{
+    if (ai_nc_cancelled(nc) && err && cap > 0)
+        snprintf(err, cap, "cancelled");
+}
+
+int ai_http_post(const char *url, const char * const *headers,
+                 const char *body, size_t body_len,
+                 AiHttpResponse *resp, AiNetCancel *nc)
+{
+    int rc = ai_http_post_impl(url, headers, body, body_len, resp, nc);
+    if (rc != 0 && resp) note_cancel(nc, resp->error, sizeof(resp->error));
+    return rc;
+}
+
+int ai_http_get(const char *url, const char * const *headers,
+                AiHttpResponse *resp, AiNetCancel *nc)
+{
+    int rc = ai_http_get_impl(url, headers, resp, nc);
+    if (rc != 0 && resp) note_cancel(nc, resp->error, sizeof(resp->error));
+    return rc;
+}
+
+int ai_http_post_stream(const char *url, const char * const *headers,
+                        const char *body, size_t body_len,
+                        AiStreamCallback cb, void *userdata,
+                        int *status_out, char *error, size_t error_size,
+                        AiNetCancel *nc)
+{
+    int rc = ai_http_post_stream_impl(url, headers, body, body_len, cb, userdata,
+                                      status_out, error, error_size, nc);
+    if (rc != 0) note_cancel(nc, error, error_size);
+    return rc;
 }
 
 #else /* !_WIN32 — stub for non-Windows builds */
 
 int ai_http_post(const char *url, const char * const *headers,
                  const char *body, size_t body_len,
-                 AiHttpResponse *resp)
+                 AiHttpResponse *resp, AiNetCancel *nc)
 {
-    (void)url; (void)headers; (void)body; (void)body_len;
+    (void)url; (void)headers; (void)body; (void)body_len; (void)nc;
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
     snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
@@ -508,9 +591,9 @@ int ai_http_post(const char *url, const char * const *headers,
 }
 
 int ai_http_get(const char *url, const char * const *headers,
-                AiHttpResponse *resp)
+                AiHttpResponse *resp, AiNetCancel *nc)
 {
-    (void)url; (void)headers;
+    (void)url; (void)headers; (void)nc;
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
     snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
@@ -520,10 +603,11 @@ int ai_http_get(const char *url, const char * const *headers,
 int ai_http_post_stream(const char *url, const char * const *headers,
                         const char *body, size_t body_len,
                         AiStreamCallback cb, void *userdata,
-                        int *status_out, char *error, size_t error_size)
+                        int *status_out, char *error, size_t error_size,
+                        AiNetCancel *nc)
 {
     (void)url; (void)headers; (void)body; (void)body_len;
-    (void)cb; (void)userdata; (void)status_out;
+    (void)cb; (void)userdata; (void)status_out; (void)nc;
     if (error && error_size > 0)
         snprintf(error, error_size, "HTTP not available on this platform");
     return -1;

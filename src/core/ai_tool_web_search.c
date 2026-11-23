@@ -313,6 +313,145 @@ int ddg_parse_html(const char *html, size_t html_len,
     return count;
 }
 
+/* ---- the WinHTTP request -------------------------------------------------- */
+
+#ifdef _WIN32
+
+/* A search is one small GET: bound every phase, and the whole call. */
+#define WS_RESOLVE_MS   10000
+#define WS_CONNECT_MS   10000
+#define WS_IO_MS        15000   /* send, and each receive */
+#define WS_TOTAL_MS     30000   /* the whole request, body included */
+#define WS_MAX_BODY     (1024u * 1024u)   /* more is cut, never grown without limit */
+
+#ifndef WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT
+#define WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT 7
+#endif
+
+static int ws_stopped(volatile int *cancel, const AiNetCancel *nc)
+{
+    return (cancel && *cancel) || ai_nc_cancelled(nc);
+}
+
+static void ws_close_cb(uintptr_t h)
+{
+    WinHttpCloseHandle((HINTERNET)h);
+}
+
+/* One GET of `url` over https. 0 with a malloc'd, NUL-terminated *body (at
+ * most WS_MAX_BODY bytes), or -1 with *err a static text. The request handle
+ * is armed on `nc` while the calls run, so the UI thread can close it and
+ * wake a blocked call; after any failed call the token is read before the
+ * handle is touched again, and the disarm decides who closes it. */
+static int ws_get(const char *url, volatile int *cancel, AiNetCancel *nc,
+                  char **body, size_t *body_len, const char **err)
+{
+    *body = NULL;
+    *body_len = 0;
+    *err = "HTTP request failed";
+    if (ws_stopped(cancel, nc)) { *err = "Search cancelled"; return -1; }
+
+    wchar_t w_url[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, url, -1, w_url, 1024) <= 0) {
+        *err = "Failed to parse search URL";
+        return -1;
+    }
+    URL_COMPONENTS uc;
+    memset(&uc, 0, sizeof(uc));
+    uc.dwStructSize = sizeof(uc);
+    wchar_t w_host[256] = {0};
+    wchar_t w_path[768] = {0};
+    uc.lpszHostName     = w_host;
+    uc.dwHostNameLength = 256;
+    uc.lpszUrlPath      = w_path;
+    uc.dwUrlPathLength  = 768;
+    if (!WinHttpCrackUrl(w_url, 0, 0, &uc)) {
+        *err = "Failed to parse search URL";
+        return -1;
+    }
+
+    HINTERNET session =
+        ns_winhttp_open(L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)");
+    if (!session) { *err = "WinHttpOpen failed"; return -1; }
+    (void)WinHttpSetTimeouts(session, WS_RESOLVE_MS, WS_CONNECT_MS,
+                             WS_IO_MS, WS_IO_MS);
+
+    HINTERNET conn = NULL, req = NULL;
+    int armed = 0;
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    int ok = 0;
+    unsigned long long end = (unsigned long long)GetTickCount64() + WS_TOTAL_MS;
+
+    DWORD port = (uc.nPort == 0) ? INTERNET_DEFAULT_HTTPS_PORT : (DWORD)uc.nPort;
+    conn = WinHttpConnect(session, w_host, (INTERNET_PORT)port, 0);
+    if (!conn) { *err = "WinHttpConnect failed"; goto done; }
+
+    req = WinHttpOpenRequest(conn, L"GET", w_path, NULL, WINHTTP_NO_REFERER,
+                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!req) { *err = "WinHttpOpenRequest failed"; goto done; }
+    if (ai_nc_arm(nc, (uintptr_t)req, ws_close_cb) != 0) goto done;   /* fired */
+    armed = nc != NULL;
+
+    DWORD resp_ms = WS_IO_MS;   /* the wait for the response headers */
+    (void)WinHttpSetOption(req, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT,
+                           &resp_ms, sizeof(resp_ms));
+
+    if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+        goto done;
+    if (ws_stopped(cancel, nc)) goto done;
+    if (!WinHttpReceiveResponse(req, NULL)) goto done;
+
+    for (;;) {
+        if (ws_stopped(cancel, nc)) goto done;
+        if ((unsigned long long)GetTickCount64() >= end) goto done;
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(req, &avail)) goto done;
+        if (avail == 0) break;
+        size_t room = WS_MAX_BODY - len;
+        if ((size_t)avail > room) avail = (DWORD)room;
+        if (avail == 0) break;   /* capped: what arrived is parsed */
+        if (len + (size_t)avail + 1 > cap) {
+            size_t ncap = (len + (size_t)avail + 1) * 2;
+            if (ncap < 65536) ncap = 65536;
+            char *tmp = (char *)realloc(buf, ncap);
+            if (!tmp) goto done;
+            buf = tmp;
+            cap = ncap;
+        }
+        DWORD got = 0;
+        if (!WinHttpReadData(req, buf + len, avail, &got)) goto done;   /* not a short body */
+        if (got == 0) break;
+        len += got;
+    }
+    if (!buf) {
+        buf = (char *)malloc(1);
+        if (!buf) goto done;
+    }
+    buf[len] = '\0';
+    ok = 1;
+
+done:
+    if (req && (!armed || ai_nc_disarm(nc))) WinHttpCloseHandle(req);
+    if (conn) WinHttpCloseHandle(conn);
+    WinHttpCloseHandle(session);
+    if (ws_stopped(cancel, nc)) {
+        free(buf);
+        *err = "Search cancelled";
+        return -1;
+    }
+    if (!ok) {
+        free(buf);
+        return -1;
+    }
+    *body = buf;
+    *body_len = len;
+    return 0;
+}
+
+#endif /* _WIN32 */
+
 /* ---- tool_web_search_execute --------------------------------------------- */
 
 int tool_web_search_execute(const char *input_json, void *tool_data,
@@ -320,12 +459,26 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
                             char **result_buf, size_t *result_len,
                             int *was_truncated)
 {
-    (void)cancel_flag;
-
     if (!input_json || !result_buf || !result_len || !was_truncated)
         return -1;
 
     *was_truncated = 0;
+    *result_buf = NULL;
+    *result_len = 0;
+
+    /* Cancelled before the first request (the flag a Stop sets, or the
+     * stream's token): nothing goes out, on every platform. */
+    {
+        const WebSearchContext *cctx = (const WebSearchContext *)tool_data;
+        if ((cancel_flag && *cancel_flag) || (cctx && ai_nc_cancelled(cctx->nc))) {
+            const char *err = "Search cancelled";
+            *result_buf = malloc(strlen(err) + 1);
+            if (!*result_buf) return -1;
+            strcpy(*result_buf, err);
+            *result_len = strlen(err);
+            return -1;
+        }
+    }
 
     /* Parse query from input JSON */
     JsonNode *input = json_parse(input_json);
@@ -391,112 +544,17 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
         return -1;
     }
 
-    /* Convert URL to wide string */
-    wchar_t w_url[1024];
-    MultiByteToWideChar(CP_UTF8, 0, url, -1, w_url, 1024);
-
-    /* Parse URL components */
-    URL_COMPONENTS uc;
-    memset(&uc, 0, sizeof(uc));
-    uc.dwStructSize = sizeof(uc);
-    wchar_t w_host[256] = {0};
-    wchar_t w_path[768] = {0};
-    uc.lpszHostName    = w_host;
-    uc.dwHostNameLength = 256;
-    uc.lpszUrlPath     = w_path;
-    uc.dwUrlPathLength = 768;
-
-    if (!WinHttpCrackUrl(w_url, 0, 0, &uc)) {
-        const char *err = "Failed to parse search URL";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    HINTERNET session =
-        ns_winhttp_open(L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)");
-    if (!session) {
-        const char *err = "WinHttpOpen failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    DWORD port = (uc.nPort == 0) ? INTERNET_DEFAULT_HTTPS_PORT : (DWORD)uc.nPort;
-    HINTERNET conn = WinHttpConnect(session, w_host, (INTERNET_PORT)port, 0);
-    if (!conn) {
-        WinHttpCloseHandle(session);
-        const char *err = "WinHttpConnect failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    HINTERNET req = WinHttpOpenRequest(
-        conn, L"GET", w_path, NULL,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-        WINHTTP_FLAG_SECURE);
-    if (!req) {
-        WinHttpCloseHandle(conn);
-        WinHttpCloseHandle(session);
-        const char *err = "WinHttpOpenRequest failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(req, NULL)) {
-        WinHttpCloseHandle(req);
-        WinHttpCloseHandle(conn);
-        WinHttpCloseHandle(session);
-        const char *err = "HTTP request failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    /* Read response body */
-    size_t resp_cap = 65536;
+    AiNetCancel *nc = ctx ? ctx->nc : NULL;
+    char  *resp_buf = NULL;
     size_t resp_len = 0;
-    char *resp_buf  = malloc(resp_cap);
-    if (!resp_buf) {
-        WinHttpCloseHandle(req);
-        WinHttpCloseHandle(conn);
-        WinHttpCloseHandle(session);
+    const char *gerr = NULL;
+    if (ws_get(url, cancel_flag, nc, &resp_buf, &resp_len, &gerr) != 0) {
+        *result_buf = malloc(strlen(gerr) + 1);
+        if (!*result_buf) return -1;
+        strcpy(*result_buf, gerr);
+        *result_len = strlen(gerr);
         return -1;
     }
-
-    DWORD avail = 0;
-    while (WinHttpQueryDataAvailable(req, &avail) && avail > 0) {
-        if (resp_len + avail + 1 > resp_cap) {
-            resp_cap = (resp_len + avail + 1) * 2;
-            char *new_buf = realloc(resp_buf, resp_cap);
-            if (!new_buf) { free(resp_buf); resp_buf = NULL; break; }
-            resp_buf = new_buf;
-        }
-        DWORD read = 0;
-        WinHttpReadData(req, resp_buf + resp_len, avail, &read);
-        resp_len += read;
-    }
-
-    WinHttpCloseHandle(req);
-    WinHttpCloseHandle(conn);
-    WinHttpCloseHandle(session);
-
-    if (!resp_buf) return -1;
-    resp_buf[resp_len] = '\0';
 
     /* Parse results */
     size_t out_max = 16384;
@@ -509,7 +567,7 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
     } else {
         n = ddg_parse_api_json(resp_buf, resp_len, max_results, out, out_max);
         if (n == 0) {
-            /* API returned no results — fall back to HTML endpoint */
+            /* API returned no results -- fall back to the HTML endpoint */
             free(out);
             free(resp_buf);
 
@@ -525,112 +583,20 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
                 return -1;
             }
 
-            wchar_t w_html_url[1024];
-            MultiByteToWideChar(CP_UTF8, 0, html_url, -1, w_html_url, 1024);
-
-            URL_COMPONENTS uc2;
-            memset(&uc2, 0, sizeof(uc2));
-            uc2.dwStructSize = sizeof(uc2);
-            wchar_t w_host2[256] = {0};
-            wchar_t w_path2[768] = {0};
-            uc2.lpszHostName    = w_host2;
-            uc2.dwHostNameLength = 256;
-            uc2.lpszUrlPath     = w_path2;
-            uc2.dwUrlPathLength = 768;
-
-            if (!WinHttpCrackUrl(w_html_url, 0, 0, &uc2)) {
-                out = malloc(64);
-                if (!out) return -1;
-                strcpy(out, "No results found.");
-                *result_buf = out;
-                *result_len = strlen(out);
-                return 0;
-            }
-
-            HINTERNET session2 =
-                ns_winhttp_open(L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)");
-            if (!session2) {
-                out = malloc(64);
-                if (!out) return -1;
-                strcpy(out, "No results found.");
-                *result_buf = out;
-                *result_len = strlen(out);
-                return 0;
-            }
-
-            DWORD port2 = (uc2.nPort == 0) ? INTERNET_DEFAULT_HTTPS_PORT
-                                            : (DWORD)uc2.nPort;
-            HINTERNET conn2 = WinHttpConnect(session2, w_host2,
-                                              (INTERNET_PORT)port2, 0);
-            if (!conn2) {
-                WinHttpCloseHandle(session2);
-                out = malloc(64);
-                if (!out) return -1;
-                strcpy(out, "No results found.");
-                *result_buf = out;
-                *result_len = strlen(out);
-                return 0;
-            }
-
-            HINTERNET req2 = WinHttpOpenRequest(
-                conn2, L"GET", w_path2, NULL,
-                WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                WINHTTP_FLAG_SECURE);
-            if (!req2) {
-                WinHttpCloseHandle(conn2);
-                WinHttpCloseHandle(session2);
-                out = malloc(64);
-                if (!out) return -1;
-                strcpy(out, "No results found.");
-                *result_buf = out;
-                *result_len = strlen(out);
-                return 0;
-            }
-
-            if (!WinHttpSendRequest(req2, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                    WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-                !WinHttpReceiveResponse(req2, NULL)) {
-                WinHttpCloseHandle(req2);
-                WinHttpCloseHandle(conn2);
-                WinHttpCloseHandle(session2);
-                out = malloc(64);
-                if (!out) return -1;
-                strcpy(out, "No results found.");
-                *result_buf = out;
-                *result_len = strlen(out);
-                return 0;
-            }
-
-            /* Read HTML response */
-            size_t html_cap = 131072;
+            char  *html_buf = NULL;
             size_t html_len = 0;
-            char *html_buf = malloc(html_cap);
-            if (!html_buf) {
-                WinHttpCloseHandle(req2);
-                WinHttpCloseHandle(conn2);
-                WinHttpCloseHandle(session2);
-                return -1;
+            const char *herr = NULL;
+            if (ws_get(html_url, cancel_flag, nc, &html_buf, &html_len, &herr) != 0) {
+                /* A cancel is a cancel; any other failure of the fallback
+                 * reads, as it always did, as an empty search. */
+                const char *msg = (strcmp(herr, "Search cancelled") == 0)
+                                      ? herr : "No results found.";
+                *result_buf = malloc(strlen(msg) + 1);
+                if (!*result_buf) return -1;
+                strcpy(*result_buf, msg);
+                *result_len = strlen(msg);
+                return strcmp(msg, herr) == 0 ? -1 : 0;
             }
-
-            DWORD avail2 = 0;
-            while (WinHttpQueryDataAvailable(req2, &avail2) && avail2 > 0) {
-                if (html_len + avail2 + 1 > html_cap) {
-                    html_cap = (html_len + avail2 + 1) * 2;
-                    char *new_buf = realloc(html_buf, html_cap);
-                    if (!new_buf) { free(html_buf); html_buf = NULL; break; }
-                    html_buf = new_buf;
-                }
-                DWORD read2 = 0;
-                WinHttpReadData(req2, html_buf + html_len, avail2, &read2);
-                html_len += read2;
-            }
-
-            WinHttpCloseHandle(req2);
-            WinHttpCloseHandle(conn2);
-            WinHttpCloseHandle(session2);
-
-            if (!html_buf) return -1;
-            html_buf[html_len] = '\0';
 
             out = malloc(out_max);
             if (!out) { free(html_buf); return -1; }

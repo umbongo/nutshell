@@ -118,6 +118,11 @@ TEST_SYS_LIBS =
 TEST_CFLAGS += -D_POSIX_C_SOURCE=200809L
 endif
 
+# The cancel-token race test (tests/test_ai_netcancel.c) uses pthreads off Windows.
+ifneq ($(HOST_WINDOWS),yes)
+TEST_CFLAGS += -pthread
+endif
+
 # Auto-detect libssh2 availability for test linking.
 # (Links to a real file rather than /dev/null: MinGW ld cannot write to /dev/null.)
 DETECT_OUT = build/.detect$(EXE)
@@ -133,6 +138,10 @@ TEST_LDFLAGS = $(LINK_MODE) -lssl -lcrypto $(TEST_SYS_LIBS) -lm
 else
 TEST_CFLAGS += -DNO_SSH_LIBS -Itests/stubs
 TEST_LDFLAGS = -lm
+endif
+
+ifneq ($(HOST_WINDOWS),yes)
+TEST_LDFLAGS += -pthread
 endif
 
 # Exclude Windows-only UI files and main entry point from test build
@@ -300,6 +309,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/notice_dlg.c src/core/notice.c src/core/notice_layout.c src/core/opt_feature.c \
                    src/core/winhttp_open.c src/core/ai_gate.c tests/test_winhttp_open_win.c \
                    tests/test_notice_dlg_win.c \
+                   src/ui/thread_join.c src/core/ai_netcancel.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
