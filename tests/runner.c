@@ -3805,6 +3805,21 @@ int test_ns_check_mark_inside_box_and_shaped(void);
 int test_ns_check_mark_scales_linearly(void);
 int test_ns_check_mark_width_scales_with_floor(void);
 
+/* test_notice.c, test_notice_layout.c */
+int test_notice_warning_copy(void);
+int test_notice_first_run_copy(void);
+int test_notice_upgrade_ai_item(void);
+int test_notice_upgrade_other_keys_and_none(void);
+int test_notice_upgrade_caps_items(void);
+int test_notice_launch_plan_table(void);
+int test_notice_queue_order_and_full(void);
+int test_notice_plain_text(void);
+int test_notice_layout_buttons_right_aligned(void);
+int test_notice_layout_rows_in_order_without_overlap(void);
+int test_notice_layout_no_action_and_no_closing(void);
+int test_notice_layout_grows_with_items(void);
+int test_notice_layout_192_is_twice_96(void);
+
 /* test_pw_prompt_layout.c */
 int test_pw_layout_today_unchanged(void);
 int test_pw_layout_text_row(void);
@@ -8888,6 +8903,19 @@ int main(void) {
         failed += test_net_url_display_marked();
         failed += test_net_url_detail();
         failed += test_net_text_escape();
+        failed += test_notice_warning_copy();
+        failed += test_notice_first_run_copy();
+        failed += test_notice_upgrade_ai_item();
+        failed += test_notice_upgrade_other_keys_and_none();
+        failed += test_notice_upgrade_caps_items();
+        failed += test_notice_launch_plan_table();
+        failed += test_notice_queue_order_and_full();
+        failed += test_notice_plain_text();
+        failed += test_notice_layout_buttons_right_aligned();
+        failed += test_notice_layout_rows_in_order_without_overlap();
+        failed += test_notice_layout_no_action_and_no_closing();
+        failed += test_notice_layout_grows_with_items();
+        failed += test_notice_layout_192_is_twice_96();
         failed += test_pw_layout_today_unchanged();
         failed += test_pw_layout_text_row();
         failed += test_pw_text_crlf();
