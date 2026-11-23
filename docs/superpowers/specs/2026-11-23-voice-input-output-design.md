@@ -354,7 +354,8 @@ only after it has been **saved** on, so ticking it and pressing Cancel loads
 nothing **(from review)**. Until then the device list shows "Save to list
 microphones". Saving with it on starts the feature without a restart. On the
 first load of a config without the field, it is added as off and named in the
-configuration upgrade notice (AI switch design, §3).
+configuration notice (AI switch design, §3). The first-run variant lists
+it too.
 
 Saving with it off tears the feature down at once:
 - Any recording is discarded and playback stopped.

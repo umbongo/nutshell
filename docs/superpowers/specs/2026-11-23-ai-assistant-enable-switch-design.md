@@ -2,8 +2,8 @@
 
 **Status**: DRAFT, for the maintainer's approval. Written 2026-11-23. It applies
 the principle in CLAUDE.md, "Optional features: off unless enabled, not loaded
-while off", to the AI assistant, and adds the configuration upgrade notice that
-principle calls for. Decisions are marked **(maintainer)** or **(call)**.
+while off", to the AI assistant, and adds the configuration notice that principle
+calls for, shown on an upgrade and on a first run. Decisions are marked **(maintainer)** or **(call)**.
 
 It ships as its own pull request, before voice PR 1
 (`2026-11-23-voice-input-output-design.md`, §9), which depends on it.
@@ -60,18 +60,28 @@ The switch is checked at one gate per entry point **(from review)**:
 - **Voice** is off and its switch disabled, with the reason "Needs the AI
   assistant".
 
-## 3. Configuration upgrade notice
+## 3. Configuration notice: upgrade and first run
 
 This is general and applies to every version that adds settings
-**(maintainer)**.
+**(maintainer)**. The same notice covers a config that was upgraded and one
+that was not found and has just been created **(maintainer)**. It has the same
+component, title, list and buttons, and only the opening and closing lines
+differ. Today a first run with no `nutshell.config` says nothing
+(`window.c:4453`, `CONFIG_LOAD_MISSING`).
 
-- At launch, if the config file lacks fields this version knows (a new
-  install has no file and is exempt), the missing fields are added with their
-  decided values and the file is saved immediately, not at the next Settings
-  save.
-- A one-time notice then appears once the main window is shown. It is
-  **non-blocking**: a themed dismissible notice, not a modal message box **(call)**.
-  Its wording:
+- **When it is shown.** It appears once, after the main window is shown,
+  in two cases:
+  - **Upgrade:** the config file lacks fields this version knows. The
+    missing fields are added with their decided values and the file is saved
+    at once, not at the next Settings save.
+  - **First run:** no config file was found (`CONFIG_LOAD_MISSING`). The
+    defaults are written to a new file at once, beside the exe as today.
+  - It is not shown when the file was found and is complete. It is also not
+    shown for an invalid or unreadable file: those keep their existing
+    warnings, and the unreadable case saves nothing.
+- **Form.** It is **non-blocking**: a themed, dismissible notice, not a modal
+  message box **(call)**.
+- **Wording, upgrade:**
 
   > **Welcome to Nutshell 1.2.NN**
   >
@@ -85,15 +95,35 @@ This is general and applies to every version that adds settings
   >
   > [Review in Settings]   [OK]
 
-  - The list names each added setting and the value it was given, in plain
-    words. A version that adds no settings shows nothing.
+- **Wording, first run** **(call: wording)**:
+
+  > **Welcome to Nutshell 1.2.NN**
+  >
+  > No configuration was found, so a new one has been created beside
+  > nutshell.exe. These optional features start switched off:
+  >
+  > - **AI assistant**: off until you choose to turn it on
+  > - **Voice**: off until you choose to turn it on
+  >
+  > Everything else uses the standard settings.
+  >
+  > [Review in Settings]   [OK]
+
+- **The list.**
+  - On an upgrade it names each added setting and the value it was given, in
+    plain words. A version that adds no settings shows no notice.
+  - On a first run it names every optional feature (CLAUDE.md, "Optional
+    features") and its starting state, which is off.
   - "Review in Settings" opens the page of the first listed setting.
+- **If the new file cannot be written** on a first run, the notice is not
+  shown. The existing "Could not save" warning appears instead, since a
+  notice saying a file was created would be untrue.
 - **Older versions** **(maintainer, from review)**: an older exe saves only the
   fields it knows (`loader.c:1063`), so it drops the new ones. The next launch
-  of a newer version adds them again and shows the notice again. If the user
-  had turned the assistant off but kept the key, it comes back on, and the
-  notice says so. This is accepted and documented, since shipped versions
-  cannot be changed. A native test names the behaviour.
+  of a newer version adds them again and shows the upgrade notice again. If
+  the user had turned the assistant off but kept the key, it comes back on,
+  and the notice says so. This is accepted and documented, since shipped
+  versions cannot be changed. A native test names the behaviour.
 
 ## 4. Turning it on and off
 
@@ -138,7 +168,8 @@ persist it **(from review)**.
     gives on; no field and only a preserved blob gives on; a saved field wins
     over both.
   - The re-add after an older exe dropped the field.
-  - Which fields the notice lists, and its text.
+  - Which fields the notice lists, and its text, in both variants: an
+    upgrade, and a first run with no file.
   - The load and save round-trip, and the voice dependency rule.
 - **The real exe, not a `wintest`** **(from review)**. The `wintest` binary
   does not contain `window.c`, `ai_chat*.c` or the delay-import library, so a
@@ -157,7 +188,8 @@ persist it **(from review)**.
 - **Integration harness:** the existing AI cases run with the switch on. A
   gate case starts with it off and checks that the View menu has no AI items
   and that the self-report is clean. A case with an upgrade-lacking config
-  checks that the file was rewritten and the notice shown.
+  checks that the file was rewritten and the notice shown. A case with no
+  config file checks that one was created and the first-run notice shown.
 - **Windows hand checks:**
   - Upgrading the maintainer's real config, which has a key: the assistant
     stays on and the notice reads well.

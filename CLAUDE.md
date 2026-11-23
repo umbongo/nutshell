@@ -128,7 +128,9 @@ three. A new feature is checked against these three tests when it is designed.
 - **New settings are written at launch, and the user is told.** When a config
   lacks fields this version knows, they are added with their decided values
   and the file is saved at once. A one-time, non-blocking notice then names
-  each added setting and the value it was given, in plain words. The first
+  each added setting and the value it was given, in plain words. A first run
+  with no config file gets the same notice: the new file is written at once,
+  and the notice says so and lists each optional feature as off. The first
   use is the AI assistant switch design
   (`docs/superpowers/specs/2026-11-23-ai-assistant-enable-switch-design.md`
   §3). An older exe drops fields it does not know, so the next new launch adds
