@@ -1,4 +1,5 @@
 #include "ai_panel_states.h"
+#include "voice_config.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -85,4 +86,15 @@ const char *const *ai_panel_suggestions(int *count)
 {
     if (count) *count = 3;
     return g_suggestions;
+}
+
+const char *ai_panel_voice_hint(int mode, int ptt_key, char *out, size_t cap)
+{
+    if (!out || cap == 0) return "";
+    const char *key = voice_ptt_key_label(ptt_key);
+    if (mode == VOICE_MODE_TOGGLE)
+        snprintf(out, cap, "Or press %s, say what you need, and press it again.", key);
+    else
+        snprintf(out, cap, "Or hold %s and say what you need.", key);
+    return out;
 }

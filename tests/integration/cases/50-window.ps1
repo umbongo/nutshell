@@ -841,3 +841,64 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
     [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
 }
+
+# Settings > Voice on all four themes, for the eye: --ui-demo=settings-voice
+# opens Settings on the Voice page with the AI assistant and Enable voice
+# ticked in memory only (never saved), and no microphone list: the demo loads
+# no audio. Captured by handle into artifacts\gallery\<Theme>-settings-voice.png.
+# Unrun here (no pwsh on automaton); run it on the Windows box.
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "settings_voice_gallery")) {
+    $name = "settings_voice_gallery"
+    Write-Host ("[RUN ] " + $name)
+    $galleryDir = Join-Path $Artifacts "gallery"
+    New-Item -ItemType Directory -Force $galleryDir | Out-Null
+    $themes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
+    $ok = $true
+    $notes = New-Object System.Collections.ArrayList
+    foreach ($theme in $themes) {
+        $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+        $session = $null
+        try {
+            $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=settings-voice", "--theme", $theme)
+            $dlg = Wait-NutshellDialog -Session $session -Title "^Settings$" -TimeoutSec 10
+            Assert-True ($dlg -ne [IntPtr]::Zero) "--ui-demo=settings-voice opened no Settings window"
+            Start-Sleep -Milliseconds 600
+            $path = Join-Path $galleryDir ("{0}-settings-voice.png" -f (ConvertTo-NutshellFileToken $theme))
+            Save-NutshellScreenshot -Session $session -Path $path -Hwnd ([long]$dlg) | Out-Null
+            Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: $path"
+            [void]$notes.Add("${theme}: ok")
+        } catch {
+            $ok = $false
+            [void]$notes.Add("${theme}: " + $_.Exception.Message)
+        } finally {
+            if ($session) { Stop-Nutshell -Session $session }
+            for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+                Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+                if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+            }
+        }
+    }
+    $detail = "Settings > Voice captured by handle on 4 themes into artifacts\gallery\<Theme>-settings-voice.png -- " + ($notes -join "; ")
+    if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
+    [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
+}
+
+# Voice off (the default), the assistant on, the panel open: Right Ctrl does
+# nothing of its own. A posted Right Ctrl down/up (VK_CONTROL with the
+# extended-key bit, through Send-NutshellChord's posting path) sent to the AI
+# input leaves no mark, and the posted 'a' that follows reads back as 'a'
+# there: no push-to-talk filter swallowed or delayed anything. Unrun here (no
+# pwsh); run it on the Windows box.
+Invoke-Case -Name "voice_off_right_ctrl_reaches_input" -Settings @{ ai_enabled = $true; ai_api_key = "" } -ExtraArgs @("-nc") -Body {
+    param($s)
+    $p = Open-NutshellAiPanel -Session $s
+    $input = Get-NutshellControl -Dialog $p -Id 4002                                  # IDC_CHAT_INPUT
+    Assert-True ($input -ne [IntPtr]::Zero) "the AI panel has no input box"
+    Assert-True ([NutshellNative]::GetDlgItem($p, 4016) -eq [IntPtr]::Zero) "the AI panel has a mic button with voice off"   # IDC_CHAT_MIC
+    Send-NutshellChord -Session $s -Key RightCtrl -Hwnd $input -SettleMs 300
+    [NutshellNative]::PostMessage($input, $script:WM_CHAR, [IntPtr][int][char]'a', [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 400
+    $text = Get-NutshellControlText -Control $input
+    Assert-True ($text -eq "a") "the AI input reads '$text' after Right Ctrl and 'a', expected 'a'"
+    "voice off: a posted Right Ctrl down/up and then 'a' left exactly 'a' in the AI input; no mic button"
+}

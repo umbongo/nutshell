@@ -7,6 +7,9 @@
 #include "ai_chat_internal.h"
 #include "ai_header_layout.h"
 #include "chat_rebuild.h"
+#include "voice_config.h"
+#include "voice_gate.h"
+#include "voice_win.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -94,6 +97,17 @@ void ai_chat_update_panel_state(AiChatData *d)
         state = AI_STATE_EMPTY;
 
     chat_listview_set_state(d->hChatList, state, d->context_lines);
+
+    /* The voice hint: one more line under the empty state while voice is on. */
+    char hint[96];
+    hint[0] = '\0';
+    if (state == AI_STATE_EMPTY && voice_gate_on()) {
+        const Settings *vs = ui_current_settings();
+        (void)ai_panel_voice_hint(vs ? vs->voice_ptt_mode : VOICE_MODE_HOLD,
+                                  vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_CTRL,
+                                  hint, sizeof(hint));
+    }
+    chat_listview_set_state_hint(d->hChatList, hint);
 }
 
 /* Start (or replace) the busy-indicator text shown in place of the status

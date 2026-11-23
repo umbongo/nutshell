@@ -200,7 +200,7 @@ typedef struct {
     HWND     hDbgDim[6];  /* dim statics on the Debugging page */
     int      n_dbg_dim;
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
-    int      demo;        /* --ui-demo=settings-debug: debugging ticked in memory, Save never writes */
+    int      demo;        /* --ui-demo: 1 = settings-debug (debugging ticked in memory), 2 = settings-voice (AI and voice ticked, no device list); Save never writes */
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
     struct FetchModelsCtx *models;   /* the Refresh Models request in flight (UI's reference), or NULL */
     ThreadJoinList models_thread;    /* its thread's handle, kept so closing can join it */
@@ -1411,7 +1411,7 @@ static void debug_open_folder(HWND hwnd, SettingsDlgData *d)
 static void debug_build_page(SettingsDlgData *nd)
 {
     const Settings *st = &nd->cfg->settings;
-    const int on = st->debug_enabled || nd->demo;
+    const int on = st->debug_enabled || nd->demo == 1;
     DlogStatus dst;
     unsigned long long used_bytes = 0;
     unsigned used_files = 0;
@@ -1761,7 +1761,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
              * the --ui-demo override, decides the initial state. */
             HWND chk = make_check2(nd, IDC_AI_ENABLE, SH_AI_ENABLE);
             SendMessage(chk, BM_SETCHECK,
-                        nd->cfg->settings.ai_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                        (nd->cfg->settings.ai_enabled || nd->demo == 2) ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 1);
         }
         {
@@ -1967,11 +1967,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         {
             const Settings *vs = &nd->cfg->settings;
             nd->voice_use_ai_wanted = vs->voice_stt_use_ai;
-            nd->voice_dev_listed = voice_gate_on();
+            nd->voice_dev_listed = voice_gate_on() && !nd->demo;   /* a demo never lists microphones (no COM) */
             {
                 HWND chk = make_check2(nd, IDC_VOICE_ENABLE, SH_VOICE_ENABLE);
                 SendMessage(chk, BM_SETCHECK,
-                            vs->voice_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                            (vs->voice_enabled || nd->demo == 2) ? BST_CHECKED : BST_UNCHECKED, 0);
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
             }
             {
@@ -3209,6 +3209,11 @@ int settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
 void settings_dlg_show_demo_debug(HWND parent, Config *cfg)
 {
     (void)settings_dlg_run(parent, cfg, "", SETTINGS_PAGE_DEBUG, 1);
+}
+
+void settings_dlg_show_demo_page(HWND parent, Config *cfg, int page)
+{
+    (void)settings_dlg_run(parent, cfg, "", page, 2);
 }
 
 #endif

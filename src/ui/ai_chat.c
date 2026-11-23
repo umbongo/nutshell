@@ -7,6 +7,8 @@
 #include "dll_record.h"
 #include "notice_dlg.h"
 #include "voice_win.h"
+#include "voice_config.h"
+#include "voice_ptt.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -3015,8 +3017,30 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         if (strcmp(state, "empty") == 0) forced = AI_STATE_EMPTY;
         else if (strcmp(state, "nokey") == 0) forced = AI_STATE_NO_KEY;
         else if (strcmp(state, "nosession") == 0) forced = AI_STATE_NO_SESSION;
+        /* The voice states show the "Ask about this session" empty state, so
+         * the voice hint under it is on screen next to the mic button. */
+        else if (strncmp(state, "voice-", 6) == 0) forced = AI_STATE_EMPTY;
     }
     ai_chat_force_state(hwnd, forced);
+
+    /* "voice-recording" and "voice-transcribing": the mic button and its cue
+     * in that look, through the same two calls the feature controller makes
+     * and nothing else -- no audio thread, no COM, no push-to-talk filter.
+     * window.c turned the voice gate's demo override on for these. */
+    if (state && (strcmp(state, "voice-recording") == 0 ||
+                  strcmp(state, "voice-transcribing") == 0)) {
+        ai_chat_voice_attach(hwnd, 1);
+        if (strcmp(state, "voice-recording") == 0) {
+            const Settings *vs = ui_current_settings();
+            char cue[96];
+            voice_cue_text(vs ? vs->voice_ptt_mode : VOICE_MODE_HOLD,
+                           vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_CTRL,
+                           0, cue, sizeof(cue));
+            ai_chat_voice_set_ui(hwnd, AIV_RECORDING, cue);
+        } else {
+            ai_chat_voice_set_ui(hwnd, AIV_TRANSCRIBING, "Transcribing\xE2\x80\xA6");
+        }
+    }
 
     /* The Thinking row's mode in the gallery: "thinking" collapsed,
      * "thinking-compact" compact, "thinking-extended" extended,

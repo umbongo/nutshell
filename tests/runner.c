@@ -3739,10 +3739,12 @@ int test_shortcuts_filtered_off_drops_ai_rows(void);
 int test_shortcuts_filtered_on_keeps_all(void);
 int test_shortcuts_filtered_counts_without_a_buffer(void);
 int test_shortcuts_readme_block_unchanged_by_filter(void);
+int test_shortcuts_voice_rows_need_both_switches(void);
 /* test_cheatsheet_layout.c */
 int test_cheatsheet_layout_capacity_holds_the_table(void);
 int test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96(void);
 int test_cheatsheet_layout_no_scrollbar_when_the_page_fits(void);
+int test_cheatsheet_layout_with_the_voice_rows_still_lays_out(void);
 int test_cheatsheet_layout_scrolls_on_1366x768_at_120(void);
 int test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p(void);
 int test_cheatsheet_layout_192_is_twice_96(void);
@@ -4103,6 +4105,7 @@ int test_thinking_wheel_scroll_touchpad_fractional_delta_rounds_to_no_movement(v
 int test_ai_panel_state_titles_actions_and_suggestions_flag(void);
 int test_ai_panel_state_null_for_bad_id(void);
 int test_ai_panel_state_body_empty_substitutes_thousands(void);
+int test_ai_panel_voice_hint_wordings(void);
 int test_ai_panel_state_body_other_states_ignore_context_lines(void);
 int test_ai_panel_suggestions_exactly_three_nonempty(void);
 
@@ -4481,6 +4484,7 @@ int test_sdbg_layout_page_height_ticked_vs_unticked(void);
 int test_ui_demo_settings_debug_is_an_empty_state(void);
 int test_ui_demo_shortcuts_is_an_empty_state(void);
 int test_ui_demo_notice_states_are_empty_states(void);
+int test_ui_demo_voice_states_are_empty_states(void);
 int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
 int test_ui_demo_policy_compact_matches_approval(void);
 int test_ui_demo_policy_for_other_states_is_write_off(void);
@@ -8138,9 +8142,11 @@ int main(void) {
     failed += test_shortcuts_filtered_on_keeps_all();
     failed += test_shortcuts_filtered_counts_without_a_buffer();
     failed += test_shortcuts_readme_block_unchanged_by_filter();
+    failed += test_shortcuts_voice_rows_need_both_switches();
     failed += test_cheatsheet_layout_capacity_holds_the_table();
     failed += test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96();
     failed += test_cheatsheet_layout_no_scrollbar_when_the_page_fits();
+    failed += test_cheatsheet_layout_with_the_voice_rows_still_lays_out();
     failed += test_cheatsheet_layout_scrolls_on_1366x768_at_120();
     failed += test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p();
     failed += test_cheatsheet_layout_192_is_twice_96();
@@ -8457,6 +8463,7 @@ int main(void) {
     failed += test_ai_panel_state_titles_actions_and_suggestions_flag();
     failed += test_ai_panel_state_null_for_bad_id();
     failed += test_ai_panel_state_body_empty_substitutes_thousands();
+    failed += test_ai_panel_voice_hint_wordings();
     failed += test_ai_panel_state_body_other_states_ignore_context_lines();
     failed += test_ai_panel_suggestions_exactly_three_nonempty();
 
@@ -8896,6 +8903,7 @@ int main(void) {
     failed += test_ui_demo_settings_debug_is_an_empty_state();
     failed += test_ui_demo_shortcuts_is_an_empty_state();
     failed += test_ui_demo_notice_states_are_empty_states();
+    failed += test_ui_demo_voice_states_are_empty_states();
     failed += test_ui_demo_policy_auto_is_executing_with_auto_on();
     failed += test_ui_demo_policy_compact_matches_approval();
     failed += test_ui_demo_policy_for_other_states_is_write_off();

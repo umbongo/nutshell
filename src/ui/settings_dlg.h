@@ -29,6 +29,12 @@ int ui_ai_is_working(void);
  * nothing is written and cfg is not touched. */
 void settings_dlg_show_demo_debug(HWND parent, Config *cfg);
 
+/* --ui-demo=settings-voice: Settings opened on `page` (SETTINGS_PAGE_VOICE)
+ * with the AI assistant and Enable voice ticked in memory only, and no
+ * microphone list (nothing starts the audio thread or COM). Save and Cancel
+ * both just close; nothing is written and cfg is not touched. */
+void settings_dlg_show_demo_page(HWND parent, Config *cfg, int page);
+
 /* A WM_VOICE_AUDIO message (voice_audio_win.h) for an open Settings dialog:
  * the device list, the Test level and errors. Returns 1 when the dialog took
  * it (it then owns a VAM_DEVICES payload), else 0 (the caller frees it). */

@@ -57,6 +57,12 @@
  * (src/ui/notice_dlg.c) over it, the upgrade sample and the invalid-config
  * sample. Not part of "all": the dialog is modal.
  *
+ * "voice-recording" and "voice-transcribing" (2026-11-23, voice input) build
+ * an empty conversation; the win32 side shows the mic button in that state
+ * with the cue, with no audio thread and no COM. "settings-voice" opens
+ * Settings on the Voice page (voice and AI ticked in memory only). None is
+ * part of "all": it keeps its pinned shape, and the settings page is modal.
+ *
  * "runlist" (2026-11-11, the command list, spec 2026-11-05-run-command-tool
  * decision 21) builds a conversation of two replies; `approval` holds the
  * live batch under the second one (ran, running, queued, queued) and

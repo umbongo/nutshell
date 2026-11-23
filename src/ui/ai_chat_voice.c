@@ -110,6 +110,7 @@ void ai_chat_voice_attach(HWND panel, int on)
             ti.lpszText = tip;
             SendMessage(d->hTooltip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
         }
+        ai_chat_update_panel_state(d);   /* the empty state's voice hint */
         return;
     }
     if (!d->hMicBtn) return;
@@ -128,6 +129,7 @@ void ai_chat_voice_attach(HWND panel, int on)
     d->anim.count = 0;   /* drop the pulse */
     if (d->hInput) InvalidateRect(d->hInput, NULL, TRUE);
     ai_chat_relayout(d);
+    ai_chat_update_panel_state(d);   /* drops the voice hint */
 }
 
 void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8)

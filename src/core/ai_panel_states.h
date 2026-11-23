@@ -43,4 +43,11 @@ int ai_panel_state_body(AiPanelStateId id, int context_lines, char *buf, size_t 
  * Always exactly 3 non-empty strings; *count is set to 3. */
 const char *const *ai_panel_suggestions(int *count);
 
+/* The empty state's extra line while voice input is on: "Or hold Right Ctrl and
+ * say what you need." (VOICE_MODE_HOLD) or "Or press Right Ctrl, say what you
+ * need, and press it again." (VOICE_MODE_TOGGLE), with the key's label (F8 and
+ * F9 in place of Right Ctrl) from voice_config.h. Writes into `out` (truncating,
+ * always NUL-terminated) and returns it; out NULL or cap 0 returns "". */
+const char *ai_panel_voice_hint(int mode, int ptt_key, char *out, size_t cap);
+
 #endif /* NUTSHELL_AI_PANEL_STATES_H */

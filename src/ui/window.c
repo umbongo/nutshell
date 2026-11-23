@@ -44,6 +44,7 @@
 #include "voice_audio_win.h"
 #include "voice_stt_win.h"
 #include "voice_gate.h"
+#include "settings_layout.h"
 #include "voice_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
@@ -120,6 +121,9 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
  * exists, to open the themed notice dialog over it. wParam 0 = the upgrade
  * sample (info), 1 = the invalid-config sample (warning). */
 #define WM_OPEN_DEMO_NOTICE     (WM_USER + 8)
+/* --ui-demo=settings-voice: posted once the demo session exists, to open
+ * Settings on the Voice page (voice and AI ticked in memory only). */
+#define WM_OPEN_DEMO_SETTINGS_VOICE (WM_USER + 10)
 /* Posted by the WM_TIMER poll when a telnet session's auto-login has no saved
  * password and the device asked for one: wParam is the Session*, lParam the
  * transport's serial. The handler re-resolves both before it answers. */
@@ -2551,6 +2555,11 @@ static void create_demo_session(HWND hwnd)
     ai_feature_on(hwnd);
 
     const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
+    /* The three voice states show voice as on, again without touching
+     * Settings: the gate's override only. Nothing starts the audio thread,
+     * COM or the push-to-talk filter (voice_feature_apply is not called). */
+    if (strncmp(state, "voice-", 6) == 0 || strcmp(state, "settings-voice") == 0)
+        voice_gate_set_demo_override(1);
     int demo_local = (strcmp(state, "local") == 0);
 
     Session *s = create_session(rows, cols);
@@ -2694,6 +2703,10 @@ static void create_demo_session(HWND hwnd)
         PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 0, 0);
     if (strcmp(state, "notice-warning") == 0)
         PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 1, 0);
+    /* --ui-demo=settings-voice: Settings on the Voice page, posted for the
+     * same reason. */
+    if (strcmp(state, "settings-voice") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_SETTINGS_VOICE, 0, 0);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -5387,6 +5400,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_OPEN_DEMO_SETTINGS:
             settings_dlg_show_demo_debug(hwnd, g_config);
+            return 0;
+
+        case WM_OPEN_DEMO_SETTINGS_VOICE:
+            settings_dlg_show_demo_page(hwnd, g_config, SETTINGS_PAGE_VOICE);
             return 0;
 
         case WM_OPEN_DEMO_SHORTCUTS:

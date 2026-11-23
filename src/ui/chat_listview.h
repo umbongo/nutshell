@@ -116,6 +116,9 @@ typedef struct {
      * feeds AI_STATE_EMPTY's "last N lines" body. */
     int state_id;
     int state_context_lines;
+    /* One extra body line under AI_STATE_EMPTY's text (the voice hint,
+     * ai_panel_voice_hint()); "" = none. Set by chat_listview_set_state_hint(). */
+    char state_hint[96];
 
     /* y coordinate at which on_paint() last placed the inline activity
      * indicator -- computed from the actually-painted bottom of the item
@@ -234,5 +237,9 @@ void chat_listview_set_thinking_pref(HWND hwnd, int pref);
  * substituted into AI_STATE_EMPTY's body ("last N lines"); ignored by the
  * other states. Triggers a repaint; a no-op HWND is ignored. */
 void chat_listview_set_state(HWND hwnd, int state_id, int context_lines);
+
+/* One extra line of body text (UTF-8, at most 95 bytes) shown under
+ * AI_STATE_EMPTY's body only; NULL or "" removes it. Triggers a repaint. */
+void chat_listview_set_state_hint(HWND hwnd, const char *hint_utf8);
 
 #endif /* NUTSHELL_CHAT_LISTVIEW_H */
