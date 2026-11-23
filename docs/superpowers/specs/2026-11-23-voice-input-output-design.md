@@ -418,7 +418,9 @@ Every control gets a `settings_help` entry, label and help text.
 
 ## 9. Delivery
 
-Two pull requests **(call)**, each its own version bump and build:
+Two pull requests **(call)**, each its own version bump and build. Both come
+after the AI assistant switch pull request and its notice-dialog follow-up
+(AI switch design, opening lines and §3):
 
 1. **Voice input**: the Enable voice switch and its teardown, WASAPI capture,
    STT providers, the Voice settings page (STT section and microphone

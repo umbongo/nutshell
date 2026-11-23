@@ -6,7 +6,10 @@ while off", to the AI assistant, and adds the configuration notice that principl
 calls for, shown on an upgrade and on a first run. Decisions are marked **(maintainer)** or **(call)**.
 
 It ships as its own pull request, before voice PR 1
-(`2026-11-23-voice-input-output-design.md`, §9), which depends on it.
+(`2026-11-23-voice-input-output-design.md`, §9), which depends on it. A
+small follow-up pull request moves the remaining message boxes onto the
+notice dialog straight after it, also before voice PR 1 (§3)
+**(maintainer)**.
 
 Reviewed 2026-11-23 by `claude-fable-5-2` (effort high). Its findings are
 folded in and marked "from review".
@@ -138,9 +141,25 @@ The form:
   - `window.c:6277,6304` (window registration or creation failed), where
     there is no window or theme yet.
   - Transient status, which belongs in the tab or panel.
-- **The other OK-only message boxes** (about 18) stay stock in this pull
-  request. Moving them is a mechanical follow-up, recorded in the notes'
-  Open list **(call)**.
+- **The other 19 OK-only message boxes move in a follow-up pull request**
+  **(maintainer)**, straight after this one and before voice PR 1. This one
+  introduces the dialog, the upgrade logic and the harness changes; keeping
+  the bulk move separate keeps each reviewable and limits each Windows
+  harness run to the dialogs it changes. They are:
+  - main window (7): `window.c:1194` (connection in progress), `2274` (tab
+    limit), `2772` (no profile to reconnect), `3988` and `4001` (debug log
+    folder), `5288` (session not found), `5499` (connection error);
+  - Session Manager (4): `session_manager.c:768,787` (select a session
+    first), `826,945` (enter a hostname);
+  - Settings (5): `settings.c:1001` (log folder path), `1752,1781,1942,1951`
+    (Refresh Models);
+  - shared log-folder helper (2): `open_dir.h:21,26`;
+  - AI panel (1): `ai_chat.c:855` (conversation save failed).
+
+  Each keeps its text and behaviour, with the warning or information tone its
+  icon has today. Whether some field-validation messages ("Enter a
+  hostname", "Enter an API key first") would be better shown beside the
+  field is a separate question, not part of that pull request.
 
 **The configuration warnings move onto the format in this pull request**
 **(maintainer)**. They are the four message boxes in `window.c`'s config
