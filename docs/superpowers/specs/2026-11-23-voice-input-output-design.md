@@ -51,6 +51,8 @@ approval card. With the speaker on, the prose of each reply is read aloud.
 - A spoken request that runs anything, or writes anything, without the approval
   a typed one would get. Voice must never build a conversation turn itself.
 - A microphone that is open when the maintainer is not talking to Nutshell.
+- Any audio code, audio DLL or push-to-talk hook active while voice is
+  disabled (§7).
 - Audio or transcripts written to disk or to the debug log without the
   existing content opt-in.
 - Breaking Ctrl shortcuts (Ctrl+C, Ctrl+V, Ctrl+=, control characters to the
@@ -71,9 +73,11 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
   application/json` is hard-coded (`ai_http_win.c:110,252`), so multipart
   needs a content-type parameter or a sibling function. winhttp.dll is
   delay-loaded; new entry points go in `build-support/delayload/winhttp.def`.
-- There is no audio code. winmm.dll is not a KnownDLL, so it is loaded at
-  run time (`LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)` plus a
-  function-pointer table, the `dwm_util.c` pattern) or through a delay `.def`.
+- There is no audio code. WASAPI needs no import library: the device
+  enumerator is created through `CoCreateInstance` (`-lole32` is already
+  linked), and Windows maps `mmdevapi.dll`/`audioses.dll` only when that call
+  is made. (winmm.dll, the older API, is not a KnownDLL and would have needed
+  run-time loading.)
 - The chat input is `d->hInput` (`src/ui/ai_chat.c:387`, subclass
   `src/ui/ai_chat_input.c:121`). The suggestion chips already do
   `SetWindowText(d->hInput, text); ai_chat_send_user_message(d);`
@@ -201,8 +205,23 @@ Toggle mode). A thin live level bar under the input is **left to the builder**.
 
 - 16 kHz, mono, 16-bit PCM, wrapped as a WAV in memory **(call)**. Every
   provider in §6 accepts it, and 60 s is under 2 MB.
-- winmm `waveIn*`, loaded at run time per §3 **(call)**: the least code that
-  meets the static-link rules. WASAPI would be the upgrade path.
+- **WASAPI** in shared mode for capture **(maintainer)**:
+  - `IMMDeviceEnumerator` finds the device, and `IAudioClient` +
+    `IAudioCaptureClient` capture on an event-driven worker thread.
+  - Use `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY`
+    (Windows 10 and later) so the engine delivers 16 kHz mono 16-bit, with no
+    resampler of our own.
+  - "Windows default" means the default **communications** capture endpoint
+    (`eCapture`, `eCommunications`), which is what headsets register as.
+  - A chosen device is stored by its endpoint ID, with its full friendly name
+    kept for display. If the ID has gone, Windows default is used and Settings
+    says so.
+  - Device arrival and removal (`IMMNotificationClient`) refreshes an open
+    Settings list. Removal of the active device ends a recording with an error,
+    never a hang.
+- The COM work is in `src/ui`, written in C with `COBJMACROS` against
+  MinGW's `mmdeviceapi.h` / `audioclient.h`. COM is initialised on the audio
+  worker thread, not assumed on the UI thread.
 - The WAV header writer, the PCM buffer and the level computation (peak or RMS
   for the meter) are pure code in `src/core` with native tests.
 - Audio buffers are wiped with `secure_zero` and freed after the upload, never
@@ -243,8 +262,11 @@ Toggle mode). A thin live level bar under the input is **left to the builder**.
   of a new recording), Escape in the panel, New chat, or closing the panel
   stops playback at once and drops the queue **(call)**.
 - **Audio format:** request uncompressed PCM or WAV from the provider (OpenAI
-  `response_format=wav` or `pcm`; Gemini returns 24 kHz PCM), so playback is
-  winmm `waveOut*` with no decoder **(call)**. MP3 decoding is a non-goal.
+  `response_format=wav` or `pcm`; Gemini returns 24 kHz PCM), so there is no
+  decoder **(call)**. MP3 decoding is a non-goal.
+- **Playback** is WASAPI render in shared mode **(maintainer)**, on the default
+  **console** render endpoint (`eRender`, `eConsole`), with the same
+  auto-convert flags and the same worker-thread model as capture.
 - **Logging:** the text sent for speech is logged only through `DLOG_CONTENT`.
 
 ## 6. Providers
@@ -294,7 +316,35 @@ Notes:
 ## 7. Settings
 
 A new nav entry under **AI Assistant**: **Voice** **(call)**, between
-Behaviour and Web Access. The page has two titled sections.
+Behaviour and Web Access.
+
+**Enable voice** (tick box at the top of the page, **off by default**)
+**(maintainer)**. It is the security boundary for the whole feature. While it
+is off:
+- No audio code runs. No `CoCreateInstance` of the device enumerator and no
+  device enumeration, so `mmdevapi.dll` and `audioses.dll` are never mapped
+  into the process. No capture or render thread exists.
+- The push-to-talk hook is not installed. Right Ctrl, F8 and F9 behave exactly
+  as they do today.
+- The mic button and the speaker toggle are not created.
+- No STT or TTS request is ever made.
+- The rest of the page is shown disabled, with no device list (listing devices
+  would load the audio stack). The keys and other voice settings are kept, but
+  not used.
+
+Ticking it in the dialog enables the page's controls and only then enumerates
+devices. Saving with it on starts the feature without a restart.
+
+Saving with it off tears the feature down at once:
+- Any recording is discarded and playback stopped.
+- In-flight requests are cancelled and their results dropped.
+- Threads are joined, COM objects released, and the hook removed.
+- The mic button and the speaker toggle are destroyed.
+
+Windows may keep the audio DLLs mapped until the process exits. The design
+claims "never loaded" only for a session that started with voice off.
+
+The page then has two titled sections.
 
 **Speech to Text**
 - `Use current AI assistant to convert speech to text` (tick box)
@@ -306,8 +356,8 @@ Behaviour and Web Access. The page has two titled sections.
 - When unticked: Provider (combo), API key (password edit with reveal), Base
   URL (Custom only, with the existing clear-text warning), Model (editable
   combo).
-- Microphone: Input device (combo: "Windows default" plus each `waveIn` device
-  by name), a **Test** button that records 3 s and shows the live level on a
+- Microphone: Input device (combo: "Windows default" plus each active capture
+  endpoint by its full friendly name), a **Test** button that records 3 s and shows the live level on a
   meter (`ns_draw_meter`), Push-to-talk key (combo: Right Ctrl, F8, F9), Mode
   (Hold to talk / Toggle), Mic start delay (0-400 ms, default 150), Review
   before sending (tick, off).
@@ -326,9 +376,10 @@ with its `*_enc_preserved` twin and the same load, save and drop-stale rules as
 key twice. That is accepted for simplicity.
 
 **Other new settings fields** (in `Settings`, loaded and saved in `loader.c`):
-STT use-chat flag, provider, base URL, model, language, input device name,
-key choice, mode, mic start delay, review flag; TTS use-chat flag, provider, base URL, model, voice; the
-speaker on/off state. A device is stored by name. If it has gone, Windows
+the voice enable flag (default off); STT use-chat flag, provider, base URL,
+model, language, input device endpoint ID and display name, key choice, mode,
+mic start delay, review flag; TTS use-chat flag, provider, base URL, model,
+voice; the speaker on/off state. If the stored endpoint ID has gone, Windows
 default is used.
 
 Every control gets a `settings_help` entry, label and help text.
@@ -347,14 +398,15 @@ Every control gets a `settings_help` entry, label and help text.
 
 Two pull requests **(call)**, each its own version bump and build:
 
-1. **Voice input**: capture, STT providers, the Voice settings page (STT
-   section and microphone controls), push-to-talk, the mic button, shortcuts
-   and demos. TTS controls are absent until PR 2.
+1. **Voice input**: the Enable voice switch and its teardown, WASAPI capture,
+   STT providers, the Voice settings page (STT section and microphone
+   controls), push-to-talk, the mic button, shortcuts and demos. TTS controls
+   are absent until PR 2.
 2. **Spoken replies**: the TTS section, the speaker toggle, the prose
    extractor, chunking and playback.
 
 Later, outside this design: offline engines (whisper.cpp for STT, SAPI for
-TTS) as provider entries; ElevenLabs and Deepgram adapters; WASAPI capture.
+TTS) as provider entries; ElevenLabs and Deepgram adapters.
 
 ## 10. Testing
 
@@ -375,12 +427,18 @@ TTS) as provider entries; ElevenLabs and Deepgram adapters; WASAPI capture.
   - Markdown-to-prose extractor: the skip markers, inline code, links.
   - Sentence chunker against limits.
   - Settings load/save round-trip for every new field and both secrets.
-- `wintest`: the winmm loader and device enumeration under Wine, and the
-  push-to-talk hook driven by posted key messages. Headless Wine on `automaton`
-  may have no audio driver, so the capture and playback tests assert a
-  **defined "no device" outcome** (a clean error, no hang, no leak) when
-  `waveInGetNumDevs`/`waveOutGetNumDevs` return 0. They exercise the real path
-  only when a device exists.
+- `wintest`:
+  - WASAPI device enumeration under Wine.
+  - The push-to-talk hook driven by posted key messages.
+  - **Voice off**: after the app's voice initialisation runs with the flag off,
+    `GetModuleHandleW(L"mmdevapi.dll")` and `L"audioses.dll"` are NULL, no
+    hook is installed, and a posted Right Ctrl reaches the input unchanged.
+  - Headless Wine on `automaton` may have no audio endpoint, so the capture
+    and playback tests assert a **defined "no device" outcome** (a clean error,
+    no hang, no leak) when enumeration returns none. They exercise the real
+    path only when an endpoint exists.
+- The integration harness repeats the voice-off module check against the real
+  exe at startup, with a config that has voice off.
 - Integration harness: a debug-only way to feed a WAV file in place of the
   microphone is **left to the builder**. A harness case speaks a fixture
   ("list the files in my home directory"), checks that the message appears and
