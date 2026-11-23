@@ -155,7 +155,7 @@ WIN_ONLY_TESTS = tests/test_winhttp_open_win.c tests/test_icons.c tests/test_loc
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
                  tests/test_pw_reveal_win.c tests/test_telnet_io_win.c \
                  tests/test_ns_tip_win.c tests/test_settings_label_win.c \
-                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c
+                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_stt_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -314,12 +314,15 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    tests/test_notice_dlg_win.c \
                    src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c \
-                   src/ui/voice_audio_win.c src/core/wav.c tests/test_voice_audio_win.c tests/win_runner.c
+                   src/ui/voice_audio_win.c src/core/wav.c tests/test_voice_audio_win.c \
+                   src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/voice_gate.c \
+                   src/core/voice_config.c src/core/base64.c src/core/json_validate.c src/config/json_parser.c src/config/json_tokenizer.c src/core/vector.c \
+                   tests/test_voice_stt_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
                    $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui -Itests
-WIN_TEST_LDFLAGS = -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp -lole32
+WIN_TEST_LDFLAGS = $(DEP_LIB) -lcrypto -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp -lole32 -lcrypt32
 
 all: $(TARGET)
 

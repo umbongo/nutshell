@@ -29,4 +29,8 @@ void voice_feature_shutdown(void);
 /* WM_VOICE_AUDIO from window.c's WndProc; frees any payload nobody took. */
 void voice_on_audio_msg(WPARAM wp, LPARAM lp);
 
+/* WM_VOICE_STT from window.c's WndProc: lParam is a VoiceSttResult the
+ * receiver frees. Until the panel takes it, it is only freed. */
+void voice_on_stt(LPARAM lp);
+
 #endif /* NUTSHELL_VOICE_WIN_H */

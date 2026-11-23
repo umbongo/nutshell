@@ -33,6 +33,17 @@ int ai_http_post(const char *url, const char * const *headers,
                  AiHttpResponse *resp, AiNetCancel *nc);
 
 /*
+ * The same POST with the caller's Content-Type (an upload, say a multipart
+ * body). A content type with CR or LF, or over 200 bytes, fails with
+ * "Invalid content type". Its WinHTTP timeouts are the short upload set:
+ * resolve 10 s, connect 10 s, send 30 s, receive 60 s (ai_http_post keeps the
+ * chat's 60 s connect and 120 s receive).
+ */
+int ai_http_post_ct(const char *url, const char * const *headers,
+                    const char *content_type, const char *body, size_t body_len,
+                    AiHttpResponse *resp, AiNetCancel *nc);
+
+/*
  * Synchronous HTTP GET — designed to be called from a background thread.
  * url:         full endpoint URL
  * headers:     NULL-terminated array of raw header strings

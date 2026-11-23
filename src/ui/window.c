@@ -42,6 +42,7 @@
 #include "ai_chat.h"
 #include "ai_gate.h"
 #include "voice_audio_win.h"
+#include "voice_stt_win.h"
 #include "voice_gate.h"
 #include "voice_win.h"
 #include "winhttp_open.h"
@@ -5421,6 +5422,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_VOICE_AUDIO:
             voice_on_audio_msg(wParam, lParam);
+            return 0;
+
+        case WM_VOICE_STT:
+            voice_on_stt(lParam);
             return 0;
 
         case WM_SELF_REPORT:
