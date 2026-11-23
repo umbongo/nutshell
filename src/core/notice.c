@@ -37,61 +37,61 @@ typedef struct {
 static const MsgRow k_msgs[NOTICE_MSG_COUNT] = {
     /* window.c on_tab_close */
     [NOTICE_MSG_CLOSE_CONNECTING] = { NOTICE_INFO, ARG_NONE, "Close Tab",
-        "Connection in progress. Please wait." },
+        "Connection in progress. Please wait.", NULL },
     /* window.c, tabs_add failed */
     [NOTICE_MSG_TAB_LIMIT] = { NOTICE_INFO, ARG_NONE, "Tab Limit",
-        "Maximum number of tabs reached." },
+        "Maximum number of tabs reached.", NULL },
     /* window.c on_status_click */
     [NOTICE_MSG_NO_RECONNECT_PROFILE] = { NOTICE_INFO, ARG_NONE, "Reconnect",
-        "No connection profile available for reconnection." },
+        "No connection profile available for reconnection.", NULL },
     /* window.c open_debug_log_folder */
     [NOTICE_MSG_DEBUG_LOG_MEM_ONLY] = { NOTICE_INFO, ARG_NONE, "Debug Log Folder",
-        "No log folder is writable, so Nutshell is keeping the log in memory only. Mark Issue still works." },
+        "No log folder is writable, so Nutshell is keeping the log in memory only. Mark Issue still works.", NULL },
     /* window.c open_debug_log_folder */
     [NOTICE_MSG_DEBUG_LOG_PATH_INVALID] = { NOTICE_WARNING, ARG_NONE, "Debug Log Folder",
-        "The log folder path is not valid." },
+        "The log folder path is not valid.", NULL },
     /* window.c, a session name that is not saved; the opening names it */
     [NOTICE_MSG_SESSION_NOT_FOUND] = { NOTICE_WARNING, ARG_NAME, "Session Not Found",
         "Session \"", "\" not found." },  /* prefix, name, suffix */
     /* window.c, a failed connection; the opening is the error text */
     [NOTICE_MSG_CONNECTION_ERROR] = { NOTICE_WARNING, ARG_TEXT, "Connection Error",
-        "The connection failed." },
+        "The connection failed.", NULL },
     /* session_manager.c Edit */
     [NOTICE_MSG_SELECT_TO_EDIT] = { NOTICE_INFO, ARG_NONE, "Edit",
-        "Select a session first." },
+        "Select a session first.", NULL },
     /* session_manager.c Delete */
     [NOTICE_MSG_SELECT_TO_DELETE] = { NOTICE_INFO, ARG_NONE, "Delete",
-        "Select a session to delete." },
+        "Select a session to delete.", NULL },
     /* session_manager.c Save */
     [NOTICE_MSG_HOSTNAME_SAVE] = { NOTICE_WARNING, ARG_NONE, "Save",
-        "Please enter a hostname." },
+        "Please enter a hostname.", NULL },
     /* session_manager.c Connect */
     [NOTICE_MSG_HOSTNAME_CONNECT] = { NOTICE_WARNING, ARG_NONE, "Connect",
-        "Please enter a hostname." },
+        "Please enter a hostname.", NULL },
     /* settings.c debug_open_folder */
     [NOTICE_MSG_LOG_FOLDER_INVALID] = { NOTICE_WARNING, ARG_NONE, "Open Log Folder",
-        "That log folder path is not valid." },
+        "That log folder path is not valid.", NULL },
     /* settings.c models refresh; the opening is the result text */
     [NOTICE_MSG_MODELS_ERROR] = { NOTICE_WARNING, ARG_TEXT, "Refresh Models",
-        "Error: the models request failed." },
+        "Error: the models request failed.", NULL },
     /* settings.c models refresh */
     [NOTICE_MSG_MODELS_NONE] = { NOTICE_INFO, ARG_NONE, "Refresh Models",
-        "No models found." },
+        "No models found.", NULL },
     /* settings.c models refresh */
     [NOTICE_MSG_MODELS_NO_URL] = { NOTICE_WARNING, ARG_NONE, "Refresh Models",
-        "Cannot determine models URL for this provider." },
+        "Cannot determine models URL for this provider.", NULL },
     /* settings.c models refresh */
     [NOTICE_MSG_MODELS_NO_KEY] = { NOTICE_WARNING, ARG_NONE, "Refresh Models",
-        "Enter an API key first." },
+        "Enter an API key first.", NULL },
     /* open_dir.h, the folder is missing; the caller's title */
     [NOTICE_MSG_FOLDER_MISSING] = { NOTICE_WARNING, ARG_TITLE, "Open Folder",
-        "That folder does not exist and could not be created." },
+        "That folder does not exist and could not be created.", NULL },
     /* open_dir.h, the path is a file; the caller's title */
     [NOTICE_MSG_FOLDER_IS_FILE] = { NOTICE_WARNING, ARG_TITLE, "Open Folder",
-        "That path is a file, not a folder, so it was not opened. Choose a folder for the log." },
+        "That path is a file, not a folder, so it was not opened. Choose a folder for the log.", NULL },
     /* ai_chat.c Save */
     [NOTICE_MSG_CHAT_SAVE_FAILED] = { NOTICE_WARNING, ARG_NONE, "Save Error",
-        "Failed to save file." },
+        "Failed to save file.", NULL },
 };
 
 int notice_msg(Notice *n, NoticeMsgId id, const char *arg)
