@@ -30,6 +30,7 @@
 #include "ns_type.h"
 #include "ns_reduced_motion.h"
 #include "ns_hover.h"
+#include "ns_motion.h"
 #include "ai_panel_layout.h"
 #include "text_lines.h"
 #include "secure_zero.h"
@@ -110,6 +111,7 @@ typedef struct {
 #define IDC_CHAT_DENY     4012
 #define IDC_CHAT_UNDOCK   4013
 #define IDC_CHAT_AUTOAPPROVE 4015  /* toggles the Auto-approve button */
+#define IDC_CHAT_MIC      4016     /* owner-drawn microphone button (voice input) */
 /* The level's absolute setter: post 4030 + stop to put the level on a
  * named stop. The integration harness drives the control through these
  * and 4015 (docs/superpowers/specs/2026-10-18-ai-auto-approve-button-
@@ -145,6 +147,10 @@ typedef struct {
 #define TIMER_THINKING    5     /* Animated thinking indicator */
 #define TIMER_HEARTBEAT   6     /* Activity monitor heartbeat (1s) */
 #define TIMER_STREAM_REAP 7     /* Finds replies whose final message was lost */
+#define TIMER_MOTION      8     /* The panel's one ns_motion timer (the mic pulse), 16 ms */
+#define TIMER_VOICE_STATUS 9    /* Clears a transient voice status after a few seconds */
+#define MOTION_TICK_MS    16
+#define VOICE_STATUS_MS   3000
 #define STREAM_REAP_MS    1000
 #define THINKING_ANIM_MS  400   /* Dot animation interval */
 #define HEARTBEAT_MS      1000  /* Heartbeat interval */
@@ -416,6 +422,18 @@ typedef struct {
      * demo session has no transport (it would otherwise read as
      * AI_STATE_NO_SESSION). */
     int forced_state;
+
+    /* Voice input (voice_win.c drives it through ai_chat_voice_*). conv_gen is
+     * bumped wherever the conversation is reset (New Chat), so a transcript
+     * recorded before it is dropped, never sent into the new chat. */
+    unsigned conv_gen;
+    HWND hMicBtn;               /* NULL while voice is off */
+    AiVoiceUi voice_ui;
+    char voice_cue[128];        /* UTF-8 placeholder painted in the empty input */
+    char voice_status[64];      /* the transient text last put in context_label */
+    NsHover mic_hover;
+    int mic_hover_tracking;
+    NsAnimList anim;            /* the panel's own ns_motion list; TIMER_MOTION steps it */
 } AiChatData;
 
 /* Session kind for the system prompt: SSH unless the active transport
@@ -671,6 +689,19 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc);
 void ai_chat_header_sync(AiChatData *d);
 void ai_chat_header_invalidate(AiChatData *d);
 void ai_chat_apply_zoom(AiChatData *d, int delta);
+
+/* ai_chat_send.c: the box's text as UTF-8, LF line ends; heap, caller frees. */
+char *ai_chat_input_text_utf8(HWND hInput);
+
+/* ai_chat_voice.c */
+void ai_chat_voice_draw_mic(AiChatData *d, LPDRAWITEMSTRUCT dis);
+void ai_chat_voice_paint_cue(AiChatData *d, HWND edit);
+void ai_chat_voice_timer(AiChatData *d, UINT_PTR id);
+void ai_chat_voice_on_destroy(AiChatData *d);
+void ai_chat_voice_busy_changed(AiChatData *d);
+LRESULT CALLBACK ai_chat_mic_subclass(HWND hwnd, UINT msg, WPARAM wParam,
+                                      LPARAM lParam, UINT_PTR uIdSubclass,
+                                      DWORD_PTR dwRefData);
 
 #endif /* _WIN32 */
 

@@ -22,6 +22,16 @@ LRESULT CALLBACK ai_chat_btn_noerase_subclass(
     if (msg == WM_ERASEBKGND) return 1;
     if (msg == WM_NCDESTROY)
         RemoveWindowSubclass(hwnd, ai_chat_btn_noerase_subclass, uIdSubclass);
+    if (msg == WM_SETTEXT) {
+        /* The Send button flips to Stop and back as the assistant becomes
+         * busy and idle: the mic button's disabled look follows. */
+        LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
+        HWND panel = GetParent(hwnd);
+        AiChatData *pd = panel ? (AiChatData *)(LONG_PTR)GetWindowLongPtr(panel, GWLP_USERDATA)
+                               : NULL;
+        if (pd && pd->hSendBtn == hwnd) ai_chat_voice_busy_changed(pd);
+        return r;
+    }
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
@@ -344,6 +354,7 @@ void ai_chat_relayout(AiChatData *d)
     {
         int input_y = l.composer.y;
         int input_w = l.composer.w - send_w - margin * 3 - CSB_WIDTH;
+        if (d->hMicBtn) input_w -= send_w + margin;   /* the mic button, left of Send */
         if (input_w < 1) input_w = 1;
         if (d->hInput)
             MoveWindow(d->hInput, l.composer.x + margin, input_y,
@@ -353,6 +364,9 @@ void ai_chat_relayout(AiChatData *d)
                        input_y, CSB_WIDTH, input_h, TRUE);
         if (d->hSendBtn)
             MoveWindow(d->hSendBtn, l.composer.x + l.composer.w - send_w - margin,
+                       input_y, send_w, input_h, TRUE);
+        if (d->hMicBtn)
+            MoveWindow(d->hMicBtn, l.composer.x + l.composer.w - 2 * send_w - 2 * margin,
                        input_y, send_w, input_h, TRUE);
     }
 

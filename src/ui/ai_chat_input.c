@@ -126,6 +126,15 @@ LRESULT CALLBACK ai_chat_input_subclass_proc(HWND hwnd, UINT msg,
     if (msg == WM_KEYDOWN || msg == WM_CHAR) {
         session_mark_user_active();
     }
+    if (msg == WM_PAINT) {
+        /* The default paint first, then the voice cue over an empty box. */
+        LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
+        HWND panel = GetParent(hwnd);
+        AiChatData *pd = panel
+            ? (AiChatData *)(LONG_PTR)GetWindowLongPtr(panel, GWLP_USERDATA) : NULL;
+        if (pd && pd->voice_cue[0]) ai_chat_voice_paint_cue(pd, hwnd);
+        return r;
+    }
     if (msg == WM_PASTE) {
         HWND parent = GetParent(hwnd);
         AiChatData *pd = parent

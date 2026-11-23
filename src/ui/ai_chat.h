@@ -7,6 +7,7 @@
 #include "session_io.h"
 #include "ai_prompt.h"
 #include "chat_approval.h"
+#include "voice_ptt.h"
 
 /* Initialize the AI assist window class. Call once at startup. */
 void ai_chat_init(HINSTANCE hInstance);
@@ -195,6 +196,35 @@ const char *ai_chat_focus_role(HWND panel, HWND focus);
 /* Bump the active session's user-idle tick.  Called from any UI
  * surface (chat input, etc.) that should count as user activity. */
 void session_mark_user_active(void);
+
+/* ---- Voice input (voice_win.c drives these; ai_chat_voice.c implements) ---- */
+
+/* 1 while the assistant is busy: a reply streaming, a dispatch running or a
+ * command/tool card unfinished in the active session. 1 too when `panel` is
+ * not a live panel. */
+int  ai_chat_voice_busy(HWND panel);
+
+/* The active session, its session_gen and the conversation generation. */
+void ai_chat_voice_binding(HWND panel, VoiceBinding *out);
+
+/* Create (on) or destroy (off) the mic button and relayout the composer. A
+ * second call with on set only refreshes the tooltip. */
+void ai_chat_voice_attach(HWND panel, int on);
+
+typedef enum { AIV_IDLE = 0, AIV_RECORDING, AIV_TRANSCRIBING } AiVoiceUi;
+
+/* The button's look, its pulse and the cue painted in an empty input. */
+void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8);
+
+/* is_error: a status row in the chat; else a few seconds of text in the
+ * status line. */
+void ai_chat_voice_status(HWND panel, const char *text_utf8, int is_error);
+
+/* Runs voice_deliver against the box and acts: SEND goes the chips' way
+ * (SetWindowText + ai_chat_send_user_message); FILL/APPEND put the words in
+ * the box with the caret at the end and the focus there; nothing says
+ * "Didn't catch that". A busy panel turns SEND into FILL. */
+void ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int review);
 
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */

@@ -6,9 +6,32 @@
 
 /*
  * voice_win -- the voice feature's controller. It sets the voice gate and
- * starts and stops the audio thread to match; later revisions add the
- * push-to-talk hook and the mic button.
+ * starts and stops the audio thread to match, runs push-to-talk from the
+ * message pump (pump_dispatch calls g_voice_filter), starts and ends a
+ * capture, hands the recording to the STT worker and delivers the transcript
+ * into the AI panel.
  */
+
+/* A main-window timer id window.c does not use: the one-shot that ends the
+ * Mic start delay or the 60 s cap. */
+#define VOICE_TIMER_ID 0x56F1
+
+/* The AI panel (docked or not), or NULL; owned by window.c. */
+HWND ui_ai_panel(void);
+
+/* pump_dispatch's hook: NULL while the feature is stopped (so voice off
+ * installs nothing). Returns 1 when it consumed the message. */
+extern int (*g_voice_filter)(const MSG *m);
+int  voice_pump_filter(const MSG *m);
+
+/* WM_ACTIVATEAPP(FALSE) or WM_ENABLE(FALSE): end a recording (VE_DEACTIVATE). */
+void voice_on_deactivate(void);
+
+/* WM_TIMER with VOICE_TIMER_ID. */
+void voice_on_timer(void);
+
+/* The mic button was clicked. */
+void voice_mic_clicked(void);
 
 /* The live settings, owned by window.c; NULL before the config is loaded. */
 const Settings *ui_current_settings(void);
@@ -30,7 +53,8 @@ void voice_feature_shutdown(void);
 void voice_on_audio_msg(WPARAM wp, LPARAM lp);
 
 /* WM_VOICE_STT from window.c's WndProc: lParam is a VoiceSttResult the
- * receiver frees. Until the panel takes it, it is only freed. */
+ * receiver frees. A result for the current recording is delivered into the
+ * panel (or dropped when the chat changed); any other is only freed. */
 void voice_on_stt(LPARAM lp);
 
 #endif /* NUTSHELL_VOICE_WIN_H */

@@ -560,6 +560,11 @@ static char *input_text_utf8(HWND hInput)
     return u;
 }
 
+char *ai_chat_input_text_utf8(HWND hInput)
+{
+    return input_text_utf8(hInput);
+}
+
 void ai_chat_send_user_message(AiChatData *d)
 {
     /* Pending command batches: a card never blocks the input (rule 1) --

@@ -1277,6 +1277,8 @@ static void on_tab_close(int index, void *user_data) {
  * apart on what "just pump it" means. */
 static void pump_dispatch(MSG *m)
 {
+    /* Push-to-talk: NULL while voice is off, so nothing is hooked then. */
+    if (g_voice_filter && g_voice_filter(m)) return;
     TranslateMessage(m);
     DispatchMessage(m);
 }
@@ -2520,6 +2522,8 @@ static HWND create_ai_chat(HWND parent)
         ai_chat_set_runcmd_mode(hwnd, g_config->settings.ai_runcmd_mode);
         ai_chat_set_policy_default(hwnd, g_config->settings.ai_policy_default);
         ai_chat_set_thinking_pref(hwnd, g_config->settings.ai_thinking_mode);
+        if (voice_feature_running())
+            ai_chat_voice_attach(hwnd, 1);   /* the mic button, while voice is on */
     }
     return hwnd;
 }
@@ -2814,6 +2818,11 @@ static void ai_feature_on(HWND hwnd)
     voice_feature_apply(hwnd);   /* voice needs the assistant: its gate follows */
     if (g_hwndTabs) tabs_set_ai_visible(g_hwndTabs, 1);
     rebuild_app_menu(hwnd);
+}
+
+HWND ui_ai_panel(void)
+{
+    return (g_hwndAiChat && IsWindow(g_hwndAiChat)) ? g_hwndAiChat : NULL;
 }
 
 const Settings *ui_current_settings(void)
@@ -5338,6 +5347,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             } else if (wParam == IDT_ISSUE_TITLE) {
                 KillTimer(hwnd, IDT_ISSUE_TITLE);
                 SetWindowTextA(hwnd, APP_TITLE);
+            } else if (wParam == VOICE_TIMER_ID) {
+                voice_on_timer();
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
             } else if (wParam == ANIM_TIMER_ID) {
@@ -6170,6 +6181,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
+
+        case WM_ACTIVATEAPP:
+        case WM_ENABLE:
+            /* Losing activation, or a modal dialog disabling this window,
+             * ends a push-to-talk recording. */
+            if (!wParam) voice_on_deactivate();
+            break;
 
         case WM_NCACTIVATE: {
             /* Repaint non-client area on activation change to keep the
