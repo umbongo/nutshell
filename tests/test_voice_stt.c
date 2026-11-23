@@ -91,6 +91,15 @@ int test_voice_stt_use_ai_reason(void)
     ASSERT_STR_EQ(voice_stt_use_ai_reason("custom", "https://h/api/generate"),
                   "Set a separate voice provider: the custom chat URL has no /chat/completions to derive from");
     ASSERT_NOT_NULL(voice_stt_use_ai_reason("custom", ""));
+    ASSERT_STR_EQ(voice_stt_use_ai_reason("", ""),
+                  "Choose an AI provider that has a speech-to-text API");
+    ASSERT_STR_EQ(voice_stt_use_ai_reason("xai", ""),
+                  "Choose an AI provider that has a speech-to-text API");
+    ASSERT_STR_EQ(voice_stt_use_ai_reason(NULL, ""),
+                  "Choose an AI provider that has a speech-to-text API");
+    ASSERT_NOT_NULL(voice_stt_use_ai_reason("custom", "ftp://h/chat/completions"));
+    ASSERT_NOT_NULL(voice_stt_use_ai_reason("custom", "/chat/completions"));
+    ASSERT_NOT_NULL(voice_stt_use_ai_reason("custom", "https:///chat/completions"));
     TEST_END();
 }
 
@@ -129,6 +138,20 @@ int test_voice_stt_resolve_use_ai(void)
     strcpy(s.ai_provider, "anthropic");
     ASSERT_EQ(voice_stt_resolve(&s, &t, err, sizeof err), 0);
     ASSERT_STR_EQ(err, "Anthropic has no speech-to-text API");
+
+    /* unknown or empty chat provider with empty / short / foreign-scheme URLs */
+    static const char *const provs[] = {"", "xai", "custom"};
+    static const char *const urls[] = {"", "x", "/", "ftp://h/chat/completions",
+                                       "https://h/api/generate"};
+    for (size_t i = 0; i < 3; i++)
+        for (size_t j = 0; j < 5; j++) {
+            if (strcmp(provs[i], "custom") != 0 && urls[j][0]) continue;
+            snprintf(s.ai_provider, sizeof s.ai_provider, "%s", provs[i]);
+            snprintf(s.ai_custom_url, sizeof s.ai_custom_url, "%s", urls[j]);
+            err[0] = '\0';
+            ASSERT_EQ(voice_stt_resolve(&s, &t, err, sizeof err), 0);
+            ASSERT_TRUE(err[0] != '\0');
+        }
     TEST_END();
 }
 
@@ -196,6 +219,21 @@ int test_voice_stt_multipart(void)
         ASSERT_TRUE(len >= 8 && memcmp(b + len - 8, "--b0--\r\n", 8) == 0);
         free(b);
     }
+    ASSERT_NULL(voice_stt_multipart("", wav, sizeof wav, "m", "en", &len));
+    ASSERT_NULL(voice_stt_multipart("b 0", wav, sizeof wav, "m", "en", &len));
+    ASSERT_NULL(voice_stt_multipart("b\r\n0", wav, sizeof wav, "m", "en", &len));
+    ASSERT_NULL(voice_stt_multipart("b\"0", wav, sizeof wav, "m", "en", &len));
+    {
+        char lb[80];
+        memset(lb, 'a', 71); lb[71] = '\0';
+        ASSERT_NULL(voice_stt_multipart(lb, wav, sizeof wav, "m", "en", &len));
+        lb[70] = '\0';
+        char *ok70 = voice_stt_multipart(lb, wav, sizeof wav, "m", "en", &len);
+        ASSERT_NOT_NULL(ok70);
+        free(ok70);
+    }
+    ASSERT_NULL(voice_stt_multipart("b0", wav, sizeof wav, "m\r\nX: y", "en", &len));
+    ASSERT_NULL(voice_stt_multipart("b0", wav, sizeof wav, "m", "e\nn", &len));
     b = voice_stt_multipart("b0", wav, sizeof wav, "whisper-1", "", &len);
     ASSERT_NOT_NULL(b);
     if (b) {

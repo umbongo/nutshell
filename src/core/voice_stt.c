@@ -84,6 +84,22 @@ int voice_base_url_normalise(const char *in, char *out, size_t cap)
     return 1;
 }
 
+#define CUSTOM_CHAT_REASON \
+    "Set a separate voice provider: the custom chat URL has no /chat/completions to derive from"
+
+/* The base a custom chat URL derives from: it minus "/chat/completions", normalised
+ * (http/https, a host). Returns 0 when the URL is not usable. */
+static int custom_chat_base(const char *chat_url, char *base, size_t cap)
+{
+    char buf[512];
+    size_t n;
+    if (!trim_copy(chat_url, buf, sizeof buf, &n) || !ends_with(buf, n, CHAT_SUFFIX))
+        return 0;
+    n -= strlen(CHAT_SUFFIX);
+    buf[n] = '\0';
+    return voice_base_url_normalise(buf, base, cap);
+}
+
 const char *voice_stt_use_ai_reason(const char *chat_provider, const char *chat_custom_url)
 {
     if (!chat_provider) chat_provider = "";
@@ -91,13 +107,13 @@ const char *voice_stt_use_ai_reason(const char *chat_provider, const char *chat_
     if (strcmp(chat_provider, "deepseek") == 0) return "DeepSeek has no speech-to-text API";
     if (strcmp(chat_provider, "moonshot") == 0) return "Moonshot has no speech-to-text API";
     if (strcmp(chat_provider, "custom") == 0) {
-        char buf[512];
-        size_t n;
-        if (!trim_copy(chat_custom_url, buf, sizeof buf, &n) || !ends_with(buf, n, CHAT_SUFFIX) ||
-            n == strlen(CHAT_SUFFIX))
-            return "Set a separate voice provider: the custom chat URL has no /chat/completions to derive from";
+        char base[512];
+        if (!custom_chat_base(chat_custom_url, base, sizeof base)) return CUSTOM_CHAT_REASON;
+        return NULL;
     }
-    return NULL;
+    if (strcmp(chat_provider, "openai") == 0 || strcmp(chat_provider, "gemini") == 0)
+        return NULL;
+    return "Choose an AI provider that has a speech-to-text API";
 }
 
 static void put_err(char *err, size_t cap, const char *msg)
@@ -125,13 +141,10 @@ int voice_stt_resolve(const Settings *s, SttTarget *t, char *err, size_t cap)
         if (!p) p = voice_stt_provider_find("custom");
         if (strcmp(p->id, "custom") == 0) {
             char buf[512];
-            size_t n;
-            if (!trim_copy(s->ai_custom_url, buf, sizeof buf, &n)) {
-                put_err(err, cap, "Set a separate voice provider: the custom chat URL has no /chat/completions to derive from");
+            if (!custom_chat_base(s->ai_custom_url, buf, sizeof buf)) {
+                put_err(err, cap, CUSTOM_CHAT_REASON);
                 return 0;
             }
-            n -= strlen(CHAT_SUFFIX);
-            buf[n] = '\0';
             if (snprintf(t->url, sizeof t->url, "%s/audio/transcriptions", buf) >= (int)sizeof t->url) {
                 put_err(err, cap, "The custom chat URL is too long");
                 return 0;
@@ -208,6 +221,15 @@ char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t
                           const char *model, const char *language, size_t *out_len)
 {
     if (!boundary || !wav || !model) return NULL;
+    size_t bl = strlen(boundary);
+    if (bl == 0 || bl > 70) return NULL;
+    for (size_t i = 0; i < bl; i++) {
+        char ch = boundary[i];
+        int okc = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                  (ch >= '0' && ch <= '9') || (ch != '\0' && strchr("'()+_,-./:=?", ch));
+        if (!okc) return NULL;
+    }
+    if (strpbrk(model, "\r\n") || (language && strpbrk(language, "\r\n"))) return NULL;
     char *b = NULL;
     size_t l = 0, c = 0;
     int ok = buf_str(&b, &l, &c, "--") && buf_str(&b, &l, &c, boundary) &&
