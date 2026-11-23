@@ -1,9 +1,10 @@
 #!/bin/sh
 # check.sh <off|on> <report-file>
 # Asserts on the report nutshell.exe --self-report wrote. AI off: nothing of
-# the assistant was requested from Windows. AI on (the control): the two
-# RichEdit libraries were requested, so a pass of the "off" run means the
-# hook really sees loads.
+# the assistant was requested from Windows (winhttp.dll, riched20.dll and
+# msftedit.dll) and no `module: winhttp.dll` is loaded. AI on (the control):
+# winhttp.dll, riched20.dll and msftedit.dll were all requested, so a pass of
+# the "off" run means the hook really sees loads.
 mode=$1
 report=$2
 [ -s "$report" ] || { echo "FAIL ($mode): no report at $report"; exit 1; }

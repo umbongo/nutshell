@@ -70,8 +70,8 @@ void notice_launch_plan(NoticeQueue *q, const NoticeLaunch *in);
 
 /* Whether the launch saves the config. `added` is a first-run file or
  * settings an upgrade adds; `local_profile` is the Local shell profile
- * being created. Under --ui-demo only the profile save is kept: the demo
- * never writes the added fields or a first-run file. */
+ * being created. Under --ui-demo nothing is saved: the demo runs on the
+ * user's real config and keeps the Local shell profile in memory. */
 int notice_launch_save_wanted(int demo, int added, int local_profile);
 
 /* title, blank line, opening, "- label: value" lines, blank line, closing;

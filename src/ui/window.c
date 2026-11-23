@@ -2360,6 +2360,9 @@ static void on_settings_clicked_page(int initial_page) {
     int ai_was_enabled = g_config->settings.ai_enabled;
     if (!settings_dlg_show(parent, g_config, active_config_path(), initial_page))
         return;   /* already open (brought forward) or never shown: nothing changed */
+    /* The main window may have been destroyed while the modal loop ran
+     * (WM_DESTROY clears g_config): touch nothing more. */
+    if (!g_config || !IsWindow(parent)) return;
     dlog_configure(&g_config->settings);
 
     /* The Enable AI assistant switch: apply a change at once, no restart.
@@ -5434,6 +5437,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 NoticeQueue q = g_launch_notices;
                 notice_queue_init(&g_launch_notices);
                 for (int ni = 0; ni < q.count; ni++) {
+                    if (!IsWindow(hwnd)) break;
                     if (notice_dlg_show(hwnd, &q.n[ni], g_theme) &&
                         !open_settings) {
                         open_settings = 1;

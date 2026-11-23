@@ -332,6 +332,8 @@ int test_notice_launch_save_wanted(void)
     ASSERT_EQ(notice_launch_save_wanted(0, 0, 1), 1);
     ASSERT_EQ(notice_launch_save_wanted(1, 1, 0), 0);   /* demo: no added fields, no first-run file */
     ASSERT_EQ(notice_launch_save_wanted(1, 0, 0), 0);
-    ASSERT_EQ(notice_launch_save_wanted(1, 1, 1), 1);   /* the Local shell save is kept */
+    ASSERT_EQ(notice_launch_save_wanted(1, 0, 1), 0);   /* demo: the Local shell profile stays in memory */
+    ASSERT_EQ(notice_launch_save_wanted(1, 1, 1), 0);
+    ASSERT_EQ(notice_launch_save_wanted(0, 1, 1), 1);
     TEST_END();
 }

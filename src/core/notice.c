@@ -291,6 +291,6 @@ size_t notice_plain_text(const Notice *n, char *out, size_t cap)
 
 int notice_launch_save_wanted(int demo, int added, int local_profile)
 {
-    if (local_profile) return 1;
-    return (!demo && added) ? 1 : 0;
+    if (demo) return 0;   /* --ui-demo runs on the real config: save nothing */
+    return (added || local_profile) ? 1 : 0;
 }
