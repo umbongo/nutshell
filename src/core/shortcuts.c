@@ -58,18 +58,18 @@ static const Shortcut TABLE[] = {
 
     /* 5. AI Assist panel */
     { S5, "Ctrl+Shift+Space", "Show or hide the panel",
-      "from the terminal, not from inside the panel", SC_MENU_ACCEL, IDM_VIEW_AI_CHAT },
+      "from the terminal, not from inside the panel", SC_AI | SC_MENU_ACCEL, IDM_VIEW_AI_CHAT },
     { S5, "Enter",       "Send",
-      "while a reply streams or commands run: stop them", 0u, 0 },
-    { S5, "Shift+Enter", "New line", "", 0u, 0 },
-    { S5, "Ctrl+V",      "Paste text, or attach an image from the clipboard", "", 0u, 0 },
-    { S5, "Ctrl+=",      "Zoom the chat in", "US layout", 0u, 0 },
-    { S5, "Ctrl+-",      "Zoom the chat out", "US layout", 0u, 0 },
-    { S5, "Ctrl+C",      "Copy the selected text", "conversation list focused", 0u, 0 },
-    { S5, "Ctrl+A",      "Select all messages", "list focused", 0u, 0 },
-    { S5, "Esc",         "Clear the selection", "list focused", 0u, 0 },
+      "while a reply streams or commands run: stop them", SC_AI, 0 },
+    { S5, "Shift+Enter", "New line", "", SC_AI, 0 },
+    { S5, "Ctrl+V",      "Paste text, or attach an image from the clipboard", "", SC_AI, 0 },
+    { S5, "Ctrl+=",      "Zoom the chat in", "US layout", SC_AI, 0 },
+    { S5, "Ctrl+-",      "Zoom the chat out", "US layout", SC_AI, 0 },
+    { S5, "Ctrl+C",      "Copy the selected text", "conversation list focused", SC_AI, 0 },
+    { S5, "Ctrl+A",      "Select all messages", "list focused", SC_AI, 0 },
+    { S5, "Esc",         "Clear the selection", "list focused", SC_AI, 0 },
     { S5, "PgUp, PgDn, Home, End, Up, Down", "Scroll the conversation",
-      "list focused", 0u, 0 },
+      "list focused", SC_AI, 0 },
 
     /* 6. Window and help */
     { S6, "F11",          "Fullscreen", "from the terminal",
@@ -89,11 +89,11 @@ static const Shortcut TABLE[] = {
     { S7, "Wheel",              "Scroll three lines", "", 0u, 0 },
     { S7, "Ctrl+Wheel",         "Zoom the terminal font", "", 0u, 0 },
     { S7, "Drag in the AI panel", "Select text",
-      "nothing copied until Ctrl+C", 0u, 0 },
-    { S7, "Double-click in the AI panel", "Select a word", "", 0u, 0 },
-    { S7, "Triple-click in the AI panel", "Select a line", "", 0u, 0 },
+      "nothing copied until Ctrl+C", SC_AI, 0 },
+    { S7, "Double-click in the AI panel", "Select a word", "", SC_AI, 0 },
+    { S7, "Triple-click in the AI panel", "Select a line", "", SC_AI, 0 },
     { S7, "Right-click in the AI panel", "Copy, Select all, Paste into message",
-      "", 0u, 0 },
+      "", SC_AI, 0 },
 };
 
 #define TABLE_N (sizeof(TABLE) / sizeof(TABLE[0]))
@@ -123,6 +123,17 @@ const char *shortcuts_menu_accel(int menu_id)
         if (TABLE[i].menu_id == menu_id) return TABLE[i].chord;
     }
     return "";
+}
+
+size_t shortcuts_filtered(Shortcut *out, size_t cap, int ai_on)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < TABLE_N; i++) {
+        if (!ai_on && (TABLE[i].flags & SC_AI)) continue;
+        if (out && n < cap) out[n] = TABLE[i];
+        n++;
+    }
+    return n;
 }
 
 /* snprintf-style appender: counts every byte, writes what fits. */

@@ -891,6 +891,9 @@ int test_tabs_btn_tooltip_prev(void);
 int test_tabs_btn_tooltip_next(void);
 int test_tabs_btn_tooltip_gap(void);
 int test_tabs_btn_tooltip_past_add(void);
+int test_tabs_btn_geometry_hidden_ai_slot_is_reclaimed(void);
+int test_tabs_btn_tooltip_ai_hidden_has_no_tip(void);
+int test_tabs_btn_tooltip_ai_hidden_neighbours_shift(void);
 int test_tabmgr_status_click_connected(void);
 int test_tabmgr_status_click_disconnected(void);
 int test_tabmgr_status_click_connecting(void);
@@ -3624,6 +3627,11 @@ int test_about_layout_null_out_is_safe(void);
 int test_build_info_deps_whole_format(void);
 int test_build_info_deps_openssl_part_matches_header(void);
 int test_build_info_deps_truncates(void);
+/* test_ai_gate.c */
+int test_ai_gate_default_off(void);
+int test_ai_gate_enabled(void);
+int test_ai_gate_override_only(void);
+int test_ai_gate_override_does_not_change_enabled(void);
 /* test_shortcuts.c */
 int test_shortcuts_every_row_has_section_chord_action(void);
 int test_shortcuts_sections_contiguous_and_in_fixed_order(void);
@@ -3637,6 +3645,10 @@ int test_shortcuts_readme_block_shape(void);
 int test_shortcuts_readme_block_truncates_safely(void);
 int test_shortcuts_readme_matches_table(void);
 int test_shortcuts_readme_check_handles_crlf_and_bad_markers(void);
+int test_shortcuts_filtered_off_drops_ai_rows(void);
+int test_shortcuts_filtered_on_keeps_all(void);
+int test_shortcuts_filtered_counts_without_a_buffer(void);
+int test_shortcuts_readme_block_unchanged_by_filter(void);
 /* test_cheatsheet_layout.c */
 int test_cheatsheet_layout_capacity_holds_the_table(void);
 int test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96(void);
@@ -3653,6 +3665,7 @@ int test_cheatsheet_place_centres_then_keeps_to_the_work_area(void);
 int test_cheatsheet_input_from_table_fills_the_table_fields(void);
 int test_cheatsheet_input_from_table_stops_at_the_section_capacity(void);
 int test_cheatsheet_input_from_table_stops_at_the_row_capacity(void);
+int test_cheatsheet_layout_without_the_ai_section_still_has_two_columns(void);
 
 /* test_settings_entry.c */
 int test_search_providers_table(void);
@@ -5287,6 +5300,9 @@ int main(void) {
     failed += test_tabs_btn_tooltip_next();
     failed += test_tabs_btn_tooltip_gap();
     failed += test_tabs_btn_tooltip_past_add();
+    failed += test_tabs_btn_geometry_hidden_ai_slot_is_reclaimed();
+    failed += test_tabs_btn_tooltip_ai_hidden_has_no_tip();
+    failed += test_tabs_btn_tooltip_ai_hidden_neighbours_shift();
 
     printf("\n--- Status Dot Click ---\n");
     failed += test_tabmgr_status_click_connected();
@@ -7921,6 +7937,10 @@ int main(void) {
     failed += test_build_info_deps_whole_format();
     failed += test_build_info_deps_openssl_part_matches_header();
     failed += test_build_info_deps_truncates();
+    failed += test_ai_gate_default_off();
+    failed += test_ai_gate_enabled();
+    failed += test_ai_gate_override_only();
+    failed += test_ai_gate_override_does_not_change_enabled();
     failed += test_shortcuts_every_row_has_section_chord_action();
     failed += test_shortcuts_sections_contiguous_and_in_fixed_order();
     failed += test_shortcuts_no_chord_and_condition_repeat_within_a_section();
@@ -7933,6 +7953,10 @@ int main(void) {
     failed += test_shortcuts_readme_block_truncates_safely();
     failed += test_shortcuts_readme_matches_table();
     failed += test_shortcuts_readme_check_handles_crlf_and_bad_markers();
+    failed += test_shortcuts_filtered_off_drops_ai_rows();
+    failed += test_shortcuts_filtered_on_keeps_all();
+    failed += test_shortcuts_filtered_counts_without_a_buffer();
+    failed += test_shortcuts_readme_block_unchanged_by_filter();
     failed += test_cheatsheet_layout_capacity_holds_the_table();
     failed += test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96();
     failed += test_cheatsheet_layout_no_scrollbar_when_the_page_fits();
@@ -7948,6 +7972,7 @@ int main(void) {
     failed += test_cheatsheet_input_from_table_fills_the_table_fields();
     failed += test_cheatsheet_input_from_table_stops_at_the_section_capacity();
     failed += test_cheatsheet_input_from_table_stops_at_the_row_capacity();
+    failed += test_cheatsheet_layout_without_the_ai_section_still_has_two_columns();
 
     printf("\n--- Settings Layout ---\n");
     failed += test_sl_scale_identity_at_96();

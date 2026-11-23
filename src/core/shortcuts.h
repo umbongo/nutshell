@@ -24,7 +24,8 @@
 enum {
     SC_MENU_PATH      = 1u << 0, /* chord is a menu path, not keys */
     SC_SELECTION_SPEC = 1u << 1, /* true once the PuTTY-selection spec landed */
-    SC_MENU_ACCEL     = 1u << 2  /* menu_id's label shows this chord */
+    SC_MENU_ACCEL     = 1u << 2, /* menu_id's label shows this chord */
+    SC_AI             = 1u << 3  /* an AI assistant row: left out while it is off */
 };
 
 typedef struct {
@@ -43,6 +44,13 @@ const Shortcut *shortcuts_table(size_t *count);
  * them to `out` (which may be NULL when cap is 0) and returns how many
  * there are. */
 size_t shortcuts_sections(const char **out, size_t cap);
+
+/* Copies the rows into `out` (at most `cap`, which may be 0 with out NULL)
+ * in table order, leaving out every SC_AI row when `ai_on` is 0; returns
+ * how many rows qualify. Sections stay contiguous, and one that loses all
+ * its rows disappears. shortcuts_readme_block() ignores this: the README
+ * always lists the full table. */
+size_t shortcuts_filtered(Shortcut *out, size_t cap, int ai_on);
 
 /* The chord the menu item `menu_id` shows as its accelerator, or "" when
  * no row names that id. Never NULL. */

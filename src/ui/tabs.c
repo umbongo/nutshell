@@ -62,6 +62,7 @@ typedef struct TabControlData {
     HFONT hFont;
     HFONT hSmallFont;  /* cached small font for indicator labels */
     HWND  hTooltip;    /* Win32 tooltip control */
+    int   ai_visible;  /* 0 = the AI button is hidden and its slot reclaimed */
     int   ai_active;   /* 1 = API key configured -> green, 0 = grey */
     int   dpi;         /* per-window DPI for layout scaling */
     char  font_name[64];
@@ -131,19 +132,19 @@ static void tabs_rect_for_btn(HWND hwnd, TabControlData *data, int btn_id,
 {
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
-    int btnSz = ns_scale(BTN_SIZE_BASE, data->dpi);
-    int pad   = ns_scale(PAD_BASE, data->dpi);
-    int btnGap = ns_scale(BTN_GAP_BASE, data->dpi);
+    TabsBtnGeom g;
+    tabs_btn_geometry(rcClient.right, data->dpi, data->ai_visible, &g);
+    int btnSz = g.btn;
     int btnY  = (rcClient.bottom - btnSz) / 2;
-    int aiX    = rcClient.right - btnSz - pad;
-    int rightX = aiX - btnSz - btnGap;
-    int leftX  = rightX - btnSz - btnGap;
 
     switch (btn_id) {
-    case TABS_HOVER_ADD:   SetRect(out, pad, btnY, pad + btnSz, btnY + btnSz); break;
-    case TABS_HOVER_LEFT:  SetRect(out, leftX, btnY, leftX + btnSz, btnY + btnSz); break;
-    case TABS_HOVER_RIGHT: SetRect(out, rightX, btnY, rightX + btnSz, btnY + btnSz); break;
-    case TABS_HOVER_AI:    SetRect(out, aiX, btnY, aiX + btnSz, btnY + btnSz); break;
+    case TABS_HOVER_ADD:   SetRect(out, g.add_x, btnY, g.add_x + btnSz, btnY + btnSz); break;
+    case TABS_HOVER_LEFT:  SetRect(out, g.left_x, btnY, g.left_x + btnSz, btnY + btnSz); break;
+    case TABS_HOVER_RIGHT: SetRect(out, g.right_x, btnY, g.right_x + btnSz, btnY + btnSz); break;
+    case TABS_HOVER_AI:
+        if (g.ai_visible) SetRect(out, g.ai_x, btnY, g.ai_x + btnSz, btnY + btnSz);
+        else SetRectEmpty(out);
+        break;
     default:               SetRectEmpty(out); break;
     }
 }
@@ -220,7 +221,6 @@ static int tabs_hit_id(HWND hwnd, TabControlData *data, int mx, int my,
 
     int btnSz_h  = ns_scale(BTN_SIZE_BASE, data->dpi);
     int pad_h    = ns_scale(PAD_BASE, data->dpi);
-    int btnGap_h = ns_scale(BTN_GAP_BASE, data->dpi);
     int btnY_h   = (rcClient.bottom - btnSz_h) / 2;
 
     /* [+] add */
@@ -231,11 +231,13 @@ static int tabs_hit_id(HWND hwnd, TabControlData *data, int mx, int my,
     }
 
     /* Right-side cluster */
-    int aiX_h    = rcClient.right - btnSz_h - pad_h;
-    int rightX_h = aiX_h - btnSz_h - btnGap_h;
-    int leftX_h  = rightX_h - btnSz_h - btnGap_h;
+    TabsBtnGeom g_h;
+    tabs_btn_geometry(rcClient.right, data->dpi, data->ai_visible, &g_h);
+    int aiX_h    = g_h.ai_x;
+    int rightX_h = g_h.right_x;
+    int leftX_h  = g_h.left_x;
     if (my >= btnY_h && my <= btnY_h + btnSz_h) {
-        if (mx >= aiX_h    && mx <= aiX_h    + btnSz_h) {
+        if (g_h.ai_visible && mx >= aiX_h && mx <= aiX_h + btnSz_h) {
             if (out_rc) tabs_rect_for_btn(hwnd, data, TABS_HOVER_AI, out_rc);
             return TABS_HOVER_AI;
         }
@@ -292,6 +294,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             data = xcalloc(1, sizeof(TabControlData));
             tabmgr_init(&data->m);
             ns_hover_init(&data->hover);
+            data->ai_visible = 1;
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
 
             (void)snprintf(data->font_name, sizeof(data->font_name),
@@ -430,7 +433,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 /* Check if cursor is over any button */
                 RECT rcClient;
                 GetClientRect(hwnd, &rcClient);
-                const char *btn_tip = tabs_btn_tooltip_at(pt.x, rcClient.right, data->dpi);
+                const char *btn_tip = tabs_btn_tooltip_at(pt.x, rcClient.right, data->dpi, data->ai_visible);
                 if (btn_tip) {
                     ttt->lpszText = (LPSTR)btn_tip;
                 } else if (tab_idx >= 0) {
@@ -496,7 +499,6 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int btnSz   = ns_scale(BTN_SIZE_BASE, data->dpi);
             int pad      = ns_scale(PAD_BASE, data->dpi);
             int tabGap   = ns_scale(TAB_GAP_BASE, data->dpi);
-            int btnGap   = ns_scale(BTN_GAP_BASE, data->dpi);
             int indW     = ns_scale(INDICATOR_W_BASE, data->dpi);
             int indGap   = ns_scale(INDICATOR_GAP_BASE, data->dpi);
             int closeSz  = ns_scale(CLOSE_SIZE_BASE, data->dpi);
@@ -639,9 +641,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
             /* ---- Right-side buttons: [◀][▶][AI] ---- */
             {
-                int aiX    = rcClient.right - btnSz - pad;
-                int rightX = aiX - btnSz - btnGap;
-                int leftX  = rightX - btnSz - btnGap;
+                TabsBtnGeom g;
+                tabs_btn_geometry(rcClient.right, data->dpi, data->ai_visible, &g);
+                int aiX    = g.ai_x;
+                int rightX = g.right_x;
+                int leftX  = g.left_x;
 
                 COLORREF hoverFill = rgb_alpha(cBtn, cTabAct, 0.6f);
                 HPEN rBtnPen = CreatePen(PS_SOLID, 1, cBorder);
@@ -677,7 +681,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                  * color, which goes green only when an AI key is
                  * configured. The accent region is small by design so
                  * the green stays well under 35% of the icon. */
-                if (aiX > x) {
+                if (g.ai_visible && aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
                     DRAW_BTN_BG(&rcAi, TABS_HOVER_AI);
                     COLORREF aiAccent = data->ai_active
@@ -711,7 +715,6 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
             int btnSz_h  = ns_scale(BTN_SIZE_BASE, data->dpi);
             int pad_h    = ns_scale(PAD_BASE, data->dpi);
-            int btnGap_h = ns_scale(BTN_GAP_BASE, data->dpi);
             int indW_h   = ns_scale(INDICATOR_W_BASE, data->dpi);
             int indGap_h = ns_scale(INDICATOR_GAP_BASE, data->dpi);
             int closeSz_h = ns_scale(CLOSE_SIZE_BASE, data->dpi);
@@ -728,11 +731,13 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             /* Hit test right-side buttons: [◀][▶][AI] */
             RECT rcClient;
             GetClientRect(hwnd, &rcClient);
-            int aiX    = rcClient.right - btnSz_h - pad_h;
-            int rightX = aiX - btnSz_h - btnGap_h;
-            int leftX  = rightX - btnSz_h - btnGap_h;
+            TabsBtnGeom g;
+            tabs_btn_geometry(rcClient.right, data->dpi, data->ai_visible, &g);
+            int aiX    = g.ai_x;
+            int rightX = g.right_x;
+            int leftX  = g.left_x;
 
-            if (mx >= aiX && mx <= aiX + btnSz_h) {
+            if (g.ai_visible && mx >= aiX && mx <= aiX + btnSz_h) {
                 if (data->on_ai) data->on_ai();
                 return 0;
             }
@@ -982,6 +987,16 @@ void tabs_set_ai_active(HWND hwnd, int active)
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!data) return;
     data->ai_active = active;
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+void tabs_set_ai_visible(HWND hwnd, int visible)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return;
+    data->ai_visible = visible ? 1 : 0;
+    /* A hovered AI button is gone; the arrows moved under the pointer. */
+    ns_hover_leave(&data->hover);
     InvalidateRect(hwnd, NULL, FALSE);
 }
 

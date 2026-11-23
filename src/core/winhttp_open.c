@@ -1,4 +1,5 @@
 #include "winhttp_open.h"
+#include "ai_gate.h"
 
 #ifdef _WIN32
 
@@ -15,6 +16,12 @@
 
 HINTERNET ns_winhttp_open(const wchar_t *agent)
 {
+    /* The one choke point for every AI request (chat, models list, web
+     * tools): nothing leaves the process while the assistant is off. */
+    if (!ai_gate_on()) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return NULL;
+    }
     if (!agent) agent = L"Nutshell/1.0";
 
     /* The automatic type needs Windows 8.1 or later; fall back otherwise. */

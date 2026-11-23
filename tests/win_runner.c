@@ -81,6 +81,8 @@ int test_telnet_io_win_resolve_fails(void);
 int test_telnet_io_win_negotiates_and_logs_in(void);
 int test_telnet_io_win_eof_reports_closed(void);
 int test_telnet_io_win_serial_unique(void);
+int test_winhttp_open_refuses_while_off(void);
+int test_winhttp_open_opens_while_on(void);
 
 /* test_settings_label_win.c */
 int test_settings_label_win_labels_fit_column(void);
@@ -361,6 +363,8 @@ int main(int argc, char **argv)
     failed += test_telnet_io_win_negotiates_and_logs_in();
     failed += test_telnet_io_win_eof_reports_closed();
     failed += test_telnet_io_win_serial_unique();
+    failed += test_winhttp_open_refuses_while_off();
+    failed += test_winhttp_open_opens_while_on();
     failed += run_ns_tip_tests();
 
     printf("\n[pty] re-executing with a console of our own "

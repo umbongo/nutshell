@@ -13,6 +13,7 @@
 #include "dpi_util.h"
 #include <stdlib.h>
 #include <string.h>
+#include "ai_gate.h"
 
 #define CHEAT_CLASS       "Nutshell_Shortcuts"
 #define CHEAT_TITLE       "Keyboard Shortcuts"
@@ -28,6 +29,8 @@ typedef struct {
     int      closing;      /* set by Close/Esc/Enter/WM_CLOSE; ends the loop */
     CsInput  in;
     CsLayout lay;
+    Shortcut rows[CS_MAX_ROWS]; /* the table as filtered when the sheet opened */
+    size_t   n_rows;
 } CheatData;
 
 static int s_open = 0;     /* a second Help > Keyboard Shortcuts is ignored */
@@ -72,9 +75,7 @@ static void cheat_measure(HWND hwnd, CheatData *d, int work_w, int work_h)
     CheatMeasure m;
     m.hdc = GetDC(hwnd);
     m.dpi = d->dpi;
-    size_t n = 0;
-    const Shortcut *t = shortcuts_table(&n);
-    cheatsheet_input_from_table(in, t, n, cheat_measure_text, &m);
+    cheatsheet_input_from_table(in, d->rows, d->n_rows, cheat_measure_text, &m);
     ReleaseDC(hwnd, m.hdc);
 }
 
@@ -211,16 +212,21 @@ static void cheat_paint(HDC hdc, const RECT *client, const CheatData *d)
     const int top = d->scroll;
     const int bottom = d->scroll + l->view.h;
 
+    /* Headings come from the filtered copy: a section is the run of rows
+     * that share a name, as cheatsheet_input_from_table() counts them. */
     const char *names[CS_MAX_SECTIONS];
-    size_t ns = shortcuts_sections(names, CS_MAX_SECTIONS);
+    size_t ns = 0;
+    for (size_t i = 0; i < d->n_rows && ns < CS_MAX_SECTIONS; i++)
+        if (i == 0 || strcmp(d->rows[i].section, d->rows[i - 1].section) != 0)
+            names[ns++] = d->rows[i].section;
     for (int s = 0; s < l->n_sections && (size_t)s < ns; s++) {
         cheat_text(hdc, l->heading[s], dy, FONT_HEADING, d->dpi, tk->text_main, names[s]);
         ns_draw_separator(hdc, l->rule[s].x, l->rule[s].x + l->rule[s].w,
                           l->rule[s].y + dy, theme_cr(tk->border));
     }
 
-    size_t n = 0;
-    const Shortcut *t = shortcuts_table(&n);
+    const size_t n = d->n_rows;
+    const Shortcut *t = d->rows;
     for (int i = 0; i < l->n_rows && (size_t)i < n; i++) {
         const CsRect *row = &l->row[i];
         if (row->y + row->h < top || row->y > bottom) continue;
@@ -379,6 +385,8 @@ void cheatsheet_show(HWND parent, HWND floating_panel, const ThemeColors *theme)
     CheatData d;
     memset(&d, 0, sizeof(d));
     d.theme = theme;
+    d.n_rows = shortcuts_filtered(d.rows, CS_MAX_ROWS, ai_gate_on());
+    if (d.n_rows > CS_MAX_ROWS) d.n_rows = CS_MAX_ROWS;
 
     HWND prev_focus = GetFocus();
     /* Created on the owner's monitor so its DPI is the owner's; cheat_fit()
