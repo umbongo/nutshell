@@ -12,6 +12,7 @@
 #include <windows.h>
 #else
 #include <pthread.h>
+#include <time.h>
 #endif
 
 static volatile int       g_closed;
@@ -250,5 +251,79 @@ int test_web_search_fired_token_stops_before_request(void)
     ASSERT_NOT_NULL(buf);
     if (buf) ASSERT_TRUE(strstr(buf, "cancelled") != NULL);
     free(buf);
+    TEST_END();
+}
+
+/* ---- disarm waits for a fire whose close is still running -------------- */
+
+static volatile int g_cb_entered, g_cb_release, g_disarm_done;
+
+static void blocking_close(uintptr_t h)
+{
+    (void)h;
+    __atomic_store_n(&g_cb_entered, 1, __ATOMIC_SEQ_CST);
+    while (!__atomic_load_n(&g_cb_release, __ATOMIC_SEQ_CST)) { /* hold the close open */ }
+}
+
+static void nap_ms(int ms)
+{
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    struct timespec ts = { 0, ms * 1000000L };
+    nanosleep(&ts, NULL);
+#endif
+}
+
+#ifdef _WIN32
+static DWORD WINAPI bc_fire(LPVOID p) { ai_nc_fire((AiNetCancel *)p); return 0; }
+static DWORD WINAPI bc_disarm(LPVOID p)
+{
+    int mine = ai_nc_disarm((AiNetCancel *)p);
+    (void)mine;
+    __atomic_store_n(&g_disarm_done, 1, __ATOMIC_SEQ_CST);
+    return 0;
+}
+#else
+static void *bc_fire(void *p) { ai_nc_fire((AiNetCancel *)p); return NULL; }
+static void *bc_disarm(void *p)
+{
+    (void)ai_nc_disarm((AiNetCancel *)p);
+    __atomic_store_n(&g_disarm_done, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+#endif
+
+int test_ai_nc_disarm_waits_for_running_close(void)
+{
+    TEST_BEGIN();
+    g_cb_entered = g_cb_release = g_disarm_done = 0;
+    AiNetCancel c;
+    ai_nc_init(&c);
+    ASSERT_EQ(ai_nc_arm(&c, 0x55, blocking_close), 0);
+#ifdef _WIN32
+    HANDLE tf = CreateThread(NULL, 0, bc_fire, &c, 0, NULL);
+#else
+    pthread_t tf, td;
+    pthread_create(&tf, NULL, bc_fire, &c);
+#endif
+    for (int i = 0; i < 2000 && !g_cb_entered; i++) nap_ms(1);
+    ASSERT_EQ((int)g_cb_entered, 1);
+#ifdef _WIN32
+    HANDLE td = CreateThread(NULL, 0, bc_disarm, &c, 0, NULL);
+#else
+    pthread_create(&td, NULL, bc_disarm, &c);
+#endif
+    nap_ms(100);
+    ASSERT_EQ((int)g_disarm_done, 0);   /* the close has not returned: disarm waits */
+    __atomic_store_n(&g_cb_release, 1, __ATOMIC_SEQ_CST);
+#ifdef _WIN32
+    WaitForSingleObject(tf, INFINITE); WaitForSingleObject(td, INFINITE);
+    CloseHandle(tf); CloseHandle(td);
+#else
+    pthread_join(tf, NULL);
+    pthread_join(td, NULL);
+#endif
+    ASSERT_EQ((int)g_disarm_done, 1);
     TEST_END();
 }

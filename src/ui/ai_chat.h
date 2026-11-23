@@ -178,6 +178,8 @@ int ai_chat_copy_selection(HWND hwnd);
  * wait only covers their last steps. Closes the finished threads' handles and
  * returns how many are still running. Such a thread owns nothing the app
  * frees (its stream is an orphan that frees itself), so carrying on is safe. */
+/* Precondition: the caller has orphaned the streams first (ai_chat_close does);
+ * the join only waits and fires no token itself. */
 int ai_chat_join_streams(DWORD ms);
 
 /* Returns non-zero if the AI chat has saveable conversation content. */

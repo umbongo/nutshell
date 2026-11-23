@@ -2839,7 +2839,7 @@ static void ai_feature_off(HWND hwnd)
     g_hwndAiChat = NULL;
     g_ai_panel_width = 0;
     g_ai_target_width = 0;
-    (void)ai_chat_join_streams(2000);
+    (void)ai_chat_join_streams(2000);   /* the panel's close above orphaned (and fired) every stream */
     /* ... so the discard comes after it, on every session. */
     for (Session *s = g_session_list; s; s = s->next)
         ai_session_discard(&s->ai_state);
@@ -6391,7 +6391,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                 ai_chat_close(g_hwndAiChat);
             g_hwndAiChat = NULL;
-            (void)ai_chat_join_streams(2000);
+            (void)ai_chat_join_streams(2000);   /* ai_chat_close above orphaned (and fired) every stream */
             {
                 Session *s = g_session_list;
                 while (s) {

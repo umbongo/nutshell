@@ -216,6 +216,16 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         total += bytes_read;
     }
 
+    if (ai_nc_cancelled(nc)) {
+        /* fired during the read: what arrived is a cut body, not a reply */
+        free(buf);
+        snprintf(resp->error, sizeof(resp->error), "cancelled");
+        req_close(hRequest, nc);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
     if (buf) {
         buf[total] = '\0';
         resp->body = buf;
@@ -525,6 +535,16 @@ static int ai_http_get_impl(const char *url, const char * const *headers,
 
         if (!WinHttpReadData(hRequest, buf + total, avail, &bytes_read)) break;
         total += bytes_read;
+    }
+
+    if (ai_nc_cancelled(nc)) {
+        /* fired during the read: what arrived is a cut body, not a reply */
+        free(buf);
+        snprintf(resp->error, sizeof(resp->error), "cancelled");
+        req_close(hRequest, nc);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
     }
 
     if (buf) {

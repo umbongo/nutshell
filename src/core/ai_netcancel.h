@@ -26,6 +26,12 @@
  * session and connect handles; only the request handle is armed. After any
  * failed call the worker consults ai_nc_cancelled() before touching the
  * handle again, because a closed handle value may be reused by the system.
+ * That window (a check that passes, then a fire, then the next call) is a few
+ * instructions wide and accepted; the call then fails on the closed handle.
+ *
+ * A disarm that returns 0 waits until fire's close callback has returned, so
+ * the worker never closes the connect/session handles while the request is
+ * still being closed on another thread.
  *
  * The token is sticky: once fired it refuses every later arm. It may be
  * armed and disarmed many times before that (one request per redirect hop).
@@ -40,6 +46,7 @@ typedef struct {
     int         cancelled;   /* set once by fire, never cleared */
     uintptr_t   h;           /* the armed handle, 0 when none */
     AiNcCloseFn close;       /* how to close it */
+    int         closing;     /* fire's close callback is running (outside the lock) */
 } AiNetCancel;
 
 void ai_nc_init(AiNetCancel *c);

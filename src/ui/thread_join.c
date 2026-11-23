@@ -23,6 +23,16 @@ void thread_join_reap(ThreadJoinList *l)
     l->n = keep;
 }
 
+void thread_join_detach_all(ThreadJoinList *l)
+{
+    if (!l) return;
+    for (int i = 0; i < l->n; i++) {
+        CloseHandle(l->h[i]);
+        l->h[i] = NULL;
+    }
+    l->n = 0;
+}
+
 int thread_join_add(ThreadJoinList *l, HANDLE h)
 {
     if (!l || !h) return 0;

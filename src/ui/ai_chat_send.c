@@ -380,11 +380,9 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     }
 }
 
-/* Every stream's cancel token
- * is fired at the moment it is orphaned (ai_stream_orphan), which the panel's
- * close, Stop, New Chat and a tab close all do first; so by the time a join
- * is asked for, each blocked request handle is already closed and the threads
- * are on their way out. */
+/* Wait-only: every stream's cancel token is fired when the stream is orphaned
+ * (ai_stream_orphan), which the panel's close, Stop, New Chat and a tab close
+ * all do, so a caller must orphan first (see ai_chat.h). */
 int ai_chat_join_streams(DWORD ms)
 {
     /* Waits on the handles, pumping this thread's sent messages (a worker

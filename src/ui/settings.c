@@ -1810,6 +1810,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         if (!d) return 0;   /* tearing down: WM_DESTROY dropped the window's reference */
         if (ctx != d->models) return 0;   /* not the request this window is waiting on */
         d->models = NULL;
+        thread_join_reap(&d->models_thread);   /* its handle: the thread is on its way out */
         if (ctx && ctx->result) {
             /* Re-enable the refresh button (only while the switch is on) */
             ai_enable_sync(d);
@@ -2382,10 +2383,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 (void)thread_join_wait(&d->models_thread, 1000);
                 models_ctx_release(d->models);
                 d->models = NULL;
-                for (int i = 0; i < d->models_thread.n; i++)   /* still running: unjoined */
-                    CloseHandle(d->models_thread.h[i]);
-                d->models_thread.n = 0;
             }
+            thread_join_detach_all(&d->models_thread);   /* whatever is left, finished or not */
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
             if (d->hTip) DestroyWindow(d->hTip);
             /* d->hDlgFont / d->hBoldFont come from the ns_font cache. */

@@ -3326,6 +3326,7 @@ int test_ai_nc_disarm_after_fire_returns_zero(void);
 int test_ai_nc_disarm_without_fire_returns_one(void);
 int test_ai_nc_fire_twice_closes_once(void);
 int test_ai_nc_null_token_is_harmless(void);
+int test_ai_nc_disarm_waits_for_running_close(void);
 int test_ai_nc_concurrent_fire_and_disarm_close_exactly_once(void);
 int test_ai_stream_orphan_fires_token(void);
 int test_ai_stream_copy_tools_points_contexts_at_token(void);
@@ -7702,6 +7703,7 @@ int main(void) {
     failed += test_ai_nc_disarm_without_fire_returns_one();
     failed += test_ai_nc_fire_twice_closes_once();
     failed += test_ai_nc_null_token_is_harmless();
+    failed += test_ai_nc_disarm_waits_for_running_close();
     failed += test_ai_nc_concurrent_fire_and_disarm_close_exactly_once();
     failed += test_ai_stream_orphan_fires_token();
     failed += test_ai_stream_copy_tools_points_contexts_at_token();

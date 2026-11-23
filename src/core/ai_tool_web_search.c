@@ -338,8 +338,10 @@ static void ws_close_cb(uintptr_t h)
     WinHttpCloseHandle((HINTERNET)h);
 }
 
+#define WS_CANCELLED (-2)   /* ws_get result: stopped by the flag or the token */
+
 /* One GET of `url` over https. 0 with a malloc'd, NUL-terminated *body (at
- * most WS_MAX_BODY bytes), or -1 with *err a static text. The request handle
+ * most WS_MAX_BODY bytes), or -1 (WS_CANCELLED when stopped) with *err a static text. The request handle
  * is armed on `nc` while the calls run, so the UI thread can close it and
  * wake a blocked call; after any failed call the token is read before the
  * handle is touched again, and the disarm decides who closes it. */
@@ -349,7 +351,7 @@ static int ws_get(const char *url, volatile int *cancel, AiNetCancel *nc,
     *body = NULL;
     *body_len = 0;
     *err = "HTTP request failed";
-    if (ws_stopped(cancel, nc)) { *err = "Search cancelled"; return -1; }
+    if (ws_stopped(cancel, nc)) { *err = "Search cancelled"; return WS_CANCELLED; }
 
     wchar_t w_url[1024];
     if (MultiByteToWideChar(CP_UTF8, 0, url, -1, w_url, 1024) <= 0) {
@@ -439,7 +441,7 @@ done:
     if (ws_stopped(cancel, nc)) {
         free(buf);
         *err = "Search cancelled";
-        return -1;
+        return WS_CANCELLED;
     }
     if (!ok) {
         free(buf);
@@ -586,16 +588,16 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
             char  *html_buf = NULL;
             size_t html_len = 0;
             const char *herr = NULL;
-            if (ws_get(html_url, cancel_flag, nc, &html_buf, &html_len, &herr) != 0) {
+            int hrc = ws_get(html_url, cancel_flag, nc, &html_buf, &html_len, &herr);
+            if (hrc != 0) {
                 /* A cancel is a cancel; any other failure of the fallback
                  * reads, as it always did, as an empty search. */
-                const char *msg = (strcmp(herr, "Search cancelled") == 0)
-                                      ? herr : "No results found.";
+                const char *msg = (hrc == WS_CANCELLED) ? herr : "No results found.";
                 *result_buf = malloc(strlen(msg) + 1);
                 if (!*result_buf) return -1;
                 strcpy(*result_buf, msg);
                 *result_len = strlen(msg);
-                return strcmp(msg, herr) == 0 ? -1 : 0;
+                return hrc == WS_CANCELLED ? -1 : 0;
             }
 
             out = malloc(out_max);

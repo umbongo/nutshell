@@ -29,6 +29,9 @@ void thread_join_reap(ThreadJoinList *l);
  * kept, 0 when closed. */
 int thread_join_add(ThreadJoinList *l, HANDLE h);
 
+/* Close every listed handle (threads running or not) and empty the list. */
+void thread_join_detach_all(ThreadJoinList *l);
+
 /* Wait until every listed thread has finished or `ms` have passed,
  * servicing this thread's sent messages meanwhile (a worker may be blocked
  * on a cross-thread SendMessage to the UI). Closes the finished handles and
