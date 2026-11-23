@@ -30,4 +30,8 @@ int  voice_stt_submit(HWND notify, const Settings *s, unsigned char *wav, size_t
  * 3 s). Each cancelled upload still posts its failed result. */
 void voice_stt_cancel_all(void);
 
+/* Test hook: called on the worker right before its last gate check. NULL
+ * outside tests. */
+extern void (*voice_stt_test_pre_send_hook)(void);
+
 #endif /* NUTSHELL_VOICE_STT_WIN_H */

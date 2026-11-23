@@ -25,6 +25,8 @@ typedef struct SttJob {
     unsigned char  *wav;
     size_t          wav_len;
     unsigned        token;
+    VoiceSttResult *res;   /* allocated at submit, posted once by the worker */
+    volatile LONG   detached;
 } SttJob;
 
 static SttJob *g_jobs[STT_MAX_JOBS];   /* UI thread only */
@@ -57,39 +59,36 @@ static int random_boundary(char *out, size_t cap)
     return 1;
 }
 
-static void post_result(SttJob *j, VoiceSttResult *r)
+/* The result is allocated at submit time, so posting it cannot fail for lack
+ * of memory: the worker fills it and posts it exactly once, at the end. */
+static void set_fail(SttJob *j, const char *why)
 {
-    r->token = j->token;
-    if (!PostMessage(j->notify, WM_VOICE_STT, 0, (LPARAM)r))
-        free(r);   /* the window is gone */
+    j->res->ok = 0;
+    put_text(j->res->err, sizeof(j->res->err), why);
 }
 
-static void finish_fail(SttJob *j, const char *why)
-{
-    VoiceSttResult *r = (VoiceSttResult *)calloc(1, sizeof(*r));
-    if (!r) return;
-    r->ok = 0;
-    put_text(r->err, sizeof(r->err), why);
-    post_result(j, r);
-}
+void (*voice_stt_test_pre_send_hook)(void) = NULL;
 
 static DWORD WINAPI stt_thread(LPVOID arg)
 {
     SttJob *j = (SttJob *)arg;
+    VoiceSttResult *r = j->res;
     ULONGLONG t0 = GetTickCount64();
     char *body = NULL;
     size_t body_len = 0;
     char ctype[160];
     char boundary[64] = "";
+    char auth[CFG_STR_MAX + 32];
+    const char *headers[2] = { NULL, NULL };
     int status = 0;
     size_t resp_len = 0;
 
     if (!voice_gate_on()) {
-        finish_fail(j, "Voice input is turned off.");
+        set_fail(j, "Voice input is turned off.");
         goto done;
     }
     if (ai_nc_cancelled(&j->nc)) {
-        finish_fail(j, "Cancelled");
+        set_fail(j, "Cancelled");
         goto done;
     }
 
@@ -99,7 +98,7 @@ static DWORD WINAPI stt_thread(LPVOID arg)
         snprintf(ctype, sizeof(ctype), "application/json");
     } else {
         if (!random_boundary(boundary, sizeof(boundary))) {
-            finish_fail(j, "Speech-to-text could not start (no random source).");
+            set_fail(j, "Speech-to-text could not start (no random source).");
             goto done;
         }
         body = voice_stt_multipart(boundary, j->wav, j->wav_len, j->target.model,
@@ -111,35 +110,29 @@ static DWORD WINAPI stt_thread(LPVOID arg)
     free(j->wav);
     j->wav = NULL;
     if (!body) {
-        finish_fail(j, "Speech-to-text could not build the request.");
+        set_fail(j, "Speech-to-text could not build the request.");
         goto done;
     }
 
-    char auth[CFG_STR_MAX + 32];
-    const char *headers[2] = { NULL, NULL };
     if (j->secret[0]) {
         snprintf(auth, sizeof(auth), "Authorization: Bearer %s", j->secret);
         headers[0] = auth;
     }
 
+    if (voice_stt_test_pre_send_hook) voice_stt_test_pre_send_hook();
     /* Checked again right before sending: the gate may have gone off. */
     if (!voice_gate_on() || ai_nc_cancelled(&j->nc)) {
-        secure_zero(auth, j->secret[0] ? sizeof(auth) : 0);
-        finish_fail(j, ai_nc_cancelled(&j->nc) ? "Cancelled" : "Voice input is turned off.");
+        if (j->secret[0]) secure_zero(auth, sizeof(auth));
+        set_fail(j, ai_nc_cancelled(&j->nc) ? "Cancelled" : "Voice input is turned off.");
         goto done;
     }
 
     AiHttpResponse resp;
     int rc = ai_http_post_ct(j->target.url, headers, ctype, body, body_len, &resp, &j->nc);
     if (j->secret[0]) secure_zero(auth, sizeof(auth));
-    secure_zero(body, body_len);
-    free(body);
-    body = NULL;
     status = resp.status_code;
     resp_len = resp.body_len;
 
-    VoiceSttResult *r = (VoiceSttResult *)calloc(1, sizeof(*r));
-    if (!r) { ai_http_response_free(&resp); goto done; }
     if (rc != 0 || resp.status_code < 200 || resp.status_code > 299) {
         if (rc != 0 && ai_nc_cancelled(&j->nc))
             put_text(r->err, sizeof(r->err), "Cancelled");
@@ -158,12 +151,18 @@ static DWORD WINAPI stt_thread(LPVOID arg)
          (unsigned long long)(GetTickCount64() - t0));
     if (r->ok)
         DLOG_CONTENT(DLOG_AI, DLOG_INFO, 0, "stt.text", "text", r->text, strlen(r->text));
-    post_result(j, r);
 
 done:
     if (body) { secure_zero(body, body_len); free(body); }
     if (j->wav) { secure_zero(j->wav, j->wav_len); free(j->wav); j->wav = NULL; }
     secure_zero(j->secret, sizeof(j->secret));
+    r->token = j->token;
+    if (!PostMessage(j->notify, WM_VOICE_STT, 0, (LPARAM)r))
+        free(r);   /* the window is gone */
+    j->res = NULL;
+    /* Exactly one side frees the record: cancel_all sets `detached` when it
+     * gives up on this thread; whoever sees it already set frees. */
+    if (InterlockedExchange(&j->detached, 1) == 1) free(j);
     return 0;
 }
 
@@ -207,7 +206,10 @@ int voice_stt_submit(HWND notify, const Settings *s, unsigned char *wav, size_t 
     for (int i = 0; i < STT_MAX_JOBS; i++)
         if (!g_jobs[i]) { slot = i; break; }
     SttJob *j = slot >= 0 ? (SttJob *)calloc(1, sizeof(*j)) : NULL;
-    if (!j) {
+    VoiceSttResult *res = j ? (VoiceSttResult *)calloc(1, sizeof(*res)) : NULL;
+    if (!j || !res) {
+        free(j);
+        free(res);
         put_text(err, errcap, slot < 0 ? "Speech-to-text is busy. Try again shortly."
                                        : "Out of memory.");
         drop_wav(wav, wav_len);
@@ -220,11 +222,13 @@ int voice_stt_submit(HWND notify, const Settings *s, unsigned char *wav, size_t 
     j->wav = wav;
     j->wav_len = wav_len;
     j->token = token;
+    j->res = res;
     j->thread = CreateThread(NULL, 0, stt_thread, j, 0, NULL);
     if (!j->thread) {
         put_text(err, errcap, "Speech-to-text could not start a thread.");
         secure_zero(j->secret, sizeof(j->secret));
         drop_wav(wav, wav_len);
+        free(res);
         free(j);
         return 0;
     }
@@ -252,7 +256,10 @@ void voice_stt_cancel_all(void)
             CloseHandle(j->thread);
             free(j);
         } else {
-            CloseHandle(j->thread);   /* stuck: detached; its record is left to it */
+            /* Stuck: let go. The worker frees its record when it ends, or we
+             * do now when it ended in the meantime. */
+            CloseHandle(j->thread);
+            if (InterlockedExchange(&j->detached, 1) == 1) free(j);
         }
         g_jobs[idx[k]] = NULL;
     }

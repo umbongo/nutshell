@@ -100,6 +100,8 @@ int test_voice_stt_refused_when_gate_off(void);
 int test_voice_stt_unresolvable_target(void);
 int test_voice_stt_cancel_unreachable(void);
 int test_voice_stt_cancel_all_idle(void);
+int test_voice_stt_cancel_closes_a_blocked_request(void);
+int test_voice_stt_gate_off_before_send_sends_nothing(void);
 int test_ai_http_post_ct_rejects_bad_content_type(void);
 int test_thread_join_all_finish(void);
 int test_thread_join_is_bounded(void);
@@ -404,6 +406,8 @@ int main(int argc, char **argv)
     failed += test_voice_stt_unresolvable_target();
     failed += test_voice_stt_cancel_unreachable();
     failed += test_voice_stt_cancel_all_idle();
+    failed += test_voice_stt_cancel_closes_a_blocked_request();
+    failed += test_voice_stt_gate_off_before_send_sends_nothing();
     failed += test_ai_http_post_ct_rejects_bad_content_type();
     failed += test_thread_join_all_finish();
     failed += test_thread_join_is_bounded();
