@@ -324,7 +324,7 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 
 | Helper | Does |
 |---|---|
-| `Wait-NutshellDialog -Session [-Title] [-TimeoutSec]` | HWND of a top-level window in one of Nutshell's own dialog classes (`#32770`, `NutshellPassDlg`, `Nutshell_Settings`, `Nutshell_PastePreview`, `Nutshell_About`, `Nutshell_Shortcuts`), optionally title-filtered; Zero if none appears |
+| `Wait-NutshellDialog -Session [-Title] [-TimeoutSec]` | HWND of a top-level window in one of Nutshell's own dialog classes (`#32770`, `NutshellPassDlg`, `Nutshell_Settings`, `Nutshell_PastePreview`, `Nutshell_About`, `Nutshell_Shortcuts`, `Nutshell_Notice`), optionally title-filtered; Zero if none appears |
 | `Get-NutshellControl -Dialog -Id` | child HWND by control id — `GetDlgItem`, then a recursive `EnumChildWindows`/`GetDlgCtrlID` fallback for a control nested in a sub-page (e.g. a Settings page) |
 | `Set-NutshellControlText -Control -Text` / `Get-NutshellControlText -Control` | `WM_SETTEXT` (+ an `EN_CHANGE` notification, though no dialog in this codebase actually reads it — see the function's doc comment) / `WM_GETTEXT` |
 | `Invoke-NutshellButton -Control` | `BM_CLICK` — works on every button in this codebase, including owner-drawn ones |

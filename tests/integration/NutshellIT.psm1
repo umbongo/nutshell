@@ -641,8 +641,9 @@ $script:VK_MAP = @{
 $script:VK_EXTENDED = @(0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E)
 
 # Window classes Nutshell's own dialogs use (see src/ui/*.c for each
-# RegisterClass call). Session Manager and the host-key/error MessageBoxes are
-# real dialogs (class #32770); Settings, the paste preview, the passphrase
+# RegisterClass call). Session Manager and the host-key and yes/no MessageBoxes are
+# real dialogs (class #32770); the OK-only notices (Close Tab, Tab Limit,
+# Connection Error, Save Error and the rest) are Nutshell_Notice; Settings, the paste preview, the passphrase
 # prompt, About, the keyboard shortcuts sheet and the notice dialog are hand-built popup windows
 # with their own classes.
 $script:DIALOG_CLASSES = @("#32770", "NutshellPassDlg", "Nutshell_Settings", "Nutshell_PastePreview", "Nutshell_About", "Nutshell_Shortcuts", "Nutshell_Notice")

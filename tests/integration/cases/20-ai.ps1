@@ -9,7 +9,7 @@ Invoke-AiCase "ai_panel_docks_with_key" {
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     $p = Open-NutshellAiPanel -Session $s
-    $dialogs = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`t" })
+    $dialogs = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t(#32770|Nutshell_Notice)`t" })
     Assert-True ($dialogs.Count -eq 0) "a dialog appeared when opening the panel: $($dialogs -join '; ')"
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_panel_docked.png") | Out-Null
     "panel docked (hwnd $p)"
@@ -133,14 +133,14 @@ Invoke-AiCase "ai_prompt_while_approval_pending" {
 # ---- AI panel without a key -----------------------------------------------------
 # Keystroke-free: unlike Invoke-AiCase (which needs a real API key to send a
 # prompt), this only needs a connected session and an *empty* ai_api_key --
-# proof that the two MessageBox dead ends (AI Assist Panel design, "Empty and
+# proof that the two dialog dead ends (AI Assist Panel design, "Empty and
 # blocked states") are gone and the panel opens straight into the no-key
 # state instead. Runs through Invoke-Case directly (not Invoke-AiCase) since
 # it must run even when no AI key is configured for the other ai_* cases.
 Invoke-Case "ai_panel_opens_without_key" @{ ai_enabled = $true; ai_api_key = "" } {
     param($s)
     Send-NutshellCommand -Session $s -Id 2020 -SettleMs 1500      # IDM_VIEW_AI_CHAT
-    $dialogs = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`t" })
+    $dialogs = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t(#32770|Nutshell_Notice)`t" })
     Assert-True ($dialogs.Count -eq 0) "a dialog appeared opening the panel with no API key: $($dialogs -join '; ')"
     $p = Get-NutshellAiPanel -Session $s
     Assert-True ($p -ne [IntPtr]::Zero) "AI Assist panel did not open with no API key"
