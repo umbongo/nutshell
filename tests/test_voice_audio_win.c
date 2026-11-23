@@ -253,6 +253,33 @@ int test_voice_audio_bad_id_falls_back(void)
  * a begin and an end both reach the thread, so a message carrying the
  * recording's token comes back (an error under Wine's no endpoint, or the
  * capture where there is one). */
+/* Waits for the recording with `token` to end (VAM_CAPTURED or VAM_ERROR
+ * carrying it). Messages that are not its own (an enumeration's VAM_ERROR
+ * with token 0, VAM_DEVICES, levels, other tokens) are skipped; `seen`, when
+ * given, records the tokens that ended (index = token, 0 < token < n). */
+static int va_wait_token(unsigned token, DWORD ms, unsigned char *seen, unsigned n)
+{
+    ULONGLONG end = GetTickCount64() + ms;
+    while (GetTickCount64() < end) {
+        WPARAM wp = 0; LPARAM lp = 0;
+        DWORD left = (DWORD)(end - GetTickCount64());
+        if (!va_wait(BIT(VAM_CAPTURED) | BIT(VAM_ERROR), left < 200 ? left : 200, &wp, &lp))
+            continue;
+        unsigned t;
+        if (wp == VAM_ERROR) {
+            t = VOICE_ERR_TOKEN(lp);
+        } else {
+            VoiceCapture *c = (VoiceCapture *)lp;
+            t = c->token;
+            voice_audio_free_capture(c);
+        }
+        if (t == 0) continue;
+        if (seen && t < n) seen[t] = 1;
+        if (t == token) return 1;
+    }
+    return 0;
+}
+
 int test_voice_audio_queue_keeps_begin_and_end(void)
 {
     TEST_BEGIN();
@@ -261,18 +288,45 @@ int test_voice_audio_queue_keeps_begin_and_end(void)
     ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    for (int i = 0; i < 40; i++) voice_audio_enumerate();
+    for (int i = 0; i < 40; i++) voice_audio_enumerate();   /* coalesced to one */
     voice_audio_capture_begin("", 7, 0);
     voice_audio_capture_end(1);
-    WPARAM wp = 0; LPARAM lp = 0;
-    int got = va_wait(BIT(VAM_CAPTURED) | BIT(VAM_ERROR), 5000, &wp, &lp);
-    ASSERT_TRUE(got);
-    if (got && wp == VAM_ERROR) {
-        ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), 7);
-    } else if (got) {
-        VoiceCapture *c = (VoiceCapture *)lp;
-        ASSERT_EQ((int)c->token, 7);
-        voice_audio_free_capture(c);
+    /* An enumeration error (token 0) may arrive first: it is not ours. */
+    ASSERT_TRUE(va_wait_token(7, 5000, NULL, 0));
+    va_end_test(w);
+    TEST_END();
+}
+
+/* Begin and end are never dropped when the queue is full: with the audio
+ * thread held (it pops nothing), push three times the initial capacity of
+ * begin/end pairs, so the queue must have grown (asserted), then release the
+ * hold and every token must come back as a capture or an error. A dropped
+ * command loses a token. */
+int test_voice_audio_queue_grows_past_initial_capacity(void)
+{
+    TEST_BEGIN();
+    enum { PAIRS = 3 * VOICE_AUDIO_QUEUE_MIN };
+    unsigned char seen[PAIRS + 1];
+    memset(seen, 0, sizeof(seen));
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_NOT_NULL(w);
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_test_hold(1);
+    for (unsigned t = 1; t <= PAIRS; t++) {
+        voice_audio_capture_begin("", t, 0);
+        voice_audio_capture_end(1);
+    }
+    int cap = voice_audio_queue_cap();
+    voice_audio_test_hold(0);            /* released before any assertion can return */
+    ASSERT_TRUE(cap >= 2 * VOICE_AUDIO_QUEUE_MIN);
+    int ok = va_wait_token(PAIRS, 30000, seen, PAIRS + 1);
+    ASSERT_TRUE(ok);
+    /* The thread handles commands in order: once the last token is back,
+     * every earlier one has been answered. */
+    for (unsigned t = 1; t <= PAIRS; t++) {
+        if (!seen[t]) { ASSERT_EQ((int)t, 0); }
     }
     va_end_test(w);
     TEST_END();

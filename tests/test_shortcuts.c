@@ -537,8 +537,8 @@ int test_shortcuts_voice_rows_need_both_switches(void)
     size_t n = shortcuts_filtered_ex(out, 128, 1, 1);
     int hold = 0, esc = 0;
     for (size_t i = 0; i < n; i++) {
-        if (strcmp(out[i].chord, "Right Ctrl (hold)") == 0 &&
-            strcmp(out[i].action, "Talk to the assistant: speak, then release to send") == 0 &&
+        if (strcmp(out[i].chord, "Right Shift") == 0 &&
+            strcmp(out[i].action, "Talk to the assistant: press, speak, press again") == 0 &&
             strcmp(out[i].condition,
                    "Voice on; key and mode in Settings > Voice") == 0)
             hold++;

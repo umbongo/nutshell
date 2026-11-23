@@ -975,6 +975,22 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         s->voice_mic_delay_ms = (int)json_obj_num(jset, "voice_mic_delay_ms",
                                                   (double)s->voice_mic_delay_ms);
         s->voice_review = json_obj_bool(jset, "voice_review", s->voice_review);
+        /* One-time migration of untouched voice defaults. 1.2.92 always wrote
+         * Right Ctrl + Hold (its defaults) and re-saved every config it opened,
+         * so those values say nothing about a choice. The internal marker
+         * "voice_defaults_rev" (written by every save, not an upgrade-notice
+         * key) is absent in such a file: voice off and the old pair means
+         * untouched, so move to the new defaults. Nothing is saved here (the
+         * demo and read-only callers load the real config): the report says
+         * so, the launch path saves, and until a save writes the marker the
+         * migration simply applies again on every load. */
+        if (!json_obj_get(jset, "voice_defaults_rev") && !s->voice_enabled
+            && s->voice_ptt_key == (int)VOICE_PTT_RIGHT_CTRL
+            && s->voice_ptt_mode == (int)VOICE_MODE_HOLD) {
+            s->voice_ptt_key = (int)VOICE_PTT_RIGHT_SHIFT;
+            s->voice_ptt_mode = (int)VOICE_MODE_TOGGLE;
+            rep->voice_migrated = 1;
+        }
         settings_validate(s);
     }
 
@@ -1302,8 +1318,9 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, voice_ptt_mode_json(s->voice_ptt_mode));
     fputs(",\n", f);
     fprintf(f, "    \"voice_mic_delay_ms\": %d,\n", s->voice_mic_delay_ms);
-    fprintf(f, "    \"voice_review\": %s", s->voice_review ? "true" : "false");
-    fputs("\n", f);
+    fprintf(f, "    \"voice_review\": %s,\n", s->voice_review ? "true" : "false");
+    /* Internal marker, last and not in k_setting_keys: see config_load_report. */
+    fputs("    \"voice_defaults_rev\": 2\n", f);
     fputs("  },\n  \"profiles\": [\n", f);
 
     for (size_t i = 0u; i < n; i++) {

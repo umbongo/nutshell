@@ -4640,6 +4640,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     launch_need_save = 1;
                 }
 
+                /* Untouched 1.2.92 voice defaults were migrated in memory: the
+                 * save writes the marker (notice_launch_save_wanted still
+                 * refuses it in demo mode; no notice, missing_count is 0). */
+                if (load_rep.voice_migrated) launch_need_save = 1;
+
                 /* Default log_dir to the exe directory when not set */
                 if (g_config->settings.log_dir[0] == '\0' && exe_dir[0] != '\0')
                     (void)snprintf(g_config->settings.log_dir,

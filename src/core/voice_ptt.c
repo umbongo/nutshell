@@ -5,6 +5,23 @@
 
 #define LP_EXTENDED 0x01000000UL
 #define LP_REPEAT   0x40000000UL
+#define SCAN_RSHIFT 0x36UL
+
+static int is_right_shift(unsigned vk, unsigned long lp)
+{
+    if (lp & LP_EXTENDED) return 0;
+    if (vk == VK_RSHIFT) return 1;
+    return vk == VK_SHIFT && ((lp >> 16) & 0xFFUL) == SCAN_RSHIFT;
+}
+
+VoiceInput voice_ptt_chord_filter(VoiceInput in, int ptt_key, unsigned mods)
+{
+    unsigned own = 0;
+    if (ptt_key == VOICE_PTT_RIGHT_SHIFT) own = VOICE_MOD_RSHIFT;
+    else if (ptt_key == VOICE_PTT_RIGHT_CTRL) own = VOICE_MOD_RCTRL;
+    if (in == VI_PTT_DOWN && (mods & ~own)) return VI_OTHER;
+    return in;
+}
 
 VoiceInput voice_ptt_classify(unsigned msg, uintptr_t wparam, intptr_t lparam, int ptt_key)
 {
@@ -18,7 +35,9 @@ VoiceInput voice_ptt_classify(unsigned msg, uintptr_t wparam, intptr_t lparam, i
         int is_ptt = 0;
         if (ptt_key == VOICE_PTT_F8) is_ptt = (vk == VK_F8);
         else if (ptt_key == VOICE_PTT_F9) is_ptt = (vk == VK_F9);
-        else is_ptt = ((vk == VK_CONTROL || vk == VK_RCONTROL) && (lp & LP_EXTENDED));
+        else if (ptt_key == VOICE_PTT_RIGHT_SHIFT) is_ptt = is_right_shift(vk, lp);
+        else if (ptt_key == VOICE_PTT_RIGHT_CTRL)
+            is_ptt = ((vk == VK_CONTROL || vk == VK_RCONTROL) && (lp & LP_EXTENDED));
         if (is_ptt) {
             if (!down) return VI_PTT_UP;
             return (lp & LP_REPEAT) ? VI_PTT_REPEAT : VI_PTT_DOWN;
@@ -46,7 +65,8 @@ void voice_ptt_init(VoicePtt *p, int mode, int delay_ms)
 
 int voice_ptt_recording(const VoicePtt *p)
 {
-    return p->state == VS_REC_HOLD || p->state == VS_REC_LATCHED || p->state == VS_STOP_PRESS;
+    return p->state == VS_REC_HOLD || p->state == VS_REC_LATCHED || p->state == VS_STOP_PRESS
+        || p->state == VS_LATCHED_SPENT;
 }
 
 static VoiceStep mk(VoiceAction a, int consume)
@@ -79,7 +99,8 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now, int in_p
     }
     if (ev == VE_ESCAPE) {
         if (rec) {
-            int key_down = (p->state == VS_REC_HOLD || p->state == VS_STOP_PRESS);
+            int key_down = (p->state == VS_REC_HOLD || p->state == VS_STOP_PRESS
+                            || p->state == VS_LATCHED_SPENT);
             p->state = key_down ? VS_KEY_SPENT : VS_IDLE;
             return mk(VA_DISCARD, 1);
         }
@@ -136,11 +157,29 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now, int in_p
         return mk(VA_NONE, 0);
     case VS_STOP_PRESS:
         if (ev == VE_KEY_UP) { p->state = VS_IDLE; return mk(VA_FINISH, 0); }
-        if (ev == VE_OTHER) { p->state = VS_KEY_SPENT; return mk(VA_DISCARD, 0); }
+        /* A chord spends the press but keeps the recording (a capital typed
+         * with Right Shift must not throw the dictation away). */
+        if (ev == VE_OTHER) { p->state = VS_LATCHED_SPENT; return mk(VA_NONE, 0); }
+        if (ev == VE_TICK && cap_reached(p, now)) { p->state = VS_KEY_SPENT; return mk(VA_FINISH, 0); }
+        return mk(VA_NONE, 0);
+    case VS_LATCHED_SPENT:
+        /* A real key-down here means the up was lost (both Shifts): the key
+         * is pressed again, so this is the stopping press once more. */
+        if (ev == VE_KEY_DOWN) { p->state = VS_STOP_PRESS; return mk(VA_NONE, 0); }
+        if (ev == VE_KEY_UP) { p->state = VS_REC_LATCHED; return mk(VA_NONE, 0); }
         if (ev == VE_TICK && cap_reached(p, now)) { p->state = VS_KEY_SPENT; return mk(VA_FINISH, 0); }
         return mk(VA_NONE, 0);
     case VS_KEY_SPENT:
-        if (ev == VE_KEY_UP) p->state = VS_IDLE;
+        if (ev == VE_KEY_UP) { p->state = VS_IDLE; return mk(VA_NONE, 0); }
+        /* A real key-down here means the up was lost (Windows sends no key-up
+         * for the first Shift released while both are down): a fresh press. */
+        if (ev == VE_KEY_DOWN && in_panel) {
+            p->key_down_at = now;
+            if (p->mode == VOICE_MODE_TOGGLE) { p->state = VS_TOGGLE_PRESS; return mk(VA_NONE, 0); }
+            p->state = VS_ARMED;
+            return armed_check(p, now, busy);
+        }
+        if (ev == VE_KEY_DOWN) p->state = VS_IDLE;
         return mk(VA_NONE, 0);
     }
     return mk(VA_NONE, 0);

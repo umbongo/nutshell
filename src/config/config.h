@@ -95,8 +95,8 @@ typedef struct Settings {
     char stt_api_key_enc_preserved[CFG_BLOB_MAX]; /* same contract as ai_api_key_enc_preserved */
     char voice_input_device[CFG_STR_MAX];      /* endpoint ID, empty = Windows default */
     char voice_input_device_name[CFG_STR_MAX]; /* its friendly name, for display */
-    int  voice_ptt_key;                  /* VoicePttKey; JSON "right_ctrl"/"f8"/"f9" */
-    int  voice_ptt_mode;                 /* VoicePttMode; JSON "hold"/"toggle" */
+    int  voice_ptt_key;                  /* VoicePttKey; JSON "right_shift"/"right_ctrl"/"f8"/"f9" (default right_shift) */
+    int  voice_ptt_mode;                 /* VoicePttMode; JSON "toggle"/"hold" (default toggle) */
     int  voice_mic_delay_ms;             /* 0-400, default 150 */
     int  voice_review;                   /* 1 = put the transcript in the input for review instead of sending */
 } Settings;
@@ -151,6 +151,7 @@ typedef struct {
     unsigned char missing[CFG_KEYS_MAX];/* indices into config_setting_keys(), file order */
     size_t missing_count;
     int ai_enabled_decided;             /* 1 when the first-load rule set ai_enabled */
+    int voice_migrated;                 /* 1 when untouched 1.2.92 voice defaults were moved to Right Shift/Toggle in memory (never an upgrade-notice item; the launch path saves) */
 } ConfigLoadReport;
 
 Config *config_new_default(void);

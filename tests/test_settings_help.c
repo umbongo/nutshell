@@ -303,8 +303,7 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
         return 1;
     }
     if (id == SH_VOICE_PTT_MODE) {
-        (void)snprintf(out, n, "%s", s->voice_ptt_mode == VOICE_MODE_TOGGLE ? "Toggle"
-                                     : "Hold to talk");
+        (void)snprintf(out, n, "%s", voice_ptt_mode_label(s->voice_ptt_mode));
         return 1;
     }
     if (id == SH_AI_RUNCMD_MODE) {

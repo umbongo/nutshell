@@ -17,6 +17,10 @@
 /* Messages posted to the notify HWND given at start. */
 #define WM_VOICE_AUDIO (WM_APP + 0x40)   /* wParam = VoiceAudioMsg, lParam = payload */
 
+/* Initial command-queue slots; the queue grows for begin/end, never drops them
+ * (exposed so the wintest can push past it). */
+#define VOICE_AUDIO_QUEUE_MIN 16
+
 typedef enum {
     VAM_READY = 1,        /* lParam 0: thread up, enumerator created (or failed: VAM_ERROR first) */
     VAM_DEVICES,          /* lParam = VoiceDeviceList* (receiver frees with voice_audio_free_devices) */
@@ -47,6 +51,8 @@ void voice_audio_enumerate(void);             /* -> VAM_DEVICES */
 void voice_audio_capture_begin(const char *device_id_utf8, unsigned token, int test_only);
 void voice_audio_capture_end(int keep);       /* keep=1 -> VAM_CAPTURED; 0 -> discard (wiped) */
 void voice_audio_watch_devices(int on);       /* register/unregister the notification client */
+void voice_audio_test_hold(int on);           /* TEST-ONLY seam, not for product code:  while on, the audio thread pops no commands; off wakes it */
+int  voice_audio_queue_cap(void);             /* TEST-ONLY seam, not for product code: current command-queue capacity, 0 with no thread */
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
 

@@ -209,12 +209,21 @@ static int buf_str(char **buf, size_t *len, size_t *cap, const char *s)
     return buf_put(buf, len, cap, s, strlen(s));
 }
 
+/* The multipart header texts, shared by the size computation and the writers
+ * so the two cannot drift. */
+static const char k_file_hdr[] =
+    "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n"
+    "Content-Type: audio/wav\r\n\r\n";
+static const char k_part_hdr[] = "\r\nContent-Disposition: form-data; name=\"";
+static const char k_part_mid[] = "\"\r\n\r\n";
+#define K_LEN(a) (sizeof(a) - 1)
+
 static int text_part(char **b, size_t *l, size_t *c, const char *boundary,
                      const char *name, const char *value)
 {
     return buf_str(b, l, c, "--") && buf_str(b, l, c, boundary) &&
-           buf_str(b, l, c, "\r\nContent-Disposition: form-data; name=\"") &&
-           buf_str(b, l, c, name) && buf_str(b, l, c, "\"\r\n\r\n") &&
+           buf_str(b, l, c, k_part_hdr) &&
+           buf_str(b, l, c, name) && buf_str(b, l, c, k_part_mid) &&
            buf_str(b, l, c, value) && buf_str(b, l, c, "\r\n");
 }
 
@@ -233,27 +242,21 @@ char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t
     if (strpbrk(model, "\r\n") || (language && strpbrk(language, "\r\n"))) return NULL;
     /* The exact size is known up front, so the buffer is allocated once and
      * never grown: a realloc would leave an unwiped copy of the audio. */
-    static const char k_file_hdr[] =
-        "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n"
-        "Content-Type: audio/wav\r\n\r\n";
-    static const char k_part_hdr[] = "\r\nContent-Disposition: form-data; name=\"";
-    static const char k_part_mid[] = "\"\r\n\r\n";
-    const size_t part_fixed = 2 + bl + (sizeof(k_part_hdr) - 1) + (sizeof(k_part_mid) - 1) + 2;
+    const size_t part_fixed = 2 + bl + K_LEN(k_part_hdr) + K_LEN(k_part_mid) + 2;
     const int with_lang = language && language[0];
     const int with_fmt = !is_gpt4o_model(model);
-    size_t total = 2 + bl + (sizeof(k_file_hdr) - 1) + wav_len + 2
-                 + part_fixed + 5 + strlen(model)
+    size_t total = 2 + bl + K_LEN(k_file_hdr) + wav_len + 2
+                 + part_fixed + K_LEN("model") + strlen(model)
                  + 2 + bl + 4;
-    if (with_lang) total += part_fixed + 8 + strlen(language);
-    if (with_fmt) total += part_fixed + 15 + 4;
+    if (with_lang) total += part_fixed + K_LEN("language") + strlen(language);
+    if (with_fmt) total += part_fixed + K_LEN("response_format") + K_LEN("json");
+#undef K_LEN
     char *b = (char *)malloc(total + 1);
     if (!b) return NULL;
     b[0] = '\0';
     size_t l = 0, c = total + 1;
     int ok = buf_str(&b, &l, &c, "--") && buf_str(&b, &l, &c, boundary) &&
-             buf_str(&b, &l, &c,
-                     "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n"
-                     "Content-Type: audio/wav\r\n\r\n") &&
+             buf_str(&b, &l, &c, k_file_hdr) &&
              buf_put(&b, &l, &c, wav, wav_len) && buf_str(&b, &l, &c, "\r\n") &&
              text_part(&b, &l, &c, boundary, "model", model);
     if (ok && with_lang)

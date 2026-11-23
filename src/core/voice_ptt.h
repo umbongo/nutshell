@@ -56,6 +56,18 @@
 #ifndef WM_NCXBUTTONDOWN
 #define WM_NCXBUTTONDOWN 0x00AB
 #endif
+#ifndef VK_SHIFT
+#define VK_SHIFT 0x10
+#endif
+#ifndef VK_LSHIFT
+#define VK_LSHIFT 0xA0
+#endif
+#ifndef VK_RSHIFT
+#define VK_RSHIFT 0xA1
+#endif
+#ifndef VK_LCONTROL
+#define VK_LCONTROL 0xA2
+#endif
 #ifndef VK_CONTROL
 #define VK_CONTROL 0x11
 #endif
@@ -77,15 +89,36 @@
 
 typedef enum { VI_NONE = 0, VI_PTT_DOWN, VI_PTT_REPEAT, VI_PTT_UP, VI_ESCAPE, VI_OTHER } VoiceInput;
 
-/* Right Ctrl = VK_CONTROL (or VK_RCONTROL) with lParam bit 24 (extended) set, on
+/* Right Shift = VK_RSHIFT, or VK_SHIFT with scan code (lParam bits 16-23) 0x36,
+ * with lParam bit 24 (extended) CLEAR: a real Right Shift is never extended, and
+ * the extended shift events the keyboard driver fakes around numpad keys
+ * (Shift+numpad arrows with NumLock on) are not the key. Left Shift (scan 0x2A)
+ * is never the key.
+ * Right Ctrl = VK_CONTROL (or VK_RCONTROL) with lParam bit 24 (extended) set, on
  * WM_KEYDOWN/WM_KEYUP; bit 30 set on a key-down = repeat. F8/F9 = VK_F8/VK_F9 when
  * ptt_key selects them. Escape key-down = VI_ESCAPE. Any other WM_KEYDOWN or
  * WM_SYSKEYDOWN, mouse button downs (client and non-client) and both wheels =
  * VI_OTHER. Everything else = VI_NONE. */
 VoiceInput voice_ptt_classify(unsigned msg, uintptr_t wparam, intptr_t lparam, int ptt_key);
 
+/* Modifier keys held at a key-down, for voice_ptt_chord_filter (the controller
+ * reads them with GetKeyState). */
+#define VOICE_MOD_LSHIFT 0x01u
+#define VOICE_MOD_RSHIFT 0x02u
+#define VOICE_MOD_LCTRL  0x04u
+#define VOICE_MOD_RCTRL  0x08u
+#define VOICE_MOD_ALT    0x10u
+#define VOICE_MOD_WIN    0x20u
+
+/* A PTT key-down (not a repeat, not an up) while any modifier other than the
+ * PTT key's own is already held is a chord (Ctrl+Shift, Win+Shift+S), not a
+ * press: it becomes VI_OTHER. Every other input is returned unchanged. */
+VoiceInput voice_ptt_chord_filter(VoiceInput in, int ptt_key, unsigned mods);
+
 typedef enum { VS_IDLE = 0, VS_ARMED, VS_TOGGLE_PRESS, VS_REC_HOLD, VS_REC_LATCHED,
-               VS_STOP_PRESS, VS_KEY_SPENT } VoiceState;
+               VS_STOP_PRESS, VS_KEY_SPENT, VS_LATCHED_SPENT } VoiceState;
+/* VS_LATCHED_SPENT: a Toggle recording whose stop press was spent by a chord
+ * (a capital typed with Right Shift): still recording, the key still down. */
 typedef enum { VA_NONE = 0, VA_OPEN, VA_FINISH, VA_DISCARD, VA_BUSY } VoiceAction;
 typedef enum { VE_KEY_DOWN, VE_KEY_UP, VE_OTHER, VE_ESCAPE, VE_TICK, VE_MIC_CLICK,
                VE_DEACTIVATE } VoiceEvent;
@@ -105,7 +138,7 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now_ms,
  * key is still down, so its release only returns to idle (VS_KEY_SPENT); else
  * straight to idle. A no-op when the machine is not recording. */
 void voice_ptt_capture_ended(VoicePtt *p, int key_held);
-int voice_ptt_recording(const VoicePtt *p);  /* VS_REC_HOLD, VS_REC_LATCHED or VS_STOP_PRESS */
+int voice_ptt_recording(const VoicePtt *p);  /* VS_REC_HOLD, VS_REC_LATCHED, VS_STOP_PRESS or VS_LATCHED_SPENT */
 /* ms until the next VE_TICK matters (delay end or cap), or -1 when none. */
 long voice_ptt_next_deadline(const VoicePtt *p, unsigned long now_ms);
 
@@ -132,9 +165,9 @@ VoiceErrRoute voice_err_route(unsigned err_token, unsigned cur_token, int captur
  * first" with no active session, else the transcribing/busy text. */
 const char *voice_busy_text(int pending, int no_session);
 
-/* "Listening… release Right Ctrl to send" (hold, key started),
- * "Listening… press Right Ctrl again to send" (toggle, or a mic-button start),
- * with F8/F9 in place of Right Ctrl. The ellipsis is U+2026 in UTF-8. */
+/* "Listening… release Right Shift to send" (hold, key started),
+ * "Listening… press Right Shift again to send" (toggle, or a mic-button start),
+ * with the selected key's label (Right Ctrl, F8, F9) in place of Right Shift. The ellipsis is U+2026 in UTF-8. */
 void voice_cue_text(int mode, int ptt_key, int latched, char *out, size_t cap);
 
 #endif /* NUTSHELL_VOICE_PTT_H */

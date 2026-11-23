@@ -103,8 +103,8 @@ void ai_chat_update_panel_state(AiChatData *d)
     hint[0] = '\0';
     if (state == AI_STATE_EMPTY && voice_gate_on()) {
         const Settings *vs = ui_current_settings();
-        (void)ai_panel_voice_hint(vs ? vs->voice_ptt_mode : VOICE_MODE_HOLD,
-                                  vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_CTRL,
+        (void)ai_panel_voice_hint(vs ? vs->voice_ptt_mode : VOICE_MODE_TOGGLE,
+                                  vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_SHIFT,
                                   hint, sizeof(hint));
     }
     chat_listview_set_state_hint(d->hChatList, hint);

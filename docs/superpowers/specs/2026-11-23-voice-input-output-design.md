@@ -120,14 +120,44 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
 
 - **Where it starts:** only while keyboard focus is in the AI assistant panel
   (input, message list or panel, docked or undocked) **(maintainer)**.
-- **Key:** Right Ctrl by default **(maintainer)**. A setting offers Right Ctrl,
-  F8 and F9 **(call)**. "Either Ctrl" was dropped after review: Left Ctrl is in
-  every editing chord, and AltGr synthesises Left Ctrl.
+- **Key:** Right Shift by default **(maintainer)**. A setting offers Right
+  Shift, Right Ctrl, F8 and F9 **(call)**. "Either Ctrl" was dropped after
+  review: Left Ctrl is in every editing chord, and AltGr synthesises Left Ctrl.
+  Maintainer's decision of 2026-11-23: the default push-to-talk key is Right
+  Shift (was Right Ctrl) and the default mode is Toggle (was Hold to talk);
+  Right Ctrl, F8 and F9 stay as choices. A config whose voice settings were
+  never touched (voice off, Right Ctrl + Hold to talk, no marker: what 1.2.92
+  wrote by default) migrates once to Right Shift + Toggle; one with voice on,
+  or with any other key or mode, keeps what it has. The marker is the internal
+  settings key `voice_defaults_rev` (2), written by every save; it is not in
+  the upgrade notice's key list, so its absence alone shows no notice. The
+  loader never saves for it (`--ui-demo` and the read-only session list load
+  the real config): it applies in memory on every load and reports it
+  (`ConfigLoadReport.voice_migrated`); the launch path then saves, silently,
+  unless it is demo mode or saving is disabled.
+  - **Detecting Right Shift:** a key-down or key-up of `VK_RSHIFT`, or of
+    `VK_SHIFT` with scan code 0x36, with the extended bit clear. Left Shift
+    (scan 0x2A) never counts, and neither does an extended-flagged Shift: the
+    driver's fake shifts around the numpad arrows with NumLock on are not the
+    key.
+  - **Shift is a chord key:** a capital letter, Shift+click, Shift+Insert,
+    Ctrl+Shift+C/V and Shift+arrows all begin with the key down, so a press
+    counts only if no other modifier (Left Shift, Ctrl, Alt, Win) was already
+    held when the key went down (a chord such as Ctrl+Shift or Win+Shift+S is
+    never a press), and the chord-safety rule below applies if any other input
+    arrives while the key is held. The chord filter covers all four keys: a
+    press with another modifier already held is a chord for every key (so
+    Ctrl+F8 or Shift+Right Ctrl does not start a recording).
+  - **Never consumed:** like Right Ctrl, Right Shift is never swallowed. Its
+    key-down and key-up still reach the terminal or the edit control, so
+    capitals and selections work as before.
 - **Modes** **(maintainer)**, set in Settings:
-  - **Hold to talk** (default): recording runs while the key is held.
-  - **Toggle**: one press starts recording, the next stops it.
-- **Mic start delay** **(maintainer)**: the microphone opens only once the key
-  has been held alone for this long. The default is **150 ms** and the range is
+  - **Toggle** (default): one press starts recording, the next stops it.
+  - **Hold to talk**: recording runs while the key is held.
+- **Mic start delay** **(maintainer)**: in Hold to talk, the microphone opens
+  only once the key has been held alone for this long. It does not apply to
+  Toggle, where a press counts only on its clean release; the Settings page
+  disables the field while Toggle is selected. The default is **150 ms** and the range is
   0-400 ms. A shortcut's second key normally follows within about 100 ms, so a
   chord never opens the device: no mic-in-use flash, and no Bluetooth headset
   dropping into its hands-free profile. At 0 the device opens at key-down. The
@@ -135,11 +165,24 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
   window **(call)**.
 - **Chord safety** **(call)**: if any other key, mouse button or wheel event
   arrives while the push-to-talk key is held, it was a shortcut (Ctrl+wheel
-  zooms the chat). Any recording is discarded, never sent, and the input
-  behaves as it does today. In Toggle mode a press counts only if it is
+  zooms the chat). A Hold to talk recording is discarded, never sent, and the
+  input behaves as it does today; a Toggle recording carries on (see the
+  stop-press chord rule below), and a Toggle press that has not yet started
+  one is spent. In Toggle mode a press counts only if it is
   released with no other input in between.
 - **Accidental taps:** a hold shorter than about 300 ms in total is discarded
   in Hold mode **(call)**. Auto-repeat key-downs are ignored.
+- **Stop-press chord rule (Toggle):** during a Toggle recording, another input
+  while the key is down for the stopping press (a capital typed with Right
+  Shift) spends that press but keeps the recording; releasing the key returns to
+  the latched recording, and a later clean press stops it. Escape, losing focus
+  and the cap behave as for any recording. Hold mode is unchanged: another
+  input discards.
+- **Lost key-up (both Shifts):** Windows sends no key-up for the first Shift
+  released while both are down, so the machine can be left with the key
+  spent. A real (non-repeat) key-down in that state means the up was lost and
+  is treated as a fresh press.  In a spent stop press of a Toggle recording the same real key-down is the
+  stopping press again.
 - **Silence gate** **(call, from review)**: if the recording's level never
   rises above a speech threshold, it is not uploaded ("Didn't catch that").
   Whisper-family models return phantom phrases such as "Thank you." on silence,
@@ -198,8 +241,9 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
 
 While recording, the mic button is filled with the `danger` intent and pulses
 gently (driven by the panel's one `ns_motion` timer), and the input placeholder
-reads "Listening… release Right Ctrl to send" (or "press Right Ctrl again" in
-Toggle mode). A thin live level bar under the input is **left to the builder**.
+names the configured key and mode: in the default Toggle mode "Listening…
+press Right Shift again to send", in Hold to talk "release Right Shift to
+send". A thin live level bar under the input is **left to the builder**.
 
 ### 4.4 Capture
 
@@ -341,7 +385,7 @@ is off:
 - No audio code runs. No `CoCreateInstance` of the device enumerator and no
   device enumeration, so `mmdevapi.dll` and `audioses.dll` are never mapped
   into the process. No capture or render thread exists.
-- The push-to-talk hook is not installed. Right Ctrl, F8 and F9 behave exactly
+- The push-to-talk hook is not installed. Right Shift, Right Ctrl, F8 and F9 behave exactly
   as they do today.
 - The mic button and the speaker toggle are not created.
 - No STT or TTS request is ever made.
@@ -380,8 +424,10 @@ The page then has two titled sections.
   combo).
 - Microphone: Input device (combo: "Windows default" plus each active capture
   endpoint by its full friendly name), a **Test** button that records 3 s and shows the live level on a
-  meter (`ns_draw_meter`), Push-to-talk key (combo: Right Ctrl, F8, F9), Mode
-  (Hold to talk / Toggle), Mic start delay (0-400 ms, default 150), Review
+  meter (`ns_draw_meter`), Push-to-talk key (combo: Right Shift, Right Ctrl, F8, F9; Right
+  Shift is first and the default), Mode (Toggle / Hold to talk; Toggle is first
+  and the default), Mic start delay (0-400 ms, default 150; greyed while Toggle
+  is selected, since it applies to Hold to talk only), Review
   before sending (tick, off).
 - Language (edit, blank = auto-detect, e.g. `en`) **(call)**.
 
@@ -408,9 +454,13 @@ Every control gets a `settings_help` entry, label and help text.
 
 ## 8. Shortcuts, help and demos
 
-- Register "Right Ctrl (hold): talk to the assistant" in the AI Assist panel
-  section of `shortcuts.c`. The entry follows the configured key and mode if
-  the registry allows that; otherwise it names the default. Regenerate README's
+- Register "Right Shift: talk to the assistant" in the AI Assist panel
+  section of `shortcuts.c` (as built: `Right Shift`, "Talk to the assistant:
+  press, speak, press again", with the note "Voice on; key and mode in
+  Settings > Voice"). The entry follows the configured key and mode if
+  the registry allows that; otherwise it names the default. The Settings help
+  texts for the key and mode (`settings_help.c`) name Right Shift and Toggle as
+  the defaults and list the chords that keep working. Regenerate README's
   block.
 - Help > Keyboard Shortcuts and the AI panel's empty-state hint mention it.
 - `--ui-demo` states: `voice-recording`, `voice-transcribing`,
@@ -453,7 +503,7 @@ TTS) as provider entries; ElevenLabs and Deepgram adapters.
   - Settings load/save round-trip for every new field and both secrets.
 - **Voice off, against the real exe** (CLAUDE.md, "Optional features"): the
   self-report shows that our code requested no audio DLL and created no device
-  enumerator. A posted Right Ctrl reaches the input unchanged.
+  enumerator. A posted Right Shift and a posted Right Ctrl reach the input unchanged.
 - `wintest`:
   - WASAPI device enumeration under Wine.
   - The push-to-talk hook driven by posted key messages.
@@ -468,7 +518,9 @@ TTS) as provider entries; ElevenLabs and Deepgram adapters.
   ("list the files in my home directory"), checks that the message appears and
   that the run_command card waits for approval.
 - Windows hand checks before each merge: a real microphone, the privacy-blocked
-  path, Right Ctrl chords in the terminal and the AI input, docked and undocked,
+  path, Right Shift chords (capitals, Shift+click, Shift+Insert, Ctrl+Shift+C/V,
+  Shift+arrows) and Right Ctrl chords in the terminal and the AI input, docked
+  and undocked,
   and a spoken reply with a code block.
 
 ## 11. Left to the builder

@@ -3033,8 +3033,8 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         if (strcmp(state, "voice-recording") == 0) {
             const Settings *vs = ui_current_settings();
             char cue[96];
-            voice_cue_text(vs ? vs->voice_ptt_mode : VOICE_MODE_HOLD,
-                           vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_CTRL,
+            voice_cue_text(vs ? vs->voice_ptt_mode : VOICE_MODE_TOGGLE,
+                           vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_SHIFT,
                            0, cue, sizeof(cue));
             ai_chat_voice_set_ui(hwnd, AIV_RECORDING, cue);
         } else {

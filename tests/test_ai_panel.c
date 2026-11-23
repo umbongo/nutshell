@@ -952,15 +952,22 @@ int test_ai_panel_voice_hint_wordings(void)
 {
     TEST_BEGIN();
     char b[160];
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
-                  "Or hold Right Ctrl and say what you need.");
-    ASSERT_STR_EQ(b, "Or hold Right Ctrl and say what you need.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+                  "Or hold Right Shift and say what you need.");
+    ASSERT_STR_EQ(b, "Or hold Right Shift and say what you need.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+                  "Or press Right Shift, say what you need, and press it again.");
     ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
                   "Or press Right Ctrl, say what you need, and press it again.");
     ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, b, sizeof b),
                   "Or hold F8 and say what you need.");
     ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F9, b, sizeof b),
                   "Or press F9, say what you need, and press it again.");
+    /* An out-of-range mode falls back to the toggle wording. */
+    ASSERT_STR_EQ(ai_panel_voice_hint(7, VOICE_PTT_F8, b, sizeof b),
+                  "Or press F8, say what you need, and press it again.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(-1, VOICE_PTT_F8, b, sizeof b),
+                  "Or press F8, say what you need, and press it again.");
     /* A small buffer truncates and still terminates; no buffer is a no-op. */
     char tiny[8];
     ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, tiny, sizeof tiny),

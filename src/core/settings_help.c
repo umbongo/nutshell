@@ -370,10 +370,10 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Enable voice",
       NULL,
       "Enable voice\n\nTurns voice input on or off. It is off by default, "
-      "and while it is off Nutshell loads nothing of voice and Right Ctrl, "
-      "F8 and F9 behave as they always did. It needs the AI assistant: with "
+      "and while it is off Nutshell loads nothing of voice and Right Shift, "
+      "Right Ctrl, F8 and F9 behave as they always did. It needs the AI assistant: with "
       "the assistant off this box is disabled. Audio is sent to the chosen "
-      "provider only while you hold the push-to-talk key.\nDefault: Off.",
+      "provider only for a recording you start.\nDefault: Off.",
       "Off",
       0, 0, 0u),
     E(SH_VOICE_STT_USE_AI, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
@@ -459,28 +459,32 @@ static const SettingsHelp k_help[SH_COUNT] = {
     E(SH_VOICE_PTT_KEY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Push-to-talk key:",
       NULL,
-      "Push-to-talk key:\n\nThe key you hold to speak while the AI panel "
-      "has focus: Right Ctrl, F8 or F9. Right Ctrl chords such as "
-      "Ctrl+C still work as they always did, because the microphone opens "
-      "only when the key is pressed alone. Any other key or a mouse click "
-      "while you hold it cancels the recording.\nDefault: Right Ctrl.",
-      "Right Ctrl",
+      "Push-to-talk key:\n\nThe key you press to speak while the AI panel "
+      "has focus: Right Shift, Right Ctrl, F8 or F9. Right Shift chords "
+      "such as a capital letter, Shift+click, Shift+Insert, Shift+arrows "
+      "and Ctrl+Shift+C keep working as they always did, because the "
+      "microphone opens only on a clean press of the key alone; a press with "
+      "another modifier already held (Ctrl+F8, Shift+Right Ctrl) never starts "
+      "one. In Hold to talk, any other key or a mouse click while you "
+      "hold it cancels the recording; in Toggle the recording carries on.\n"
+      "Default: Right Shift.",
+      "Right Shift",
       0, 0, 0u),
     E(SH_VOICE_PTT_MODE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Mode:",
       NULL,
-      "Mode:\n\nHold to talk records while you hold the key and sends when "
-      "you let go. Toggle records from one clean press of the key to the "
-      "next. A recording stops by itself after 60 seconds, and Escape "
-      "throws it away.\nDefault: Hold to talk.",
-      "Hold to talk",
+      "Mode:\n\nToggle records from one clean press of the key to the "
+      "next. Hold to talk records while you hold the key and sends when "
+      "you let go. A recording stops by itself after 60 seconds, and Escape "
+      "throws it away.\nDefault: Toggle.",
+      "Toggle",
       0, 0, 0u),
     E(SH_VOICE_MIC_DELAY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Mic start delay (ms):",
       NULL,
       "Mic start delay (ms):\n\nThe microphone opens only once the key has "
-      "been held alone this long, so a shortcut such as Ctrl+C never opens "
-      "it. Set from 0 to 400 milliseconds; a lower number starts "
+      "been held alone this long, so a shortcut that begins with the key "
+      "never opens it. Set from 0 to 400 milliseconds; a lower number starts "
       "recording sooner, a higher one is safer against accidental use. It "
       "applies to Hold to talk only.\nDefault: 150.",
       "150",

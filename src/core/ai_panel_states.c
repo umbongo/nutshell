@@ -92,7 +92,7 @@ const char *ai_panel_voice_hint(int mode, int ptt_key, char *out, size_t cap)
 {
     if (!out || cap == 0) return "";
     const char *key = voice_ptt_key_label(ptt_key);
-    if (mode == VOICE_MODE_TOGGLE)
+    if (mode != VOICE_MODE_HOLD)
         snprintf(out, cap, "Or press %s, say what you need, and press it again.", key);
     else
         snprintf(out, cap, "Or hold %s and say what you need.", key);

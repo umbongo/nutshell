@@ -32,7 +32,7 @@ int (*g_voice_filter)(const MSG *m);
 static void ptt_reset(void)
 {
     const Settings *s = ui_current_settings();
-    voice_ptt_init(&g_ptt, s ? s->voice_ptt_mode : VOICE_MODE_HOLD,
+    voice_ptt_init(&g_ptt, s ? s->voice_ptt_mode : VOICE_MODE_TOGGLE,
                    s ? s->voice_mic_delay_ms : VOICE_MIC_DELAY_DEFAULT);
     if (g_main) KillTimer(g_main, VOICE_TIMER_ID);
 }
@@ -72,8 +72,8 @@ static void act(VoiceStep st, VoiceEvent ev)
         ai_chat_voice_binding(panel, &g_bind);
         g_capturing = 1;
         voice_audio_capture_begin(s ? s->voice_input_device : "", g_token, 0);
-        voice_cue_text(s ? s->voice_ptt_mode : VOICE_MODE_HOLD,
-                       s ? s->voice_ptt_key : VOICE_PTT_RIGHT_CTRL,
+        voice_cue_text(s ? s->voice_ptt_mode : VOICE_MODE_TOGGLE,
+                       s ? s->voice_ptt_key : VOICE_PTT_RIGHT_SHIFT,
                        ev == VE_MIC_CLICK, cue, sizeof(cue));
         ai_chat_voice_set_ui(panel, AIV_RECORDING, cue);
         break;
@@ -93,7 +93,7 @@ static void act(VoiceStep st, VoiceEvent ev)
         ai_chat_voice_set_ui(panel, AIV_IDLE, NULL);
         break;
     case VA_BUSY:
-        ai_chat_voice_status(panel, voice_busy_text(g_pending, no_session(panel)), 0);
+        ai_chat_voice_status(panel, voice_busy_text(g_pending || g_capturing, no_session(panel)), 0);
         break;
     case VA_NONE:
         break;
@@ -110,13 +110,29 @@ static VoiceStep step_now(VoiceEvent ev, int in_panel)
     return st;
 }
 
+/* The modifier keys physically held now, for the chord filter. */
+static unsigned held_mods(void)
+{
+    unsigned mods = 0;
+    if (GetKeyState(VK_LSHIFT) & 0x8000) mods |= VOICE_MOD_LSHIFT;
+    if (GetKeyState(VK_RSHIFT) & 0x8000) mods |= VOICE_MOD_RSHIFT;
+    if (GetKeyState(VK_LCONTROL) & 0x8000) mods |= VOICE_MOD_LCTRL;
+    if (GetKeyState(VK_RCONTROL) & 0x8000) mods |= VOICE_MOD_RCTRL;
+    if (GetKeyState(VK_MENU) & 0x8000) mods |= VOICE_MOD_ALT;
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) mods |= VOICE_MOD_WIN;
+    return mods;
+}
+
 int voice_pump_filter(const MSG *m)
 {
     const Settings *s = ui_current_settings();
     if (!s || !g_audio_up) return 0;
     VoiceInput in = voice_ptt_classify(m->message, m->wParam, m->lParam, s->voice_ptt_key);
     if (in == VI_NONE) return 0;
-    const int f_key = s->voice_ptt_key != VOICE_PTT_RIGHT_CTRL;   /* Right Ctrl is never consumed */
+    if (in == VI_PTT_DOWN) in = voice_ptt_chord_filter(in, s->voice_ptt_key, held_mods());
+    /* Modifier keys (Right Shift, Right Ctrl) are never consumed: a press must
+     * still reach the terminal or edit (capitals, chords). */
+    const int f_key = !voice_ptt_key_is_modifier(s->voice_ptt_key);
     const VoiceState before = g_ptt.state;
     if (in == VI_PTT_REPEAT) return f_key && before != VS_IDLE;
 
@@ -224,7 +240,8 @@ static void on_captured(VoiceCapture *c)
      * finish: take the machine out of recording (no action), so a later key-up
      * or Escape cannot finish or discard audio that is already on its way. */
     if (voice_ptt_recording(&g_ptt)) {
-        voice_ptt_capture_ended(&g_ptt, g_ptt.state == VS_REC_HOLD || g_ptt.state == VS_STOP_PRESS);
+        voice_ptt_capture_ended(&g_ptt, g_ptt.state == VS_REC_HOLD || g_ptt.state == VS_STOP_PRESS
+                                       || g_ptt.state == VS_LATCHED_SPENT);
         arm_timer();
     }
     const char *problem = NULL;
