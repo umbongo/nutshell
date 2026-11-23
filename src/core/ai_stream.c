@@ -13,6 +13,7 @@ AiStream *ai_stream_new(void)
     s->body = (char *)calloc(1, AI_BODY_MAX);
     if (!s->body) { free(s); return NULL; }
     worker_life_init(&s->life);
+    ai_nc_init(&s->nc);
     tool_decision_init(&s->decision);
     s->tool_timeout_ms = tool_decision_timeout_ms(AI_TOOL_TIMEOUT_SEC_DEFAULT);
     s->tool_auto_rounds = AI_TOOL_ROUNDS_DEFAULT;
@@ -45,6 +46,7 @@ void ai_stream_orphan(AiStream *s)
 {
     if (!s) return;
     worker_life_cancel(&s->life);
+    ai_nc_fire(&s->nc);   /* before the release: the stream is still ours to touch */
     ai_stream_release(s);
 }
 
@@ -84,6 +86,8 @@ void ai_stream_copy_tools(AiStream *s, const AiToolRegistry *reg,
     if (search) s->search = *search;
     if (fetch)  s->fetch  = *fetch;
     if (debug)  s->debug_log = *debug;
+    s->search.nc = &s->nc;   /* the tools' requests arm the stream's token */
+    s->fetch.nc  = &s->nc;
     if (!reg) return;
     s->tools = *reg;
     for (int i = 0; i < s->tools.count && i < AI_TOOL_MAX; i++) {

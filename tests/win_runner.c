@@ -63,6 +63,17 @@ int test_pw_prompt_win_activate_keeps_focus_on_field(void);
 int test_pw_prompt_win_save_ticked_ok_returns_one(void);
 int test_pw_prompt_win_save_unticked_ok_returns_zero(void);
 int test_pw_prompt_win_save_ticked_cancel_returns_zero(void);
+int test_notice_dlg_win_opens_with_class_caption_and_controls(void);
+int test_notice_dlg_win_no_action_button_when_action_empty(void);
+int test_notice_dlg_win_enter_on_ok_returns_zero_and_window_is_gone(void);
+int test_notice_dlg_win_escape_returns_zero(void);
+int test_notice_dlg_win_close_box_returns_zero(void);
+int test_notice_dlg_win_enter_on_focused_action_returns_one(void);
+int test_notice_dlg_win_tab_moves_ok_action_ok(void);
+int test_notice_dlg_win_tab_with_only_ok_stays_on_ok(void);
+int test_notice_dlg_win_owner_enable_state_is_restored(void);
+int test_notice_dlg_win_wide_label_and_long_text_stay_inside(void);
+int test_ns_font_win_bold_is_cached_and_bold(void);
 
 /* test_telnet_io_win.c */
 int test_telnet_io_win_connect_ok_and_refused(void);
@@ -70,6 +81,12 @@ int test_telnet_io_win_resolve_fails(void);
 int test_telnet_io_win_negotiates_and_logs_in(void);
 int test_telnet_io_win_eof_reports_closed(void);
 int test_telnet_io_win_serial_unique(void);
+int test_winhttp_open_refuses_while_off(void);
+int test_winhttp_open_opens_while_on(void);
+int test_thread_join_all_finish(void);
+int test_thread_join_is_bounded(void);
+int test_thread_join_full_list_closes_handle(void);
+int test_ai_nc_fire_wakes_blocked_winhttp_call(void);
 
 /* test_settings_label_win.c */
 int test_settings_label_win_labels_fit_column(void);
@@ -334,11 +351,28 @@ int main(int argc, char **argv)
     failed += test_pw_prompt_win_save_ticked_ok_returns_one();
     failed += test_pw_prompt_win_save_unticked_ok_returns_zero();
     failed += test_pw_prompt_win_save_ticked_cancel_returns_zero();
+    failed += test_notice_dlg_win_opens_with_class_caption_and_controls();
+    failed += test_notice_dlg_win_no_action_button_when_action_empty();
+    failed += test_notice_dlg_win_enter_on_ok_returns_zero_and_window_is_gone();
+    failed += test_notice_dlg_win_escape_returns_zero();
+    failed += test_notice_dlg_win_close_box_returns_zero();
+    failed += test_notice_dlg_win_enter_on_focused_action_returns_one();
+    failed += test_notice_dlg_win_tab_moves_ok_action_ok();
+    failed += test_notice_dlg_win_tab_with_only_ok_stays_on_ok();
+    failed += test_notice_dlg_win_owner_enable_state_is_restored();
+    failed += test_notice_dlg_win_wide_label_and_long_text_stay_inside();
+    failed += test_ns_font_win_bold_is_cached_and_bold();
     failed += test_telnet_io_win_connect_ok_and_refused();
     failed += test_telnet_io_win_resolve_fails();
     failed += test_telnet_io_win_negotiates_and_logs_in();
     failed += test_telnet_io_win_eof_reports_closed();
     failed += test_telnet_io_win_serial_unique();
+    failed += test_winhttp_open_refuses_while_off();
+    failed += test_winhttp_open_opens_while_on();
+    failed += test_thread_join_all_finish();
+    failed += test_thread_join_is_bounded();
+    failed += test_thread_join_full_list_closes_handle();
+    failed += test_ai_nc_fire_wakes_blocked_winhttp_call();
     failed += run_ns_tip_tests();
 
     printf("\n[pty] re-executing with a console of our own "

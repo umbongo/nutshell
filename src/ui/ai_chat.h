@@ -162,16 +162,25 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
  * aborted; its thread frees its own state when it notices. */
 void ai_chat_close(HWND hwnd);
 
+/* 1 while the panel's command dispatcher is running a batch (Settings asks
+ * before the AI switch is turned off then); 0 for no panel. */
+int ai_chat_dispatch_running(HWND hwnd);
+
 /* Edit > Copy: when the panel's message list has keyboard focus and a
  * selection, copy the selection's visible text and return 1; otherwise
  * return 0 (copy the terminal's selection instead). */
 int ai_chat_copy_selection(HWND hwnd);
 
-/* On exit, after ai_chat_close(): give aborted stream threads up to
- * timeout_ms to notice and free their state. Returns early once none are
- * left; a thread still blocked in a network read after that owns nothing
- * the app frees, so exiting under it is safe. */
-void ai_chat_wait_for_streams(DWORD timeout_ms);
+/* After ai_chat_close() (turning the assistant off, or exit): wait up to ms
+ * for the AI stream threads to finish, pumping this thread's sent messages.
+ * Every stream's cancel token was fired when the panel orphaned it, so the
+ * blocked requests are already closed and the threads return at once; the
+ * wait only covers their last steps. Closes the finished threads' handles and
+ * returns how many are still running. Such a thread owns nothing the app
+ * frees (its stream is an orphan that frees itself), so carrying on is safe. */
+/* Precondition: the caller has orphaned the streams first (ai_chat_close does);
+ * the join only waits and fires no token itself. */
+int ai_chat_join_streams(DWORD ms);
 
 /* Returns non-zero if the AI chat has saveable conversation content. */
 int ai_chat_has_content(HWND hwnd);

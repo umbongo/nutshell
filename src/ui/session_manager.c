@@ -8,6 +8,7 @@
 #include "../core/ns_scale.h"
 #include "../core/ui_theme.h"
 #include "../core/edit_scroll.h"
+#include "notice_dlg.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
 #include "icons.h"
@@ -805,10 +806,11 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
              * from disk, rather than leaving the user to discover the
              * deleted session is still there on the next launch. */
             if (config_save(st->cfg, st->config_path) != 0) {
-                MessageBoxA(hwnd,
+                Notice sf;
+                notice_save_failed(&sf,
                     "Could not save nutshell.config. The deletion has not "
-                    "been written to disk.",
-                    "Save Failed", MB_OK | MB_ICONWARNING);
+                    "been written to disk.");
+                (void)notice_dlg_show(hwnd, &sf, st->theme);
             }
             list_rebuild(hList, st->cfg);
             st->edit_idx = -1;
@@ -907,10 +909,11 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
              * so a silent failure here means the user believes a password
              * or a changed host was saved when it was not. */
             if (config_save(st->cfg, st->config_path) != 0) {
-                MessageBoxA(hwnd,
+                Notice sf;
+                notice_save_failed(&sf,
                     "Could not save nutshell.config. This session has not "
-                    "been written to disk.",
-                    "Save Failed", MB_OK | MB_ICONWARNING);
+                    "been written to disk.");
+                (void)notice_dlg_show(hwnd, &sf, st->theme);
             }
             list_rebuild(hList, st->cfg);
             SendMessage(hList, LB_SETCURSEL, (WPARAM)st->edit_idx, 0);

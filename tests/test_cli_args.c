@@ -427,3 +427,102 @@ int test_cli_usage_text_mentions_all_flags(void)
     ASSERT_NOT_NULL(strstr(u, "-?"));
     TEST_END();
 }
+
+/* ---- --self-report=<path> (hidden: DLL record + module list, then exit) ---- */
+
+int test_cli_self_report_with_run(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--self-report=report.txt" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_RUN);
+    ASSERT_STR_EQ(o.self_report, "report.txt");
+    TEST_END();
+}
+
+int test_cli_self_report_with_no_connect(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "-nc", "--self-report=r.txt" };
+    char *a2[] = { "nutshell", "--self-report=r.txt", "-nc" };
+    cli_parse(3, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_RUN_NO_CONNECT);
+    ASSERT_STR_EQ(o.self_report, "r.txt");
+    cli_parse(3, a2, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_RUN_NO_CONNECT);
+    ASSERT_STR_EQ(o.self_report, "r.txt");
+    TEST_END();
+}
+
+int test_cli_self_report_equals_form_only(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "--self-report" };
+    char *a2[] = { "nutshell", "--self-report", "r.txt" };
+    cli_parse(2, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    cli_parse(3, a2, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_self_report_rejected_with_ui_demo(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "--ui-demo", "--self-report=r.txt" };
+    char *a2[] = { "nutshell", "--self-report=r.txt", "--ui-demo" };
+    cli_parse(3, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    ASSERT_NOT_NULL(strstr(o.error, "--self-report"));
+    cli_parse(3, a2, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_self_report_rejected_with_version(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "-v", "--self-report=r.txt" };
+    char *a2[] = { "nutshell", "-l", "--self-report=r.txt" };
+    cli_parse(3, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    cli_parse(3, a2, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_self_report_rejected_alone_with_connect(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "--local", "--self-report=r.txt" };
+    char *a2[] = { "nutshell", "-sn", "x", "--self-report=r.txt" };
+    cli_parse(3, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    cli_parse(4, a2, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_self_report_empty_path_rejected(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "--self-report=" };
+    cli_parse(2, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    ASSERT_NOT_NULL(strstr(o.error, "--self-report"));
+    TEST_END();
+}
+
+int test_cli_self_report_not_in_usage(void)
+{
+    TEST_BEGIN();
+    ASSERT_NULL(strstr(cli_usage_text(), "self-report"));
+    TEST_END();
+}

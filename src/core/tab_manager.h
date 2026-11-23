@@ -63,8 +63,23 @@ void      tabmgr_set_connect_info(TabManager *m, int index,
 void      tabmgr_set_logging   (TabManager *m, int index, int logging);
 int       tabmgr_get_logging   (const TabManager *m, int index);
 
+/* Where the tab strip's fixed buttons sit, in client x, at `dpi`. The one
+ * geometry that layout, hit-testing, hover, paint, click and the tooltip all
+ * read. add_x is the [+] button; left_x and right_x the arrows; ai_x the AI
+ * button, or -1 when ai_visible is 0, in which case its slot is reclaimed
+ * and the arrows sit one slot further right. */
+typedef struct {
+    int btn;        /* button width and height */
+    int add_x, left_x, right_x, ai_x;
+    int ai_visible;
+} TabsBtnGeom;
+void tabs_btn_geometry(int client_width, int dpi, int ai_visible,
+                       TabsBtnGeom *out);
+
 /* Return tooltip label for the tab-strip button at pixel position mx,
- * given total client width and DPI.  Returns NULL if mx is not over a button. */
-const char *tabs_btn_tooltip_at(int mx, int client_width, int dpi);
+ * given total client width, DPI and whether the AI button is shown.
+ * Returns NULL if mx is not over a (visible) button. */
+const char *tabs_btn_tooltip_at(int mx, int client_width, int dpi,
+                                int ai_visible);
 
 #endif

@@ -643,9 +643,9 @@ $script:VK_EXTENDED = @(0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x
 # Window classes Nutshell's own dialogs use (see src/ui/*.c for each
 # RegisterClass call). Session Manager and the host-key/error MessageBoxes are
 # real dialogs (class #32770); Settings, the paste preview, the passphrase
-# prompt, About and the keyboard shortcuts sheet are hand-built popup windows
+# prompt, About, the keyboard shortcuts sheet and the notice dialog are hand-built popup windows
 # with their own classes.
-$script:DIALOG_CLASSES = @("#32770", "NutshellPassDlg", "Nutshell_Settings", "Nutshell_PastePreview", "Nutshell_About", "Nutshell_Shortcuts")
+$script:DIALOG_CLASSES = @("#32770", "NutshellPassDlg", "Nutshell_Settings", "Nutshell_PastePreview", "Nutshell_About", "Nutshell_Shortcuts", "Nutshell_Notice")
 
 function New-NutshellTestEnv {
     <#
@@ -655,7 +655,8 @@ function New-NutshellTestEnv {
     .PARAMETER HostName  SSH host to connect to.
     .PARAMETER User      SSH user name.
     .PARAMETER KeyPath   Private key file (must be passphrase-free).
-    .PARAMETER Settings  Hashtable of extra top-level settings to override, e.g.
+    .PARAMETER Settings  Hashtable of top-level settings to override (the base table
+                         holds every key config_save() writes), e.g.
                          @{ paste_confirm = $false; log_format = "%Y%m%d-%H%M" }.
     .PARAMETER NoConfig  Skip writing nutshell.config entirely (LAUNCH-2/LAUNCH-3:
                          first-run and corrupt-config scenarios) -- the scratch
@@ -698,22 +699,37 @@ function New-NutshellTestEnv {
     New-Item -ItemType Directory -Force $logs | Out-Null
     Copy-Item $Exe (Join-Path $root "nutshell.exe") -Force
 
+    # Complete on purpose: exactly the keys config_save() writes (the known-key
+    # table, config_setting_keys() in src/config/loader.c), so a launch finds
+    # nothing to add and shows no "Welcome" notice (the upgrade notice lists
+    # every missing key). A key added to that table needs a line here. Values
+    # are config_new_default()'s, except those a case relies on (no paste
+    # delay, no web search, log_dir in the scratch folder).
     $s = @{
         font = "Consolas"; ai_font = "Consolas"; font_size = 10
         scrollback_lines = 10000; paste_delay_ms = 0
-        logging_enabled = $false; debug_terminal = $false
+        logging_enabled = $false
+        debug_enabled = $false
+        debug_levels = [ordered]@{ render = "info"; term = "info"; ai = "info"; ssh = "info"; shell = "info"; general = "info" }
+        debug_include_content = $false; debug_screenshot = $false
+        debug_recorder = $true; debug_recorder_level = "trace"
+        debug_log_dir = "logs"; debug_max_file_mb = 10; debug_max_total_mb = 50
         log_format = "%Y-%m-%d_%H-%M-%S"; log_dir = $logs
         host_key_verification = "tofu"
         foreground_colour = "#E0E0E0"; background_colour = "#121212"
         colour_scheme = "Onyx Synapse"
-        ai_provider = "anthropic"; ai_custom_url = ""; ai_custom_model = ""
+        ai_provider = "anthropic"; ai_enabled = $false
+        ai_custom_url = ""; ai_custom_model = ""
         ai_api_key = ""; ai_system_notes = ""
         ai_search_provider = "none"; ai_search_url = ""; ai_max_search_results = 7
-        ai_web_fetch_enabled = $false; ssh_user_idle_timeout_mins = 0
+        ai_web_fetch_enabled = $false
+        ai_runcmd_mode = "automatic"; ai_thinking_mode = "auto"
+        ssh_user_idle_timeout_mins = 0
         markdown_render_enabled = $true; ai_max_context_lines = 1000
+        ai_tool_timeout_sec = 60; ai_tool_auto_rounds = 3
         auto_connect = $false; auto_connect_session = ""
         paste_confirm = $true; open_session_manager_at_start = $false
-        ai_auto_approve_default = 0
+        ai_policy_default = "read/none"
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }
 

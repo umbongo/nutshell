@@ -2,6 +2,7 @@
 #define NUTSHELL_AI_HTTP_H
 
 #include <stddef.h>
+#include "ai_netcancel.h"
 
 typedef struct {
     int    status_code;   /* HTTP status (200, 401, etc.) or 0 on transport error */
@@ -20,11 +21,16 @@ typedef struct {
  * body_len: length of body
  * resp:    output response struct
  *
+ * nc:      the caller's cancel token, or NULL. The request handle is armed on
+ *          it while the call blocks, so another thread firing it makes the
+ *          call return at once with a "cancelled" error (same for the
+ *          streaming POST and the GET below).
+ *
  * Returns 0 on success (check resp->status_code), -1 on transport error.
  */
 int ai_http_post(const char *url, const char * const *headers,
                  const char *body, size_t body_len,
-                 AiHttpResponse *resp);
+                 AiHttpResponse *resp, AiNetCancel *nc);
 
 /*
  * Synchronous HTTP GET — designed to be called from a background thread.
@@ -36,7 +42,7 @@ int ai_http_post(const char *url, const char * const *headers,
  * Returns 0 on success (check resp->status_code), -1 on transport error.
  */
 int ai_http_get(const char *url, const char * const *headers,
-                AiHttpResponse *resp);
+                AiHttpResponse *resp, AiNetCancel *nc);
 
 /* Callback for streaming HTTP POST. Called for each chunk of data received.
  * data: raw bytes, len: byte count, userdata: caller context.
@@ -55,6 +61,9 @@ typedef int (*AiStreamCallback)(const char *data, size_t len, void *userdata);
  * error:      error message buffer (may be NULL)
  * error_size: size of error buffer
  *
+ * nc:        cancel token or NULL (see ai_http_post). A cancelled call
+ *            returns -1 with the error "cancelled".
+ *
  * Returns 0 on success, -1 on transport error. -1 with a 2xx *status_out
  * means the body broke after the headers: `error` then holds "connection
  * lost during reply" (the reply may or may not have arrived whole).
@@ -62,7 +71,8 @@ typedef int (*AiStreamCallback)(const char *data, size_t len, void *userdata);
 int ai_http_post_stream(const char *url, const char * const *headers,
                         const char *body, size_t body_len,
                         AiStreamCallback cb, void *userdata,
-                        int *status_out, char *error, size_t error_size);
+                        int *status_out, char *error, size_t error_size,
+                        AiNetCancel *nc);
 
 /* Free the response body. Safe to call with NULL body. */
 void ai_http_response_free(AiHttpResponse *resp);

@@ -4,6 +4,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
+#include "dll_record.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -2304,7 +2305,9 @@ void ai_chat_init(HINSTANCE hInstance)
      * hardening): search System32 only, never the exe's own directory or
      * the current directory, so a same-named DLL planted in either can't be
      * loaded instead of the real one. */
+    dll_record_note("Riched20.dll");
     LoadLibraryExW(L"Riched20.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    dll_record_note("Msftedit.dll");
     LoadLibraryExW(L"Msftedit.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
 
     /* Register the ChatListView window class */
@@ -3074,42 +3077,11 @@ void ai_chat_close(HWND hwnd)
         DestroyWindow(hwnd);
 }
 
-/* True once no AiStream is left live process-wide (ai_stream_live_count()
- * only drops once a worker thread has actually released its reference and
- * exited, not merely been asked to cancel). */
-static int ai_streams_done(void)
+int ai_chat_dispatch_running(HWND hwnd)
 {
-    return ai_stream_live_count() <= 0;
-}
-
-void ai_chat_wait_for_streams(DWORD timeout_ms)
-{
-    /* Pumps this thread's inbound sent messages while waiting, instead of
-     * blocking in Sleep(): called from window.c's WM_DESTROY, after the
-     * panel has orphaned every stream it knew about, to give those worker
-     * threads a moment to actually exit before WSACleanup/OpenSSL's exit
-     * handlers run. A worker can still be blocked showing a host-key or
-     * credential prompt owned by the main window, and Windows delivers
-     * that dialog's own housekeeping to its owner via a cross-thread
-     * SendMessage -- which only unblocks once this thread services its
-     * message queue. A plain Sleep loop here never does that, so it can
-     * turn a dismissable prompt into a full-timeout hang on every exit. */
-    DWORD start = GetTickCount();
-    for (;;) {
-        if (ai_streams_done()) return;
-        DWORD elapsed = GetTickCount() - start;
-        if (elapsed >= timeout_ms) return;
-        DWORD slice = timeout_ms - elapsed;
-        if (slice > 20) slice = 20;
-
-        MsgWaitForMultipleObjects(0, NULL, FALSE, slice, QS_SENDMESSAGE);
-
-        MSG msg;
-        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE | PM_QS_SENDMESSAGE)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-    }
+    if (!hwnd || !IsWindow(hwnd)) return 0;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    return d && d->dispatch_active;
 }
 
 int ai_chat_has_content(HWND hwnd)

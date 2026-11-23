@@ -52,6 +52,11 @@
  * conversation; the win32 side opens Help > Keyboard Shortcuts over it.
  * Not part of "all": the sheet is modal, like Settings in "settings-debug".
  *
+ * "notice-info" and "notice-warning" (2026-11-23, the themed notice dialog)
+ * build an empty conversation; the win32 side opens the notice dialog
+ * (src/ui/notice_dlg.c) over it, the upgrade sample and the invalid-config
+ * sample. Not part of "all": the dialog is modal.
+ *
  * "runlist" (2026-11-11, the command list, spec 2026-11-05-run-command-tool
  * decision 21) builds a conversation of two replies; `approval` holds the
  * live batch under the second one (ran, running, queued, queued) and

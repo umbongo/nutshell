@@ -316,3 +316,52 @@ Invoke-Case "cli_host_flag_connects" @{} {
     Assert-True (Wait-NutshellLog -Session $s -Pattern "HOST_FLAG_CONNECTED" -TimeoutSec 10) "no shell output reached the log via -h $HostName"
     "connected via -h $HostName (resolved to the generated profile by host)"
 } -ExtraArgs @("-h", $HostName)
+
+# ---- self_report_ai_off_clean: the hidden --self-report switch (spec section 6) ---
+# `nutshell.exe -nc --self-report=self_report.txt` writes every DLL nutshell's
+# own code asked Windows for (the delay-load hook, src/ui/dll_hook_win.c, and
+# the run-time LoadLibraryExW sites, src/core/dll_record.c) plus the process
+# module list after WM_STARTUP_CONNECT has run, then closes its own window and
+# exits 0. New-NutshellTestEnv's config has the AI assistant off, so winhttp,
+# riched20 and msftedit must never have been requested. Standalone (not
+# Invoke-Case): the window is up for about a second, shorter than
+# Start-Nutshell's polling. The relative path resolves against the working
+# directory, which is the scratch folder. Unrun here (no pwsh on automaton);
+# `make selftest-wine` asserts the same on Linux.
+if ($ActiveTiers -contains "gate" -and ($Only.Count -eq 0 -or $Only -contains "self_report_ai_off_clean")) {
+    Write-Host "[RUN ] self_report_ai_off_clean"
+    $srEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+    $srOk = $false; $srDetail = ""
+    $srProc = $null
+    try {
+        $srProc = Start-Process -FilePath $srEnv.Exe -ArgumentList @("-nc", "--self-report=self_report.txt") `
+                                -WorkingDirectory $srEnv.Root -PassThru
+        $null = $srProc.Handle
+        if (-not $srProc.WaitForExit(30000)) {
+            Stop-Process -Id $srProc.Id -Force -ErrorAction SilentlyContinue
+            throw "nutshell.exe --self-report did not exit within 30s (a dialog blocking startup?)"
+        }
+        Assert-True ($srProc.ExitCode -eq 0) "exit code was $($srProc.ExitCode), expected 0 (3 means the report could not be written)"
+        $srPath = Join-Path $srEnv.Root "self_report.txt"
+        Assert-True (Test-Path $srPath) "no self_report.txt was written"
+        $srLines = [IO.File]::ReadAllLines($srPath)
+        $srReq = @($srLines | Where-Object { $_ -like "requested: *" } | ForEach-Object { $_.Substring(11).ToLowerInvariant() })
+        $srMods = @($srLines | Where-Object { $_ -like "module: *" } | ForEach-Object { $_.Substring(8).ToLowerInvariant() })
+        Assert-True ($srMods -contains "nutshell.exe") "the module list does not name nutshell.exe: the report is not a real one"
+        foreach ($d in @("winhttp.dll", "riched20.dll", "msftedit.dll")) {
+            Assert-True ($srReq -notcontains $d) "$d was requested with the AI assistant off (requested: $($srReq -join ', '))"
+        }
+        $srDetail = "AI off: $($srReq.Count) DLLs requested ($($srReq -join ', ')), none of winhttp/riched20/msftedit"
+        $srOk = $true
+    } catch {
+        $srDetail = $_.Exception.Message
+    } finally {
+        if ($srProc -and -not $srProc.HasExited) { Stop-Process -Id $srProc.Id -Force -ErrorAction SilentlyContinue }
+        for ($try = 0; $try -lt 5 -and (Test-Path $srEnv.Root); $try++) {
+            Remove-Item -Recurse -Force $srEnv.Root -ErrorAction SilentlyContinue
+            if (Test-Path $srEnv.Root) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    if ($srOk) { Write-Host "[PASS] self_report_ai_off_clean" } else { Write-Host ("[FAIL] self_report_ai_off_clean -- " + $srDetail) }
+    [void]$results.Add([pscustomobject]@{ Name = "self_report_ai_off_clean"; Passed = $srOk; Detail = $srDetail })
+}

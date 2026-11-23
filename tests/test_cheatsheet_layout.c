@@ -457,3 +457,39 @@ int test_cheatsheet_input_from_table_stops_at_the_row_capacity(void)
     ASSERT_EQ(in.section_rows[0], CS_MAX_ROWS);
     TEST_END();
 }
+
+/* The AI section gone (the assistant is off): six sections, and the
+ * two-column split still puts sections 1-4 left and the other two right. */
+int test_cheatsheet_layout_without_the_ai_section_still_has_two_columns(void)
+{
+    TEST_BEGIN();
+    int dpi = 96;
+    Shortcut rows[CS_MAX_ROWS];
+    size_t n = shortcuts_filtered(rows, CS_MAX_ROWS, 0);
+    ASSERT_TRUE(n > 0 && n <= (size_t)CS_MAX_ROWS);
+
+    CsInput in;
+    memset(&in, 0, sizeof(in));
+    in.dpi = dpi;
+    in.work_w = 1920;
+    in.work_h = 1040;
+    in.nc_w = ns_scale(EST_NC_W_96, dpi);
+    in.nc_h = ns_scale(EST_NC_H_96, dpi);
+    in.body_h = ns_scale(EST_BODY_LINE_96, dpi);
+    in.caption_h = ns_scale(EST_CAPTION_LINE_96, dpi);
+    in.heading_h = ns_scale(EST_HEADING_LINE_96, dpi);
+    in.scrollbar_w = ns_scale(EST_SCROLLBAR_W_96, dpi);
+    cheatsheet_input_from_table(&in, rows, n, est_measure, &dpi);
+    ASSERT_EQ(in.n_sections, 6);
+
+    CsLayout l;
+    cheatsheet_layout_compute(&l, &in);
+    ASSERT_EQ(l.n_sections, 6);
+    ASSERT_EQ(l.n_rows, (int)n);
+    ASSERT_EQ(l.columns, 2);
+    for (int s = 0; s < 6; s++) ASSERT_EQ(l.heading_col[s], s < CS_LEFT_SECTIONS ? 0 : 1);
+    ASSERT_EQ(check_geometry(&l), 0);
+    /* Both columns hold something. */
+    ASSERT_TRUE(l.heading[4].x > l.heading[0].x);
+    TEST_END();
+}

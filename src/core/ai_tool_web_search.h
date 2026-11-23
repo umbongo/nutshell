@@ -2,12 +2,14 @@
 #define NUTSHELL_AI_TOOL_WEB_SEARCH_H
 
 #include "ai_tools.h"
+#include "ai_netcancel.h"
 
 /* Web search context -- passed as tool_data to tool_web_search_execute */
 typedef struct {
     char search_provider[64];   /* "duckduckgo-api", "duckduckgo-html", "custom" */
     char search_url[256];       /* custom search endpoint */
     int  max_search_results;    /* max results to return (default 7) */
+    AiNetCancel *nc;            /* the stream's cancel token, or NULL */
 } WebSearchContext;
 
 /* Tool execute callback */

@@ -466,6 +466,24 @@ int test_config_ensure_local_profile_null(void);
 int test_config_ensure_local_profile_survives_save_load_roundtrip(void);
 int test_config_password_dpapi_encrypted_on_disk(void);
 int test_config_ai_key_foreign_blob_preserved_through_load_save(void);
+int test_config_ai_enabled_missing_no_key_off(void);
+int test_config_ai_enabled_missing_with_key_on(void);
+int test_config_ai_enabled_missing_preserved_blob_on(void);
+int test_config_ai_enabled_saved_false_wins_over_key(void);
+int test_config_ai_enabled_saved_true_without_key(void);
+int test_config_ai_enabled_default_off(void);
+int test_config_ai_enabled_roundtrip(void);
+int test_config_older_exe_drop_readds_on(void);
+int test_config_report_complete_file_has_no_missing(void);
+int test_config_report_lists_missing_keys_in_order(void);
+int test_config_report_legacy_key_counts_present(void);
+int test_config_report_no_settings_object_all_missing(void);
+int test_config_keys_match_saved_file(void);
+int test_config_report_invalid_names_bad_path(void);
+int test_config_report_missing_and_unreadable_status(void);
+int test_opt_feature_table_ai_first(void);
+int test_opt_feature_enabled(void);
+int test_opt_feature_blocked_reason(void);
 int test_config_new_password_replaces_preserved_blob(void);
 int test_config_cleared_password_drops_blob(void);
 int test_config_password_legacy_migrates_to_dpapi_on_save(void);
@@ -492,6 +510,17 @@ int test_config_load_ex_unparseable_reports_invalid(void);
 int test_config_load_ex_oversized_reports_unreadable(void);
 int test_config_fallback_path_core(void);
 int test_config_fallback_path_rejects_relative(void);
+/* test_dll_record.c */
+int test_dll_record_note_and_query(void);
+int test_dll_record_case_insensitive(void);
+int test_dll_record_duplicates_once(void);
+int test_dll_record_null_and_empty_ignored(void);
+int test_dll_record_cap_of_64(void);
+int test_dll_record_overlong_name_ignored(void);
+int test_dll_record_format_with_modules(void);
+int test_dll_record_format_modules_only(void);
+int test_dll_record_format_truncates_whole_lines(void);
+
 /* test_cli_args.c */
 int test_cli_no_args(void);
 int test_cli_session_name_short(void);
@@ -528,6 +557,14 @@ int test_cli_local_twice(void);
 int test_cli_local_with_theme_is_error(void);
 int test_cli_local_not_matched_by_prefix(void);
 int test_cli_usage_text_mentions_local(void);
+int test_cli_self_report_with_run(void);
+int test_cli_self_report_with_no_connect(void);
+int test_cli_self_report_equals_form_only(void);
+int test_cli_self_report_rejected_with_ui_demo(void);
+int test_cli_self_report_rejected_with_version(void);
+int test_cli_self_report_rejected_alone_with_connect(void);
+int test_cli_self_report_empty_path_rejected(void);
+int test_cli_self_report_not_in_usage(void);
 
 /* profile lookup (test_config.c) */
 int test_find_profile_by_name_exact(void);
@@ -873,6 +910,9 @@ int test_tabs_btn_tooltip_prev(void);
 int test_tabs_btn_tooltip_next(void);
 int test_tabs_btn_tooltip_gap(void);
 int test_tabs_btn_tooltip_past_add(void);
+int test_tabs_btn_geometry_hidden_ai_slot_is_reclaimed(void);
+int test_tabs_btn_tooltip_ai_hidden_has_no_tip(void);
+int test_tabs_btn_tooltip_ai_hidden_neighbours_shift(void);
 int test_tabmgr_status_click_connected(void);
 int test_tabmgr_status_click_disconnected(void);
 int test_tabmgr_status_click_connecting(void);
@@ -2793,6 +2833,11 @@ int test_cmd_batch_settled_flag_lifecycle(void);
 int test_cmd_batch_next_runnable_none(void);
 int test_cmd_batch_add_user_acted_zero(void);
 
+/* test_ai_session_discard.c */
+int test_ai_session_discard_clears_everything(void);
+int test_ai_session_discard_keeps_platform(void);
+int test_ai_session_discard_twice_is_safe(void);
+
 /* test_ai_rounds.c */
 int test_ai_rounds_user_message_resets(void);
 int test_ai_rounds_continue_unattended_counts(void);
@@ -3293,6 +3338,22 @@ int test_web_fetch_describe(void);
 int test_web_fetch_deadline_passed_inside_on_hop(void);
 int test_web_fetch_get_failure(void);
 int test_web_fetch_cancel_after_resolve(void);
+/* test_ai_netcancel.c */
+int test_ai_nc_fire_before_arm_refuses(void);
+int test_ai_nc_fire_closes_armed_handle_once(void);
+int test_ai_nc_disarm_after_fire_returns_zero(void);
+int test_ai_nc_disarm_without_fire_returns_one(void);
+int test_ai_nc_fire_twice_closes_once(void);
+int test_ai_nc_null_token_is_harmless(void);
+int test_ai_nc_disarm_waits_for_running_close(void);
+int test_ai_nc_concurrent_fire_and_disarm_close_exactly_once(void);
+int test_ai_stream_orphan_fires_token(void);
+int test_ai_stream_copy_tools_points_contexts_at_token(void);
+int test_web_search_cancelled_flag_stops_before_request(void);
+int test_web_search_fired_token_stops_before_request(void);
+int test_web_fetch_nc_fired_before_first_hop(void);
+int test_web_fetch_nc_fired_during_get(void);
+int test_web_fetch_nc_fired_between_hops(void);
 int test_web_fetch_end_hook_runs_once_on_every_exit(void);
 int test_web_fetch_pinned_same_host_followed(void);
 int test_web_fetch_pinned_cross_host_refused(void);
@@ -3606,6 +3667,11 @@ int test_about_layout_null_out_is_safe(void);
 int test_build_info_deps_whole_format(void);
 int test_build_info_deps_openssl_part_matches_header(void);
 int test_build_info_deps_truncates(void);
+/* test_ai_gate.c */
+int test_ai_gate_default_off(void);
+int test_ai_gate_enabled(void);
+int test_ai_gate_override_only(void);
+int test_ai_gate_override_does_not_change_enabled(void);
 /* test_shortcuts.c */
 int test_shortcuts_every_row_has_section_chord_action(void);
 int test_shortcuts_sections_contiguous_and_in_fixed_order(void);
@@ -3619,6 +3685,10 @@ int test_shortcuts_readme_block_shape(void);
 int test_shortcuts_readme_block_truncates_safely(void);
 int test_shortcuts_readme_matches_table(void);
 int test_shortcuts_readme_check_handles_crlf_and_bad_markers(void);
+int test_shortcuts_filtered_off_drops_ai_rows(void);
+int test_shortcuts_filtered_on_keeps_all(void);
+int test_shortcuts_filtered_counts_without_a_buffer(void);
+int test_shortcuts_readme_block_unchanged_by_filter(void);
 /* test_cheatsheet_layout.c */
 int test_cheatsheet_layout_capacity_holds_the_table(void);
 int test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96(void);
@@ -3635,6 +3705,7 @@ int test_cheatsheet_place_centres_then_keeps_to_the_work_area(void);
 int test_cheatsheet_input_from_table_fills_the_table_fields(void);
 int test_cheatsheet_input_from_table_stops_at_the_section_capacity(void);
 int test_cheatsheet_input_from_table_stops_at_the_row_capacity(void);
+int test_cheatsheet_layout_without_the_ai_section_still_has_two_columns(void);
 
 /* test_settings_entry.c */
 int test_search_providers_table(void);
@@ -3670,6 +3741,7 @@ int test_settings_help_keep_entries(void);
 int test_settings_help_font_sizes_and_notes(void);
 int test_settings_help_labels_match_sources(void);
 int test_settings_help_every_id_in_settings_c(void);
+int test_settings_help_ai_enable_entry(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -3785,6 +3857,24 @@ int test_ns_check_layout_narrow_control_clamps_label(void);
 int test_ns_check_mark_inside_box_and_shaped(void);
 int test_ns_check_mark_scales_linearly(void);
 int test_ns_check_mark_width_scales_with_floor(void);
+
+/* test_notice.c, test_notice_layout.c */
+int test_notice_warning_copy(void);
+int test_notice_first_run_copy(void);
+int test_notice_upgrade_ai_item(void);
+int test_notice_upgrade_other_keys_and_none(void);
+int test_notice_upgrade_caps_items(void);
+int test_notice_launch_plan_table(void);
+int test_notice_queue_order_and_full(void);
+int test_notice_plain_text(void);
+int test_notice_launch_save_wanted(void);
+int test_notice_layout_buttons_right_aligned(void);
+int test_notice_layout_rows_in_order_without_overlap(void);
+int test_notice_layout_no_action_and_no_closing(void);
+int test_notice_layout_grows_with_items(void);
+int test_notice_layout_192_is_twice_96(void);
+int test_notice_layout_very_wide_label_keeps_value_width_non_negative(void);
+int test_notice_layout_title_row_follows_measured_height(void);
 
 /* test_pw_prompt_layout.c */
 int test_pw_layout_today_unchanged(void);
@@ -4330,6 +4420,7 @@ int test_sdbg_layout_page_height_ticked_vs_unticked(void);
 
 int test_ui_demo_settings_debug_is_an_empty_state(void);
 int test_ui_demo_shortcuts_is_an_empty_state(void);
+int test_ui_demo_notice_states_are_empty_states(void);
 int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
 int test_ui_demo_policy_compact_matches_approval(void);
 int test_ui_demo_policy_for_other_states_is_write_off(void);
@@ -4914,6 +5005,24 @@ int main(void) {
     failed += test_config_ensure_local_profile_survives_save_load_roundtrip();
     failed += test_config_password_dpapi_encrypted_on_disk();
     failed += test_config_ai_key_foreign_blob_preserved_through_load_save();
+    failed += test_config_ai_enabled_missing_no_key_off();
+    failed += test_config_ai_enabled_missing_with_key_on();
+    failed += test_config_ai_enabled_missing_preserved_blob_on();
+    failed += test_config_ai_enabled_saved_false_wins_over_key();
+    failed += test_config_ai_enabled_saved_true_without_key();
+    failed += test_config_ai_enabled_default_off();
+    failed += test_config_ai_enabled_roundtrip();
+    failed += test_config_older_exe_drop_readds_on();
+    failed += test_config_report_complete_file_has_no_missing();
+    failed += test_config_report_lists_missing_keys_in_order();
+    failed += test_config_report_legacy_key_counts_present();
+    failed += test_config_report_no_settings_object_all_missing();
+    failed += test_config_keys_match_saved_file();
+    failed += test_config_report_invalid_names_bad_path();
+    failed += test_config_report_missing_and_unreadable_status();
+    failed += test_opt_feature_table_ai_first();
+    failed += test_opt_feature_enabled();
+    failed += test_opt_feature_blocked_reason();
     failed += test_config_new_password_replaces_preserved_blob();
     failed += test_config_cleared_password_drops_blob();
     failed += test_config_password_legacy_migrates_to_dpapi_on_save();
@@ -4942,6 +5051,15 @@ int main(void) {
     failed += test_config_fallback_path_rejects_relative();
 
     printf("\n--- CLI args ---\n");
+    failed += test_dll_record_note_and_query();
+    failed += test_dll_record_case_insensitive();
+    failed += test_dll_record_duplicates_once();
+    failed += test_dll_record_null_and_empty_ignored();
+    failed += test_dll_record_cap_of_64();
+    failed += test_dll_record_overlong_name_ignored();
+    failed += test_dll_record_format_with_modules();
+    failed += test_dll_record_format_modules_only();
+    failed += test_dll_record_format_truncates_whole_lines();
     failed += test_cli_no_args();
     failed += test_cli_session_name_short();
     failed += test_cli_session_name_long();
@@ -4977,6 +5095,14 @@ int main(void) {
     failed += test_cli_local_with_theme_is_error();
     failed += test_cli_local_not_matched_by_prefix();
     failed += test_cli_usage_text_mentions_local();
+    failed += test_cli_self_report_with_run();
+    failed += test_cli_self_report_with_no_connect();
+    failed += test_cli_self_report_equals_form_only();
+    failed += test_cli_self_report_rejected_with_ui_demo();
+    failed += test_cli_self_report_rejected_with_version();
+    failed += test_cli_self_report_rejected_alone_with_connect();
+    failed += test_cli_self_report_empty_path_rejected();
+    failed += test_cli_self_report_not_in_usage();
 
     printf("\n--- Profile lookup ---\n");
     failed += test_find_profile_by_name_exact();
@@ -5232,6 +5358,9 @@ int main(void) {
     failed += test_tabs_btn_tooltip_next();
     failed += test_tabs_btn_tooltip_gap();
     failed += test_tabs_btn_tooltip_past_add();
+    failed += test_tabs_btn_geometry_hidden_ai_slot_is_reclaimed();
+    failed += test_tabs_btn_tooltip_ai_hidden_has_no_tip();
+    failed += test_tabs_btn_tooltip_ai_hidden_neighbours_shift();
 
     printf("\n--- Status Dot Click ---\n");
     failed += test_tabmgr_status_click_connected();
@@ -7064,6 +7193,9 @@ int main(void) {
     failed += test_cmd_batch_add_user_acted_zero();
 
     printf("\n--- AI auto rounds ---\n");
+    failed += test_ai_session_discard_clears_everything();
+    failed += test_ai_session_discard_keeps_platform();
+    failed += test_ai_session_discard_twice_is_safe();
     failed += test_ai_rounds_user_message_resets();
     failed += test_ai_rounds_continue_unattended_counts();
     failed += test_ai_rounds_continue_attended_resets();
@@ -7602,6 +7734,21 @@ int main(void) {
     failed += test_web_fetch_deadline_passed_inside_on_hop();
     failed += test_web_fetch_get_failure();
     failed += test_web_fetch_cancel_after_resolve();
+    failed += test_ai_nc_fire_before_arm_refuses();
+    failed += test_ai_nc_fire_closes_armed_handle_once();
+    failed += test_ai_nc_disarm_after_fire_returns_zero();
+    failed += test_ai_nc_disarm_without_fire_returns_one();
+    failed += test_ai_nc_fire_twice_closes_once();
+    failed += test_ai_nc_null_token_is_harmless();
+    failed += test_ai_nc_disarm_waits_for_running_close();
+    failed += test_ai_nc_concurrent_fire_and_disarm_close_exactly_once();
+    failed += test_ai_stream_orphan_fires_token();
+    failed += test_ai_stream_copy_tools_points_contexts_at_token();
+    failed += test_web_search_cancelled_flag_stops_before_request();
+    failed += test_web_search_fired_token_stops_before_request();
+    failed += test_web_fetch_nc_fired_before_first_hop();
+    failed += test_web_fetch_nc_fired_during_get();
+    failed += test_web_fetch_nc_fired_between_hops();
     failed += test_web_fetch_end_hook_runs_once_on_every_exit();
     failed += test_web_fetch_pinned_same_host_followed();
     failed += test_web_fetch_pinned_cross_host_refused();
@@ -7866,6 +8013,10 @@ int main(void) {
     failed += test_build_info_deps_whole_format();
     failed += test_build_info_deps_openssl_part_matches_header();
     failed += test_build_info_deps_truncates();
+    failed += test_ai_gate_default_off();
+    failed += test_ai_gate_enabled();
+    failed += test_ai_gate_override_only();
+    failed += test_ai_gate_override_does_not_change_enabled();
     failed += test_shortcuts_every_row_has_section_chord_action();
     failed += test_shortcuts_sections_contiguous_and_in_fixed_order();
     failed += test_shortcuts_no_chord_and_condition_repeat_within_a_section();
@@ -7878,6 +8029,10 @@ int main(void) {
     failed += test_shortcuts_readme_block_truncates_safely();
     failed += test_shortcuts_readme_matches_table();
     failed += test_shortcuts_readme_check_handles_crlf_and_bad_markers();
+    failed += test_shortcuts_filtered_off_drops_ai_rows();
+    failed += test_shortcuts_filtered_on_keeps_all();
+    failed += test_shortcuts_filtered_counts_without_a_buffer();
+    failed += test_shortcuts_readme_block_unchanged_by_filter();
     failed += test_cheatsheet_layout_capacity_holds_the_table();
     failed += test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96();
     failed += test_cheatsheet_layout_no_scrollbar_when_the_page_fits();
@@ -7893,6 +8048,7 @@ int main(void) {
     failed += test_cheatsheet_input_from_table_fills_the_table_fields();
     failed += test_cheatsheet_input_from_table_stops_at_the_section_capacity();
     failed += test_cheatsheet_input_from_table_stops_at_the_row_capacity();
+    failed += test_cheatsheet_layout_without_the_ai_section_still_has_two_columns();
 
     printf("\n--- Settings Layout ---\n");
     failed += test_sl_scale_identity_at_96();
@@ -7978,6 +8134,7 @@ int main(void) {
     failed += test_settings_help_font_sizes_and_notes();
     failed += test_settings_help_labels_match_sources();
     failed += test_settings_help_every_id_in_settings_c();
+    failed += test_settings_help_ai_enable_entry();
 
     printf("\n--- Design System: scale & type ---\n");
     failed += test_ns_scale_identity_at_96();
@@ -8630,6 +8787,7 @@ int main(void) {
 
     failed += test_ui_demo_settings_debug_is_an_empty_state();
     failed += test_ui_demo_shortcuts_is_an_empty_state();
+    failed += test_ui_demo_notice_states_are_empty_states();
     failed += test_ui_demo_policy_auto_is_executing_with_auto_on();
     failed += test_ui_demo_policy_compact_matches_approval();
     failed += test_ui_demo_policy_for_other_states_is_write_off();
@@ -8850,6 +9008,22 @@ int main(void) {
         failed += test_net_url_display_marked();
         failed += test_net_url_detail();
         failed += test_net_text_escape();
+        failed += test_notice_warning_copy();
+        failed += test_notice_first_run_copy();
+        failed += test_notice_upgrade_ai_item();
+        failed += test_notice_upgrade_other_keys_and_none();
+        failed += test_notice_upgrade_caps_items();
+        failed += test_notice_launch_plan_table();
+        failed += test_notice_queue_order_and_full();
+        failed += test_notice_plain_text();
+        failed += test_notice_launch_save_wanted();
+        failed += test_notice_layout_buttons_right_aligned();
+        failed += test_notice_layout_rows_in_order_without_overlap();
+        failed += test_notice_layout_no_action_and_no_closing();
+        failed += test_notice_layout_grows_with_items();
+        failed += test_notice_layout_192_is_twice_96();
+        failed += test_notice_layout_very_wide_label_keeps_value_width_non_negative();
+        failed += test_notice_layout_title_row_follows_measured_height();
         failed += test_pw_layout_today_unchanged();
         failed += test_pw_layout_text_row();
         failed += test_pw_text_crlf();

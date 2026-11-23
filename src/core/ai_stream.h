@@ -9,6 +9,7 @@
 #include "ai_tool_web_search.h"
 #include "ai_tool_web_fetch.h"
 #include "worker_life.h"
+#include "ai_netcancel.h"
 #include "tool_decision.h"
 
 /*
@@ -34,6 +35,9 @@
 
 typedef struct AiStream {
     WorkerLife life;
+    AiNetCancel nc;            /* the in-flight request handle, closed by ai_stream_orphan() so a
+                                * blocked WinHTTP call returns at once; also reached by the
+                                * tools through search.nc and fetch.nc */
     unsigned   id;             /* process-unique, never 0 */
     volatile int finished;     /* set by the thread on its way out */
     volatile int delivered;    /* set by the thread once its final (done or
@@ -97,8 +101,9 @@ void ai_stream_discard(AiStream *s);
  * wiped and its conversation freed). NULL is a no-op. */
 void ai_stream_release(AiStream *s);
 
-/* Abort, then drop the UI's reference: the thread frees it when it sees
- * the abort (or right now, if it has already finished). */
+/* Abort, fire the cancel token (closing the request the thread is blocked
+ * on), then drop the UI's reference: the thread frees it when it sees the
+ * abort (or right now, if it has already finished). */
 void ai_stream_orphan(AiStream *s);
 
 /* Non-zero once the stream has been aborted. */

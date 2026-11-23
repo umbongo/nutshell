@@ -496,7 +496,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         char errbuf[256] = "";
         int rc = ai_http_post_stream(url, req_headers, s->body, s->body_len,
                                      stream_callback, &ctx,
-                                     &status, errbuf, sizeof(errbuf));
+                                     &status, errbuf, sizeof(errbuf), &s->nc);
         sse_line_free(&ctx.sse);   /* a half line at the end is dropped, as before */
 
         /* If stream was aborted (user cancelled), discard partial results */

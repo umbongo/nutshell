@@ -5,6 +5,7 @@
 #include "ns_font.h"
 #include "ns_scale.h"
 #include "ui_theme.h"
+#include "notice_dlg.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
@@ -12,6 +13,11 @@
 #include "ai_prompt.h"
 #include "thinking_mode.h"
 #include "ai_http.h"
+#include "ai_netcancel.h"
+#include "worker_life.h"
+#include "secure_zero.h"
+#include "thread_join.h"
+#include "ai_gate.h"
 #include "cmd_policy.h"
 #include "tool_decision.h"
 #include "json_parser.h"
@@ -189,6 +195,8 @@ typedef struct {
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
     int      demo;        /* --ui-demo=settings-debug: debugging ticked in memory, Save never writes */
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
+    struct FetchModelsCtx *models;   /* the Refresh Models request in flight (UI's reference), or NULL */
+    ThreadJoinList models_thread;    /* its thread's handle, kept so closing can join it */
 
     SettingsCtrl *ctrl_ai_base_url;   /* toggled by provider combo */
     SettingsCtrl *ctrl_ai_url_warn;   /* shown for a clear-text custom endpoint */
@@ -209,6 +217,7 @@ static void relayout(HWND hwnd, SettingsDlgData *d);
 static void ai_url_warn_sync(SettingsDlgData *d);
 static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
+static void ai_enable_sync(SettingsDlgData *d);
 
 /* ---- Layout helpers ----------------------------------------------------- */
 /* Controls are created with placeholder geometry; relayout() positions them
@@ -334,12 +343,36 @@ static BOOL CALLBACK SetFontProc(HWND hChild, LPARAM lParam)
 
 /* ---- Fetch models thread ------------------------------------------------ */
 
-typedef struct {
+/* Shared by the settings window and the thread (a WorkerLife: two
+ * references). The window cancels the request when it closes; whoever drops
+ * the last reference wipes the key and frees it. */
+typedef struct FetchModelsCtx {
+    WorkerLife  life;
+    AiNetCancel nc;        /* fired when Settings closes: the blocked GET returns */
     HWND  hwnd;        /* settings window to post result to */
     char  url[512];    /* models endpoint URL */
-    char  headers[3][300]; /* raw HTTP headers (NULL-terminated array) */
+    char  headers[3][300]; /* raw HTTP headers, the API key among them (NULL-terminated array) */
     char *result;      /* heap-allocated newline-separated model IDs, or error */
 } FetchModelsCtx;
+
+static void models_ctx_release(FetchModelsCtx *ctx)
+{
+    if (!ctx || !worker_life_release(&ctx->life)) return;
+    secure_zero(ctx->headers, sizeof(ctx->headers));   /* the API key */
+    free(ctx->result);
+    free(ctx);
+}
+
+/* The thread's last act: hand the result to the window, unless Settings has
+ * closed meanwhile (its HWND may be reused), then drop the thread's own
+ * reference. The window's reference is dropped by the window: in
+ * WM_AI_MODELS_DONE when it takes the result, or in WM_DESTROY. */
+static void models_post_and_release(FetchModelsCtx *ctx)
+{
+    if (!ai_nc_cancelled(&ctx->nc))
+        (void)PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
+    models_ctx_release(ctx);
+}
 
 static DWORD WINAPI fetch_models_thread(LPVOID param)
 {
@@ -352,7 +385,7 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
         hdrs[i] = ctx->headers[i];
 
     AiHttpResponse resp;
-    int rc = ai_http_get(ctx->url, hdrs[0] ? hdrs : NULL, &resp);
+    int rc = ai_http_get(ctx->url, hdrs[0] ? hdrs : NULL, &resp, &ctx->nc);
     DLOG(DLOG_GENERAL, DLOG_INFO, 0u, "settings.models", "rc=%d status=%d", rc,
          resp.status_code);
 
@@ -364,7 +397,7 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
             snprintf(err, sizeof(err), "Error: HTTP %d", resp.status_code);
         ctx->result = _strdup(err);
         ai_http_response_free(&resp);
-        PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
+        models_post_and_release(ctx);
         return 0;
     }
 
@@ -374,7 +407,7 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
 
     if (!root) {
         ctx->result = _strdup("Error: invalid JSON response");
-        PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
+        models_post_and_release(ctx);
         return 0;
     }
 
@@ -382,7 +415,7 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
     if (!data || data->type != JSON_ARRAY) {
         json_free(root);
         ctx->result = _strdup("Error: no 'data' array in response");
-        PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
+        models_post_and_release(ctx);
         return 0;
     }
 
@@ -392,7 +425,7 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
     if (!buf) {
         json_free(root);
         ctx->result = _strdup("Error: out of memory");
-        PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
+        models_post_and_release(ctx);
         return 0;
     }
     size_t pos = 0;
@@ -417,7 +450,7 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
     json_free(root);
 
     ctx->result = buf;
-    PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
+    models_post_and_release(ctx);
     return 0;
 }
 
@@ -730,6 +763,32 @@ static int ai_url_warn_apply(SettingsDlgData *d)
     int changed = (d->ctrl_ai_url_warn->visible != show);
     d->ctrl_ai_url_warn->visible = show;
     return changed;
+}
+
+/* The Enable AI assistant box decides whether the rest of the three AI pages
+ * can be used: every control on them, the box itself excepted, is enabled
+ * only while it is ticked. Refresh also needs the gate open, because a key
+ * typed here is not used (ns_winhttp_open refuses) until the setting is saved
+ * on. Called when the box is clicked and when a model fetch ends. */
+static void ai_enable_sync(SettingsDlgData *d)
+{
+    if (!d || !d->hPage) return;
+    int on = (IsDlgButtonChecked(d->hPage, IDC_AI_ENABLE) == BST_CHECKED);
+    HWND box = GetDlgItem(d->hPage, IDC_AI_ENABLE);
+    for (int i = 0; i < d->n_ctrls; i++) {
+        const SettingsCtrl *c = &d->ctrls[i];
+        if (c->page != SETTINGS_PAGE_AI_PROVIDER &&
+            c->page != SETTINGS_PAGE_AI_BEHAVIOUR &&
+            c->page != SETTINGS_PAGE_AI_WEB)
+            continue;
+        if (c->hLabel) EnableWindow(c->hLabel, on ? TRUE : FALSE);
+        if (c->hCtrl && c->hCtrl != box) EnableWindow(c->hCtrl, on ? TRUE : FALSE);
+        if (c->hExtra)  EnableWindow(c->hExtra, on ? TRUE : FALSE);
+        if (c->hExtra2) EnableWindow(c->hExtra2, on ? TRUE : FALSE);
+    }
+    HWND refresh = GetDlgItem(d->hPage, IDC_AI_REFRESH);
+    if (refresh)
+        EnableWindow(refresh, (on && ai_gate_on()) ? TRUE : FALSE);
 }
 
 static void ai_url_warn_sync(SettingsDlgData *d)
@@ -1354,6 +1413,16 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         {
         int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
         {
+            /* The master switch: while it is unticked every other AI control
+             * on the three AI pages stays created (the help tips stay
+             * counted) but disabled (ai_enable_sync). The stored value, never
+             * the --ui-demo override, decides the initial state. */
+            HWND chk = make_check2(nd, IDC_AI_ENABLE, SH_AI_ENABLE);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.ai_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 1);
+        }
+        {
             HWND lbl = make_label2(nd, SH_AI_PROVIDER);
             HWND cmb = make_combo2(nd, IDC_AI_PROVIDER_COMBO, CBS_DROPDOWNLIST,
                                    SH_AI_PROVIDER);
@@ -1711,6 +1780,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             SetWindowText(nd->hPageTitle, settings_page_title(nd->cur_page));
         }
         ai_url_warn_sync(nd);
+        ai_enable_sync(nd);
         relayout(hwnd, nd);
 
         return 0;
@@ -1737,16 +1807,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
     case WM_AI_MODELS_DONE: {
         FetchModelsCtx *ctx = (FetchModelsCtx *)lParam;
+        if (!d) return 0;   /* tearing down: WM_DESTROY dropped the window's reference */
+        if (ctx != d->models) return 0;   /* not the request this window is waiting on */
+        d->models = NULL;
+        thread_join_reap(&d->models_thread);   /* its handle: the thread is on its way out */
         if (ctx && ctx->result) {
-            if (!d) {
-                /* Window is tearing down; nothing left to update. */
-                free(ctx->result);
-                free(ctx);
-                return 0;
-            }
-
-            /* Re-enable the refresh button */
-            EnableWindow(GetDlgItem(d->hPage, IDC_AI_REFRESH), TRUE);
+            /* Re-enable the refresh button (only while the switch is on) */
+            ai_enable_sync(d);
 
             if (strncmp(ctx->result, "Error:", 6) == 0) {
                 MessageBox(hwnd, ctx->result, "Refresh Models",
@@ -1781,9 +1848,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     MessageBox(hwnd, "No models found.", "Refresh Models",
                                MB_OK | MB_ICONINFORMATION);
             }
-            free(ctx->result);
         }
-        free(ctx);
+        models_ctx_release(ctx);   /* the window's reference; wipes the key when last */
         return 0;
     }
 
@@ -1901,6 +1967,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             break;
 
+        case IDC_AI_ENABLE:
+            if (d && HIWORD(wParam) == BN_CLICKED)
+                ai_enable_sync(d);
+            break;
+
         case IDC_AI_CUSTOM_URL:
             if (HIWORD(wParam) == EN_CHANGE && d)
                 ai_url_warn_update(d);
@@ -1954,8 +2025,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 }
 
                 /* Launch background thread */
-                FetchModelsCtx *ctx = calloc(1, sizeof(FetchModelsCtx));
+                FetchModelsCtx *ctx = d->models ? NULL
+                                      : calloc(1, sizeof(FetchModelsCtx));
                 if (ctx) {
+                    worker_life_init(&ctx->life);   /* the window's and the thread's */
+                    ai_nc_init(&ctx->nc);
                     ctx->hwnd = hwnd;
                     snprintf(ctx->url, sizeof(ctx->url), "%s", models_url);
 
@@ -1975,13 +2049,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     HANDLE ht = CreateThread(NULL, 0, fetch_models_thread,
                                              ctx, 0, NULL);
                     if (ht) {
-                        CloseHandle(ht);
+                        /* Kept, not closed: closing Settings fires ctx->nc
+                         * and joins it. */
+                        d->models = ctx;
+                        thread_join_add(&d->models_thread, ht);
                         /* Disable button while fetching */
                         EnableWindow(GetDlgItem(d->hPage, IDC_AI_REFRESH), FALSE);
                     } else {
+                        secure_zero(ctx->headers, sizeof(ctx->headers));
                         free(ctx);
                     }
                 }
+                secure_zero(api_key, sizeof(api_key));
             }
             break;
 
@@ -2022,6 +2101,37 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* --ui-demo=settings-debug: show the page, change nothing. */
             if (d->demo) { DestroyWindow(hwnd); break; }
             Settings *s = &d->cfg->settings;
+
+            /* Turning the assistant off while it works stops the reply and
+             * closes the conversations: ask first. A yes/no decision, not a
+             * notice. No leaves the dialog open with the box ticked again,
+             * before anything has been read back. */
+            {
+                int want = (IsDlgButtonChecked(d->hPage, IDC_AI_ENABLE)
+                            == BST_CHECKED) ? 1 : 0;
+                if (s->ai_enabled && !want && ui_ai_is_working()) {
+                    /* Modal: d->saving makes a second Save/Cancel/close a
+                     * no-op meanwhile, and d is fetched again after it in
+                     * case the window went (as the policy confirm below). */
+                    d->saving = 1;
+                    int ans = MessageBoxA(hwnd,
+                        "Turn off the AI assistant? The running reply will be "
+                        "stopped and open conversations closed.",
+                        "AI assistant", MB_YESNO | MB_ICONWARNING);
+                    if (!IsWindow(hwnd)) return 0;
+                    d = (SettingsDlgData *)(LONG_PTR)GetWindowLongPtr(
+                        hwnd, GWLP_USERDATA);
+                    if (!d) return 0;
+                    d->saving = 0;
+                    s = &d->cfg->settings;
+                    if (ans != IDYES) {
+                        CheckDlgButton(d->hPage, IDC_AI_ENABLE, BST_CHECKED);
+                        ai_enable_sync(d);
+                        break;
+                    }
+                }
+                s->ai_enabled = want;
+            }
 
             /* Terminal font from combo */
             {
@@ -2244,10 +2354,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
              * for this session because nutshell.config could not be read
              * at startup (see window.c's WM_CREATE / M3). */
             if (config_save(d->cfg, d->config_path) != 0) {
-                MessageBox(hwnd,
+                Notice sf;
+                notice_save_failed(&sf,
                     "Could not save nutshell.config. Your settings changes "
-                    "have not been written to disk.",
-                    "Save Failed", MB_OK | MB_ICONWARNING);
+                    "have not been written to disk.");
+                (void)notice_dlg_show(hwnd, &sf, d->theme);
             }
             DestroyWindow(hwnd);
             break;
@@ -2262,6 +2373,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
     case WM_DESTROY:
         if (d) {
+            /* A Refresh Models request still out: close its handle so the
+             * blocked GET returns now, give the thread a moment to finish,
+             * then drop the window's reference (the thread frees the rest,
+             * wiping the key, if it is still running). Its result message,
+             * if already posted, dies with this window. */
+            if (d->models) {
+                ai_nc_fire(&d->models->nc);
+                (void)thread_join_wait(&d->models_thread, 1000);
+                models_ctx_release(d->models);
+                d->models = NULL;
+            }
+            thread_join_detach_all(&d->models_thread);   /* whatever is left, finished or not */
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
             if (d->hTip) DestroyWindow(d->hTip);
             /* d->hDlgFont / d->hBoldFont come from the ns_font cache. */

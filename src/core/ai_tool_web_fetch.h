@@ -3,6 +3,7 @@
 
 #include "ai_tools.h"
 #include "net_guard.h"
+#include "ai_netcancel.h"
 
 #define WEB_FETCH_TOTAL_MS      30000  /* deadline for the whole fetch, redirects included */
 #define WEB_FETCH_MAX_REDIRECTS 5      /* redirects followed: up to 6 requests */
@@ -45,6 +46,9 @@ typedef struct {
      * host (ASCII case-insensitive; "example.com." and "a.example.com" are
      * other hosts) is refused before it is resolved. */
     char pinned_host[NET_HOST_MAX];
+    /* The stream's cancel token (NULL: none). The platform backend arms each
+     * hop's request handle on it, and the hop loop stops once it is fired. */
+    AiNetCancel *nc;
 } WebFetchContext;
 
 /* The platform's own backend, or NULL where there is none (the tool then

@@ -141,26 +141,45 @@ int tabmgr_get_logging(const TabManager *m, int index)
 /* Simple integer MulDiv for non-Win32 builds */
 static int tab_scale(int val, int dpi) { return val * dpi / 96; }
 
-const char *tabs_btn_tooltip_at(int mx, int client_width, int dpi)
+void tabs_btn_geometry(int client_width, int dpi, int ai_visible,
+                       TabsBtnGeom *out)
 {
+    if (!out) return;
     int btn = tab_scale(BTN_BASE, dpi);
     int gap = tab_scale(GAP_BASE, dpi);
     int pad = tab_scale(PAD_BASE, dpi);
 
-    /* [+] button: x=[pad, pad+btn] */
-    if (mx >= pad && mx <= pad + btn)
+    out->btn = btn;
+    out->ai_visible = ai_visible ? 1 : 0;
+    out->add_x = pad;
+    /* The AI button is the rightmost; without it the arrows move right and
+     * take its slot. */
+    int x = client_width - btn - pad;
+    if (ai_visible) {
+        out->ai_x = x;
+        x -= btn + gap;
+    } else {
+        out->ai_x = -1;
+    }
+    out->right_x = x;
+    out->left_x  = x - btn - gap;
+}
+
+const char *tabs_btn_tooltip_at(int mx, int client_width, int dpi,
+                                int ai_visible)
+{
+    TabsBtnGeom g;
+    tabs_btn_geometry(client_width, dpi, ai_visible, &g);
+
+    /* [+] button */
+    if (mx >= g.add_x && mx <= g.add_x + g.btn)
         return "Session Manager";
 
-    /* Right-side buttons */
-    int aiX    = client_width - btn - pad;
-    int rightX = aiX - btn - gap;
-    int leftX  = rightX - btn - gap;
-
-    if (mx >= aiX && mx <= aiX + btn)
+    if (g.ai_visible && mx >= g.ai_x && mx <= g.ai_x + g.btn)
         return "AI Assist\nOpen the AI assistant.\nAsk questions or let it run commands\non your terminal.";
-    if (mx >= leftX && mx <= leftX + btn)
+    if (mx >= g.left_x && mx <= g.left_x + g.btn)
         return "Previous tab";
-    if (mx >= rightX && mx <= rightX + btn)
+    if (mx >= g.right_x && mx <= g.right_x + g.btn)
         return "Next tab";
 
     return NULL;

@@ -3,7 +3,7 @@
 #include <string.h>
 
 /* Convenience wrapper: call tabs_btn_tooltip_at with 96 DPI (no scaling) */
-#define tabs_btn_tooltip_at_96(mx, cw) tabs_btn_tooltip_at((mx), (cw), 96)
+#define tabs_btn_tooltip_at_96(mx, cw) tabs_btn_tooltip_at((mx), (cw), 96, 1)
 
 /* ---- tabmgr_init --------------------------------------------------------- */
 
@@ -498,6 +498,57 @@ int test_tabs_btn_tooltip_past_add(void)
     /* BTN_SIZE=24, so [+] goes from 4 to 28. x=29 is past it. */
     const char *tip = tabs_btn_tooltip_at_96(29, 400);
     ASSERT_NULL(tip);
+    TEST_END();
+}
+
+/* The AI button hidden: no tip over its old slot, and the arrows take it.
+ * client_width=400: visible is ai 372, next 346, prev 320; hidden is next
+ * 372, prev 346. */
+int test_tabs_btn_geometry_hidden_ai_slot_is_reclaimed(void)
+{
+    TEST_BEGIN();
+    TabsBtnGeom v, h;
+    tabs_btn_geometry(400, 96, 1, &v);
+    tabs_btn_geometry(400, 96, 0, &h);
+    ASSERT_EQ(v.ai_x, 372);
+    ASSERT_EQ(v.right_x, 346);
+    ASSERT_EQ(v.left_x, 320);
+    ASSERT_EQ(h.ai_x, -1);
+    ASSERT_EQ(h.right_x, 372);
+    ASSERT_EQ(h.left_x, 346);
+    ASSERT_EQ(h.add_x, v.add_x);
+    ASSERT_EQ(h.btn, v.btn);
+    /* Scales with DPI like the paint code. */
+    tabs_btn_geometry(800, 192, 0, &h);
+    ASSERT_EQ(h.btn, 48);
+    ASSERT_EQ(h.right_x, 800 - 48 - 8);
+    TEST_END();
+}
+
+int test_tabs_btn_tooltip_ai_hidden_has_no_tip(void)
+{
+    TEST_BEGIN();
+    for (int mx = 0; mx <= 400; mx++) {
+        const char *tip = tabs_btn_tooltip_at(mx, 400, 96, 0);
+        if (tip) ASSERT_TRUE(strncmp(tip, "AI Assist", 9) != 0);
+    }
+    /* And visible still has it. */
+    ASSERT_NOT_NULL(tabs_btn_tooltip_at(380, 400, 96, 1));
+    TEST_END();
+}
+
+int test_tabs_btn_tooltip_ai_hidden_neighbours_shift(void)
+{
+    TEST_BEGIN();
+    const char *tip = tabs_btn_tooltip_at(380, 400, 96, 0);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "Next tab");
+    tip = tabs_btn_tooltip_at(355, 400, 96, 0);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "Previous tab");
+    /* Where "Previous tab" used to be is empty now. */
+    ASSERT_NULL(tabs_btn_tooltip_at(325, 400, 96, 0));
+    ASSERT_STR_EQ(tabs_btn_tooltip_at(10, 400, 96, 0), "Session Manager");
     TEST_END();
 }
 

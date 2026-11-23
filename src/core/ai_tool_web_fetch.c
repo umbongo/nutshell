@@ -201,11 +201,12 @@ enum { STOP_NONE = 0, STOP_CANCELLED, STOP_TIMEOUT };
  * was reached at, so a caller computing a timeout from it cannot see a later
  * clock than the one it was cleared on. */
 static int stop_reason(const WebFetchBackend *be, volatile int *cancel,
+                       const AiNetCancel *nc,
                        unsigned long long deadline, unsigned long long *now_out)
 {
     unsigned long long now = be->now_ms(be->ctx);
     if (now_out) *now_out = now;
-    if (cancel && *cancel) return STOP_CANCELLED;
+    if ((cancel && *cancel) || ai_nc_cancelled(nc)) return STOP_CANCELLED;
     if (now >= deadline) return STOP_TIMEOUT;
     return STOP_NONE;
 }
@@ -237,6 +238,7 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
     NetUrlParts next_parts;
     NetAddr     addrs[WEB_FETCH_MAX_ADDRS];
 
+    const AiNetCancel *nc = ctx ? ctx->nc : NULL;
     int per_hop = (ctx && ctx->timeout_ms > 0) ? ctx->timeout_ms
                                                : WEB_FETCH_DEFAULT_HOP_MS;
     unsigned long long deadline = be->now_ms(be->ctx) + WEB_FETCH_TOTAL_MS;
@@ -244,7 +246,7 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
     snprintf(url, sizeof(url), "%s", first_url);
 
     for (int hop = 0; hop <= WEB_FETCH_MAX_REDIRECTS; hop++) {
-        int stop = stop_reason(be, cancel, deadline, NULL);
+        int stop = stop_reason(be, cancel, nc, deadline, NULL);
         if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
 
         if (net_url_parse(url, &parts) != 0)
@@ -288,7 +290,7 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
         }
 
         /* The lookup counts against the deadline and may have been cancelled. */
-        stop = stop_reason(be, cancel, deadline, NULL);
+        stop = stop_reason(be, cancel, nc, deadline, NULL);
         if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
 
         if (ctx && ctx->on_hop) ctx->on_hop(ctx->user, display, 0);
@@ -297,7 +299,7 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
          * whether the hop may start and how long it may run: time left is
          * at least 1 ms here, and a timeout of 0 would mean "forever". */
         unsigned long long now;
-        stop = stop_reason(be, cancel, deadline, &now);
+        stop = stop_reason(be, cancel, nc, deadline, &now);
         if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
         unsigned long long left = deadline - now;
         int timeout = per_hop;
@@ -311,7 +313,7 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
         int got = be->get(be->ctx, &parts, timeout, cancel, &status,
                           location, sizeof(location), &body, &body_len);
 
-        stop = stop_reason(be, cancel, deadline, NULL);
+        stop = stop_reason(be, cancel, nc, deadline, NULL);
         if (stop != STOP_NONE) {
             free(body);
             return fail_stopped(stop, result_buf, result_len);
@@ -380,7 +382,8 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
  * (web_fetch_default_backend() used directly) each hop opens and closes its
  * own session instead. */
 typedef struct {
-    HINTERNET session;
+    HINTERNET    session;
+    AiNetCancel *nc;      /* the stream's token: each hop's request is armed on it */
 } WfFetch;
 
 #define WIDEN2(s) L##s
@@ -444,9 +447,14 @@ static unsigned long long wf_now_ms(void *ctx)
     return (unsigned long long)GetTickCount64();
 }
 
-static int wf_stopped(volatile int *cancel)
+static int wf_stopped(volatile int *cancel, const AiNetCancel *nc)
 {
-    return cancel && *cancel;
+    return (cancel && *cancel) || ai_nc_cancelled(nc);
+}
+
+static void wf_close_cb(uintptr_t h)
+{
+    WinHttpCloseHandle((HINTERNET)h);
 }
 
 static void wf_end(void *ctx)
@@ -480,8 +488,10 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         wf_to_wide(url->path, w_path, NET_URL_MAX) != 0)
         return -1;
 
+    AiNetCancel *nc = fetch ? fetch->nc : NULL;
     HINTERNET session = NULL, connect = NULL, req = NULL;
     int own_session = 0;   /* opened here, so closed here */
+    int armed = 0;         /* req is registered on nc: fire may close it */
     char *buf = NULL;
     size_t len = 0, cap = 0;
     const size_t max_body = (size_t)AI_TOOL_RESULT_MAX * 4;
@@ -504,6 +514,11 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
                              WINHTTP_DEFAULT_ACCEPT_TYPES,
                              url->https ? WINHTTP_FLAG_SECURE : 0);
     if (!req) goto fail;
+    /* From here a fire from the UI thread closes req and the blocked call
+     * returns an error. After any failure the token is read before req is
+     * touched again; only the disarm decides who closes it. */
+    if (ai_nc_arm(nc, (uintptr_t)req, wf_close_cb) != 0) goto fail;   /* fired: closed below */
+    armed = nc != NULL;
 
     DWORD no_redirects = WINHTTP_DISABLE_REDIRECTS;
     if (!WinHttpSetOption(req, WINHTTP_OPTION_DISABLE_FEATURE,
@@ -521,9 +536,9 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
         goto fail;
-    if (wf_stopped(cancel)) goto fail;
+    if (wf_stopped(cancel, nc)) goto fail;
     if (!WinHttpReceiveResponse(req, NULL)) goto fail;
-    if (wf_stopped(cancel)) goto fail;
+    if (wf_stopped(cancel, nc)) goto fail;
 
     DWORD code = 0, code_sz = sizeof(code);
     if (!WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
@@ -551,7 +566,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     /* Body, capped; cancel between reads, and the hop's own time limit so a
      * server that trickles bytes cannot outlast it. */
     for (;;) {
-        if (wf_stopped(cancel)) goto fail;
+        if (wf_stopped(cancel, nc)) goto fail;
         unsigned long long now = (unsigned long long)GetTickCount64();
         if (now >= hop_end) goto fail;
 
@@ -585,7 +600,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         len += got;
         if (len >= max_body) break;
     }
-    if (wf_stopped(cancel)) goto fail;
+    if (wf_stopped(cancel, nc)) goto fail;
 
     if (!buf) {
         buf = malloc(1);
@@ -593,7 +608,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     }
     buf[len] = '\0';
 
-    WinHttpCloseHandle(req);
+    if (!armed || ai_nc_disarm(nc)) WinHttpCloseHandle(req);
     WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);
     *status   = (int)code;
@@ -603,7 +618,10 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
 
 fail:
     free(buf);
-    if (req)     WinHttpCloseHandle(req);
+    if (req) {
+        /* armed: fire may already have closed it (disarm says 0) */
+        if (!armed || ai_nc_disarm(nc)) WinHttpCloseHandle(req);
+    }
     if (connect) WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);   /* a shared one stays for wf_end() */
     *status = 0;
@@ -621,9 +639,11 @@ const WebFetchBackend *web_fetch_default_backend(void)
 /* The default backend for one fetch: `own` is filled in, with `fetch` as its
  * ctx, so the hops share one session that wf_end() closes. */
 static const WebFetchBackend *default_backend_for_fetch(WebFetchBackend *own,
-                                                        WfFetch *fetch)
+                                                        WfFetch *fetch,
+                                                        AiNetCancel *nc)
 {
     fetch->session = NULL;
+    fetch->nc      = nc;
     own->ctx     = fetch;
     own->resolve = wf_resolve;
     own->get     = wf_get;
@@ -642,10 +662,12 @@ const WebFetchBackend *web_fetch_default_backend(void)
 }
 
 static const WebFetchBackend *default_backend_for_fetch(WebFetchBackend *own,
-                                                        WfFetch *fetch)
+                                                        WfFetch *fetch,
+                                                        AiNetCancel *nc)
 {
     (void)own;
     (void)fetch;
+    (void)nc;
     return NULL;
 }
 
@@ -736,7 +758,7 @@ int tool_web_fetch_execute(const char *input_json, void *tool_data,
     memset(&own, 0, sizeof(own));
     const WebFetchBackend *be = (ctx && ctx->backend)
                                     ? ctx->backend
-                                    : default_backend_for_fetch(&own, &fetch);
+                                    : default_backend_for_fetch(&own, &fetch, ctx ? ctx->nc : NULL);
     if (!be || !be->resolve || !be->get || !be->now_ms)
         return fetch_fail(result_buf, result_len,
                           "Web fetch not available (non-Windows build)");

@@ -898,6 +898,14 @@ typedef struct {
  * (guard-rails spec 2026-11-04 section 1, "The counter"). */
 #define AI_AUTO_ROUNDS_MAX 3
 
+/* Turning the AI assistant off: forget everything this session's AI state
+ * holds -- conversation (valid = 0), pending batches, run log, queued notes,
+ * stream buffers, busy flag, activity and every round counter -- and leave it
+ * as a fresh one. Keeps `platform` and `platform_contradicted`: they describe
+ * the host, not the assistant. The caller has already ended every stream and
+ * destroyed the panel. Safe to call twice; NULL-safe. */
+void ai_session_discard(AiSessionState *st);
+
 /* The user typed a message: auto_rounds = 0. NULL-safe. */
 void ai_rounds_user_message(AiSessionState *s);
 

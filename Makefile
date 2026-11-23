@@ -60,11 +60,14 @@ LDFLAGS = -mwindows -Os -flto -Wl,--gc-sections -s $(LINK_MODE) \
 # hand-resolving each call site the way dwm_util.c/crypto_dpapi.c do isn't
 # practical, so these two are linked as delay-imports instead: dlltool
 # builds an import library ($(DELAY_LIBS), below) whose thunks call
-# LoadLibrary/GetProcAddress through libdelayimp.a's __delayLoadHelper2 the
-# first time each function is actually called, by which point WinMain's
+# LoadLibrary/GetProcAddress through __delayLoadHelper2 the first time each
+# function is actually called, by which point WinMain's
 # SetDefaultDllDirectories/SetDllDirectoryW (src/main.c) has already
-# restricted the search path. -ldelayimp must come after $(DELAY_LIBS) on
-# the command line -- its thunks are what reference __delayLoadHelper2.
+# restricted the search path. The helper comes from libmingwex.a (delayimp.o):
+# this toolchain's libdelayimp.a is an empty archive, so -ldelayimp is a
+# harmless leftover. src/ui/dll_hook_win.c defines __pfnDliNotifyHook2 (the
+# helper leaves it undefined) to record each delay-loaded DLL's name for
+# --self-report.
 
 # See build-support/delayload/*.def for exactly which symbols each of these
 # two DLLs needs to export (only what nutshell.exe actually calls -- the
@@ -118,6 +121,11 @@ TEST_SYS_LIBS =
 TEST_CFLAGS += -D_POSIX_C_SOURCE=200809L
 endif
 
+# The cancel-token race test (tests/test_ai_netcancel.c) uses pthreads off Windows.
+ifneq ($(HOST_WINDOWS),yes)
+TEST_CFLAGS += -pthread
+endif
+
 # Auto-detect libssh2 availability for test linking.
 # (Links to a real file rather than /dev/null: MinGW ld cannot write to /dev/null.)
 DETECT_OUT = build/.detect$(EXE)
@@ -135,14 +143,19 @@ TEST_CFLAGS += -DNO_SSH_LIBS -Itests/stubs
 TEST_LDFLAGS = -lm
 endif
 
+ifneq ($(HOST_WINDOWS),yes)
+TEST_LDFLAGS += -pthread
+endif
+
 # Exclude Windows-only UI files and main entry point from test build
 NON_TEST_SRCS = src/main.c $(wildcard src/ui/*.c)
 
 # Win32-only tests belong to the `wintest` harness, never to `test`
-WIN_ONLY_TESTS = tests/test_icons.c tests/test_local_pty.c tests/win_runner.c tests/test_ns_check_win.c \
+WIN_ONLY_TESTS = tests/test_winhttp_open_win.c tests/test_icons.c tests/test_local_pty.c tests/win_runner.c tests/test_ns_check_win.c \
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
                  tests/test_pw_reveal_win.c tests/test_telnet_io_win.c \
-                 tests/test_ns_tip_win.c tests/test_settings_label_win.c
+                 tests/test_ns_tip_win.c tests/test_settings_label_win.c \
+                 tests/test_notice_dlg_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -252,13 +265,15 @@ $(call write-stamp,$(FUZZ_FLAGS_STAMP),$(FUZZ_FLAGS_TEXT))
 $(call write-stamp,$(FUZZ_SRCS_STAMP),$(FUZZ_SRCS_TEXT))
 
 
-.PHONY: all clean test lint lint-gate debug release wintest fuzz fuzz-run fuzz-long
+.PHONY: all clean test lint lint-gate debug release wintest selftest-wine fuzz fuzz-run fuzz-long
 
 # ── Win32-only test harness: the icon renderer (GDI+) and the ConPTY
 # backend (real pseudo-consoles, real child processes).  Runs directly on a
 # Windows host, under Wine on Linux if available; otherwise prints a skip
 # notice.  Kept separate from `test`, which never touches Win32.
 #
+# tests/test_notice_dlg_win.c stubs config_setting_keys(): config/loader.c must
+# not join WIN_TEST_SRCS while that stub exists.
 # local_pty.c drags in the shell resolver, the ring, the emulator and the
 # two small helpers they use -- term_process() is what the ConPTY bytes are
 # drained into, exactly as the app does it.
@@ -294,12 +309,16 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/ns_tip.c tests/test_ns_tip_win.c \
                    src/ui/ns_check.c src/core/ns_check_geom.c tests/test_ns_check_win.c \
                    src/core/settings_help.c src/core/settings_layout.c \
+                   src/ui/notice_dlg.c src/core/notice.c src/core/notice_layout.c src/core/opt_feature.c \
+                   src/core/winhttp_open.c src/core/ai_gate.c tests/test_winhttp_open_win.c \
+                   tests/test_notice_dlg_win.c \
+                   src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
                    $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui -Itests
-WIN_TEST_LDFLAGS = -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32
+WIN_TEST_LDFLAGS = -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp
 
 all: $(TARGET)
 
@@ -404,6 +423,33 @@ else
 		echo "[skip] wine not installed — built $(WIN_TEST_TARGET) but cannot run"; \
 	fi
 endif
+
+# ── The real exe under Wine: nutshell.exe -nc --self-report=report.txt writes
+# every DLL Nutshell's own code asked Windows for (the delay-load hook and
+# the run-time LoadLibraryExW sites) and the process module list, then exits.
+# With the AI assistant off winhttp.dll, riched20.dll and msftedit.dll must
+# never have been requested; with it on (the control) riched20.dll,
+# msftedit.dll and winhttp.dll (one session opened and closed) must have
+# been. Uses $(TARGET) as it stands: a UPX-packed exe
+# (make release) works as well as an unpacked one. A private Wine prefix
+# keeps the shared ~/.wine untouched; the first run takes a minute.
+SELFTEST_DIR    = build/selftest
+SELFTEST_PREFIX = $(abspath build/wineprefix)
+
+selftest-wine: $(TARGET)
+	@if ! command -v wine >/dev/null 2>&1 || ! command -v xvfb-run >/dev/null 2>&1; then \
+		echo "[skip] selftest-wine needs wine and xvfb-run"; \
+	else \
+		set -e; \
+		for m in off on; do \
+			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
+			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
+			cp tests/selftest/nutshell-ai-$$m.config $(SELFTEST_DIR)/$$m/nutshell.config; \
+			( cd $(SELFTEST_DIR)/$$m && WINEPREFIX=$(SELFTEST_PREFIX) WINEDEBUG=-all \
+				timeout 120 xvfb-run -a wine nutshell.exe -nc --self-report=report.txt ); \
+			sh tests/selftest/check.sh $$m $(SELFTEST_DIR)/$$m/report.txt; \
+		done; \
+	fi
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(TEST_TARGET) $(WIN_TEST_TARGET) $(DETECT_OUT) *.o tests/*.o

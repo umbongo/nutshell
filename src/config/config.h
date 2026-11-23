@@ -46,6 +46,10 @@ typedef struct Settings {
     char background_colour[CFG_STR_MAX];
     char colour_scheme[CFG_STR_MAX];
     char ai_provider[CFG_STR_MAX];
+    int  ai_enabled;                     /* "ai_enabled": the AI assistant switch. Off by default
+                                          * on a new install; a file lacking the field gets it on
+                                          * only when an API key (or a preserved blob) is present
+                                          * (config_load_report()'s first-load rule). */
     char ai_api_key[CFG_STR_MAX];
     /* Verbatim copy of the last encrypted API-key blob this process could
      * NOT decrypt (moved from another user/PC, or corrupt). See
@@ -109,8 +113,34 @@ typedef enum {
                                * the original survives as ".bad-*" */
 } ConfigLoadStatus;
 
+/* The settings keys config_save() writes, in file order, for the upgrade
+ * notice. A key counts as present in a loaded file when it, or a legacy key
+ * it is migrated from, is there. `sh_id` is a SettingsHelpId (or -1 for
+ * none); `label` is NULL when that entry's label (trailing ':' dropped) is
+ * the one to show, else the plain label. The read-only legacy
+ * "debug_terminal" is not a key. */
+#define CFG_KEYS_MAX 64
+typedef struct {
+    const char *key;
+    const char *legacy[2];
+    int sh_id;
+    const char *label;
+} ConfigSettingKey;
+const ConfigSettingKey *config_setting_keys(size_t *count);
+
+/* What a load found, beyond the Config itself. */
+typedef struct {
+    ConfigLoadStatus status;
+    char bad_path[700];                 /* CONFIG_LOAD_INVALID: where the file went (".bad-*") */
+    unsigned char missing[CFG_KEYS_MAX];/* indices into config_setting_keys(), file order */
+    size_t missing_count;
+    int ai_enabled_decided;             /* 1 when the first-load rule set ai_enabled */
+} ConfigLoadReport;
+
 Config *config_new_default(void);
 Config *config_load(const char *path);
+/* config_load_ex() plus the report (may be NULL). */
+Config *config_load_report(const char *path, ConfigLoadReport *rep);
 /* Same as config_load(), plus *status_out (when non-NULL) is set to why,
  * on every return -- see ConfigLoadStatus above. */
 Config *config_load_ex(const char *path, ConfigLoadStatus *status_out);

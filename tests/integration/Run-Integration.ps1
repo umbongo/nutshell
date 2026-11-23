@@ -186,7 +186,7 @@ if ($AiCfg) {
     if ($AiCfg.Provider -and -not $PSBoundParameters.ContainsKey("AiProvider")) { $AiProvider = $AiCfg.Provider }
     if ($AiCfg.Model -and -not $PSBoundParameters.ContainsKey("AiModel")) { $AiModel = $AiCfg.Model }
 }
-$AiSettings = @{ ai_provider = $AiProvider; ai_custom_model = $AiModel; ai_api_key = $AiKey
+$AiSettings = @{ ai_enabled = $true; ai_provider = $AiProvider; ai_custom_model = $AiModel; ai_api_key = $AiKey
                  ai_max_context_lines = 30; ai_search_provider = "none"; ai_web_fetch_enabled = $false }
 
 function Invoke-AiCase {

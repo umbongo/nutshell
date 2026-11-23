@@ -22,12 +22,13 @@ static HFONT ns_font_create(NsFontRole role, int dpi, int face_id)
 {
     const NsFontSpec *spec = ns_type_font(role);
     int px = ns_type_font_px(role, dpi, g_mono_pt);
-    int is_mono = (face_id == 2);
+    int is_mono = (face_id == 2 || face_id == 3);
+    int weight = (face_id & 1) ? FW_BOLD : spec->weight;   /* 1/3 are the bold variants */
     const char *face = is_mono ? g_mono_face : g_ui_face;
     DWORD pitch_family = is_mono ? (FIXED_PITCH | FF_MODERN)
                                   : (DEFAULT_PITCH | FF_SWISS);
 
-    return CreateFont(-px, 0, 0, 0, spec->weight, FALSE, FALSE, FALSE,
+    return CreateFont(-px, 0, 0, 0, weight, FALSE, FALSE, FALSE,
                        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                        CLEARTYPE_QUALITY, pitch_family, face);
 }
@@ -35,6 +36,19 @@ static HFONT ns_font_create(NsFontRole role, int dpi, int face_id)
 HFONT ns_font(NsFontRole role, int dpi)
 {
     int face_id = ns_type_font_face_id(role);
+    int slot = ns_type_font_slot(role, dpi, face_id);
+    if (slot < 0 || slot >= NS_FONT_SLOTS)
+        return NULL;
+
+    if (!g_cache[slot])
+        g_cache[slot] = ns_font_create(role, dpi, face_id);
+
+    return g_cache[slot];
+}
+
+HFONT ns_font_bold(NsFontRole role, int dpi)
+{
+    int face_id = ns_type_font_face_id(role) | 1;   /* 0 -> 1, 2 -> 3 */
     int slot = ns_type_font_slot(role, dpi, face_id);
     if (slot < 0 || slot >= NS_FONT_SLOTS)
         return NULL;

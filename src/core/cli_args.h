@@ -20,6 +20,7 @@ typedef enum {
 #define CLI_ARG_MAX ((size_t)256)
 #define CLI_DEMO_STATE_MAX ((size_t)32)
 #define CLI_THEME_MAX ((size_t)64)
+#define CLI_REPORT_MAX ((size_t)260)
 
 typedef struct {
     CliAction action;
@@ -27,6 +28,7 @@ typedef struct {
     char error[CLI_ARG_MAX];  /* human-readable message when CLI_ERROR    */
     char demo_state[CLI_DEMO_STATE_MAX]; /* CLI_UI_DEMO: "chat","all",... */
     char theme[CLI_THEME_MAX];           /* --theme <name>, only with --ui-demo */
+    char self_report[CLI_REPORT_MAX];    /* --self-report=<path>, only with a plain run or -nc */
 } CliOptions;
 
 /* Parse argv (argv[0] ignored). Never fails hard: bad input yields
@@ -34,7 +36,13 @@ typedef struct {
  * exclusive, with one exception: --theme <name> (also --theme=<name>) is
  * accepted only alongside --ui-demo[=<state>] and is CLI_ERROR on its own
  * or combined with any other action. --ui-demo and --theme are hidden —
- * they never appear in cli_usage_text(). */
+ * they never appear in cli_usage_text().
+ *
+ * --self-report=<path> (hidden, equals form only, non-empty path) is also a
+ * modifier: accepted only on its own or with -nc, CLI_ERROR with any other
+ * action. The running app then writes its DLL record and module list to
+ * <path> after startup and exits; a relative path is relative to the
+ * working directory. */
 void cli_parse(int argc, char **argv, CliOptions *out);
 
 /* Static usage text listing every flag. */

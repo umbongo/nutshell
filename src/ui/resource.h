@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.89"
-#define APP_VERSION_BINARY  1,2,89,0
+#define APP_VERSION        "1.2.90"
+#define APP_VERSION_BINARY  1,2,90,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -117,6 +117,7 @@
 #define IDC_DBG_MAX_FILE         3094 /* Max file size (MB) */
 #define IDC_DBG_MAX_TOTAL        3095 /* Keep at most (MB) */
 #define IDC_DBG_CURRENT          3096 /* Current log file (read-only) */
+#define IDC_AI_ENABLE            3098 /* Settings > Provider: "Enable AI assistant" tickbox */
 #define IDC_AI_THINKING_MODE     3097 /* Settings: "Thinking display" combo (Automatic, Always collapsed, Always compact, Always open) */
 
 #endif

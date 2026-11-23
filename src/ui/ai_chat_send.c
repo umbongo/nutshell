@@ -7,9 +7,13 @@
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
 #include "run_command.h"
+#include "thread_join.h"
 
 #ifdef _WIN32
 #include <stdio.h>
+
+/* The stream threads' handles, UI thread only (see ai_chat_join_streams). */
+static ThreadJoinList g_stream_threads;
 
 /* The provider's tools and run_command for this panel's setting "Commands as
  * tool calls" (AiChatData.runcmd_mode, 0 = Automatic). The one place the UI
@@ -301,6 +305,10 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     }
     unsigned stream_id = s->id;
 
+    /* The thread's handle is kept (not closed at launch) so turning the
+     * assistant off, or exiting, can wait for it. Finished threads are
+     * reaped here, when the next one starts. */
+    thread_join_reap(&g_stream_threads);
     HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, ai_chat_stream_thread_proc, s, 0, NULL);
     if (!hThread) {
         /* No thread: drop its reference for it, then ours. */
@@ -309,7 +317,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         launch_failed(d, "[could not start the AI request thread]");
         return;
     }
-    CloseHandle(hThread);
+    thread_join_add(&g_stream_threads, hThread);   /* full list: closed, still safe as an orphan */
     s = NULL;   /* the thread may free it from here on; only the id is ours */
     SetTimer(d->hwnd, TIMER_STREAM_REAP, STREAM_REAP_MS, NULL);
 
@@ -370,6 +378,18 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         SetWindowTextW(d->hSendBtn, L"\x25A0"); /* ■ solid square = stop */
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
+}
+
+/* Wait-only: every stream's cancel token is fired when the stream is orphaned
+ * (ai_stream_orphan), which the panel's close, Stop, New Chat and a tab close
+ * all do, so a caller must orphan first (see ai_chat.h). */
+int ai_chat_join_streams(DWORD ms)
+{
+    /* Waits on the handles, pumping this thread's sent messages (a worker
+     * blocked in a cross-thread SendMessage to the UI is freed by that).
+     * A thread still running afterwards stays safe: its stream is orphaned,
+     * it frees itself through WorkerLife and posts nothing. */
+    return thread_join_wait(&g_stream_threads, ms);
 }
 
 /* Abort and orphan the reply `state` has in flight, and put the session

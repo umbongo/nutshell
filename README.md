@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.89 \
+**Version**: v1.2.90 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -53,6 +53,10 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 1. Place `nutshell.exe` anywhere on your Windows machine. Configuration is stored in `nutshell.config` in the same directory.
 2. Launch the application. The session manager opens on demand via **Ctrl+Shift+T** or the **+** area in the tab strip. To have it open automatically at launch, enable **Open Session Manager at startup** in Settings (Connection > Startup) — off by default.
 3. Create a session profile by entering a hostname, port, username, and authentication credentials, then click **Connect**.
+
+#### Configuration notices
+
+When a newer Nutshell starts with a `nutshell.config` that lacks settings it has added, it writes them to the file at launch and lists them once in a notice. A first run, with no config at all, creates the file and says so, naming the optional features that start switched off. The warnings for a config folder that cannot be used, a config that cannot be read, an invalid config (kept as a `nutshell.config.bad-` copy) and a failed save use the same themed dialog. An older Nutshell drops settings it does not know when it saves, so the next launch of a newer one adds them again and says so (see also [Upgrading and downgrading](#upgrading-and-downgrading)).
 
 ### Connecting to a Server
 
@@ -164,7 +168,7 @@ Only one option may be given at a time, except `--theme`, which goes with `--ui-
 
 - **File**: New Session, Close Tab, Session Manager..., Disconnect, Start Logging, Stop Logging, Save AI Chat..., Exit
 - **Edit**: Copy, Paste, Select All, Send Key, Settings...
-- **View**: AI Assist, Undock AI Assist, Fullscreen
+- **View**: AI Assist, Undock AI Assist, Fullscreen (the two AI Assist items, and File > Save AI Chat..., are present only while the AI assistant is enabled, see [AI Assistant > Provider](#ai-assistant--provider))
 - **Help**: Keyboard Shortcuts..., User Guide, Mark Issue, Open Debug Log Folder, About
 
 ### Settings
@@ -222,6 +226,7 @@ There is no on/off switch here. Start or stop logging for one tab with **File > 
 - **Session** — which saved session to open. Command-line options override this; start with `-nc` to skip auto-connect once.
 
 #### AI Assistant > Provider
+- **Enable AI assistant** — the first box on the page. Off on a new install; on when an API key was already saved in the config when this version first loaded it. While it is off nothing of the assistant is loaded: there is no panel, no View > AI Assist or Undock AI Assist and no File > Save AI Chat..., no **AI** button in the tab strip, **Ctrl+Shift+Space** goes to the terminal, the Keyboard Shortcuts sheet leaves out the AI Assist panel section, and no request is made to any provider. The other AI settings are disabled and kept as they are, and Refresh makes no request until the switch has been saved on. Turning it off while a reply is running asks first, then stops the reply and discards every open conversation (files you saved are untouched)
 - **Provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or Custom
 - **API key** — encrypted at rest with Windows DPAPI, per Windows user (same protection as saved passwords)
 - **Model** — type one, or press the refresh button to fetch the provider's model list. Left empty, each provider uses its own default model; the Custom provider has none (left empty it sends `deepseek-chat`), so type the name your server expects
@@ -246,7 +251,7 @@ There is no on/off switch here. Start or stop logging for one tab with **File > 
 
 ### AI Chat Assistant
 
-Click the **AI** button in the tab strip (or press **Ctrl+Shift+Space**, or use View > AI Assist) to open the panel. The button is green when an API key is configured, grey otherwise — either way the panel opens; it just shows one of the [empty states](#empty-no-key-and-no-session-states) below when there's nothing to display yet.
+With the AI assistant enabled (Settings > AI Assistant > Provider), click the **AI** button in the tab strip (or press **Ctrl+Shift+Space**, or use View > AI Assist) to open the panel. The button is green when an API key is configured, grey otherwise — either way the panel opens; it just shows one of the [empty states](#empty-no-key-and-no-session-states) below when there's nothing to display yet.
 
 The AI assistant can see the recent history of your terminal output (1,000 lines by default, configurable up to 50,000) and run commands in the session. Each tab maintains its own independent conversation history.
 
@@ -273,7 +278,7 @@ A line above the input box, always visible once a session is connected:
 - **Enter** sends the message
 - **Shift+Enter** inserts a newline (for multi-line messages)
 - **Ctrl+V** with an image on the clipboard attaches a screenshot (sent as base64 PNG to multimodal-capable providers)
-- Click **Send** (or press Enter) to submit; while a reply is streaming the button becomes **Stop**
+- Click **Send** (or press Enter) to submit; while a reply is streaming the button becomes **Stop**, which cancels the request at once
 
 #### Selecting and Copying
 

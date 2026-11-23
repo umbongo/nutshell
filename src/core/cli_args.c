@@ -53,6 +53,7 @@ void cli_parse(int argc, char **argv, CliOptions *out)
 
     int seen = 0;
     int theme_seen = 0;
+    int report_seen = 0;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -81,6 +82,15 @@ void cli_parse(int argc, char **argv, CliOptions *out)
             (void)snprintf(out->theme, sizeof(out->theme), "%s", value);
             theme_seen = 1;
             continue; /* --theme is a modifier, not a mutually-exclusive action */
+        } else if (long_flag_match(a, "--self-report", 13, &has_inline)) {
+            if (!has_inline || a[14] == '\0') {
+                set_error(out, "Missing value for ", a);
+                return;
+            }
+            (void)snprintf(out->self_report, sizeof(out->self_report), "%s",
+                           a + 14); /* past "--self-report=" */
+            report_seen = 1;
+            continue; /* a modifier, like --theme */
         } else if (flag_eq(a, "--local", "--local")) {
             act = CLI_CONNECT_LOCAL;
         } else if (flag_eq(a, "-sn", "--session-name")) {
@@ -128,6 +138,13 @@ void cli_parse(int argc, char **argv, CliOptions *out)
 
     if (theme_seen && out->action != CLI_UI_DEMO) {
         set_error(out, "--theme requires ", "--ui-demo");
+        return;
+    }
+
+    if (report_seen && out->action != CLI_RUN &&
+        out->action != CLI_RUN_NO_CONNECT) {
+        set_error(out, "--self-report is only allowed ",
+                  "with a plain run or -nc");
         return;
     }
 }

@@ -2,6 +2,7 @@
 
 #include <winsock2.h>   /* Must come before windows.h */
 #include "ui.h"
+#include "dll_hook_win.h"
 #include "dlog.h"
 #include "open_dir.h"
 #include "renderer.h"
@@ -22,6 +23,7 @@
 #include "settings_entry.h"
 #include "help_guide.h"
 #include "cheatsheet_dlg.h"
+#include "notice_dlg.h"
 #include "shortcuts.h"
 #include "ssh_session.h"
 #include "ssh_auth_plan.h"
@@ -38,6 +40,8 @@
 #include "clipboard.h"
 #include "paste_filter.h"
 #include "ai_chat.h"
+#include "ai_gate.h"
+#include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
 #include "ui_demo.h"
@@ -94,6 +98,9 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
 #define WM_STARTUP_CONNECT      (WM_USER + 3)
+/* --self-report: posted at the end of the launch-notice step of
+ * WM_STARTUP_CONNECT; writes the DLL record and closes the window. */
+#define WM_SELF_REPORT          (WM_USER + 9)
 /* Posted by connection_thread (worker) to ask the UI thread to show the
  * host-key or passphrase dialog for the job and slot generation packed
  * into `wParam` (CONN_PROMPT_WPARAM() below); lParam is the
@@ -105,6 +112,10 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
 /* --ui-demo=shortcuts: posted once the demo session exists, to open the
  * keyboard shortcuts sheet over it. */
 #define WM_OPEN_DEMO_SHORTCUTS  (WM_USER + 6)
+/* --ui-demo=notice-info / notice-warning: posted once the demo session
+ * exists, to open the themed notice dialog over it. wParam 0 = the upgrade
+ * sample (info), 1 = the invalid-config sample (warning). */
+#define WM_OPEN_DEMO_NOTICE     (WM_USER + 8)
 /* Posted by the WM_TIMER poll when a telnet session's auto-login has no saved
  * password and the device asked for one: wParam is the Session*, lParam the
  * transport's serial. The handler re-resolves both before it answers. */
@@ -523,10 +534,15 @@ static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup *
  * set, which config_save() already refuses to write to (see its own top-of
  * -function comment), so nothing needs to check this flag directly. */
 static int g_config_save_disabled = 0;
+/* Launch notices queued by WM_CREATE (by value), shown at the top of
+ * WM_STARTUP_CONNECT once the window and theme exist. */
+static NoticeQueue g_launch_notices;
 static CliAction g_startup_action = CLI_RUN;
 static char g_startup_arg[256];
 static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
 static char g_startup_theme[CLI_THEME_MAX];
+static char g_self_report_path[CLI_REPORT_MAX];
+static int  g_self_report_failed;
 static HWND g_hwndAiChat = NULL;
 static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
@@ -539,6 +555,8 @@ static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 static HMENU create_app_menu(void);      /* forward declaration */
 static void on_ai_clicked(void);         /* forward declaration */
+static void ai_feature_on(HWND hwnd);    /* forward declaration */
+static void ai_feature_off(HWND hwnd);   /* forward declaration */
 static void key_oneshot_clear(void);     /* forward declaration */
 
 /* ---- Docked AI panel state ---- */
@@ -2339,9 +2357,21 @@ static void apply_config_colors(void)
  * no-key state's "Open Settings" button land on Provider. */
 static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
+    int ai_was_enabled = g_config->settings.ai_enabled;
     if (!settings_dlg_show(parent, g_config, active_config_path(), initial_page))
         return;   /* already open (brought forward) or never shown: nothing changed */
+    /* The main window may have been destroyed while the modal loop ran
+     * (WM_DESTROY clears g_config): touch nothing more. */
+    if (!g_config || !IsWindow(parent)) return;
     dlog_configure(&g_config->settings);
+
+    /* The Enable AI assistant switch: apply a change at once, no restart.
+     * Off tears the panel and every conversation down; on builds nothing
+     * until the user opens the panel. */
+    if (g_config->settings.ai_enabled && !ai_was_enabled)
+        ai_feature_on(parent);
+    else if (!g_config->settings.ai_enabled && ai_was_enabled)
+        ai_feature_off(parent);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -2457,6 +2487,7 @@ static void relayout_main(HWND hwnd)
 
 static HWND create_ai_chat(HWND parent)
 {
+    if (!ai_gate_on()) return NULL;   /* the only panel constructor */
     HWND hwnd = ai_chat_show(parent,
                         g_config->settings.ai_api_key,
                         g_config->settings.ai_provider,
@@ -2503,6 +2534,12 @@ static void create_demo_session(HWND hwnd)
         cols = term_w / g_renderer.charWidth;
         rows = term_h / g_renderer.charHeight;
     }
+
+    /* The demo shows every state whatever the stored switch says: the
+     * override opens the gate without touching Settings.ai_enabled, so a
+     * Settings save inside a demo writes the tick box as it was. */
+    ai_gate_set_demo_override(1);
+    ai_feature_on(hwnd);
 
     const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
     int demo_local = (strcmp(state, "local") == 0);
@@ -2642,6 +2679,12 @@ static void create_demo_session(HWND hwnd)
      * session, posted for the same reason. */
     if (strcmp(state, "shortcuts") == 0)
         PostMessage(hwnd, WM_OPEN_DEMO_SHORTCUTS, 0, 0);
+    /* --ui-demo=notice-info / notice-warning: the themed notice dialog over
+     * the demo session, posted for the same reason. */
+    if (strcmp(state, "notice-info") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 0, 0);
+    if (strcmp(state, "notice-warning") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 1, 0);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -2737,6 +2780,85 @@ static void on_ai_dock_toggle(HWND hwnd) {
 
     /* Reopen in new mode */
     on_ai_clicked();
+}
+
+/* Swap the menu bar for a freshly built one (the AI items come and go with
+ * the switch) and free the old one. Before WM_CREATE attaches the first bar
+ * there is nothing to swap. */
+static void rebuild_app_menu(HWND hwnd)
+{
+    HMENU oldMenu = GetMenu(hwnd);
+    if (!oldMenu) return;
+    SetMenu(hwnd, create_app_menu());
+    DestroyMenu(oldMenu);
+    DrawMenuBar(hwnd);
+}
+
+/* Settings (and the --ui-demo override) turn the AI assistant on: load its
+ * DLLs and classes once, open the gate, and show the menu items and the tab
+ * button. The panel itself is built only when the user opens it. The gate
+ * follows Settings.ai_enabled here; the demo override sits beside it. */
+static void ai_feature_on(HWND hwnd)
+{
+    static int inited = 0;
+    if (!inited) {
+        ai_chat_init(g_hInst);   /* Riched20/Msftedit, window classes */
+        inited = 1;
+    }
+    ai_gate_set_enabled(g_config->settings.ai_enabled);
+    if (g_hwndTabs) tabs_set_ai_visible(g_hwndTabs, 1);
+    rebuild_app_menu(hwnd);
+}
+
+/* 1 while the assistant is working: a reply streaming, a dispatch running,
+ * or a tool/command card still waiting in any session. Settings asks before
+ * turning the switch off then. */
+int ui_ai_is_working(void)
+{
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat) &&
+        ai_chat_dispatch_running(g_hwndAiChat))
+        return 1;
+    for (Session *s = g_session_list; s; s = s->next) {
+        if (s->ai_state.busy) return 1;
+        for (int i = 0; i < s->ai_state.batches.count; i++)
+            if (!cmd_batch_finished(s->ai_state.batches.b[i])) return 1;
+    }
+    return 0;
+}
+
+/* The switch goes off: no panel, no conversation, no menu items, no tab
+ * button, and the gate closed so nothing starts a request. Replies in flight
+ * are aborted and orphaned by the panel's WM_DESTROY, which fires each
+ * stream's cancel token: the request handle a worker is blocked on is closed
+ * at once, so its call returns. The worker threads are then joined for a
+ * bounded 2 s; one still running after that is an orphan that frees itself
+ * (WorkerLife) and posts nothing. */
+static void ai_feature_off(HWND hwnd)
+{
+    ai_gate_set_enabled(0);
+    if (ai_gate_on()) return;   /* --ui-demo override: the demo keeps its panel */
+
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+        /* Answer every waiting tool card while the panel can still do it. */
+        for (Session *s = g_session_list; s; s = s->next)
+            ai_chat_cancel_tool_batches_for(g_hwndAiChat, &s->ai_state);
+        /* WM_DESTROY aborts every stream, ends the dispatch and saves the
+         * conversation back into the active session ... */
+        ai_chat_close(g_hwndAiChat);
+    }
+    g_hwndAiChat = NULL;
+    g_ai_panel_width = 0;
+    g_ai_target_width = 0;
+    g_ai_last_width = 0;
+    (void)ai_chat_join_streams(2000);   /* the panel's close above orphaned (and fired) every stream */
+    /* ... so the discard comes after it, on every session. */
+    for (Session *s = g_session_list; s; s = s->next)
+        ai_session_discard(&s->ai_state);
+    g_ai_reopen_after_connect = 0;
+
+    if (g_hwndTabs) tabs_set_ai_visible(g_hwndTabs, 0);
+    rebuild_app_menu(hwnd);
+    relayout_main(hwnd);
 }
 
 static void on_status_click(int index, void *user_data, TabStatus status) {
@@ -3337,8 +3459,10 @@ static HMENU create_app_menu(void)
     menu_add_item(hFile, IDM_FILE_LOG_START, "Start Logging");
     menu_add_item(hFile, IDM_FILE_LOG_STOP, "Stop Logging");
     menu_add_separator(hFile);
-    menu_add_item(hFile, IDM_FILE_SAVE_AI, "Save AI Chat...");
-    menu_add_separator(hFile);
+    if (ai_gate_on()) {
+        menu_add_item(hFile, IDM_FILE_SAVE_AI, "Save AI Chat...");
+        menu_add_separator(hFile);
+    }
     menu_add_item(hFile, IDM_FILE_EXIT, "Exit");
     menu_add_popup(hMenu, hFile, "File");
 
@@ -3372,8 +3496,10 @@ static HMENU create_app_menu(void)
     menu_add_popup(hMenu, hEdit, "Edit");
 
     HMENU hView = CreatePopupMenu();
-    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
-    menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
+    if (ai_gate_on()) {
+        menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
+        menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
+    }
     menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen");
     menu_add_popup(hMenu, hView, "View");
 
@@ -3631,6 +3757,33 @@ static void show_shortcuts(HWND hwnd)
     HWND floating = (!g_ai_docked && g_hwndAiChat && IsWindow(g_hwndAiChat))
                         ? g_hwndAiChat : NULL;
     cheatsheet_show(hwnd, floating, g_theme);
+}
+
+/* --ui-demo=notice-info (which 0) and notice-warning (which 1): the sample
+ * notices built by the real builders, with a fake report that lists
+ * ai_enabled (decided on) and a sample backup name. The action button's
+ * result is ignored: nothing opens Settings from a demo. */
+static void show_demo_notice(HWND hwnd, int which)
+{
+    Notice n;
+    if (which == 0) {
+        ConfigLoadReport rep;
+        memset(&rep, 0, sizeof(rep));
+        size_t nkeys = 0;
+        const ConfigSettingKey *keys = config_setting_keys(&nkeys);
+        for (size_t i = 0; i < nkeys && rep.missing_count < CFG_KEYS_MAX; i++) {
+            if (strcmp(keys[i].key, "ai_enabled") == 0)
+                rep.missing[rep.missing_count++] = (unsigned char)i;
+        }
+        rep.ai_enabled_decided = 1;
+        Settings s;
+        memset(&s, 0, sizeof(s));
+        s.ai_enabled = 1;
+        (void)notice_upgrade(&n, APP_VERSION, &rep, &s);
+    } else {
+        notice_invalid(&n, "nutshell.config.bad-20261123-101500");
+    }
+    (void)notice_dlg_show(hwnd, &n, g_theme);
 }
 
 /* ---- Keyboard: what each key sends (special-keys spec, 2026-09-23) -------
@@ -4067,7 +4220,9 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
             if (!is_repeat) close_active_tab();
             return true;
         }
-        if (vk == VK_SPACE) {
+        /* While the AI assistant is off the chord is unbound: it falls
+         * through to the terminal like any other key. */
+        if (vk == VK_SPACE && ai_gate_on()) {
             drop_queued_char(hwnd, lParam);
             if (!is_repeat) on_ai_clicked();
             return true;
@@ -4417,18 +4572,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                 }
 
-                ConfigLoadStatus load_status = CONFIG_LOAD_MISSING;
+                ConfigLoadReport load_rep;
+                memset(&load_rep, 0, sizeof(load_rep));
+                load_rep.status = CONFIG_LOAD_MISSING;
                 g_config = (g_config_path[0] != '\0')
-                          ? config_load_ex(g_config_path, &load_status)
+                          ? config_load_report(g_config_path, &load_rep)
                           : NULL;
+                ConfigLoadStatus load_status = load_rep.status;
+                int launch_no_folder = 0;
+                int launch_need_save = 0;
                 if (!g_config) {
                     if (g_config_path[0] == '\0') {
-                        MessageBoxA(hwnd,
-                            "Could not find a folder to store " CONFIG_FILENAME " in "
-                            "(neither the program's own folder nor %LOCALAPPDATA% "
-                            "is available).\n\nSettings and sessions will not be "
-                            "saved this run.",
-                            "Configuration Warning", MB_OK | MB_ICONWARNING);
+                        launch_no_folder = 1;
                         g_config_save_disabled = 1;
                     } else if (load_status == CONFIG_LOAD_UNREADABLE) {
                         /* M3/M4: the file is there, but this process could
@@ -4441,28 +4596,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                          * instead (every save site is passed "" in place
                          * of g_config_path -- see g_config_save_disabled's
                          * own comment). */
-                        MessageBoxA(hwnd,
-                            "Could not read " CONFIG_FILENAME " (it may be locked "
-                            "by another program, or larger than expected).\n\n"
-                            "Starting with default settings for this run only -- "
-                            "nothing will be saved until the file is readable "
-                            "again and Nutshell is restarted.",
-                            "Configuration Warning", MB_OK | MB_ICONWARNING);
                         g_config_save_disabled = 1;
                     } else {
                         /* CONFIG_LOAD_MISSING (first run) or CONFIG_LOAD_INVALID
                          * (unparseable, but backed up successfully): safe to
                          * save fresh defaults over `path`. */
-                        if (load_status == CONFIG_LOAD_INVALID) {
-                            MessageBoxA(hwnd,
-                                "Could not load " CONFIG_FILENAME ": it was not "
-                                "valid. The previous file was kept alongside it "
-                                "as " CONFIG_FILENAME ".bad-<timestamp>."
-                                "\n\nStarting with default settings.",
-                                "Configuration Warning", MB_OK | MB_ICONWARNING);
-                        }
+                        launch_need_save = 1;
                     }
                     g_config = config_new_default();
+                } else if (load_rep.missing_count > 0) {
+                    /* An upgrade: the file lacks settings this version
+                     * knows; add them to the file now. */
+                    launch_need_save = 1;
                 }
 
                 /* Default log_dir to the exe directory when not set */
@@ -4479,12 +4624,37 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                  * would leave the profile showing for this run only, gone
                  * again the moment Nutshell restarts, with no indication
                  * why. */
-                if (config_ensure_local_profile(g_config) && !g_config_save_disabled &&
-                    config_save(g_config, g_config_path) != 0) {
-                    MessageBoxA(hwnd,
-                        "Could not save " CONFIG_FILENAME ". The \"Local shell\" "
-                        "profile just added will not persist to the next run.",
-                        "Save Failed", MB_OK | MB_ICONWARNING);
+                launch_need_save = notice_launch_save_wanted(
+                    g_startup_action == CLI_UI_DEMO, launch_need_save,
+                    config_ensure_local_profile(g_config));
+
+                /* One save covers the new file, the added settings and the
+                 * Local shell profile. The notices are only queued here (the
+                 * theme is not resolved yet); WM_STARTUP_CONNECT shows them. */
+                {
+                    NoticeLaunch nl;
+                    char fb_folder[MAX_PATH];
+                    memset(&nl, 0, sizeof(nl));
+                    nl.status = load_status;
+                    nl.no_folder = launch_no_folder;
+                    nl.rep = &load_rep;
+                    nl.version = APP_VERSION;
+                    nl.s = &g_config->settings;
+                    fb_folder[0] = '\0';
+                    if (exe_dir[0] == '\0' && g_config_path[0] != '\0') {
+                        char *sep = strrchr(g_config_path, '\\');
+                        size_t flen = sep ? (size_t)(sep - g_config_path) : 0u;
+                        if (flen > 0u && flen < sizeof(fb_folder)) {
+                            memcpy(fb_folder, g_config_path, flen);
+                            fb_folder[flen] = '\0';
+                            nl.fallback_folder = fb_folder;
+                        }
+                    }
+                    if (launch_need_save && !g_config_save_disabled) {
+                        nl.saved = 1;
+                        nl.save_ok = (config_save(g_config, g_config_path) == 0);
+                    }
+                    notice_launch_plan(&g_launch_notices, &nl);
                 }
 
                 /* The debug log follows the saved settings (hand-edited until the
@@ -4571,7 +4741,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             tabs_set_ai_active(g_hwndTabs,
                                g_config->settings.ai_api_key[0] != '\0');
             tabs_set_theme(g_hwndTabs, g_theme);
-            ai_chat_init(g_hInst);
+            /* Nothing of the AI assistant (its panel, its DLLs, its menu
+             * items, its tab button) exists while the switch is off. */
+            if (g_config->settings.ai_enabled)
+                ai_feature_on(hwnd);
+            tabs_set_ai_visible(g_hwndTabs, ai_gate_on());
 
             renderer_init(&g_renderer,
                           g_config->settings.font[0]
@@ -4724,6 +4898,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     on_settings_clicked_page(lParam ? (int)lParam : -1);
                     return 0;
                 case IDM_FILE_SAVE_AI:
+                    if (!ai_gate_on()) return 0;
                     /* Forward to the AI chat's save button (IDC_CHAT_SAVE) */
                     if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                         SendMessage(g_hwndAiChat, WM_COMMAND,
@@ -4731,9 +4906,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                                BN_CLICKED), 0);
                     return 0;
                 case IDM_VIEW_AI_CHAT:
+                    if (!ai_gate_on()) return 0;
                     on_ai_clicked();
                     return 0;
                 case IDM_VIEW_AI_UNDOCK:
+                    if (!ai_gate_on()) return 0;
                     on_ai_dock_toggle(hwnd);
                     return 0;
                 case IDM_VIEW_FULLSCREEN: {
@@ -5196,6 +5373,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             show_shortcuts(hwnd);
             return 0;
 
+        case WM_OPEN_DEMO_NOTICE:
+            show_demo_notice(hwnd, (int)wParam);
+            return 0;
+
         case WM_TELNET_PASSWORD: {
             Session *s = g_session_list;
             while (s && s != (Session *)wParam) s = s->next;
@@ -5230,7 +5411,51 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_SELF_REPORT:
+            /* Hidden --self-report=<path> (spec section 6): the record is
+             * complete once WM_STARTUP_CONNECT has run. A failed write is
+             * reported through the exit code of the run. */
+            /* The control: with the gate on, open and close one WinHTTP
+             * session (no request), so the delay-load hook has to fire. */
+            if (ai_gate_on()) {
+                HINTERNET h = ns_winhttp_open(NULL);
+                if (h) WinHttpCloseHandle(h);
+            }
+            if (!ns_self_report_write(g_self_report_path))
+                g_self_report_failed = 1;
+            PostMessage(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+
         case WM_STARTUP_CONNECT: {
+            if (g_startup_action == CLI_UI_DEMO) {
+                notice_queue_init(&g_launch_notices);
+            } else if (g_launch_notices.count > 0) {
+                /* Warnings first (the queue is in show order), one at a
+                 * time. An action result opens Settings only after every
+                 * notice has been shown and closed. */
+                int open_settings = 0, open_page = -1;
+                NoticeQueue q = g_launch_notices;
+                notice_queue_init(&g_launch_notices);
+                for (int ni = 0; ni < q.count; ni++) {
+                    if (!IsWindow(hwnd)) break;
+                    if (notice_dlg_show(hwnd, &q.n[ni], g_theme) &&
+                        !open_settings) {
+                        open_settings = 1;
+                        open_page = q.n[ni].action_page;
+                    }
+                }
+                /* A WM_CLOSE posted while a notice's loop ran has destroyed
+                 * the window (and freed g_config): touch nothing more. */
+                if (!IsWindow(hwnd)) return 0;
+                if (open_settings) {
+                    /* Called directly, so Settings closes before startup
+                     * goes on (auto-connect, Session Manager). */
+                    on_settings_clicked_page(open_page > 0 ? open_page : -1);
+                    if (!IsWindow(hwnd)) return 0;
+                }
+            }
+            if (g_self_report_path[0])
+                PostMessage(hwnd, WM_SELF_REPORT, 0, 0);
             if (g_startup_action == CLI_UI_DEMO) {
                 create_demo_session(hwnd);
                 return 0;
@@ -6203,7 +6428,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                 ai_chat_close(g_hwndAiChat);
             g_hwndAiChat = NULL;
-            ai_chat_wait_for_streams(2000);
+            (void)ai_chat_join_streams(2000);   /* ai_chat_close above orphaned (and fired) every stream */
             {
                 Session *s = g_session_list;
                 while (s) {
@@ -6223,6 +6448,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * thread blocked in a host-key MessageBox owned by hwnd. */
             pump_wait_ms(3000, conn_jobs_done);
             if (g_config) config_free(g_config);
+            g_config = NULL;
             renderer_free(&g_renderer);
             g_hMenuFont = NULL;
             ns_font_flush();
@@ -6251,6 +6477,17 @@ void ui_set_startup_action(CliAction action, const char *arg,
                    demo_state ? demo_state : "");
     (void)snprintf(g_startup_theme, sizeof(g_startup_theme), "%s",
                    theme ? theme : "");
+}
+
+void ui_set_self_report(const char *path)
+{
+    (void)snprintf(g_self_report_path, sizeof(g_self_report_path), "%s",
+                   path ? path : "");
+}
+
+int ui_self_report_failed(void)
+{
+    return g_self_report_failed;
 }
 
 void ui_init(HINSTANCE instance) {

@@ -440,6 +440,14 @@ Done, in order (details in the commit messages and the specs named):
   and `test_settings_help` asserts it. `src/core/chat_thinking.[ch]` and
   `tests/test_chat_thinking.c` are deleted (the only reference left in `src/` was an unused
   `#include` in `ai_chat_internal.h`, dropped too).
+- AI assistant switch, notice dialog and cancellation (branch feat/ai-switch; spec
+  `2026-11-23-ai-assistant-enable-switch-design.md`): `ai_enabled` in the config (off for a
+  new install, on for a config that already holds a key), a runtime gate so that nothing of
+  the assistant loads while it is off (menu items, tab-strip button, shortcut, help section,
+  WinHTTP and the DLL loads), Stop and turning the assistant off close the request handle at
+  once, and one themed `Nutshell_Notice` dialog for the upgrade notice, the first-run notice
+  and the configuration warnings (missing settings are now written at launch). Its Windows
+  checks are in Open.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -461,6 +469,21 @@ Open, in priority order:
       collapsed), the click cycle and the clicked row keeping its place, the choice
       surviving a restart and an undock and redock, Settings > Automatic resetting it. All:
       `--ui-demo=all` on the four themes and a `ui_gallery` run (20 states x 4 themes).
+- [ ] **AI switch / notice dialog / cancellation: nothing run on Windows** (feat/ai-switch).
+      (a) Integration harness cases never run (no pwsh on automaton): `notice_dialog_gallery`,
+      the rewritten `LAUNCH-2` and `LAUNCH-3`, `launch_upgrade_adds_fields`,
+      `menus_open_and_list_items` and its `_ai_on` twin, `settings_help_tool_count` (now
+      "1, 84"), `launch_ai_off_no_ai_items`, `self_report_ai_off_clean`, and the AI cases now
+      passing `ai_enabled = $true`; run `-Tier gate` and `-Tier ai`. (b) `mingw32-make
+      wintest` on Windows: `test_ai_nc_fire_wakes_blocked_winhttp_call` SKIPs under Wine, so a
+      close from the UI thread waking a blocked synchronous WinHTTP call is unproven until it
+      runs on Windows. (c) Hand checks: upgrading the maintainer's real config (with a key)
+      keeps the assistant on and the notice reads well; turning the assistant off mid-reply
+      stops at once and closes the conversations; Stop is immediate; exit while a reply
+      streams; Refresh Models then close Settings; the notice on Windows 11 (dark title bar,
+      per-monitor DPI when dragged between monitors, Narrator reading it, Ctrl+C copies it);
+      the tab strip with the AI button hidden; the Help sheet without the AI section;
+      Settings' AI controls disabled while the box is unticked.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text

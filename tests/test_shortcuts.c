@@ -399,3 +399,110 @@ int test_shortcuts_readme_check_handles_crlf_and_bad_markers(void)
     free(crlf);
     TEST_END();
 }
+
+/* ---- shortcuts_filtered: the AI rows ------------------------------------- */
+
+static size_t count_ai_rows(const Shortcut *t, size_t n)
+{
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) if (t[i].flags & SC_AI) k++;
+    return k;
+}
+
+int test_shortcuts_filtered_off_drops_ai_rows(void)
+{
+    TEST_BEGIN();
+    size_t full_n = 0;
+    const Shortcut *full = shortcuts_table(&full_n);
+    size_t ai = count_ai_rows(full, full_n);
+    ASSERT_TRUE(ai > 0);
+
+    Shortcut out[128];
+    size_t n = shortcuts_filtered(out, 128, 0);
+    ASSERT_EQ((int)n, (int)(full_n - ai));
+    /* Order kept: the output is the table with the SC_AI rows skipped. */
+    size_t j = 0;
+    for (size_t i = 0; i < full_n; i++) {
+        if (full[i].flags & SC_AI) continue;
+        ASSERT_TRUE(j < n);
+        ASSERT_STR_EQ(out[j].section, full[i].section);
+        ASSERT_STR_EQ(out[j].chord, full[i].chord);
+        ASSERT_STR_EQ(out[j].action, full[i].action);
+        j++;
+    }
+    ASSERT_EQ((int)j, (int)n);
+    for (size_t i = 0; i < n; i++) {
+        ASSERT_TRUE((out[i].flags & SC_AI) == 0);
+        ASSERT_TRUE(strcmp(out[i].section, "AI Assist panel") != 0);
+        ASSERT_TRUE(strstr(out[i].chord, "AI panel") == NULL);
+    }
+    /* The other six sections are intact and in order; Mouse keeps its
+     * non-AI rows. */
+    const char *want[] = { "Sessions and tabs", "Copy, paste and selection",
+                           "Scrolling and zoom",
+                           "Keys the terminal sends to the shell",
+                           "Window and help", "Mouse" };
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (i == 0 || strcmp(out[i].section, out[i - 1].section) != 0) {
+            ASSERT_TRUE(k < 6);
+            ASSERT_STR_EQ(out[i].section, want[k]);
+            k++;
+        }
+    }
+    ASSERT_EQ((int)k, 6);
+    int mouse = 0;
+    for (size_t i = 0; i < n; i++) if (strcmp(out[i].section, "Mouse") == 0) mouse++;
+    ASSERT_EQ(mouse, 7);
+    TEST_END();
+}
+
+int test_shortcuts_filtered_on_keeps_all(void)
+{
+    TEST_BEGIN();
+    size_t full_n = 0;
+    const Shortcut *full = shortcuts_table(&full_n);
+    Shortcut out[128];
+    size_t n = shortcuts_filtered(out, 128, 1);
+    ASSERT_EQ((int)n, (int)full_n);
+    for (size_t i = 0; i < n; i++) {
+        ASSERT_STR_EQ(out[i].chord, full[i].chord);
+        ASSERT_STR_EQ(out[i].section, full[i].section);
+        ASSERT_EQ((int)out[i].flags, (int)full[i].flags);
+        ASSERT_EQ(out[i].menu_id, full[i].menu_id);
+    }
+    TEST_END();
+}
+
+int test_shortcuts_filtered_counts_without_a_buffer(void)
+{
+    TEST_BEGIN();
+    size_t full_n = 0;
+    (void)shortcuts_table(&full_n);
+    ASSERT_EQ((int)shortcuts_filtered(NULL, 0, 1), (int)full_n);
+    size_t off = shortcuts_filtered(NULL, 0, 0);
+    ASSERT_TRUE(off < full_n);
+    /* A short buffer takes what fits and still reports the full count. */
+    Shortcut two[2];
+    ASSERT_EQ((int)shortcuts_filtered(two, 2, 0), (int)off);
+    ASSERT_STR_EQ(two[0].section, "Sessions and tabs");
+    /* Both cheat sheet modes fit its row capacity (CS_MAX_ROWS = 96). */
+    ASSERT_TRUE(full_n <= 96);
+    TEST_END();
+}
+
+int test_shortcuts_readme_block_unchanged_by_filter(void)
+{
+    TEST_BEGIN();
+    char before[16384], after[16384];
+    size_t a = shortcuts_readme_block(before, sizeof(before));
+    Shortcut out[128];
+    (void)shortcuts_filtered(out, 128, 0);
+    size_t b = shortcuts_readme_block(after, sizeof(after));
+    ASSERT_EQ((int)a, (int)b);
+    ASSERT_STR_EQ(before, after);
+    /* Still the full table: it lists the AI section. */
+    ASSERT_TRUE(strstr(after, "AI Assist panel") != NULL);
+    ASSERT_TRUE(strstr(after, "Drag in the AI panel") != NULL);
+    TEST_END();
+}

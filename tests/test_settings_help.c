@@ -85,7 +85,7 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_LOG_DIR), N(SH_LOG_FORMAT),
     N(SH_SSH_IDLE),
     N(SH_SESSION_MGR_STARTUP), N(SH_AUTOCONNECT), N(SH_AUTOCONNECT_SESSION),
-    N(SH_AI_PROVIDER), N(SH_AI_KEY), N(SH_AI_MODEL), N(SH_AI_REFRESH), N(SH_AI_BASE_URL),
+    N(SH_AI_ENABLE), N(SH_AI_PROVIDER), N(SH_AI_KEY), N(SH_AI_MODEL), N(SH_AI_REFRESH), N(SH_AI_BASE_URL),
     N(SH_AI_RUNCMD_MODE),
     N(SH_AI_CONTEXT_LINES), N(SH_AI_SYSTEM_NOTES), N(SH_AI_MARKDOWN), N(SH_AI_THINKING_MODE),
     N(SH_AI_POLICY_ALLOWED), N(SH_AI_POLICY_AUTO), N(SH_AI_TOOL_TIMEOUT), N(SH_AI_TOOL_ROUNDS),
@@ -104,7 +104,7 @@ int test_settings_help_table_matches_enum(void) {
     const SettingsHelp *t = settings_help_table(&n);
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(n, (size_t)SH_COUNT);
-    ASSERT_EQ(SH_COUNT, 48);
+    ASSERT_EQ(SH_COUNT, 49);
     ASSERT_EQ(sizeof(k_names) / sizeof(k_names[0]), (size_t)SH_COUNT);
     ASSERT_NOT_NULL(settings_help_table(NULL));
     if (t != NULL && n == (size_t)SH_COUNT) {
@@ -270,6 +270,10 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     }
     if (flag >= 0) {
         (void)snprintf(out, n, "%s", flag ? "on" : "off");
+        return 1;
+    }
+    if (id == SH_AI_ENABLE) {
+        (void)snprintf(out, n, "%s", s->ai_enabled ? "On" : "Off");
         return 1;
     }
     if (id == SH_AI_RUNCMD_MODE) {
@@ -590,5 +594,24 @@ int test_settings_help_every_id_in_settings_c(void) {
         ASSERT_TRUE(found);
     }
     free(src);
+    TEST_END();
+}
+
+int test_settings_help_ai_enable_entry(void) {
+    TEST_BEGIN();
+    const SettingsHelp *e = settings_help_get((int)SH_AI_ENABLE);
+    ASSERT_NOT_NULL(e);
+    if (e != NULL) {
+        ASSERT_EQ(e->page, SETTINGS_PAGE_AI_PROVIDER);
+        ASSERT_EQ(e->kind, SH_KIND_SETTING);
+        ASSERT_STR_EQ(e->label, "Enable AI assistant");
+        ASSERT_STR_EQ(e->default_text, "Off");
+        ASSERT_TRUE(strstr(e->text, "\nDefault: Off.") != NULL);
+    }
+    /* first among the Provider entries */
+    ASSERT_EQ(SH_AI_ENABLE + 1, SH_AI_PROVIDER);
+    const SettingsHelp *prev = settings_help_get((int)SH_AI_ENABLE - 1);
+    ASSERT_NOT_NULL(prev);
+    if (prev != NULL) ASSERT_TRUE(prev->page != SETTINGS_PAGE_AI_PROVIDER);
     TEST_END();
 }

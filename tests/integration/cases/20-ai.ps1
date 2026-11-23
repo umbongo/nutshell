@@ -137,7 +137,7 @@ Invoke-AiCase "ai_prompt_while_approval_pending" {
 # blocked states") are gone and the panel opens straight into the no-key
 # state instead. Runs through Invoke-Case directly (not Invoke-AiCase) since
 # it must run even when no AI key is configured for the other ai_* cases.
-Invoke-Case "ai_panel_opens_without_key" @{ ai_api_key = "" } {
+Invoke-Case "ai_panel_opens_without_key" @{ ai_enabled = $true; ai_api_key = "" } {
     param($s)
     Send-NutshellCommand -Session $s -Id 2020 -SettleMs 1500      # IDM_VIEW_AI_CHAT
     $dialogs = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`t" })
@@ -150,13 +150,36 @@ Invoke-Case "ai_panel_opens_without_key" @{ ai_api_key = "" } {
     "panel opened with no key (hwnd $p), no dialog"
 }
 
+# ---- The assistant off: nothing of it exists (gate tier, no key, no host) -------
+# A default config has ai_enabled false. The View menu then lacks AI Assist
+# (2020) and Undock AI Assist (2022); a posted IDM_VIEW_AI_CHAT, and the
+# Ctrl+Shift+Space chord (unbound while off, so it reaches the terminal), open
+# no Nutshell_AIChat window. -nc: no SSH host.
+Invoke-Case "launch_ai_off_no_ai_items" @{ ai_enabled = $false } {
+    param($s)
+    $hMenu = [NutshellNative]::GetMenu($s.Main)
+    Assert-True ($hMenu -ne [IntPtr]::Zero) "main window has no menu"
+    for ($i = 0; $i -lt [NutshellNative]::GetMenuItemCount($hMenu); $i++) {
+        $sub = [NutshellNative]::GetSubMenu($hMenu, $i)
+        for ($j = 0; $j -lt [NutshellNative]::GetMenuItemCount($sub); $j++) {
+            $id = [NutshellNative]::GetMenuItemID($sub, $j)
+            Assert-True (@(2007, 2020, 2022) -notcontains $id) "menu $i item $j is an AI item (id $id) with the assistant off"
+        }
+    }
+    Send-NutshellCommand -Session $s -Id 2020 -SettleMs 1000      # IDM_VIEW_AI_CHAT, posted directly
+    Assert-True ((Get-NutshellAiPanel -Session $s) -eq [IntPtr]::Zero) "a posted IDM_VIEW_AI_CHAT opened the AI panel with the assistant off"
+    Send-NutshellChord -Session $s -Key Space -Ctrl -Shift -SettleMs 1000
+    Assert-True ((Get-NutshellAiPanel -Session $s) -eq [IntPtr]::Zero) "Ctrl+Shift+Space opened the AI panel with the assistant off"
+    "assistant off: no 2007/2020/2022 in any menu; a posted 2020 and Ctrl+Shift+Space opened no Nutshell_AIChat"
+} -ExtraArgs @("-nc")
+
 # ---- Auto-approve at Critical asks first (gate tier, no key) ------------------
 # docs/superpowers/specs/2026-10-18-ai-auto-approve-button-design.md section 2:
 # turning the button on while the level is Critical shows a Yes/No box; No
 # leaves the policy as it was; a second toggle while the box is up is a no-op
 # (Review Focus 5); Yes applies it. Key-free like ai_panel_opens_without_key:
 # the policy ids and WM_AI_GET_POLICY are handled in every panel state.
-Invoke-Case "ai_auto_approve_critical_asks_first" @{ ai_api_key = "" } {
+Invoke-Case "ai_auto_approve_critical_asks_first" @{ ai_enabled = $true; ai_api_key = "" } {
     param($s)
     Send-NutshellCommand -Session $s -Id 2020 -SettleMs 1500      # IDM_VIEW_AI_CHAT
     $p = Get-NutshellAiPanel -Session $s
