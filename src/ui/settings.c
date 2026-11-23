@@ -13,6 +13,7 @@
 #include "ai_prompt.h"
 #include "thinking_mode.h"
 #include "ai_http.h"
+#include "ai_gate.h"
 #include "cmd_policy.h"
 #include "tool_decision.h"
 #include "json_parser.h"
@@ -210,6 +211,7 @@ static void relayout(HWND hwnd, SettingsDlgData *d);
 static void ai_url_warn_sync(SettingsDlgData *d);
 static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
+static void ai_enable_sync(SettingsDlgData *d);
 
 /* ---- Layout helpers ----------------------------------------------------- */
 /* Controls are created with placeholder geometry; relayout() positions them
@@ -731,6 +733,32 @@ static int ai_url_warn_apply(SettingsDlgData *d)
     int changed = (d->ctrl_ai_url_warn->visible != show);
     d->ctrl_ai_url_warn->visible = show;
     return changed;
+}
+
+/* The Enable AI assistant box decides whether the rest of the three AI pages
+ * can be used: every control on them, the box itself excepted, is enabled
+ * only while it is ticked. Refresh also needs the gate open, because a key
+ * typed here is not used (ns_winhttp_open refuses) until the setting is saved
+ * on. Called when the box is clicked and when a model fetch ends. */
+static void ai_enable_sync(SettingsDlgData *d)
+{
+    if (!d || !d->hPage) return;
+    int on = (IsDlgButtonChecked(d->hPage, IDC_AI_ENABLE) == BST_CHECKED);
+    HWND box = GetDlgItem(d->hPage, IDC_AI_ENABLE);
+    for (int i = 0; i < d->n_ctrls; i++) {
+        const SettingsCtrl *c = &d->ctrls[i];
+        if (c->page != SETTINGS_PAGE_AI_PROVIDER &&
+            c->page != SETTINGS_PAGE_AI_BEHAVIOUR &&
+            c->page != SETTINGS_PAGE_AI_WEB)
+            continue;
+        if (c->hLabel) EnableWindow(c->hLabel, on ? TRUE : FALSE);
+        if (c->hCtrl && c->hCtrl != box) EnableWindow(c->hCtrl, on ? TRUE : FALSE);
+        if (c->hExtra)  EnableWindow(c->hExtra, on ? TRUE : FALSE);
+        if (c->hExtra2) EnableWindow(c->hExtra2, on ? TRUE : FALSE);
+    }
+    HWND refresh = GetDlgItem(d->hPage, IDC_AI_REFRESH);
+    if (refresh)
+        EnableWindow(refresh, (on && ai_gate_on()) ? TRUE : FALSE);
 }
 
 static void ai_url_warn_sync(SettingsDlgData *d)
@@ -1355,6 +1383,16 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         {
         int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
         {
+            /* The master switch: while it is unticked every other AI control
+             * on the three AI pages stays created (the help tips stay
+             * counted) but disabled (ai_enable_sync). The stored value, never
+             * the --ui-demo override, decides the initial state. */
+            HWND chk = make_check2(nd, IDC_AI_ENABLE, SH_AI_ENABLE);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.ai_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 1);
+        }
+        {
             HWND lbl = make_label2(nd, SH_AI_PROVIDER);
             HWND cmb = make_combo2(nd, IDC_AI_PROVIDER_COMBO, CBS_DROPDOWNLIST,
                                    SH_AI_PROVIDER);
@@ -1712,6 +1750,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             SetWindowText(nd->hPageTitle, settings_page_title(nd->cur_page));
         }
         ai_url_warn_sync(nd);
+        ai_enable_sync(nd);
         relayout(hwnd, nd);
 
         return 0;
@@ -1746,8 +1785,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 return 0;
             }
 
-            /* Re-enable the refresh button */
-            EnableWindow(GetDlgItem(d->hPage, IDC_AI_REFRESH), TRUE);
+            /* Re-enable the refresh button (only while the switch is on) */
+            ai_enable_sync(d);
 
             if (strncmp(ctx->result, "Error:", 6) == 0) {
                 MessageBox(hwnd, ctx->result, "Refresh Models",
@@ -1902,6 +1941,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             break;
 
+        case IDC_AI_ENABLE:
+            if (d && HIWORD(wParam) == BN_CLICKED)
+                ai_enable_sync(d);
+            break;
+
         case IDC_AI_CUSTOM_URL:
             if (HIWORD(wParam) == EN_CHANGE && d)
                 ai_url_warn_update(d);
@@ -2023,6 +2067,27 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* --ui-demo=settings-debug: show the page, change nothing. */
             if (d->demo) { DestroyWindow(hwnd); break; }
             Settings *s = &d->cfg->settings;
+
+            /* Turning the assistant off while it works stops the reply and
+             * closes the conversations: ask first. A yes/no decision, not a
+             * notice. No leaves the dialog open with the box ticked again,
+             * before anything has been read back. */
+            {
+                int want = (IsDlgButtonChecked(d->hPage, IDC_AI_ENABLE)
+                            == BST_CHECKED) ? 1 : 0;
+                if (s->ai_enabled && !want && ui_ai_is_working()) {
+                    int ans = MessageBoxA(hwnd,
+                        "Turn off the AI assistant? The running reply will be "
+                        "stopped and open conversations closed.",
+                        "AI assistant", MB_YESNO | MB_ICONWARNING);
+                    if (ans != IDYES) {
+                        CheckDlgButton(d->hPage, IDC_AI_ENABLE, BST_CHECKED);
+                        ai_enable_sync(d);
+                        break;
+                    }
+                }
+                s->ai_enabled = want;
+            }
 
             /* Terminal font from combo */
             {

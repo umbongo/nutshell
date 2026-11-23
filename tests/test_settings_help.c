@@ -589,8 +589,6 @@ int test_settings_help_every_id_in_settings_c(void) {
     const SettingsHelp *tab = settings_help_table(&count);
     ASSERT_NOT_NULL(tab);
     for (size_t i = 0; tab != NULL && i < count; i++) {
-        /* TASK 6 REMOVES THIS: SH_AI_ENABLE gets its Settings control then. */
-        if (tab[i].id == SH_AI_ENABLE) continue;
         int found = has_identifier(src, tab[i].name);
         if (!found) printf("  src/ui/settings.c never names %s\n", tab[i].name);
         ASSERT_TRUE(found);

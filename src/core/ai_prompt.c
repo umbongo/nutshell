@@ -2955,6 +2955,35 @@ void ai_build_auth_headers(const char *provider, const char *api_key,
 
 /* ---- Unattended-round counter (guard-rails spec 2026-11-04 section 1) ---- */
 
+void ai_session_discard(AiSessionState *st)
+{
+    if (!st) return;
+    cmd_batch_set_free(&st->batches);
+    cmd_batch_set_init(&st->batches);
+    cmd_run_log_free(&st->run_log);
+    cmd_run_log_init(&st->run_log);
+    ai_conv_reset(&st->conv);
+    st->valid = 0;
+    memset(&st->notes, 0, sizeof(st->notes));
+    st->busy = 0;
+    free(st->stream_content);
+    st->stream_content = NULL;
+    st->stream_content_len = 0;
+    free(st->stream_thinking);
+    st->stream_thinking = NULL;
+    st->stream_thinking_len = 0;
+    st->stream_phase = 0;
+    st->policy_seeded = 0;
+    st->activity_phase = 0;
+    st->auto_rounds = 0;
+    st->auto_tool_rounds = 0;
+    st->tool_round_stream = 0;
+    st->tool_round_iter = 0;
+    st->tool_round_base = 0;
+    st->tool_round_counted = 0;
+    st->tool_pause_shown = 0;
+}
+
 void ai_rounds_user_message(AiSessionState *s)
 {
     if (s) s->auto_rounds = 0;

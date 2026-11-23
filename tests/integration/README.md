@@ -36,7 +36,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | File | Cases |
 |---|---|
 | `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x4 (Enter and Tab in Confirm Paste), PTY resize, Page Up, holds position, inactive-tab resize, terminal selection x13 |
-| `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` + `ai_auto_approve_critical_asks_first` |
+| `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` + `ai_auto_approve_critical_asks_first` (both run with `ai_enabled` true) + `launch_ai_off_no_ai_items` |
 | `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token`, `helpers_ansi_contrast_floor`, `helpers_theme_switch_repaints` |
 | `cases\40-helpers.ps1` | the other `helpers_*` cases |
 | `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) and the keyboard shortcuts sheet (`HELP-1`: the three `help_shortcuts_sheet_*` cases below) and the notice dialog gallery |
@@ -44,7 +44,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\50-window.ps1` | `help_shortcuts_sheet_fits_the_screen`: the sheet lies inside the work area at the current DPI; at 96 DPI on a 1920x1040 or larger work area it must be one page, with no scrollbar |
 | `cases\50-window.ps1` | `help_shortcuts_sheet_gallery`: `--ui-demo=shortcuts` on all four themes, the sheet captured by handle into `artifacts\gallery\<Theme>-shortcuts.png` |
 | `cases\50-window.ps1` | `notice_dialog_gallery`: `--ui-demo=notice-info` and `--ui-demo=notice-warning` on all four themes, the notice dialog captured by handle into `artifacts\gallery\<Theme>-notice-info.png` and `-notice-warning.png` |
-| `cases\50-window.ps1` | `settings_help_tool_count`: after Edit > Settings, the Settings dialog's hidden `tooltips_class32` windows (found by walking every top-level window, since `Get-NutshellWindows` lists visible ones only) hold exactly 83 and 1 tools by `TTM_GETTOOLCOUNT` (the controls' tips and the API key eye's); a second Edit > Settings leaves one Settings window, the same one |
+| `cases\50-window.ps1` | `settings_help_tool_count`: after Edit > Settings, the Settings dialog's hidden `tooltips_class32` windows (found by walking every top-level window, since `Get-NutshellWindows` lists visible ones only) hold exactly 84 and 1 tools by `TTM_GETTOOLCOUNT` (the controls' tips, the Enable AI assistant box's among them, and the API key eye's); a second Edit > Settings leaves one Settings window, the same one |
 | `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
 | `cases\80-local-shell.ps1` | `local_shell` (`--local`: echo, exit, silent reconnect) and `local_shell_powershell` (a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit) |
@@ -215,7 +215,7 @@ touches before marking its pull request ready.
 | `help_shortcuts_sheet_fits_the_screen` | the sheet lies inside the work area at the current DPI; at 96 DPI on a 1920x1040 or larger work area it is one page, with no scrollbar |
 | `help_shortcuts_sheet_gallery` | `--ui-demo=shortcuts` on all four themes, the sheet captured by handle into `artifacts\gallery\<Theme>-shortcuts.png`; no SSH host or AI key needed |
 | `notice_dialog_gallery` | `--ui-demo=notice-info` (the upgrade sample) and `--ui-demo=notice-warning` (the invalid-config sample) on all four themes, the `Nutshell_Notice` dialog captured by handle into `artifacts\gallery\<Theme>-notice-info.png` and `-notice-warning.png`; no SSH host or AI key needed |
-| `settings_help_tool_count` | after Edit > Settings, the Settings dialog's hidden `tooltips_class32` windows hold exactly 83 and 1 tools by `TTM_GETTOOLCOUNT`; a second Edit > Settings leaves one Settings window, the same one |
+| `settings_help_tool_count` | after Edit > Settings, the Settings dialog's hidden `tooltips_class32` windows hold exactly 84 and 1 tools by `TTM_GETTOOLCOUNT` (the Enable AI assistant box makes the 84th); a second Edit > Settings leaves one Settings window, the same one |
 | `local_shell` | `--local`: echo, exit, silent reconnect |
 | `local_shell_powershell` | a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit |
 | `telnet_autologin_never_logs_password` | against the scripted loopback responder in `cases\85-telnet.ps1`: option negotiation, auto-login at `Username:`/`Password:`, and the password stays out of every log |
@@ -237,7 +237,7 @@ touches before marking its pull request ready.
 | `minimise_restore_repaints` | (`WINDOW-1`) SW_MINIMIZE then SW_RESTORE: iconic/restored state and the "repaints identically" comparison all asserted normally. Regression guard for the `WM_SIZE` `SIZE_MINIMIZED` bug this case found, fixed in v1.1.12 (see the case comment) |
 | `fullscreen_toggle_changes_pty` | (`WINDOW-2`) `IDM_VIEW_FULLSCREEN` twice: `tput cols` grows then returns to its original value |
 | `close_with_live_session_exits_cleanly` | (`CLOSE-1`) `WM_CLOSE` with a connected tab: process exits within 5s, exit code 0, no dialog (none exists today) |
-| `menus_open_and_list_items` | (`MENU-1`) message-free: `GetMenu`/`GetSubMenu`/`GetMenuItemCount`/`GetMenuItemID` against the 4 top-level menus and every item's real `WM_COMMAND` id (0 = separator, -1 = a popup item), hand-derived from `create_app_menu()` in `src/ui/window.c`, including a walk of the Edit menu's new "Send Key" popup submenu (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, Send Next Key Raw/with Alt) — captions are **not** checked: the menu is entirely owner-drawn (`MF_OWNERDRAW`, no `MENU` resource in `resource.rc`) so `GetMenuString` returns empty for every item |
+| `menus_open_and_list_items` | (`MENU-1`) run twice: with the assistant off (default config) File has no 2007 or its separator and View is Fullscreen (2021) alone; the twin `menus_open_and_list_items_ai_on` (`ai_enabled` true) keeps the full lists. Message-free: `GetMenu`/`GetSubMenu`/`GetMenuItemCount`/`GetMenuItemID` against the 4 top-level menus and every item's real `WM_COMMAND` id (0 = separator, -1 = a popup item), hand-derived from `create_app_menu()` in `src/ui/window.c`, including a walk of the Edit menu's new "Send Key" popup submenu (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, Send Next Key Raw/with Alt) — captions are **not** checked: the menu is entirely owner-drawn (`MF_OWNERDRAW`, no `MENU` resource in `resource.rc`) so `GetMenuString` returns empty for every item |
 | `tabs_open_switch_close` | (`TABS-1`) open a second tab (fully posted — no click needed), the tab strip capture changes, Ctrl+Shift+W closes the active one (moved off plain Ctrl+W, which now reaches the shell instead — see `cases\90-keys.ps1`'s `ctrl_w_reaches_shell_and_shift_closes_tab`); the post-close checks (strip hashes back to the one-tab strip, a marker still reaches the surviving tab's log) are asserted normally. Regression guard for the tab-close bug this case found, fixed in v1.1.13 (see the case comment) |
 | `tab_status_dot_colours` | (`TABS-2`) three phases (unroutable host / tompi / `kill -9 $$`), each at a fixed 1200×800 so the tab-strip scan band is meaningful: the status dot samples to the theme's `warning`/`success`/`danger` token colour respectively |
 | `logging_stop_then_restart_new_file` | (`LOG-1`) `IDM_FILE_LOG_STOP` then a marker is absent from the old file; `IDM_FILE_LOG_START` opens a new file and a second marker lands in it |
@@ -305,7 +305,7 @@ environment variable `NUTSHELL_IT_AI_KEY` or in the git-ignored file
 `tests\integration\.ai_config\nutshell.config` (saved from a Nutshell instance run
 in that folder; the key stays encrypted for this machine, and the provider and
 model saved there are used too) —
-`ai_panel_opens_without_key` and `ai_auto_approve_critical_asks_first` are not among them; they need no key. Provider and
+`ai_panel_opens_without_key` and `ai_auto_approve_critical_asks_first` are not among them; they need no key, only `ai_enabled` true (the AI assistant is off in a default config, and `$AiSettings` for the key-gated cases carries it too). `launch_ai_off_no_ai_items` (unrun on automaton, no pwsh) checks the opposite: with `ai_enabled` false the View menu has no AI Assist (2020) or Undock AI Assist (2022), File no Save AI Chat... (2007), a posted 2020 and Ctrl+Shift+Space open no `Nutshell_AIChat`. The `--ui-demo` cases need nothing: the demo overrides the gate. Provider and
 model default to Moonshot / `kimi-k3`, are taken from `.ai_config` when it is the
 key's source, and can be changed with `-AiProvider` and `-AiModel` (which win). 30 lines of terminal context, no web tools. A full run of the five
 key-gated cases makes about nine model calls: `ai_panel_docks_with_key` sends

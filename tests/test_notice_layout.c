@@ -14,7 +14,7 @@ static void mk_in(NoticeLayoutIn *in, int dpi, int items, int action)
     in->closing_h = ns_scale(18, dpi);
     in->item_count = items;
     in->label_w = ns_scale(110, dpi);
-    for (int i = 0; i < items; i++) in->value_h[i] = ns_scale(18 + 18 * (i % 2), dpi);
+    for (int i = 0; i < items && i < NOTICE_ITEMS_MAX; i++) in->value_h[i] = ns_scale(18 + 18 * (i % 2), dpi);
     in->has_action = action;
 }
 

@@ -3074,6 +3074,13 @@ void ai_chat_close(HWND hwnd)
         DestroyWindow(hwnd);
 }
 
+int ai_chat_dispatch_running(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd)) return 0;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    return d && d->dispatch_active;
+}
+
 /* True once no AiStream is left live process-wide (ai_stream_live_count()
  * only drops once a worker thread has actually released its reference and
  * exited, not merely been asked to cancel). */

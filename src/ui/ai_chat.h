@@ -162,6 +162,10 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
  * aborted; its thread frees its own state when it notices. */
 void ai_chat_close(HWND hwnd);
 
+/* 1 while the panel's command dispatcher is running a batch (Settings asks
+ * before the AI switch is turned off then); 0 for no panel. */
+int ai_chat_dispatch_running(HWND hwnd);
+
 /* Edit > Copy: when the panel's message list has keyboard focus and a
  * selection, copy the selection's visible text and return 1; otherwise
  * return 0 (copy the terminal's selection instead). */

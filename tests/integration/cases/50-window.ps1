@@ -15,15 +15,14 @@ $IDM_EDIT_SETTINGS   = 2013
 function Start-NutshellUntilDialogOrWindow {
     <# Launch nutshell.exe directly -- NOT via the module's Start-Nutshell,
        which polls only for the main window and throws after -TimeoutSec if
-       nothing with class Nutshell_Window turns up. That's exactly what
-       happens when config_load() fails (LAUNCH-2/LAUNCH-3): WM_CREATE
-       (src/ui/window.c) shows a synchronous MessageBoxA *before*
-       CreateWindowEx returns, so the main window is created but not yet
-       shown/visible -- Start-Nutshell's own poll (IsWindowVisible-filtered)
-       never sees it and times out with the dialog just sitting there
-       un-dismissed. This polls for either the main window or a top-level
-       dialog and returns whichever showed up first, so the caller can
-       dismiss a blocking dialog and then wait again for the window. #>
+       nothing with class Nutshell_Window turns up. The launch notices
+       (config_load() failures LAUNCH-2/LAUNCH-3, a first run, an upgrade) are
+       themed Nutshell_Notice dialogs, queued in WM_CREATE and shown only at
+       the top of WM_STARTUP_CONNECT, after the main window is visible; each
+       is modal over it and sits there un-dismissed until the caller closes
+       it. This polls for either the main window or a top-level dialog and
+       returns whichever showed up first, so the caller can dismiss a
+       blocking dialog and then wait again for the window. #>
     param([Parameter(Mandatory)] $Env, [string[]] $ExtraArgs = @(), [int] $TimeoutSec = 15)
     # Start-Process rejects -ArgumentList @() (empty collection) outright, so
     # only pass it when there's something to pass.
@@ -555,10 +554,17 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
 # create_app_menu()'s call order and cross-checked against src/ui/resource.h's
 # IDM_* constants. The Edit menu's "Send Key" popup (special-keys design
 # section 4A) is walked as its own submenu (GetSubMenu(editMenu, 3)).
-if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "menus_open_and_list_items")) {
-    $name = "menus_open_and_list_items"
+# Run twice. With the AI assistant off (the default config: ai_enabled false)
+# the menus have none of its items: File has no "Save AI Chat..." (2007) and no
+# separator of its own, View is Fullscreen (2021) alone. The twin
+# (menus_open_and_list_items_ai_on, ai_enabled true) keeps the full lists.
+foreach ($aiOn in @($false, $true)) {
+$baseName = "menus_open_and_list_items"
+$caseName = if ($aiOn) { $baseName + "_ai_on" } else { $baseName }
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains $caseName)) {
+    $name = $caseName
     Write-Host ("[RUN ] " + $name)
-    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -Settings @{ ai_enabled = $aiOn }
     $session = $null
     $ok = $false; $detail = ""
     try {
@@ -578,6 +584,11 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
             1 = @(2010, 2011, 2012, -1, 0, 2013)                          # Edit
             2 = @(2020, 2022, 2021)                                       # View
             3 = @(2033, 2029, 0, 2031, 2032, 0, 2030)                     # Help: shortcuts, guide, mark issue, log folder, about
+        }
+        if (-not $aiOn) {
+            # Switch off: no Save AI Chat... and its separator, no AI Assist / Undock AI Assist.
+            $expected[0] = @(2001, 2008, 0, 2002, 2003, 0, 2004, 2005, 0, 2006)
+            $expected[2] = @(2021)
         }
         $names = @("File", "Edit", "View", "Help")
         for ($i = 0; $i -lt $topCount; $i++) {
@@ -609,7 +620,8 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
 
         $path = Join-Path $Artifacts "$name.png"
         Save-NutshellScreenshot -Session $session -Path $path | Out-Null
-        $detail = "4 top-level menus; File 12 items, Edit 6 (incl. Send Key popup), View 3, Help 7; Send Key submenu 23 items (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, raw/Alt one-shots); every WM_COMMAND id matched resource.h/create_app_menu() in order (captions not API-observable -- owner-drawn, see case comment)"
+        $fileN = $expected[0].Count; $viewN = $expected[2].Count
+        $detail = "AI assistant " + $(if ($aiOn) { "on" } else { "off" }) + ": 4 top-level menus; File $fileN items, Edit 6 (incl. Send Key popup), View $viewN, Help 7; Send Key submenu 23 items (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, raw/Alt one-shots); every WM_COMMAND id matched resource.h/create_app_menu() in order (captions not API-observable -- owner-drawn, see case comment)"
         $ok = $true
     } catch {
         $detail = $_.Exception.Message
@@ -623,6 +635,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     }
     if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
     [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
+}
 }
 
 # ---- HELP-1: Help > Keyboard Shortcuts (cheat-sheet spec section 3.2) ----------
@@ -724,7 +737,7 @@ Invoke-Case -Name "settings_help_tool_count" -Settings @{} -ExtraArgs @("-nc") -
         [void]$counts.Add($n)
     }
     $seen = (@($counts | Sort-Object) -join ", ")
-    Assert-True ($seen -eq "1, 83") "the Settings dialog's tooltip windows hold tools [$seen], expected [1, 83]"
+    Assert-True ($seen -eq "1, 84") "the Settings dialog's tooltip windows hold tools [$seen], expected [1, 84]"
 
     # A second Edit > Settings while the dialog is open opens nothing more.
     [NutshellNative]::PostMessage($s.Main, $WM_COMMAND, [IntPtr]$IDM_EDIT_SETTINGS, [IntPtr]::Zero) | Out-Null
@@ -734,7 +747,7 @@ Invoke-Case -Name "settings_help_tool_count" -Settings @{} -ExtraArgs @("-nc") -
     Assert-True ([NutshellNative]::IsWindow($dlg)) "the first Settings window is gone after a second Edit > Settings"
 
     Close-NutshellDialog -Dialog $dlg -Button Cancel
-    "tooltip windows of the Settings dialog hold [$seen] tools (83 labelled controls, 1 API key eye); a second Edit > Settings left one Settings window"
+    "tooltip windows of the Settings dialog hold [$seen] tools (84 labelled controls incl. the Enable AI assistant box, 1 API key eye); a second Edit > Settings left one Settings window"
 }
 
 # The sheet on all four themes, for the eye: --ui-demo=shortcuts opens it over

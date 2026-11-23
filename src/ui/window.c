@@ -39,6 +39,7 @@
 #include "clipboard.h"
 #include "paste_filter.h"
 #include "ai_chat.h"
+#include "ai_gate.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
 #include "ui_demo.h"
@@ -547,6 +548,8 @@ static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 static HMENU create_app_menu(void);      /* forward declaration */
 static void on_ai_clicked(void);         /* forward declaration */
+static void ai_feature_on(HWND hwnd);    /* forward declaration */
+static void ai_feature_off(HWND hwnd);   /* forward declaration */
 static void key_oneshot_clear(void);     /* forward declaration */
 
 /* ---- Docked AI panel state ---- */
@@ -2347,9 +2350,18 @@ static void apply_config_colors(void)
  * no-key state's "Open Settings" button land on Provider. */
 static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
+    int ai_was_enabled = g_config->settings.ai_enabled;
     if (!settings_dlg_show(parent, g_config, active_config_path(), initial_page))
         return;   /* already open (brought forward) or never shown: nothing changed */
     dlog_configure(&g_config->settings);
+
+    /* The Enable AI assistant switch: apply a change at once, no restart.
+     * Off tears the panel and every conversation down; on builds nothing
+     * until the user opens the panel. */
+    if (g_config->settings.ai_enabled && !ai_was_enabled)
+        ai_feature_on(parent);
+    else if (!g_config->settings.ai_enabled && ai_was_enabled)
+        ai_feature_off(parent);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -2465,6 +2477,7 @@ static void relayout_main(HWND hwnd)
 
 static HWND create_ai_chat(HWND parent)
 {
+    if (!ai_gate_on()) return NULL;   /* the only panel constructor */
     HWND hwnd = ai_chat_show(parent,
                         g_config->settings.ai_api_key,
                         g_config->settings.ai_provider,
@@ -2511,6 +2524,12 @@ static void create_demo_session(HWND hwnd)
         cols = term_w / g_renderer.charWidth;
         rows = term_h / g_renderer.charHeight;
     }
+
+    /* The demo shows every state whatever the stored switch says: the
+     * override opens the gate without touching Settings.ai_enabled, so a
+     * Settings save inside a demo writes the tick box as it was. */
+    ai_gate_set_demo_override(1);
+    ai_feature_on(hwnd);
 
     const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
     int demo_local = (strcmp(state, "local") == 0);
@@ -2751,6 +2770,80 @@ static void on_ai_dock_toggle(HWND hwnd) {
 
     /* Reopen in new mode */
     on_ai_clicked();
+}
+
+/* Swap the menu bar for a freshly built one (the AI items come and go with
+ * the switch) and free the old one. Before WM_CREATE attaches the first bar
+ * there is nothing to swap. */
+static void rebuild_app_menu(HWND hwnd)
+{
+    HMENU oldMenu = GetMenu(hwnd);
+    if (!oldMenu) return;
+    SetMenu(hwnd, create_app_menu());
+    DestroyMenu(oldMenu);
+    DrawMenuBar(hwnd);
+}
+
+/* Settings (and the --ui-demo override) turn the AI assistant on: load its
+ * DLLs and classes once, open the gate, and show the menu items and the tab
+ * button. The panel itself is built only when the user opens it. The gate
+ * follows Settings.ai_enabled here; the demo override sits beside it. */
+static void ai_feature_on(HWND hwnd)
+{
+    static int inited = 0;
+    if (!inited) {
+        ai_chat_init(g_hInst);   /* Riched20/Msftedit, window classes */
+        inited = 1;
+    }
+    ai_gate_set_enabled(g_config->settings.ai_enabled);
+    if (g_hwndTabs) tabs_set_ai_visible(g_hwndTabs, 1);
+    rebuild_app_menu(hwnd);
+}
+
+/* 1 while the assistant is working: a reply streaming, a dispatch running,
+ * or a tool/command card still waiting in any session. Settings asks before
+ * turning the switch off then. */
+int ui_ai_is_working(void)
+{
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat) &&
+        ai_chat_dispatch_running(g_hwndAiChat))
+        return 1;
+    for (Session *s = g_session_list; s; s = s->next) {
+        if (s->ai_state.busy) return 1;
+        for (int i = 0; i < s->ai_state.batches.count; i++)
+            if (!cmd_batch_finished(s->ai_state.batches.b[i])) return 1;
+    }
+    return 0;
+}
+
+/* The switch goes off: no panel, no conversation, no menu items, no tab
+ * button, and the gate closed so nothing starts a request. Replies in flight
+ * are aborted and orphaned by the panel's WM_DESTROY (their threads hold a
+ * WorkerLife and free themselves); cancelling them at once is a later task. */
+static void ai_feature_off(HWND hwnd)
+{
+    ai_gate_set_enabled(0);
+    if (ai_gate_on()) return;   /* --ui-demo override: the demo keeps its panel */
+
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+        /* Answer every waiting tool card while the panel can still do it. */
+        for (Session *s = g_session_list; s; s = s->next)
+            ai_chat_cancel_tool_batches_for(g_hwndAiChat, &s->ai_state);
+        /* WM_DESTROY aborts every stream, ends the dispatch and saves the
+         * conversation back into the active session ... */
+        ai_chat_close(g_hwndAiChat);
+    }
+    g_hwndAiChat = NULL;
+    g_ai_panel_width = 0;
+    g_ai_target_width = 0;
+    /* ... so the discard comes after it, on every session. */
+    for (Session *s = g_session_list; s; s = s->next)
+        ai_session_discard(&s->ai_state);
+    g_ai_reopen_after_connect = 0;
+
+    if (g_hwndTabs) tabs_set_ai_visible(g_hwndTabs, 0);
+    rebuild_app_menu(hwnd);
+    relayout_main(hwnd);
 }
 
 static void on_status_click(int index, void *user_data, TabStatus status) {
@@ -3351,8 +3444,10 @@ static HMENU create_app_menu(void)
     menu_add_item(hFile, IDM_FILE_LOG_START, "Start Logging");
     menu_add_item(hFile, IDM_FILE_LOG_STOP, "Stop Logging");
     menu_add_separator(hFile);
-    menu_add_item(hFile, IDM_FILE_SAVE_AI, "Save AI Chat...");
-    menu_add_separator(hFile);
+    if (ai_gate_on()) {
+        menu_add_item(hFile, IDM_FILE_SAVE_AI, "Save AI Chat...");
+        menu_add_separator(hFile);
+    }
     menu_add_item(hFile, IDM_FILE_EXIT, "Exit");
     menu_add_popup(hMenu, hFile, "File");
 
@@ -3386,8 +3481,10 @@ static HMENU create_app_menu(void)
     menu_add_popup(hMenu, hEdit, "Edit");
 
     HMENU hView = CreatePopupMenu();
-    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
-    menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
+    if (ai_gate_on()) {
+        menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
+        menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
+    }
     menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen");
     menu_add_popup(hMenu, hView, "View");
 
@@ -4108,7 +4205,9 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
             if (!is_repeat) close_active_tab();
             return true;
         }
-        if (vk == VK_SPACE) {
+        /* While the AI assistant is off the chord is unbound: it falls
+         * through to the terminal like any other key. */
+        if (vk == VK_SPACE && ai_gate_on()) {
             drop_queued_char(hwnd, lParam);
             if (!is_repeat) on_ai_clicked();
             return true;
@@ -4625,7 +4724,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             tabs_set_ai_active(g_hwndTabs,
                                g_config->settings.ai_api_key[0] != '\0');
             tabs_set_theme(g_hwndTabs, g_theme);
-            ai_chat_init(g_hInst);
+            /* Nothing of the AI assistant (its panel, its DLLs, its menu
+             * items, its tab button) exists while the switch is off. */
+            if (g_config->settings.ai_enabled)
+                ai_feature_on(hwnd);
+            tabs_set_ai_visible(g_hwndTabs, ai_gate_on());
 
             renderer_init(&g_renderer,
                           g_config->settings.font[0]
@@ -4778,6 +4881,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     on_settings_clicked_page(lParam ? (int)lParam : -1);
                     return 0;
                 case IDM_FILE_SAVE_AI:
+                    if (!ai_gate_on()) return 0;
                     /* Forward to the AI chat's save button (IDC_CHAT_SAVE) */
                     if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                         SendMessage(g_hwndAiChat, WM_COMMAND,
@@ -4785,9 +4889,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                                BN_CLICKED), 0);
                     return 0;
                 case IDM_VIEW_AI_CHAT:
+                    if (!ai_gate_on()) return 0;
                     on_ai_clicked();
                     return 0;
                 case IDM_VIEW_AI_UNDOCK:
+                    if (!ai_gate_on()) return 0;
                     on_ai_dock_toggle(hwnd);
                     return 0;
                 case IDM_VIEW_FULLSCREEN: {

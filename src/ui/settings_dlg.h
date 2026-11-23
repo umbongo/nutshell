@@ -19,6 +19,11 @@
 int settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
                       int initial_page);
 
+/* Defined in window.c: 1 while the AI assistant is working (a reply streaming,
+ * a dispatch running or a card waiting in any session). Turning the switch off
+ * then asks first. */
+int ui_ai_is_working(void);
+
 /* --ui-demo=settings-debug: Settings opened on the Debugging page with
  * "Enable debugging" ticked in memory only. Save and Cancel both just close;
  * nothing is written and cfg is not touched. */

@@ -2814,6 +2814,11 @@ int test_cmd_batch_settled_flag_lifecycle(void);
 int test_cmd_batch_next_runnable_none(void);
 int test_cmd_batch_add_user_acted_zero(void);
 
+/* test_ai_session_discard.c */
+int test_ai_session_discard_clears_everything(void);
+int test_ai_session_discard_keeps_platform(void);
+int test_ai_session_discard_twice_is_safe(void);
+
 /* test_ai_rounds.c */
 int test_ai_rounds_user_message_resets(void);
 int test_ai_rounds_continue_unattended_counts(void);
@@ -7135,6 +7140,9 @@ int main(void) {
     failed += test_cmd_batch_add_user_acted_zero();
 
     printf("\n--- AI auto rounds ---\n");
+    failed += test_ai_session_discard_clears_everything();
+    failed += test_ai_session_discard_keeps_platform();
+    failed += test_ai_session_discard_twice_is_safe();
     failed += test_ai_rounds_user_message_resets();
     failed += test_ai_rounds_continue_unattended_counts();
     failed += test_ai_rounds_continue_attended_resets();
