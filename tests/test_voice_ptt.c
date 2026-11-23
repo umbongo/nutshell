@@ -448,6 +448,33 @@ int test_voice_binding_same(void)
     TEST_END();
 }
 
+int test_voice_err_route(void)
+{
+    TEST_BEGIN();
+    /* the current recording's error is honoured */
+    ASSERT_EQ((int)voice_err_route(5, 5, 1), (int)VOICE_ERR_CAPTURE);
+    /* a stale token is ignored, whatever is recording now */
+    ASSERT_EQ((int)voice_err_route(4, 5, 1), (int)VOICE_ERR_STALE);
+    ASSERT_EQ((int)voice_err_route(5, 6, 1), (int)VOICE_ERR_STALE);
+    /* nothing recording: a leftover error is stale, even with equal tokens */
+    ASSERT_EQ((int)voice_err_route(5, 5, 0), (int)VOICE_ERR_STALE);
+    ASSERT_EQ((int)voice_err_route(5, 0, 1), (int)VOICE_ERR_STALE);
+    /* token 0 is Settings' (the Test, enumeration), recording or not */
+    ASSERT_EQ((int)voice_err_route(0, 5, 1), (int)VOICE_ERR_SETTINGS);
+    ASSERT_EQ((int)voice_err_route(0, 0, 0), (int)VOICE_ERR_SETTINGS);
+    TEST_END();
+}
+
+int test_voice_busy_text(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(voice_busy_text(0, 1), "Connect a session first");
+    ASSERT_STR_EQ(voice_busy_text(1, 1), "Connect a session first");
+    ASSERT_STR_EQ(voice_busy_text(1, 0), "Still transcribing the last recording");
+    ASSERT_STR_EQ(voice_busy_text(0, 0), "Assistant is busy");
+    TEST_END();
+}
+
 int test_voice_cue_text(void)
 {
     TEST_BEGIN();

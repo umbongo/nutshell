@@ -21,17 +21,20 @@ typedef enum {
     VAM_DEVICES,          /* lParam = VoiceDeviceList* (receiver frees with voice_audio_free_devices) */
     VAM_LEVEL,            /* lParam = level 0..1000 (peak of the last ~50 ms) */
     VAM_CAPTURED,         /* lParam = VoiceCapture* (receiver frees with voice_audio_free_capture) */
-    VAM_ERROR,            /* lParam = VoiceAudioErr */
+    VAM_ERROR,            /* lParam = VoiceAudioErrMsg* (receiver frees with voice_audio_free_error) */
     VAM_DEVICES_CHANGED   /* lParam 0: from IMMNotificationClient; re-enumerate */
 } VoiceAudioMsg;
 
 typedef enum { VAE_NONE = 0, VAE_NO_DEVICE, VAE_DEVICE_LOST, VAE_OPEN_FAILED,
-               VAE_COM_FAILED, VAE_NO_MEMORY } VoiceAudioErr;
+               VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED } VoiceAudioErr;
+/* An error and the recording token it belongs to (0: not a push-to-talk
+ * recording: a Settings Test, an enumeration or the thread itself). */
+typedef struct { VoiceAudioErr err; unsigned token; } VoiceAudioErrMsg;
 
 typedef struct { int n; struct { wchar_t id[256]; char name[256]; } dev[32]; } VoiceDeviceList;
 typedef struct { PcmBuf pcm; PcmVerdict verdict; int used_default; unsigned token; } VoiceCapture;
 
-int  voice_audio_start(HWND notify);          /* creates the MTA thread; 0 on failure; 1 if already running */
+int  voice_audio_start(HWND notify);          /* creates the MTA thread; 0 on failure or while voice is off (voice_gate_on); 1 if already running */
 void voice_audio_stop(void);                  /* stop event, join (bounded 3 s), release all */
 int  voice_audio_wait_ready(DWORD ms);        /* 1 once VAM_READY was reached */
 void voice_audio_enumerate(void);             /* -> VAM_DEVICES */
@@ -40,5 +43,6 @@ void voice_audio_capture_end(int keep);       /* keep=1 -> VAM_CAPTURED; 0 -> di
 void voice_audio_watch_devices(int on);       /* register/unregister the notification client */
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
+void voice_audio_free_error(VoiceAudioErrMsg *e);
 
 #endif /* NUTSHELL_VOICE_AUDIO_WIN_H */

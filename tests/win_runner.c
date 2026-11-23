@@ -91,6 +91,8 @@ int test_telnet_io_win_serial_unique(void);
 int test_winhttp_open_refuses_while_off(void);
 int test_winhttp_open_opens_while_on(void);
 int test_voice_audio_start_stop(void);
+int test_voice_audio_start_refused_when_gate_off(void);
+int test_voice_audio_double_start_is_one_thread(void);
 int test_voice_audio_restart(void);
 int test_voice_audio_enumerate_defined(void);
 int test_voice_audio_capture_no_device_or_data(void);
@@ -398,6 +400,8 @@ int main(int argc, char **argv)
     failed += test_winhttp_open_refuses_while_off();
     failed += test_winhttp_open_opens_while_on();
     failed += test_voice_audio_start_stop();
+    failed += test_voice_audio_start_refused_when_gate_off();
+    failed += test_voice_audio_double_start_is_one_thread();
     failed += test_voice_audio_restart();
     failed += test_voice_audio_enumerate_defined();
     failed += test_voice_audio_capture_no_device_or_data();

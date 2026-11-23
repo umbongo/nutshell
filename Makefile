@@ -451,7 +451,9 @@ selftest-wine: $(TARGET)
 			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
 			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
 			case $$m in \
-			off) sed 's/"voice_enabled": false/"voice_enabled": true/' tests/selftest/nutshell-ai-off.config > $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			off) sed 's/"voice_enabled": false/"voice_enabled": true/' tests/selftest/nutshell-ai-off.config > $(SELFTEST_DIR)/$$m/nutshell.config; \
+				grep -q '"voice_enabled": true' $(SELFTEST_DIR)/$$m/nutshell.config \
+					|| { echo "FAIL: the off config does not tick voice (the sed matched nothing)"; exit 1; } ;; \
 			voiceoff) cp tests/selftest/nutshell-ai-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			on) cp tests/selftest/nutshell-voice-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			esac; \

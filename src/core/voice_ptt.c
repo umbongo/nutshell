@@ -187,6 +187,19 @@ int voice_binding_same(const VoiceBinding *a, const VoiceBinding *b)
         && a->session_gen == b->session_gen && a->conv_gen == b->conv_gen;
 }
 
+VoiceErrRoute voice_err_route(unsigned err_token, unsigned cur_token, int capturing)
+{
+    if (err_token == 0) return VOICE_ERR_SETTINGS;
+    if (capturing && cur_token != 0 && err_token == cur_token) return VOICE_ERR_CAPTURE;
+    return VOICE_ERR_STALE;
+}
+
+const char *voice_busy_text(int pending, int no_session)
+{
+    if (no_session) return "Connect a session first";
+    return pending ? "Still transcribing the last recording" : "Assistant is busy";
+}
+
 void voice_cue_text(int mode, int ptt_key, int latched, char *out, size_t cap)
 {
     const char *label = voice_ptt_key_label(ptt_key);

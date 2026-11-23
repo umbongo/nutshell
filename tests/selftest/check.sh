@@ -40,6 +40,9 @@ on)
     for d in winhttp.dll riched20.dll msftedit.dll mmdevapi.dll; do
         req "$d" || { echo "FAIL (on): $d was not requested"; rc=1; }
     done
+    # the enumerator was really created: Wine maps the module in (checked on
+    # the "on" report of this run), so it is a loaded module as well
+    mod mmdevapi.dll || { echo "FAIL (on): mmdevapi.dll is not a loaded module"; rc=1; }
     ;;
 *) echo "usage: check.sh off|voiceoff|on report"; exit 2 ;;
 esac

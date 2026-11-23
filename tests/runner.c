@@ -222,6 +222,7 @@ int test_dlog_config_defaults_match_the_spec(void);
 int test_dlog_config_from_settings_copies_and_clamps(void);
 int test_dlog_apply_sets_the_flags_and_status(void);
 int test_dlog_configure_registers_the_api_key_as_a_secret(void);
+int test_dlog_configure_registers_the_stt_key_as_a_secret(void);
 int test_dlog_shutdown_wipes_secrets(void);
 int test_dlog_fmt_value_standalone(void);
 int test_dlog_fake_put_file_pads_once(void);
@@ -3705,6 +3706,8 @@ int test_voice_deactivate_and_modal_discard(void);
 int test_voice_next_deadline(void);
 int test_voice_deliver(void);
 int test_voice_binding_same(void);
+int test_voice_err_route(void);
+int test_voice_busy_text(void);
 int test_voice_cue_text(void);
 /* test_voice_stt.c */
 int test_voice_stt_provider_table(void);
@@ -4775,6 +4778,7 @@ int main(void) {
     failed += test_dlog_config_from_settings_copies_and_clamps();
     failed += test_dlog_apply_sets_the_flags_and_status();
     failed += test_dlog_configure_registers_the_api_key_as_a_secret();
+    failed += test_dlog_configure_registers_the_stt_key_as_a_secret();
     failed += test_dlog_shutdown_wipes_secrets();
     failed += test_dlog_fmt_value_standalone();
     failed += test_dlog_fake_put_file_pads_once();
@@ -8112,6 +8116,8 @@ int main(void) {
     failed += test_voice_next_deadline();
     failed += test_voice_deliver();
     failed += test_voice_binding_same();
+    failed += test_voice_err_route();
+    failed += test_voice_busy_text();
     failed += test_voice_cue_text();
     failed += test_voice_stt_provider_table();
     failed += test_voice_base_url_normalise();

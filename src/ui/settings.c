@@ -327,6 +327,17 @@ static HWND make_combo2(SettingsDlgData *d, int id, DWORD type_style,
                      id, help);
 }
 
+/* A drop-down list that is a wide window, so the wide CB_ADDSTRING keeps a
+ * name outside the ANSI code page (a microphone's) intact. */
+static HWND make_combo2_wide(SettingsDlgData *d, int id, SettingsHelpId help)
+{
+    HWND w = CreateWindowW(L"COMBOBOX", L"",
+                           WS_CHILD | WS_VISIBLE | CBS_HASSTRINGS | WS_VSCROLL | CBS_DROPDOWNLIST,
+                           0, 0, 10, 200, d->hPage, (HMENU)(UINT_PTR)id, NULL, NULL);
+    page_track(d, w, help);
+    return w;
+}
+
 static HWND make_check2(SettingsDlgData *d, int id, SettingsHelpId help)
 {
     HWND chk = page_ctrl(d, "BUTTON", settings_help_get((int)help)->label,
@@ -1069,6 +1080,16 @@ static void voice_test_start(SettingsDlgData *d)
     if (test) InvalidateRect(test, NULL, TRUE);
 }
 
+/* Adds a UTF-8 name to a combo as wide text, so a non-Latin microphone name
+ * shows as itself (an ANSI CB_ADDSTRING would turn it into question marks). */
+static int voice_combo_add_utf8(HWND cmb, const char *utf8)
+{
+    wchar_t w[320];
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, (int)(sizeof(w) / sizeof(w[0]))) <= 0)
+        w[0] = L'\0';
+    return (int)SendMessageW(cmb, CB_ADDSTRING, 0, (LPARAM)w);
+}
+
 /* The device list arrived: refill the combo and keep the selection by ID. */
 static void voice_dev_take_list(SettingsDlgData *d, const VoiceDeviceList *l)
 {
@@ -1102,9 +1123,9 @@ static void voice_dev_take_list(SettingsDlgData *d, const VoiceDeviceList *l)
     HWND cmb = GetDlgItem(d->hPage, IDC_VOICE_DEVICE);
     if (!cmb) return;
     SendMessage(cmb, CB_RESETCONTENT, 0, 0);
-    SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)first);
+    voice_combo_add_utf8(cmb, first);
     for (int i = 0; i < d->voice_dev_n; i++)
-        SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)d->voice_dev[i].name);
+        voice_combo_add_utf8(cmb, d->voice_dev[i].name);
     SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
 }
 
@@ -1134,6 +1155,9 @@ int settings_voice_on_audio(WPARAM wp, LPARAM lp)
             switch ((VoiceAudioErr)lp) {
             case VAE_NO_DEVICE:    voice_test_note(d, "No microphone was found."); break;
             case VAE_DEVICE_LOST:  voice_test_note(d, "The microphone stopped responding."); break;
+            case VAE_ACCESS_DENIED:
+                voice_test_note(d, "Windows may be blocking the microphone: Settings > Privacy & security > Microphone");
+                break;
             default:               voice_test_note(d, "The microphone could not be opened."); break;
             }
         }
@@ -2071,16 +2095,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 /* The list is filled only once voice has been saved on (the
                  * audio thread enumerates then); until then one placeholder. */
                 HWND lbl = make_label2(nd, SH_VOICE_DEVICE);
-                HWND cmb = make_combo2(nd, IDC_VOICE_DEVICE, CBS_DROPDOWNLIST,
-                                       SH_VOICE_DEVICE);
+                HWND cmb = make_combo2_wide(nd, IDC_VOICE_DEVICE, SH_VOICE_DEVICE);
                 if (nd->voice_dev_listed) {
-                    SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Windows default");
+                    voice_combo_add_utf8(cmb, "Windows default");
                     int sel = 0;
                     if (vs->voice_input_device[0]) {
                         const char *nm = vs->voice_input_device_name[0]
                                              ? vs->voice_input_device_name
                                              : vs->voice_input_device;
-                        sel = (int)SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)nm);
+                        sel = voice_combo_add_utf8(cmb, nm);
                     }
                     SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
                 } else {

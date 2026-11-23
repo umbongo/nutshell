@@ -114,6 +114,18 @@ VoiceDelivery voice_deliver(const char *input, const char *transcript, int revie
 typedef struct { const void *session; unsigned session_gen; unsigned conv_gen; } VoiceBinding;
 int voice_binding_same(const VoiceBinding *a, const VoiceBinding *b);  /* all three equal, session non-NULL */
 
+/* Where an audio error goes. An error carries the token of the recording it
+ * ends (0 = none: a Settings Test, an enumeration, the thread itself).
+ * VOICE_ERR_CAPTURE: the current, still-open recording's. VOICE_ERR_SETTINGS:
+ * token 0, for an open Settings page. VOICE_ERR_STALE: another recording's
+ * (a discarded or finished one): ignored, it must not touch the current state. */
+typedef enum { VOICE_ERR_STALE = 0, VOICE_ERR_CAPTURE, VOICE_ERR_SETTINGS } VoiceErrRoute;
+VoiceErrRoute voice_err_route(unsigned err_token, unsigned cur_token, int capturing);
+
+/* The status line for a start refused at the start point: "Connect a session
+ * first" with no active session, else the transcribing/busy text. */
+const char *voice_busy_text(int pending, int no_session);
+
 /* "Listening… release Right Ctrl to send" (hold, key started),
  * "Listening… press Right Ctrl again to send" (toggle, or a mic-button start),
  * with F8/F9 in place of Right Ctrl. The ellipsis is U+2026 in UTF-8. */

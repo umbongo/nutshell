@@ -12,6 +12,7 @@
 
 #include "dll_record.h"
 #include "voice_config.h"
+#include "voice_gate.h"
 
 /* The GUIDs and the property key are defined here, as copies: linking
  * libuuid/mmdevapi for them would add an import the exe must not have. */
@@ -35,7 +36,7 @@ static const PROPERTYKEY VA_PKEY_FriendlyName =
 #define VA_TEST_MS      3000u
 #define VA_STALL_MS     2000u
 #define VA_LEVEL_MS     50u
-#define VA_QMAX         16
+#define VA_QMIN         16   /* initial queue slots; it grows for begin/end, never drops them */
 
 typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH } VaCmdKind;
 typedef struct {
@@ -54,8 +55,8 @@ struct VaCtx {
     HANDLE           thread, stop, wake, ready;
     HWND             notify;
     CRITICAL_SECTION qcs;
-    VaCmd            q[VA_QMAX];
-    int              qn;
+    VaCmd           *q;          /* grown by va_push under qcs */
+    int              qn, qcap;
     VaNotify         nc;
     int              exited;     /* under g_cs: the thread is done with ctx */
     int              orphaned;   /* under g_cs: stop() gave up waiting */
@@ -73,6 +74,7 @@ static void va_ctx_free(VaCtx *c)
     if (c->wake) CloseHandle(c->wake);
     if (c->ready) CloseHandle(c->ready);
     DeleteCriticalSection(&c->qcs);
+    free(c->q);
     free(c);
 }
 
@@ -84,10 +86,19 @@ static void va_post(VaCtx *c, VoiceAudioMsg m, LPARAM lp)
     if (!h || !PostMessage(h, WM_VOICE_AUDIO, (WPARAM)m, lp)) {
         if (m == VAM_DEVICES) voice_audio_free_devices((VoiceDeviceList *)lp);
         if (m == VAM_CAPTURED) voice_audio_free_capture((VoiceCapture *)lp);
+        if (m == VAM_ERROR) voice_audio_free_error((VoiceAudioErrMsg *)lp);
     }
 }
 
-static void va_post_err(VaCtx *c, VoiceAudioErr e) { va_post(c, VAM_ERROR, (LPARAM)e); }
+/* token: the push-to-talk recording the error belongs to, 0 for none. */
+static void va_post_err(VaCtx *c, VoiceAudioErr e, unsigned token)
+{
+    VoiceAudioErrMsg *m = (VoiceAudioErrMsg *)calloc(1, sizeof(*m));
+    if (!m) return;
+    m->err = e;
+    m->token = token;
+    va_post(c, VAM_ERROR, (LPARAM)m);   /* frees m itself when the post fails */
+}
 
 /* ---- the notification client (a C vtable; callbacks only PostMessage) --- */
 
@@ -158,7 +169,7 @@ static void va_finish(VaState *st, int keep)
         VoiceCapture *c = (VoiceCapture *)calloc(1, sizeof(*c));
         if (!c) {
             pcm_free(&st->pcm);
-            va_post_err(st->ctx, VAE_NO_MEMORY);
+            va_post_err(st->ctx, VAE_NO_MEMORY, st->token);
             return;
         }
         c->pcm = st->pcm;                    /* ownership moves */
@@ -174,8 +185,9 @@ static void va_finish(VaState *st, int keep)
 
 static void va_fail(VaState *st, VoiceAudioErr e)
 {
+    unsigned token = st->token;
     va_finish(st, 0);
-    va_post_err(st->ctx, e);
+    va_post_err(st->ctx, e, token);
 }
 
 static int va_utf8_to_wide(const char *u, wchar_t *w, int cap)
@@ -186,14 +198,17 @@ static int va_utf8_to_wide(const char *u, wchar_t *w, int cap)
 /* Activate, initialise and start a client on dev. 1 and the three outputs
  * set, or 0 with nothing left open. */
 static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
-                       IAudioCaptureClient **out_cap, HANDLE *out_ev)
+                       IAudioCaptureClient **out_cap, HANDLE *out_ev, int *denied)
 {
     IAudioClient *cl = NULL;
     IAudioCaptureClient *cap = NULL;
     HANDLE ev = NULL;
     HRESULT hr = IMMDevice_Activate(dev, &VA_IID_IAudioClient, CLSCTX_ALL, NULL,
                                     (void **)&cl);
-    if (FAILED(hr) || !cl) return 0;
+    if (FAILED(hr) || !cl) {
+        if (hr == E_ACCESSDENIED) *denied = 1;
+        return 0;
+    }
 
     WAVEFORMATEX wfx;
     memset(&wfx, 0, sizeof(wfx));
@@ -214,6 +229,7 @@ static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
         hr = IAudioClient_GetService(cl, &VA_IID_IAudioCaptureClient, (void **)&cap);
     if (SUCCEEDED(hr)) hr = IAudioClient_Start(cl);
     if (FAILED(hr) || !cap) {
+        if (hr == E_ACCESSDENIED) *denied = 1;
         if (cap) IAudioCaptureClient_Release(cap);
         IAudioClient_Release(cl);
         if (ev) CloseHandle(ev);
@@ -228,12 +244,12 @@ static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
 static void va_begin(VaState *st, const VaCmd *c)
 {
     if (st->active) va_finish(st, 0);
-    if (!st->enm) { va_post_err(st->ctx, VAE_NO_DEVICE); return; }
+    if (!st->enm) { va_post_err(st->ctx, VAE_NO_DEVICE, c->token); return; }
 
     IAudioClient *cl = NULL;
     IAudioCaptureClient *cap = NULL;
     HANDLE ev = NULL;
-    int ok = 0;
+    int ok = 0, denied = 0;
     st->used_default = 0;
     if (c->id[0]) {
         IMMDevice *dev = NULL;
@@ -242,23 +258,26 @@ static void va_begin(VaState *st, const VaCmd *c)
             SUCCEEDED(IMMDeviceEnumerator_GetDevice(st->enm, wid, &dev)) && dev) {
             DWORD state = 0;
             if (SUCCEEDED(IMMDevice_GetState(dev, &state)) && state == DEVICE_STATE_ACTIVE)
-                ok = va_open_dev(dev, &cl, &cap, &ev);
+                ok = va_open_dev(dev, &cl, &cap, &ev, &denied);
             IMMDevice_Release(dev);
         }
         /* Not found, not active or would not open: Windows default; the
          * stored ID is never touched. */
-        if (!ok) st->used_default = 1;
+        if (!ok) { st->used_default = 1; denied = 0; }
     }
     if (!ok) {
         IMMDevice *dev = NULL;
         if (FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(st->enm, eCapture,
                                                                eConsole, &dev)) || !dev) {
-            va_post_err(st->ctx, VAE_NO_DEVICE);
+            va_post_err(st->ctx, VAE_NO_DEVICE, c->token);
             return;
         }
-        ok = va_open_dev(dev, &cl, &cap, &ev);
+        ok = va_open_dev(dev, &cl, &cap, &ev, &denied);
         IMMDevice_Release(dev);
-        if (!ok) { va_post_err(st->ctx, VAE_OPEN_FAILED); return; }
+        if (!ok) {
+            va_post_err(st->ctx, denied ? VAE_ACCESS_DENIED : VAE_OPEN_FAILED, c->token);
+            return;
+        }
     }
     st->client = cl;
     st->cap = cap;
@@ -317,15 +336,15 @@ static void va_level(VaState *st, ULONGLONG now)
  * Settings Test can tell it from its own result. */
 static void va_enumerate(VaState *st)
 {
-    if (!st->enm) { va_post_err(st->ctx, VAE_COM_FAILED); return; }
+    if (!st->enm) { va_post_err(st->ctx, VAE_COM_FAILED, 0); return; }
     IMMDeviceCollection *coll = NULL;
     if (FAILED(IMMDeviceEnumerator_EnumAudioEndpoints(st->enm, eCapture,
                                                       DEVICE_STATE_ACTIVE, &coll)) || !coll) {
-        va_post_err(st->ctx, VAE_COM_FAILED);
+        va_post_err(st->ctx, VAE_COM_FAILED, 0);
         return;
     }
     VoiceDeviceList *l = (VoiceDeviceList *)calloc(1, sizeof(*l));
-    if (!l) { IMMDeviceCollection_Release(coll); va_post_err(st->ctx, VAE_NO_MEMORY); return; }
+    if (!l) { IMMDeviceCollection_Release(coll); va_post_err(st->ctx, VAE_NO_MEMORY, 0); return; }
     UINT cnt = 0;
     IMMDeviceCollection_GetCount(coll, &cnt);
     for (UINT i = 0; i < cnt && l->n < 32; i++) {
@@ -391,12 +410,12 @@ static DWORD WINAPI va_thread(LPVOID arg)
     st.ctx = cx;
     int com = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
     if (!com) {
-        va_post_err(cx, VAE_COM_FAILED);
+        va_post_err(cx, VAE_COM_FAILED, 0);
     } else {
         dll_record_note("mmdevapi.dll");   /* the only place the enumerator is created */
         if (FAILED(CoCreateInstance(&VA_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
                                     &VA_IID_IMMDeviceEnumerator, (void **)&st.enm)))
-            { st.enm = NULL; va_post_err(cx, VAE_COM_FAILED); }
+            { st.enm = NULL; va_post_err(cx, VAE_COM_FAILED, 0); }
     }
     va_post(cx, VAM_READY, 0);
     SetEvent(cx->ready);
@@ -421,6 +440,12 @@ static DWORD WINAPI va_thread(LPVOID arg)
             ULONGLONG now = GetTickCount64();
             if (w == WAIT_OBJECT_0 + 2) st.t_last_ev = now;
             if (!va_drain(&st)) { va_fail(&st, VAE_DEVICE_LOST); continue; }
+            /* The cap ends a push-to-talk capture here, so the device never
+             * stays open past it whatever the UI does (a Test ends at 3 s). */
+            if (!st.test_only && st.token != 0 && pcm_full(&st.pcm)) {
+                va_finish(&st, 1);
+                continue;
+            }
             va_level(&st, now);
             if (now - st.t_last_ev > VA_STALL_MS) { va_fail(&st, VAE_DEVICE_LOST); continue; }
             if (st.test_only && now - st.t_start >= VA_TEST_MS) {
@@ -454,6 +479,7 @@ int voice_audio_start(HWND notify)
 {
     if (!g_cs_ready) { InitializeCriticalSection(&g_cs); g_cs_ready = 1; }
     if (g_ctx) return 1;
+    if (!voice_gate_on()) return 0;     /* voice off: no thread, no mmdevapi.dll */
     EnterCriticalSection(&g_cs);
     int zombie = g_zombies;
     LeaveCriticalSection(&g_cs);
@@ -510,7 +536,24 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
     VaCtx *cx = g_ctx;
     if (!cx) return;
     EnterCriticalSection(&cx->qcs);
-    if (cx->qn < VA_QMAX) {
+    /* An enumeration repeats nothing a queued one will not do, and only the
+     * last watch state matters: both are coalesced. Begin and end are never
+     * dropped: the queue grows for them. */
+    int done = 0;
+    if (k == VC_ENUM || k == VC_WATCH) {
+        for (int i = 0; i < cx->qn; i++) {
+            if (cx->q[i].kind != k) continue;
+            if (k == VC_WATCH) cx->q[i].flag = flag;
+            done = 1;
+            break;
+        }
+    }
+    if (!done && cx->qn >= cx->qcap) {
+        int ncap = cx->qcap ? cx->qcap * 2 : VA_QMIN;
+        VaCmd *nq = (VaCmd *)realloc(cx->q, (size_t)ncap * sizeof(VaCmd));
+        if (nq) { cx->q = nq; cx->qcap = ncap; }
+    }
+    if (!done && cx->qn < cx->qcap) {
         VaCmd *c = &cx->q[cx->qn++];
         memset(c, 0, sizeof(*c));
         c->kind = k;
@@ -529,6 +572,7 @@ void voice_audio_capture_end(int keep) { va_push(VC_END, NULL, 0, keep ? 1 : 0);
 void voice_audio_watch_devices(int on) { va_push(VC_WATCH, NULL, 0, on ? 1 : 0); }
 
 void voice_audio_free_devices(VoiceDeviceList *l) { free(l); }
+void voice_audio_free_error(VoiceAudioErrMsg *e) { free(e); }
 
 void voice_audio_free_capture(VoiceCapture *c)
 {

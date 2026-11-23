@@ -25,6 +25,8 @@ static VoiceBinding g_bind;  /* the panel state the recording started in */
 int (*g_voice_filter)(const MSG *m);
 
 #define MSG_DIDNT_CATCH "Didn't catch that"
+#define VOICE_PRIVACY_TEXT \
+    "Windows may be blocking the microphone: Settings > Privacy & security > Microphone"
 #define CUE_TRANSCRIBING "Transcribing\xE2\x80\xA6"
 
 static void ptt_reset(void)
@@ -47,6 +49,14 @@ static unsigned next_token(void)
 {
     if (++g_token_seq == 0) g_token_seq = 1;
     return g_token_seq;
+}
+
+/* No active session: the send path would drop the message, so no recording starts. */
+static int no_session(HWND panel)
+{
+    VoiceBinding b;
+    ai_chat_voice_binding(panel, &b);
+    return b.session == NULL;
 }
 
 static void act(VoiceStep st, VoiceEvent ev)
@@ -80,8 +90,7 @@ static void act(VoiceStep st, VoiceEvent ev)
         ai_chat_voice_set_ui(panel, AIV_IDLE, NULL);
         break;
     case VA_BUSY:
-        ai_chat_voice_status(panel, g_pending ? "Still transcribing the last recording"
-                                              : "Assistant is busy", 0);
+        ai_chat_voice_status(panel, voice_busy_text(g_pending, no_session(panel)), 0);
         break;
     case VA_NONE:
         break;
@@ -92,7 +101,7 @@ static VoiceStep step_now(VoiceEvent ev, int in_panel)
 {
     HWND panel = ui_ai_panel();
     VoiceStep st = voice_ptt_step(&g_ptt, ev, (unsigned long)GetTickCount(), in_panel,
-                                  ai_chat_voice_busy(panel) || g_pending);
+                                  ai_chat_voice_busy(panel) || g_pending || no_session(panel));
     act(st, ev);
     arm_timer();
     return st;
@@ -216,7 +225,7 @@ static void on_captured(VoiceCapture *c)
         problem = MSG_DIDNT_CATCH;
         break;
     case PCM_ALL_ZERO:
-        problem = "Windows may be blocking the microphone: Settings > Privacy & security > Microphone";
+        problem = VOICE_PRIVACY_TEXT;
         problem_is_error = 1;
         break;
     default:
@@ -255,6 +264,9 @@ static void on_captured(VoiceCapture *c)
 
 static void on_capture_error(VoiceAudioErr e)
 {
+    /* The thread has ended this capture already; this also covers any path
+     * where the device could still be open. A no-op when nothing is active. */
+    if (g_audio_up) voice_audio_capture_end(0);
     HWND panel = ui_ai_panel();
     const char *text;
     switch (e) {
@@ -263,6 +275,9 @@ static void on_capture_error(VoiceAudioErr e)
         break;
     case VAE_DEVICE_LOST:
         text = "The microphone stopped responding (was it unplugged?). Nothing was sent.";
+        break;
+    case VAE_ACCESS_DENIED:
+        text = VOICE_PRIVACY_TEXT;
         break;
     default:
         text = "The microphone could not be opened.";
@@ -285,9 +300,15 @@ void voice_on_audio_msg(WPARAM wp, LPARAM lp)
         if (c) on_captured(c);
         return;
     }
-    if (wp == VAM_ERROR && g_capturing && g_audio_up) {
-        on_capture_error((VoiceAudioErr)lp);
-        return;
+    if (wp == VAM_ERROR) {
+        VoiceAudioErrMsg *m = (VoiceAudioErrMsg *)lp;
+        if (!m) return;
+        const VoiceAudioErr err = m->err;
+        const VoiceErrRoute route = voice_err_route(m->token, g_token, g_capturing && g_audio_up);
+        voice_audio_free_error(m);
+        if (route == VOICE_ERR_CAPTURE) on_capture_error(err);
+        else if (route == VOICE_ERR_SETTINGS) (void)settings_voice_on_audio(wp, (LPARAM)err);
+        return;   /* a stale recording's error changes nothing */
     }
     /* An open Settings page takes the device list, levels and errors; what
      * nobody wants is freed here. */

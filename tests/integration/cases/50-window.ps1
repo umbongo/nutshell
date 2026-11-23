@@ -892,13 +892,13 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
 Invoke-Case -Name "voice_off_right_ctrl_reaches_input" -Settings @{ ai_enabled = $true; ai_api_key = "" } -ExtraArgs @("-nc") -Body {
     param($s)
     $p = Open-NutshellAiPanel -Session $s
-    $input = Get-NutshellControl -Dialog $p -Id 4002                                  # IDC_CHAT_INPUT
-    Assert-True ($input -ne [IntPtr]::Zero) "the AI panel has no input box"
+    $inputBox = Get-NutshellControl -Dialog $p -Id 4002                                  # IDC_CHAT_INPUT
+    Assert-True ($inputBox -ne [IntPtr]::Zero) "the AI panel has no input box"
     Assert-True ([NutshellNative]::GetDlgItem($p, 4016) -eq [IntPtr]::Zero) "the AI panel has a mic button with voice off"   # IDC_CHAT_MIC
-    Send-NutshellChord -Session $s -Key RightCtrl -Hwnd $input -SettleMs 300
-    [NutshellNative]::PostMessage($input, $script:WM_CHAR, [IntPtr][int][char]'a', [IntPtr]::Zero) | Out-Null
+    Send-NutshellChord -Session $s -Key RightCtrl -Hwnd $inputBox -SettleMs 300
+    [NutshellNative]::PostMessage($inputBox, $script:WM_CHAR, [IntPtr][int][char]'a', [IntPtr]::Zero) | Out-Null
     Start-Sleep -Milliseconds 400
-    $text = Get-NutshellControlText -Control $input
+    $text = Get-NutshellControlText -Control $inputBox
     Assert-True ($text -eq "a") "the AI input reads '$text' after Right Ctrl and 'a', expected 'a'"
     "voice off: a posted Right Ctrl down/up and then 'a' left exactly 'a' in the AI input; no mic button"
 }

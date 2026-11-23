@@ -3,6 +3,7 @@
 #include "voice_stt.h"
 #include "base64.h"
 #include "json_validate.h"
+#include "secure_zero.h"
 #include "../config/json_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,7 +245,7 @@ char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t
         ok = text_part(&b, &l, &c, boundary, "response_format", "json");
     ok = ok && buf_str(&b, &l, &c, "--") && buf_str(&b, &l, &c, boundary) &&
          buf_str(&b, &l, &c, "--\r\n");
-    if (!ok) { free(b); return NULL; }
+    if (!ok) { if (b) secure_zero(b, c); free(b); return NULL; }   /* it holds audio */
     if (out_len) *out_len = l;
     return b;
 }
@@ -263,11 +264,15 @@ char *voice_stt_gemini_body(const unsigned char *wav, size_t wav_len,
     size_t b64cap = ((wav_len + 2) / 3) * 4 + 1;
     char *b64 = (char *)malloc(b64cap);
     if (!b64) return NULL;
-    if (base64_encode(wav, wav_len, b64, b64cap) == 0 && wav_len > 0) { free(b64); return NULL; }
+    if (base64_encode(wav, wav_len, b64, b64cap) == 0 && wav_len > 0) {
+        secure_zero(b64, b64cap);
+        free(b64);
+        return NULL;
+    }
     size_t mlen = strlen(model), tlen = strlen(text);
     size_t cap = strlen(b64) + 12 * (mlen + tlen) + 256;
     char *out = (char *)malloc(cap);
-    if (!out) { free(b64); return NULL; }
+    if (!out) { secure_zero(b64, b64cap); free(b64); return NULL; }
     size_t pos = 0;
 #define PUT(lit) do { size_t k_ = strlen(lit); if (pos + k_ >= cap) goto fail; memcpy(out + pos, lit, k_); pos += k_; } while (0)
     PUT("{\"model\":");
@@ -286,10 +291,13 @@ char *voice_stt_gemini_body(const unsigned char *wav, size_t wav_len,
     PUT("\",\"format\":\"wav\"}}]}]}");
 #undef PUT
     out[pos] = '\0';
+    secure_zero(b64, b64cap);   /* the audio, encoded */
     free(b64);
     if (out_len) *out_len = pos;
     return out;
 fail:
+    secure_zero(b64, b64cap);
+    secure_zero(out, cap);
     free(b64);
     free(out);
     return NULL;

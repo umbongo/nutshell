@@ -157,8 +157,10 @@ done:
     if (j->wav) { secure_zero(j->wav, j->wav_len); free(j->wav); j->wav = NULL; }
     secure_zero(j->secret, sizeof(j->secret));
     r->token = j->token;
-    if (!PostMessage(j->notify, WM_VOICE_STT, 0, (LPARAM)r))
-        free(r);   /* the window is gone */
+    if (!PostMessage(j->notify, WM_VOICE_STT, 0, (LPARAM)r)) {
+        secure_zero(r, sizeof(*r));   /* the window is gone; the transcript is wiped */
+        free(r);
+    }
     j->res = NULL;
     /* Exactly one side frees the record: cancel_all sets `detached` when it
      * gives up on this thread; whoever sees it already set frees. */

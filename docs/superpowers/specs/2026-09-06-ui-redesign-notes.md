@@ -524,6 +524,12 @@ Open, in priority order:
       off while recording and while transcribing stops at once, and no transcript arrives
       later. (t) Changing the STT provider on the Voice page moves a default model to the new
       provider's default and keeps a typed one.
+      (u) Win+L during a Toggle recording: locking may not send WM_ACTIVATEAPP, so a latched
+      recording can run to the 60 s cap and send; a follow-up could map WTS_SESSION_LOCK
+      through a delay-loaded wtsapi32. (v) With the microphone blocked in Windows privacy
+      settings, an open that returns E_ACCESSDENIED (Activate or Initialize) shows "Windows
+      may be blocking the microphone: Settings > Privacy & security > Microphone" (panel and
+      Settings > Voice Test); never seen, Wine does not return it.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
