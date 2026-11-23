@@ -129,8 +129,9 @@ three. A new feature is checked against these three tests when it is designed.
   lacks fields this version knows, they are added with their decided values
   and the file is saved at once. A one-time, non-blocking notice then names
   each added setting and the value it was given, in plain words. A first run
-  with no config file gets the same notice: the new file is written at once,
-  and the notice says so and lists each optional feature as off. The first
+  with no config file gets its own notice in the same format: the new file is
+  written at once, and the notice says so and lists each optional feature as
+  off. The first
   use is the AI assistant switch design
   (`docs/superpowers/specs/2026-11-23-ai-assistant-enable-switch-design.md`
   §3). An older exe drops fields it does not know, so the next new launch adds
@@ -226,6 +227,11 @@ other rules are convention, checked only in review:
   `ns_hover_move()`/`ns_hover_leave()` on `WM_MOUSEMOVE`/`TrackMouseEvent`
   and invalidate only the two elements that changed state, rather than
   tracking a hot-id by hand per widget.
+- **Notices use the shared notice format**: a title, an opening line, an
+  optional list, an optional closing line and up to two buttons, themed and
+  non-blocking, one at a time. Every notice uses the one notice component and
+  supplies only its own text (see
+  `docs/superpowers/specs/2026-11-23-ai-assistant-enable-switch-design.md` §3).
 - **Visual sanity check**: `nutshell.exe --ui-demo=all` (or `--ui-demo=<state>`
   with `--theme "<name>"`) opens a live window in every panel state without
   needing an SSH session or an AI key — use it to eyeball a change before

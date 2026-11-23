@@ -60,27 +60,39 @@ The switch is checked at one gate per entry point **(from review)**:
 - **Voice** is off and its switch disabled, with the reason "Needs the AI
   assistant".
 
-## 3. Configuration notice: upgrade and first run
+## 3. Notices: one format, starting with upgrade and first run
 
-This is general and applies to every version that adds settings
-**(maintainer)**. The same notice covers a config that was upgraded and one
-that was not found and has just been created **(maintainer)**. It has the same
-component, title, list and buttons, and only the opening and closing lines
-differ. Today a first run with no `nutshell.config` says nothing
+**A shared notice format** **(maintainer)**. Nutshell gets one notice
+component, and every notice uses it: the two below and any added later. Each
+notice has its own text. What stays the same is the form and how it behaves:
+
+- **Layout:** a title, an opening line, an optional list of items in bold
+  label + plain value form, an optional closing line, and up to two buttons
+  (an optional action such as "Review in Settings", and OK).
+- **Behaviour:** themed with the design-system tokens; **non-blocking**
+  (not a modal message box) **(call)**; shown after the main window appears;
+  dismissed by OK, Escape or its close control; one at a time, so a second
+  notice waits until the first is dismissed **(call)**.
+- **The code:** one module that takes the notice's content as data, so a new
+  notice is new text, not a new window. `--ui-demo` shows it, so the gallery
+  covers it on all four themes.
+- The existing configuration warnings (invalid or unreadable file, save
+  failed) stay modal message boxes for now. Moving them onto the format is a
+  separate change **(call)**.
+
+**The first two notices.** This applies to every version that adds settings
+**(maintainer)**. Today a first run with no `nutshell.config` says nothing
 (`window.c:4453`, `CONFIG_LOAD_MISSING`).
 
-- **When it is shown.** It appears once, after the main window is shown,
-  in two cases:
+- **When they are shown.** Each appears once, in one of two cases:
   - **Upgrade:** the config file lacks fields this version knows. The
     missing fields are added with their decided values and the file is saved
     at once, not at the next Settings save.
   - **First run:** no config file was found (`CONFIG_LOAD_MISSING`). The
     defaults are written to a new file at once, beside the exe as today.
-  - It is not shown when the file was found and is complete. It is also not
-    shown for an invalid or unreadable file: those keep their existing
+  - Neither is shown when the file was found and is complete, nor
+    for an invalid or unreadable file: those keep their existing
     warnings, and the unreadable case saves nothing.
-- **Form.** It is **non-blocking**: a themed, dismissible notice, not a modal
-  message box **(call)**.
 - **Wording, upgrade:**
 
   > **Welcome to Nutshell 1.2.NN**
@@ -109,7 +121,7 @@ differ. Today a first run with no `nutshell.config` says nothing
   >
   > [Review in Settings]   [OK]
 
-- **The list.**
+- **Their lists.**
   - On an upgrade it names each added setting and the value it was given, in
     plain words. A version that adds no settings shows no notice.
   - On a first run it names every optional feature (CLAUDE.md, "Optional
@@ -199,6 +211,6 @@ persist it **(from review)**.
 
 - Removing the menu items versus greying them out. Removal is preferred, per
   "as if it did not exist".
-- The notice's visual form within the design system.
+- The notice component's exact visual form within the design system.
 - The module boundary for AI init and teardown, and the handle registry for
   cancellation.
