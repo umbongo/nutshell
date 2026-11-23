@@ -11,6 +11,7 @@
 #include "config.h"
 #include "thinking_mode.h"
 #include "dlog_types.h"
+#include "voice_config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,6 +90,10 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_AI_RUNCMD_MODE),
     N(SH_AI_CONTEXT_LINES), N(SH_AI_SYSTEM_NOTES), N(SH_AI_MARKDOWN), N(SH_AI_THINKING_MODE),
     N(SH_AI_POLICY_ALLOWED), N(SH_AI_POLICY_AUTO), N(SH_AI_TOOL_TIMEOUT), N(SH_AI_TOOL_ROUNDS),
+    N(SH_VOICE_ENABLE), N(SH_VOICE_STT_USE_AI), N(SH_VOICE_STT_PROVIDER), N(SH_VOICE_STT_KEY),
+    N(SH_VOICE_STT_URL), N(SH_VOICE_STT_MODEL), N(SH_VOICE_LANGUAGE), N(SH_VOICE_DEVICE),
+    N(SH_VOICE_TEST), N(SH_VOICE_PTT_KEY), N(SH_VOICE_PTT_MODE), N(SH_VOICE_MIC_DELAY),
+    N(SH_VOICE_REVIEW),
     N(SH_AI_WEB_FETCH), N(SH_AI_SEARCH), N(SH_AI_SEARCH_URL), N(SH_AI_MAX_RESULTS),
     N(SH_DBG_ENABLE), N(SH_DBG_LEVEL_RENDER), N(SH_DBG_LEVEL_TERM), N(SH_DBG_LEVEL_AI),
     N(SH_DBG_LEVEL_SSH), N(SH_DBG_LEVEL_SHELL), N(SH_DBG_LEVEL_GENERAL),
@@ -104,7 +109,7 @@ int test_settings_help_table_matches_enum(void) {
     const SettingsHelp *t = settings_help_table(&n);
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(n, (size_t)SH_COUNT);
-    ASSERT_EQ(SH_COUNT, 49);
+    ASSERT_EQ(SH_COUNT, 62);
     ASSERT_EQ(sizeof(k_names) / sizeof(k_names[0]), (size_t)SH_COUNT);
     ASSERT_NOT_NULL(settings_help_table(NULL));
     if (t != NULL && n == (size_t)SH_COUNT) {
@@ -229,6 +234,11 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     case SH_AI_BASE_URL:          str = s->ai_custom_url; break;
     case SH_AI_SYSTEM_NOTES:      str = s->ai_system_notes; break;
     case SH_AI_SEARCH_URL:        str = s->ai_search_url; break;
+    case SH_VOICE_STT_PROVIDER:   str = s->voice_stt_provider; break;
+    case SH_VOICE_STT_KEY:        str = s->stt_api_key; break;
+    case SH_VOICE_STT_URL:        str = s->voice_stt_url; break;
+    case SH_VOICE_STT_MODEL:      str = s->voice_stt_model; break;
+    case SH_VOICE_LANGUAGE:       str = s->voice_stt_language; break;
     case SH_DBG_FOLDER:           str = s->debug_log_dir; break;
     default: break;
     }
@@ -247,6 +257,7 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     case SH_FONT_SIZE:         num = s->font_size; break;
     case SH_AI_TOOL_ROUNDS:    num = s->ai_tool_auto_rounds; break;
     case SH_AI_MAX_RESULTS:    num = s->ai_max_search_results; break;
+    case SH_VOICE_MIC_DELAY:   num = s->voice_mic_delay_ms; break;
     case SH_DBG_MAX_FILE:      num = s->debug_max_file_mb; break;
     default: isnum = 0; break;
     }
@@ -274,6 +285,26 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     }
     if (id == SH_AI_ENABLE) {
         (void)snprintf(out, n, "%s", s->ai_enabled ? "On" : "Off");
+        return 1;
+    }
+    if (id == SH_VOICE_ENABLE || id == SH_VOICE_REVIEW || id == SH_VOICE_STT_USE_AI) {
+        int on = id == SH_VOICE_ENABLE ? s->voice_enabled
+               : id == SH_VOICE_REVIEW ? s->voice_review : s->voice_stt_use_ai;
+        (void)snprintf(out, n, "%s", on ? "On" : "Off");
+        return 1;
+    }
+    if (id == SH_VOICE_DEVICE) {
+        (void)snprintf(out, n, "%s", s->voice_input_device[0] != '\0'
+                                     ? s->voice_input_device_name : "Windows default");
+        return 1;
+    }
+    if (id == SH_VOICE_PTT_KEY) {
+        (void)snprintf(out, n, "%s", voice_ptt_key_label(s->voice_ptt_key));
+        return 1;
+    }
+    if (id == SH_VOICE_PTT_MODE) {
+        (void)snprintf(out, n, "%s", s->voice_ptt_mode == VOICE_MODE_TOGGLE ? "Toggle"
+                                     : "Hold to talk");
         return 1;
     }
     if (id == SH_AI_RUNCMD_MODE) {
@@ -613,5 +644,35 @@ int test_settings_help_ai_enable_entry(void) {
     const SettingsHelp *prev = settings_help_get((int)SH_AI_ENABLE - 1);
     ASSERT_NOT_NULL(prev);
     if (prev != NULL) ASSERT_TRUE(prev->page != SETTINGS_PAGE_AI_PROVIDER);
+    TEST_END();
+}
+
+int test_settings_help_voice_entries(void) {
+    TEST_BEGIN();
+    for (int id = (int)SH_VOICE_ENABLE; id <= (int)SH_VOICE_REVIEW; id++) {
+        const SettingsHelp *e = settings_help_get(id);
+        ASSERT_NOT_NULL(e);
+        if (e == NULL) continue;
+        ASSERT_EQ(e->page, SETTINGS_PAGE_VOICE);
+        ASSERT_EQ(e->kind, id == (int)SH_VOICE_TEST ? SH_KIND_ACTION : SH_KIND_SETTING);
+    }
+    ASSERT_EQ((int)SH_VOICE_REVIEW - (int)SH_VOICE_ENABLE + 1, 13);
+    /* between the AI Behaviour and the AI Web entries */
+    ASSERT_EQ(settings_help_get((int)SH_VOICE_ENABLE - 1)->page, SETTINGS_PAGE_AI_BEHAVIOUR);
+    ASSERT_EQ(settings_help_get((int)SH_VOICE_REVIEW + 1)->page, SETTINGS_PAGE_AI_WEB);
+    const SettingsHelp *e = settings_help_get((int)SH_VOICE_ENABLE);
+    ASSERT_STR_EQ(e->label, "Enable voice");
+    ASSERT_STR_EQ(e->default_text, "Off");
+    e = settings_help_get((int)SH_VOICE_MIC_DELAY);
+    ASSERT_EQ(e->min, VOICE_MIC_DELAY_MIN);
+    ASSERT_EQ(e->max, VOICE_MIC_DELAY_MAX);
+    ASSERT_EQ(e->min, 0);
+    ASSERT_EQ(e->max, 400);
+    ASSERT_STR_EQ(e->default_text, "150");
+    e = settings_help_get((int)SH_VOICE_STT_URL);
+    ASSERT_TRUE(strstr(e->text, "base URL") != NULL);
+    e = settings_help_get((int)SH_VOICE_TEST);
+    ASSERT_STR_EQ(e->label, "Test");
+    ASSERT_NULL(e->default_text);
     TEST_END();
 }

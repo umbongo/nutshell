@@ -506,3 +506,51 @@ int test_shortcuts_readme_block_unchanged_by_filter(void)
     ASSERT_TRUE(strstr(after, "Drag in the AI panel") != NULL);
     TEST_END();
 }
+
+/* The two voice rows (SC_AI | SC_VOICE) show only with the AI assistant and
+ * voice both on; every other combination drops them, and the plain
+ * shortcuts_filtered() means voice follows the AI switch. */
+int test_shortcuts_voice_rows_need_both_switches(void)
+{
+    TEST_BEGIN();
+    size_t full_n = 0;
+    const Shortcut *full = shortcuts_table(&full_n);
+    size_t voice = 0;
+    for (size_t i = 0; i < full_n; i++) {
+        if (full[i].flags & SC_VOICE) {
+            voice++;
+            ASSERT_TRUE((full[i].flags & SC_AI) != 0);
+            ASSERT_STR_EQ(full[i].section, "AI Assist panel");
+        }
+    }
+    ASSERT_EQ((int)voice, 2);
+
+    ASSERT_EQ((int)shortcuts_filtered_ex(NULL, 0, 1, 1), (int)full_n);
+    ASSERT_EQ((int)shortcuts_filtered_ex(NULL, 0, 1, 0), (int)(full_n - 2));
+    /* voice on cannot show a row while the AI assistant is off */
+    size_t ai_off = shortcuts_filtered(NULL, 0, 0);
+    ASSERT_EQ((int)shortcuts_filtered_ex(NULL, 0, 0, 1), (int)ai_off);
+    ASSERT_EQ((int)shortcuts_filtered_ex(NULL, 0, 0, 0), (int)ai_off);
+    ASSERT_EQ((int)shortcuts_filtered(NULL, 0, 1), (int)full_n);
+
+    Shortcut out[128];
+    size_t n = shortcuts_filtered_ex(out, 128, 1, 1);
+    int hold = 0, esc = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (strcmp(out[i].chord, "Right Ctrl (hold)") == 0 &&
+            strcmp(out[i].action, "Talk to the assistant: speak, then release to send") == 0 &&
+            strcmp(out[i].condition,
+                   "Voice on; key and mode in Settings > Voice") == 0)
+            hold++;
+        if (strcmp(out[i].chord, "Esc") == 0 &&
+            strcmp(out[i].action, "Cancel a voice recording") == 0 &&
+            strcmp(out[i].condition, "While recording") == 0)
+            esc++;
+    }
+    ASSERT_EQ(hold, 1);
+    ASSERT_EQ(esc, 1);
+    n = shortcuts_filtered_ex(out, 128, 1, 0);
+    for (size_t i = 0; i < n; i++) ASSERT_TRUE((out[i].flags & SC_VOICE) == 0);
+    ASSERT_TRUE(full_n <= 96);   /* CS_MAX_ROWS */
+    TEST_END();
+}

@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.91 \
+**Version**: v1.2.92 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -22,6 +22,8 @@ The standout feature: an integrated AI panel that sits alongside your terminal s
 - **Per-session context** — attach notes to each server profile (e.g. "production database — read-only") that guide the AI's behaviour
 - **Safety controls** — one policy scale (Read › Unknown › Write › Critical) for how far the AI is *allowed* to go, plus an **Auto-approve** button that lets it run commands up to that level without asking — sits directly above the input, next to a context-usage meter
 - **Guided empty states** — the panel always opens: it shows starter suggestions with nothing to ask yet, a button straight to Settings when no API key is set, and a button to the Session Manager when no session is connected
+
+**Voice input** (off by default; Settings > Voice, needs the AI assistant): with the AI panel focused, hold **Right Ctrl** (or choose F8 or F9, or Toggle mode, in Settings), speak, and release. The recording is sent to the speech-to-text provider you pick (your AI provider's, or OpenAI, Groq, Mistral, Gemini or a custom endpoint) and the transcript goes through the chat's normal send path, so every approval works as before; **Esc** cancels. Nothing of the audio code is loaded while voice is off, and Right Ctrl keeps its usual chords.
 
 ## Pre-built Binary
 
@@ -478,6 +480,8 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **Ctrl+C** | Copy the selected text | conversation list focused |
 | **Ctrl+A** | Select all messages | list focused |
 | **Esc** | Clear the selection | list focused |
+| **Right Ctrl (hold)** | Talk to the assistant: speak, then release to send | Voice on; key and mode in Settings > Voice |
+| **Esc** | Cancel a voice recording | While recording |
 | **PgUp, PgDn, Home, End, Up, Down** | Scroll the conversation | list focused |
 
 #### Window and help

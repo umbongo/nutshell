@@ -97,6 +97,7 @@ void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner)
 void ai_chat_batch_settle_rows(AiChatData *d, CmdBatch *batch)
 {
     if (!d || !batch) return;
+    ai_chat_voice_busy_changed(d);   /* a card finishing frees the mic button */
     batch->settled = 1;
     chat_msg_batch_settle(&d->msg_list, batch->id);
 }
@@ -553,6 +554,7 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
         return;
     }
     CmdBatch *b = cmd_batch_add(&owner->batches, NULL, NULL);
+    if (b) ai_chat_voice_busy_changed(d);
     if (!b) {
         (void)tool_decision_answer(&stream->decision, m->gen,
                                    TOOL_DECISION_NOT_APPROVED);
@@ -712,6 +714,8 @@ void ai_chat_dispatch_start(AiChatData *d, int batch_id)
     DWORD now = GetTickCount();
 
     d->dispatch_active = 1;
+
+    ai_chat_voice_busy_changed(d);
     d->dispatch_batch_id = batch->id;
     d->dispatch_seq = d->active_term ? d->active_term->write_seq : 0;
     d->dispatch_await_echo = 0;
@@ -796,6 +800,7 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify,
 
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     d->dispatch_active = 0;
+    ai_chat_voice_busy_changed(d);
     d->dispatch_stall_reported = 0;
     d->dispatch_ambiguous_since_tick = 0;
     d->dispatch_ambiguous_reported = 0;
@@ -1061,6 +1066,7 @@ void ai_chat_dispatch_tick(AiChatData *d)
          * cancelled, but this stale tick still fired) -- stop cleanly. */
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         d->dispatch_active = 0;
+        ai_chat_voice_busy_changed(d);
         d->dispatch_batch_id = 0;
         d->dispatch_stall_reported = 0;
         d->dispatch_ambiguous_since_tick = 0;
@@ -1295,6 +1301,7 @@ void ai_chat_dispatch_tick(AiChatData *d)
              * records, removes, and starts the next request (SETTLED). */
             KillTimer(d->hwnd, TIMER_CMD_QUEUE);
             d->dispatch_active = 0;
+            ai_chat_voice_busy_changed(d);
             d->dispatch_batch_id = 0;
             d->dispatch_stall_reported = 0;
             d->dispatch_ambiguous_since_tick = 0;
@@ -1340,6 +1347,7 @@ void ai_chat_dispatch_tick(AiChatData *d)
 
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         d->dispatch_active = 0;
+        ai_chat_voice_busy_changed(d);
         d->dispatch_batch_id = 0;
         d->dispatch_stall_reported = 0;
         d->dispatch_ambiguous_since_tick = 0;

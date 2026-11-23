@@ -10,6 +10,7 @@
 #include "crypto.h"
 #include "settings_entry.h"
 #include "settings_help.h"
+#include "voice_config.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -524,6 +525,19 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("open_session_manager_at_start", NULL, NULL, SH_SESSION_MGR_STARTUP, NULL),
     CK("ai_policy_default",             "ai_auto_approve_mode", "ai_auto_approve_default",
                                         SH_AI_POLICY_ALLOWED, NULL),
+    CK("voice_enabled",                 NULL, NULL, SH_VOICE_ENABLE, "Voice"),
+    CK("voice_stt_use_ai",              NULL, NULL, SH_VOICE_STT_USE_AI, "Voice: use the AI assistant's provider"),
+    CK("voice_stt_provider",            NULL, NULL, SH_VOICE_STT_PROVIDER, "Voice: speech-to-text provider"),
+    CK("voice_stt_url",                 NULL, NULL, SH_VOICE_STT_URL, "Voice: speech-to-text URL"),
+    CK("voice_stt_model",               NULL, NULL, SH_VOICE_STT_MODEL, "Voice: speech-to-text model"),
+    CK("voice_stt_language",            NULL, NULL, SH_VOICE_LANGUAGE, "Voice: language"),
+    CK("stt_api_key",                   NULL, NULL, SH_VOICE_STT_KEY, "Voice: speech-to-text API key"),
+    CK("voice_input_device",            NULL, NULL, SH_VOICE_DEVICE, "Voice: microphone"),
+    CK("voice_input_device_name",       NULL, NULL, SH_VOICE_DEVICE, "Voice: microphone name"),
+    CK("voice_ptt_key",                 NULL, NULL, SH_VOICE_PTT_KEY, "Voice: push-to-talk key"),
+    CK("voice_ptt_mode",                NULL, NULL, SH_VOICE_PTT_MODE, "Voice: push-to-talk mode"),
+    CK("voice_mic_delay_ms",            NULL, NULL, SH_VOICE_MIC_DELAY, "Voice: mic start delay"),
+    CK("voice_review",                  NULL, NULL, SH_VOICE_REVIEW, "Voice: review before sending"),
 };
 #undef CK
 
@@ -571,6 +585,7 @@ void settings_validate(Settings *s)
     if (s->paste_confirm != 0) s->paste_confirm = 1;
     if (s->open_session_manager_at_start != 0) s->open_session_manager_at_start = 1;
     cmd_policy_clamp(&s->ai_policy_default);
+    voice_settings_validate(s);
     /* debug log */
     s->debug_enabled = s->debug_enabled ? 1 : 0;
     for (int i = 0; i < (int)DLOG_CAT_COUNT; i++)
@@ -628,6 +643,7 @@ void config_default_settings(Settings *s)
     s->paste_confirm = 1;
     s->open_session_manager_at_start = 0;
     s->ai_policy_default = cmd_policy_default();
+    voice_settings_default(s);
 }
 
 Profile *config_profile_new(void)
@@ -672,6 +688,7 @@ void config_free(Config *cfg)
     /* Wipe the one secret that lives directly in Settings (profile
      * passwords are wiped by config_profile_free() above already). */
     secure_zero(cfg->settings.ai_api_key, sizeof(cfg->settings.ai_api_key));
+    secure_zero(cfg->settings.stt_api_key, sizeof(cfg->settings.stt_api_key));
     free(cfg);
 }
 
@@ -925,6 +942,39 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
             s->ai_policy_default.allowed = CMD_READ;
             s->ai_policy_default.unattended = legacy_on ? CMD_READ : POLICY_NONE;
         }
+
+        /* Voice. A file lacking "voice_enabled" keeps it off (the default):
+         * unlike ai_enabled there is no first-load rule. */
+        s->voice_enabled = json_obj_bool(jset, "voice_enabled", s->voice_enabled);
+        s->voice_stt_use_ai = json_obj_bool(jset, "voice_stt_use_ai", s->voice_stt_use_ai);
+        if ((sv = json_obj_str(jset, "voice_stt_provider"))) {
+            field_copy(s->voice_stt_provider, sizeof(s->voice_stt_provider), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_stt_url"))) {
+            field_copy(s->voice_stt_url, sizeof(s->voice_stt_url), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_stt_model"))) {
+            field_copy(s->voice_stt_model, sizeof(s->voice_stt_model), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_stt_language"))) {
+            field_copy(s->voice_stt_language, sizeof(s->voice_stt_language), sv);
+        }
+        if ((sv = json_obj_str(jset, "stt_api_key"))) {
+            load_secret(sv, s->stt_api_key, sizeof(s->stt_api_key),
+                        s->stt_api_key_enc_preserved, sizeof(s->stt_api_key_enc_preserved),
+                        &migrated);
+        }
+        if ((sv = json_obj_str(jset, "voice_input_device"))) {
+            field_copy(s->voice_input_device, sizeof(s->voice_input_device), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_input_device_name"))) {
+            field_copy(s->voice_input_device_name, sizeof(s->voice_input_device_name), sv);
+        }
+        s->voice_ptt_key = voice_ptt_key_from_json(json_obj_str(jset, "voice_ptt_key"));
+        s->voice_ptt_mode = voice_ptt_mode_from_json(json_obj_str(jset, "voice_ptt_mode"));
+        s->voice_mic_delay_ms = (int)json_obj_num(jset, "voice_mic_delay_ms",
+                                                  (double)s->voice_mic_delay_ms);
+        s->voice_review = json_obj_bool(jset, "voice_review", s->voice_review);
         settings_validate(s);
     }
 
@@ -1075,6 +1125,14 @@ int config_save(const Config *cfg, const char *path)
         return -1;
     }
 
+    char stt_api_key_blob[CFG_BLOB_MAX];
+    if (secret_prepare(s->stt_api_key, s->stt_api_key_enc_preserved,
+                        stt_api_key_blob, sizeof(stt_api_key_blob)) != CRYPTO_OK) {
+        secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
+        secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+        return -1;
+    }
+
     char (*pw_blobs)[CFG_BLOB_MAX] = NULL;
     if (n > 0u) {
         pw_blobs = xmalloc(n * sizeof(*pw_blobs));
@@ -1087,6 +1145,7 @@ int config_save(const Config *cfg, const char *path)
                 }
                 free(pw_blobs);
                 secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+                secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
                 return -1;
             }
         }
@@ -1107,6 +1166,7 @@ int config_save(const Config *cfg, const char *path)
             free(pw_blobs);
         }
         secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+        secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
         return -1;
     }
 
@@ -1211,6 +1271,38 @@ int config_save(const Config *cfg, const char *path)
         fputs("    \"ai_policy_default\": ", f);
         fprint_json_str(f, policy_tok);
     }
+    fputs(",\n", f);
+    fprintf(f, "    \"voice_enabled\": %s,\n", s->voice_enabled ? "true" : "false");
+    fprintf(f, "    \"voice_stt_use_ai\": %s,\n", s->voice_stt_use_ai ? "true" : "false");
+    fputs("    \"voice_stt_provider\": ", f);
+    fprint_json_str(f, s->voice_stt_provider);
+    fputs(",\n", f);
+    fputs("    \"voice_stt_url\": ", f);
+    fprint_json_str(f, s->voice_stt_url);
+    fputs(",\n", f);
+    fputs("    \"voice_stt_model\": ", f);
+    fprint_json_str(f, s->voice_stt_model);
+    fputs(",\n", f);
+    fputs("    \"voice_stt_language\": ", f);
+    fprint_json_str(f, s->voice_stt_language);
+    fputs(",\n", f);
+    fputs("    \"stt_api_key\": ", f);
+    fprint_json_str(f, stt_api_key_blob);
+    fputs(",\n", f);
+    fputs("    \"voice_input_device\": ", f);
+    fprint_json_str(f, s->voice_input_device);
+    fputs(",\n", f);
+    fputs("    \"voice_input_device_name\": ", f);
+    fprint_json_str(f, s->voice_input_device_name);
+    fputs(",\n", f);
+    fputs("    \"voice_ptt_key\": ", f);
+    fprint_json_str(f, voice_ptt_key_json(s->voice_ptt_key));
+    fputs(",\n", f);
+    fputs("    \"voice_ptt_mode\": ", f);
+    fprint_json_str(f, voice_ptt_mode_json(s->voice_ptt_mode));
+    fputs(",\n", f);
+    fprintf(f, "    \"voice_mic_delay_ms\": %d,\n", s->voice_mic_delay_ms);
+    fprintf(f, "    \"voice_review\": %s", s->voice_review ? "true" : "false");
     fputs("\n", f);
     fputs("  },\n  \"profiles\": [\n", f);
 
@@ -1276,6 +1368,7 @@ int config_save(const Config *cfg, const char *path)
             free(pw_blobs);
         }
         secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+        secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
         return -1;
     }
 
@@ -1306,6 +1399,7 @@ int config_save(const Config *cfg, const char *path)
         free(pw_blobs);
     }
     secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+    secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
 
     return moved;
 }

@@ -68,6 +68,10 @@ static const Shortcut TABLE[] = {
     { S5, "Ctrl+C",      "Copy the selected text", "conversation list focused", SC_AI, 0 },
     { S5, "Ctrl+A",      "Select all messages", "list focused", SC_AI, 0 },
     { S5, "Esc",         "Clear the selection", "list focused", SC_AI, 0 },
+    { S5, "Right Ctrl (hold)", "Talk to the assistant: speak, then release to send",
+      "Voice on; key and mode in Settings > Voice", SC_AI | SC_VOICE, 0 },
+    { S5, "Esc",         "Cancel a voice recording", "While recording",
+      SC_AI | SC_VOICE, 0 },
     { S5, "PgUp, PgDn, Home, End, Up, Down", "Scroll the conversation",
       "list focused", SC_AI, 0 },
 
@@ -127,9 +131,15 @@ const char *shortcuts_menu_accel(int menu_id)
 
 size_t shortcuts_filtered(Shortcut *out, size_t cap, int ai_on)
 {
+    return shortcuts_filtered_ex(out, cap, ai_on, ai_on);
+}
+
+size_t shortcuts_filtered_ex(Shortcut *out, size_t cap, int ai_on, int voice_on)
+{
     size_t n = 0;
     for (size_t i = 0; i < TABLE_N; i++) {
         if (!ai_on && (TABLE[i].flags & SC_AI)) continue;
+        if (!voice_on && (TABLE[i].flags & SC_VOICE)) continue;
         if (out && n < cap) out[n] = TABLE[i];
         n++;
     }

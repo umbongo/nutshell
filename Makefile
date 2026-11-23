@@ -155,7 +155,7 @@ WIN_ONLY_TESTS = tests/test_winhttp_open_win.c tests/test_icons.c tests/test_loc
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
                  tests/test_pw_reveal_win.c tests/test_telnet_io_win.c \
                  tests/test_ns_tip_win.c tests/test_settings_label_win.c \
-                 tests/test_notice_dlg_win.c
+                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_stt_win.c tests/test_voice_ptt_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -313,12 +313,16 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/winhttp_open.c src/core/ai_gate.c tests/test_winhttp_open_win.c \
                    tests/test_notice_dlg_win.c \
                    src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
-                   tests/test_settings_label_win.c tests/win_runner.c
+                   tests/test_settings_label_win.c \
+                   src/ui/voice_audio_win.c src/core/wav.c tests/test_voice_audio_win.c \
+                   src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/voice_gate.c \
+                   src/core/voice_config.c src/core/base64.c src/core/json_validate.c src/config/json_parser.c src/config/json_tokenizer.c src/core/vector.c \
+                   tests/test_voice_stt_win.c src/core/voice_ptt.c tests/test_voice_ptt_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
                    $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui -Itests
-WIN_TEST_LDFLAGS = -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp
+WIN_TEST_LDFLAGS = $(DEP_LIB) -lcrypto -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp -lole32 -lcrypt32
 
 all: $(TARGET)
 
@@ -430,7 +434,9 @@ endif
 # With the AI assistant off winhttp.dll, riched20.dll and msftedit.dll must
 # never have been requested; with it on (the control) riched20.dll,
 # msftedit.dll and winhttp.dll (one session opened and closed) must have
-# been. Uses $(TARGET) as it stands: a UPX-packed exe
+# been. Three runs: off (AI off, voice ticked in the file: the dependency keeps
+# it off, so no mmdevapi.dll), voiceoff (AI on, voice off) and on (both on:
+# mmdevapi.dll must have been requested). Uses $(TARGET) as it stands: a UPX-packed exe
 # (make release) works as well as an unpacked one. A private Wine prefix
 # keeps the shared ~/.wine untouched; the first run takes a minute.
 SELFTEST_DIR    = build/selftest
@@ -441,10 +447,16 @@ selftest-wine: $(TARGET)
 		echo "[skip] selftest-wine needs wine and xvfb-run"; \
 	else \
 		set -e; \
-		for m in off on; do \
+		for m in off voiceoff on; do \
 			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
 			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
-			cp tests/selftest/nutshell-ai-$$m.config $(SELFTEST_DIR)/$$m/nutshell.config; \
+			case $$m in \
+			off) sed 's/"voice_enabled": false/"voice_enabled": true/' tests/selftest/nutshell-ai-off.config > $(SELFTEST_DIR)/$$m/nutshell.config; \
+				grep -q '"voice_enabled": true' $(SELFTEST_DIR)/$$m/nutshell.config \
+					|| { echo "FAIL: the off config does not tick voice (the sed matched nothing)"; exit 1; } ;; \
+			voiceoff) cp tests/selftest/nutshell-ai-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			on) cp tests/selftest/nutshell-voice-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			esac; \
 			( cd $(SELFTEST_DIR)/$$m && WINEPREFIX=$(SELFTEST_PREFIX) WINEDEBUG=-all \
 				timeout 120 xvfb-run -a wine nutshell.exe -nc --self-report=report.txt ); \
 			sh tests/selftest/check.sh $$m $(SELFTEST_DIR)/$$m/report.txt; \

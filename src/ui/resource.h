@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.91"
-#define APP_VERSION_BINARY  1,2,91,0
+#define APP_VERSION        "1.2.92"
+#define APP_VERSION_BINARY  1,2,92,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -119,5 +119,19 @@
 #define IDC_DBG_CURRENT          3096 /* Current log file (read-only) */
 #define IDC_AI_ENABLE            3098 /* Settings > Provider: "Enable AI assistant" tickbox */
 #define IDC_AI_THINKING_MODE     3097 /* Settings: "Thinking display" combo (Automatic, Always collapsed, Always compact, Always open) */
+#define IDC_VOICE_ENABLE         3099 /* Settings > Voice: "Enable voice" tickbox */
+#define IDC_VOICE_USE_AI         3100 /* "Use current AI assistant to convert speech to text" tickbox */
+#define IDC_VOICE_PROVIDER       3101 /* speech-to-text provider combo */
+#define IDC_VOICE_KEY            3102 /* speech-to-text API key edit */
+#define IDC_VOICE_URL            3103 /* custom speech-to-text base URL edit */
+#define IDC_VOICE_MODEL          3104 /* speech-to-text model (editable combo) */
+#define IDC_VOICE_LANG           3105 /* language code edit */
+#define IDC_VOICE_DEVICE         3106 /* input device combo */
+#define IDC_VOICE_TEST           3107 /* "Test" button beside the device combo */
+#define IDC_VOICE_METER          3108 /* the owner-drawn level meter row */
+#define IDC_VOICE_PTT_KEY        3109 /* push-to-talk key combo */
+#define IDC_VOICE_PTT_MODE       3110 /* Hold to talk / Toggle combo */
+#define IDC_VOICE_MIC_DELAY      3111 /* mic start delay (ms) edit */
+#define IDC_VOICE_REVIEW         3112 /* "Review before sending" tickbox */
 
 #endif

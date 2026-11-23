@@ -33,6 +33,12 @@
 #include "settings_help.h"
 #include "search_providers.h"
 #include "settings_entry.h"
+#include "opt_feature.h"
+#include "voice_audio_win.h"
+#include "voice_config.h"
+#include "voice_gate.h"
+#include "voice_stt.h"
+#include "voice_win.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +68,7 @@
 #define IDC_SSH_IDLE_EDIT   1030
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
+#define IDT_VOICE_TEST      52  /* the 3 s microphone test */
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 static const char *PAGE_CLASS     = "Nutshell_SettingsPage";
@@ -150,7 +157,7 @@ typedef struct {
 } SettingsCtrl;
 
 /* Raise this when a page outgrows it; add_ctrl refuses to overflow. */
-#define MAX_SETTINGS_CTRLS 64
+#define MAX_SETTINGS_CTRLS 96
 
 /* ---- Dialog state ------------------------------------------------------- */
 
@@ -166,7 +173,7 @@ typedef struct {
                                * never the bare CONFIG_FILENAME, which would
                                * save into whatever the CWD has become. */
     HWND     hTip;       /* the help tip (ns_tip), themed from `theme` */
-    SettingsTip tips[96]; /* every control with a help id, in creation order */
+    SettingsTip tips[128]; /* every control with a help id, in creation order */
     int      n_tips;
     HFONT    hDlgFont;   /* MS Shell Dlg 8pt — applied to all child controls */
     HFONT    hBoldFont;  /* same face, bold — nav headers + breadcrumb title */
@@ -193,7 +200,7 @@ typedef struct {
     HWND     hDbgDim[6];  /* dim statics on the Debugging page */
     int      n_dbg_dim;
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
-    int      demo;        /* --ui-demo=settings-debug: debugging ticked in memory, Save never writes */
+    int      demo;        /* --ui-demo: 1 = settings-debug (debugging ticked in memory), 2 = settings-voice (AI and voice ticked, no device list); Save never writes */
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
     struct FetchModelsCtx *models;   /* the Refresh Models request in flight (UI's reference), or NULL */
     ThreadJoinList models_thread;    /* its thread's handle, kept so closing can join it */
@@ -201,6 +208,30 @@ typedef struct {
     SettingsCtrl *ctrl_ai_base_url;   /* toggled by provider combo */
     SettingsCtrl *ctrl_ai_url_warn;   /* shown for a clear-text custom endpoint */
     SettingsCtrl *ctrl_ai_search_url; /* toggled by search-provider combo */
+
+    /* The Voice page: the rows that come and go, and the dim notes. */
+    HWND     hVoiceBlock;    /* dim "Needs the AI assistant" under Enable voice */
+    HWND     hVoiceAiNote;   /* dim reason "Use current AI assistant" cannot be ticked */
+    HWND     hVoiceHead[2];  /* "Speech to Text" / "Microphone" section labels */
+    HWND     hVoiceUrlWarn;  /* warning-coloured "not encrypted" line under the voice Base URL */
+    SettingsCtrl *ctrl_voice_block;
+    SettingsCtrl *ctrl_voice_ai_note;
+    SettingsCtrl *ctrl_voice_provider;
+    SettingsCtrl *ctrl_voice_key;
+    SettingsCtrl *ctrl_voice_url;
+    SettingsCtrl *ctrl_voice_url_warn;
+    int      voice_use_ai_wanted; /* the user's choice, kept while the AI provider cannot do speech */
+    int      voice_dev_listed;    /* the device combo lists microphones (voice saved on) */
+    HWND     hDlg;                /* the dialog window (timers, relayout) */
+    HWND     hVoiceTestNote;      /* dim "No microphone was found." under the meter */
+    SettingsCtrl *ctrl_voice_test_note;
+    int      voice_testing;       /* the 3 s test is running */
+    int      voice_level;         /* the meter, 0..1000 */
+    int      voice_dev_touched;   /* the user changed the device combo */
+    int      voice_dev_missing;   /* the saved microphone is not in the list */
+    int      voice_dev_n;         /* microphones listed (entry i is combo item i + 1) */
+    struct { char id[256]; char name[256]; } voice_dev[32];   /* UTF-8 */
+    const SttProvider *voice_seeded; /* the provider the Model list was last seeded from */
 
     int      cur_page; /* SETTINGS_PAGE_* currently shown */
     int      scroll;   /* current page scroll offset, px */
@@ -218,6 +249,10 @@ static void ai_url_warn_sync(SettingsDlgData *d);
 static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
 static void ai_enable_sync(SettingsDlgData *d);
+static void voice_enable_sync(SettingsDlgData *d);
+
+/* The open Settings dialog that listens for WM_VOICE_AUDIO (UI thread only). */
+static SettingsDlgData *g_voice_dlg;
 
 /* ---- Layout helpers ----------------------------------------------------- */
 /* Controls are created with placeholder geometry; relayout() positions them
@@ -290,6 +325,17 @@ static HWND make_combo2(SettingsDlgData *d, int id, DWORD type_style,
 {
     return page_ctrl(d, "COMBOBOX", "", CBS_HASSTRINGS | WS_VSCROLL | type_style,
                      id, help);
+}
+
+/* A drop-down list that is a wide window, so the wide CB_ADDSTRING keeps a
+ * name outside the ANSI code page (a microphone's) intact. */
+static HWND make_combo2_wide(SettingsDlgData *d, int id, SettingsHelpId help)
+{
+    HWND w = CreateWindowW(L"COMBOBOX", L"",
+                           WS_CHILD | WS_VISIBLE | CBS_HASSTRINGS | WS_VSCROLL | CBS_DROPDOWNLIST,
+                           0, 0, 10, 200, d->hPage, (HMENU)(UINT_PTR)id, NULL, NULL);
+    page_track(d, w, help);
+    return w;
 }
 
 static HWND make_check2(SettingsDlgData *d, int id, SettingsHelpId help)
@@ -791,6 +837,166 @@ static void ai_enable_sync(SettingsDlgData *d)
         EnableWindow(refresh, (on && ai_gate_on()) ? TRUE : FALSE);
 }
 
+/* ---- Voice page ---------------------------------------------------------- */
+
+/* The Voice page follows the two switches in this dialog, not the saved
+ * ones: Enable voice needs the AI tick, every other row needs both. */
+static int voice_ai_ticked(const SettingsDlgData *d)
+{
+    return IsDlgButtonChecked(d->hPage, IDC_AI_ENABLE) == BST_CHECKED;
+}
+
+static int voice_ticked(const SettingsDlgData *d)
+{
+    return IsDlgButtonChecked(d->hPage, IDC_VOICE_ENABLE) == BST_CHECKED;
+}
+
+/* Why "Use current AI assistant" cannot be ticked for the provider and URL
+ * now showing on the AI Provider page, or NULL. */
+static const char *voice_use_ai_reason(const SettingsDlgData *d)
+{
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_PROVIDER_COMBO,
+                                      CB_GETCURSEL, 0, 0);
+    const char *prov = (sel >= 0 && sel < NUM_AI_PROVIDERS) ? k_ai_providers[sel] : "";
+    char url[512];
+    url[0] = '\0';
+    GetDlgItemText(d->hPage, IDC_AI_CUSTOM_URL, url, (int)sizeof(url));
+    return voice_stt_use_ai_reason(prov, url);
+}
+
+/* The speech-to-text provider the model list is seeded from: the chat
+ * provider while the assistant's own is used, else the Voice page's combo. */
+static const SttProvider *voice_effective_provider(const SettingsDlgData *d)
+{
+    if (IsDlgButtonChecked(d->hPage, IDC_VOICE_USE_AI) == BST_CHECKED) {
+        int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_PROVIDER_COMBO,
+                                          CB_GETCURSEL, 0, 0);
+        const SttProvider *p = (sel >= 0 && sel < NUM_AI_PROVIDERS)
+                                   ? voice_stt_provider_find(k_ai_providers[sel]) : NULL;
+        return p ? p : voice_stt_provider_find("custom");
+    }
+    size_t n = 0;
+    const SttProvider *tab = voice_stt_providers(&n);
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PROVIDER, CB_GETCURSEL, 0, 0);
+    return (sel >= 0 && (size_t)sel < n) ? &tab[sel] : NULL;
+}
+
+/* Refill the Model list from the effective provider; the text now in the box
+ * (the current value) is kept. */
+static void voice_model_seed(SettingsDlgData *d)
+{
+    HWND cmb = GetDlgItem(d->hPage, IDC_VOICE_MODEL);
+    if (!cmb) return;
+    const SttProvider *p = voice_effective_provider(d);
+    if (p == d->voice_seeded && SendMessage(cmb, CB_GETCOUNT, 0, 0) > 0) return;
+    const SttProvider *prev = d->voice_seeded;
+    d->voice_seeded = p;
+    char cur[CFG_STR_MAX];
+    cur[0] = '\0';
+    GetWindowText(cmb, cur, (int)sizeof(cur));
+    /* Empty means "the provider's default model": show that default. A text
+     * that is one of the previous provider's seeds follows the provider too;
+     * one the user typed is kept. */
+    int follow = (cur[0] == '\0');
+    for (size_t k = 0; !follow && prev && prev != p && prev->models && prev->models[k]; k++)
+        if (strcmp(cur, prev->models[k]) == 0) follow = 1;
+    SendMessage(cmb, CB_RESETCONTENT, 0, 0);
+    if (p && p->models)
+        for (size_t i = 0; p->models[i]; i++)
+            SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)p->models[i]);
+    if (follow && p && p->models && p->models[0])
+        SetWindowText(cmb, p->models[0]);
+    else
+        SetWindowText(cmb, cur);
+}
+
+static int voice_url_is_cleartext(const SettingsDlgData *d)
+{
+    char url[512];
+    url[0] = '\0';
+    GetDlgItemText(d->hPage, IDC_VOICE_URL, url, (int)sizeof(url));
+    return net_url_cleartext_remote(url);
+}
+
+/* Which Voice rows show: the reason notes, and the Provider, API key and Base
+ * URL rows (hidden while the assistant's own provider is used). Returns 1
+ * when a row came or went, so the caller relays the page out. */
+static int voice_rows_apply(SettingsDlgData *d)
+{
+    if (!d || !d->hPage || !d->ctrl_voice_provider) return 0;
+    int ai_on = voice_ai_ticked(d);
+    const char *why = voice_use_ai_reason(d);
+    int use_ai = d->voice_use_ai_wanted && why == NULL;
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PROVIDER, CB_GETCURSEL, 0, 0);
+    size_t n = 0;
+    const SttProvider *tab = voice_stt_providers(&n);
+    int custom = (sel >= 0 && (size_t)sel < n && strcmp(tab[sel].id, "custom") == 0);
+
+    CheckDlgButton(d->hPage, IDC_VOICE_USE_AI, use_ai ? BST_CHECKED : BST_UNCHECKED);
+    SetWindowText(d->hVoiceAiNote, why ? why : "");
+    const char *blocked = NULL;
+    {
+        Settings tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        tmp.ai_enabled = ai_on;
+        blocked = opt_feature_blocked_reason(&tmp, OPT_AI);
+    }
+    SetWindowText(d->hVoiceBlock, blocked ? blocked : "");
+
+    int changed = 0;
+    struct { SettingsCtrl *c; int show; } rows[] = {
+        { d->ctrl_voice_block,    blocked != NULL },
+        { d->ctrl_voice_ai_note,  why != NULL },
+        { d->ctrl_voice_provider, !use_ai },
+        { d->ctrl_voice_key,      !use_ai },
+        { d->ctrl_voice_url,      !use_ai && custom },
+        { d->ctrl_voice_url_warn, !use_ai && custom && voice_url_is_cleartext(d) },
+    };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        if (!rows[i].c) continue;
+        if (rows[i].c->visible != rows[i].show) changed = 1;
+        rows[i].c->visible = rows[i].show;
+    }
+    voice_model_seed(d);
+    return changed;
+}
+
+/* The Enable voice box is usable only while the AI tick is on; every other
+ * Voice row only while both ticks are. Use current AI assistant is also
+ * disabled (and unticked) while the provider has no speech-to-text, the
+ * device list and Test only once voice has been saved on, and Test never in
+ * this revision. Called wherever ai_enable_sync is, and when a box or the AI
+ * provider changes. */
+static void voice_enable_sync(SettingsDlgData *d)
+{
+    if (!d || !d->hPage) return;
+    int ai_on = voice_ai_ticked(d);
+    int on = ai_on && voice_ticked(d);
+    HWND box = GetDlgItem(d->hPage, IDC_VOICE_ENABLE);
+    for (int i = 0; i < d->n_ctrls; i++) {
+        const SettingsCtrl *c = &d->ctrls[i];
+        if (c->page != SETTINGS_PAGE_VOICE) continue;
+        if (c->hLabel) EnableWindow(c->hLabel, on ? TRUE : FALSE);
+        if (c->hCtrl && c->hCtrl != box) EnableWindow(c->hCtrl, on ? TRUE : FALSE);
+        if (c->hExtra)  EnableWindow(c->hExtra, on ? TRUE : FALSE);
+    }
+    if (box) EnableWindow(box, ai_on ? TRUE : FALSE);
+    int changed = voice_rows_apply(d);
+    HWND use_ai = GetDlgItem(d->hPage, IDC_VOICE_USE_AI);
+    if (use_ai)
+        EnableWindow(use_ai, (on && voice_use_ai_reason(d) == NULL) ? TRUE : FALSE);
+    HWND dev = GetDlgItem(d->hPage, IDC_VOICE_DEVICE);
+    if (dev) EnableWindow(dev, (on && d->voice_dev_listed) ? TRUE : FALSE);
+    /* Test needs the listed microphones (voice saved on) and runs once at a time. */
+    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
+    if (test)
+        EnableWindow(test, (on && d->voice_dev_listed && !d->voice_testing) ? TRUE : FALSE);
+    if (changed && d->cur_page == SETTINGS_PAGE_VOICE) {
+        relayout(GetParent(d->hPage), d);
+        InvalidateRect(d->hPage, NULL, TRUE);
+    }
+}
+
 static void ai_url_warn_sync(SettingsDlgData *d)
 {
     (void)ai_url_warn_apply(d);
@@ -808,6 +1014,160 @@ static void ai_url_warn_update(SettingsDlgData *d)
  * Every page control is a child of this window. It handles theme colours,
  * owner-draw for the refresh button, forwards WM_COMMAND to the main
  * window, and owns scrolling (both the AI notes edit and the whole page). */
+
+/* ---- Voice page: microphones, Test and the meter ------------------------ */
+
+static void voice_meter_redraw(SettingsDlgData *d)
+{
+    HWND m = GetDlgItem(d->hPage, IDC_VOICE_METER);
+    if (m) InvalidateRect(m, NULL, FALSE);
+}
+
+/* The dim line under the meter ("" hides the row). */
+static void voice_test_note(SettingsDlgData *d, const char *text)
+{
+    if (!d->hVoiceTestNote || !d->ctrl_voice_test_note) return;
+    SetWindowText(d->hVoiceTestNote, text);
+    int show = text[0] ? 1 : 0;
+    if (d->ctrl_voice_test_note->visible != show) {
+        d->ctrl_voice_test_note->visible = show;
+        if (d->cur_page == SETTINGS_PAGE_VOICE) {
+            relayout(d->hDlg, d);
+            InvalidateRect(d->hPage, NULL, TRUE);
+        }
+    }
+}
+
+static void voice_test_end(SettingsDlgData *d)
+{
+    if (!d->voice_testing) return;
+    voice_audio_capture_end(0);   /* explicit: the test is over, discard */
+    KillTimer(d->hDlg, IDT_VOICE_TEST);
+    d->voice_testing = 0;
+    d->voice_level = 0;
+    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
+    if (test) SetWindowText(test, settings_help_get((int)SH_VOICE_TEST)->label);
+    voice_meter_redraw(d);
+    voice_enable_sync(d);
+    if (test) InvalidateRect(test, NULL, TRUE);
+}
+
+/* The endpoint ID the device combo currently stands for ("" = Windows default). */
+static const char *voice_dev_selected_id(const SettingsDlgData *d)
+{
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_DEVICE, CB_GETCURSEL, 0, 0);
+    if (sel >= 1 && sel - 1 < d->voice_dev_n) return d->voice_dev[sel - 1].id;
+    if (sel >= 1) return d->cfg->settings.voice_input_device;   /* before the list arrives */
+    return "";
+}
+
+static void voice_test_start(SettingsDlgData *d)
+{
+    if (d->voice_testing || !d->voice_dev_listed) return;
+    /* The page was built with voice on; it may have gone off since. */
+    if (!voice_gate_on() || !voice_feature_running()) {
+        voice_test_note(d, "Voice is not running.");
+        return;
+    }
+    voice_test_note(d, "");
+    d->voice_testing = 1;
+    d->voice_level = 0;
+    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
+    if (test) SetWindowText(test, "Testing...");
+    SetTimer(d->hDlg, IDT_VOICE_TEST, 3000, NULL);
+    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1);
+    voice_enable_sync(d);
+    if (test) InvalidateRect(test, NULL, TRUE);
+}
+
+/* Adds a UTF-8 name to a combo as wide text, so a non-Latin microphone name
+ * shows as itself (an ANSI CB_ADDSTRING would turn it into question marks). */
+static int voice_combo_add_utf8(HWND cmb, const char *utf8)
+{
+    wchar_t w[320];
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, (int)(sizeof(w) / sizeof(w[0]))) <= 0)
+        w[0] = L'\0';
+    return (int)SendMessageW(cmb, CB_ADDSTRING, 0, (LPARAM)w);
+}
+
+/* The device list arrived: refill the combo and keep the selection by ID. */
+static void voice_dev_take_list(SettingsDlgData *d, const VoiceDeviceList *l)
+{
+    char want[256];
+    snprintf(want, sizeof(want), "%s", d->voice_dev_touched
+                 ? voice_dev_selected_id(d)
+                 : d->cfg->settings.voice_input_device);
+    d->voice_dev_n = 0;
+    for (int i = 0; i < l->n && i < 32; i++) {
+        if (WideCharToMultiByte(CP_UTF8, 0, l->dev[i].id, -1, d->voice_dev[d->voice_dev_n].id,
+                                (int)sizeof(d->voice_dev[0].id), NULL, NULL) <= 0)
+            continue;
+        snprintf(d->voice_dev[d->voice_dev_n].name, sizeof(d->voice_dev[0].name),
+                 "%s", l->dev[i].name);
+        d->voice_dev_n++;
+    }
+    int sel = 0;
+    for (int i = 0; i < d->voice_dev_n; i++)
+        if (want[0] && strcmp(want, d->voice_dev[i].id) == 0) sel = i + 1;
+    d->voice_dev_missing = (want[0] && sel == 0 && !d->voice_dev_touched) ? 1 : 0;
+
+    char first[300];
+    if (d->voice_dev_missing) {
+        const Settings *vs = &d->cfg->settings;
+        snprintf(first, sizeof(first), "Windows default (saved microphone not found: %s)",
+                 vs->voice_input_device_name[0] ? vs->voice_input_device_name
+                                                : vs->voice_input_device);
+    } else {
+        snprintf(first, sizeof(first), "Windows default");
+    }
+    HWND cmb = GetDlgItem(d->hPage, IDC_VOICE_DEVICE);
+    if (!cmb) return;
+    SendMessage(cmb, CB_RESETCONTENT, 0, 0);
+    voice_combo_add_utf8(cmb, first);
+    for (int i = 0; i < d->voice_dev_n; i++)
+        voice_combo_add_utf8(cmb, d->voice_dev[i].name);
+    SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+}
+
+int settings_voice_on_audio(WPARAM wp, LPARAM lp)
+{
+    SettingsDlgData *d = g_voice_dlg;
+    if (!d || !d->voice_dev_listed || !d->hPage) return 0;
+    switch ((VoiceAudioMsg)wp) {
+    case VAM_DEVICES:
+        voice_dev_take_list(d, (const VoiceDeviceList *)lp);
+        voice_audio_free_devices((VoiceDeviceList *)lp);
+        return 1;
+    case VAM_DEVICES_CHANGED:
+        voice_audio_enumerate();
+        return 1;
+    case VAM_LEVEL:
+        if (d->voice_testing) {
+            d->voice_level = (int)lp < 0 ? 0 : ((int)lp > 1000 ? 1000 : (int)lp);
+            voice_meter_redraw(d);
+        }
+        return 1;
+    case VAM_ERROR:
+        /* Only a capture error is the Test's result; an enumeration failure
+         * (VAE_COM_FAILED) arriving meanwhile is not. */
+        if (d->voice_testing && (VoiceAudioErr)lp != VAE_COM_FAILED) {
+            voice_test_end(d);
+            switch ((VoiceAudioErr)lp) {
+            case VAE_NO_DEVICE:    voice_test_note(d, "No microphone was found."); break;
+            case VAE_DEVICE_LOST:  voice_test_note(d, "The microphone stopped responding."); break;
+            case VAE_ACCESS_DENIED:
+                voice_test_note(d, "Windows may be blocking the microphone: Settings > Privacy & security > Microphone");
+                break;
+            default:               voice_test_note(d, "The microphone could not be opened."); break;
+            }
+        }
+        return 1;
+    case VAM_READY:
+        return 1;
+    default:
+        return 0;
+    }
+}
 
 static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                                          WPARAM wParam, LPARAM lParam)
@@ -835,14 +1195,16 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
     case WM_CTLCOLORSTATIC:
         if (d && d->theme) {
             HWND hCtl = (HWND)lParam;
-            if (d->hUrlWarn && hCtl == d->hUrlWarn) {
+            if ((d->hUrlWarn && hCtl == d->hUrlWarn) ||
+                (d->hVoiceUrlWarn && hCtl == d->hVoiceUrlWarn)) {
                 SetTextColor((HDC)wParam, theme_cr(ns_tokens()->warning.base));
                 SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
                 return (LRESULT)d->hBrBgPrimary;
             }
             int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb ||
                        hCtl == d->hCtxHint || hCtl == d->hToolTimeoutNote ||
-                       hCtl == d->hToolRoundsNote);
+                       hCtl == d->hToolRoundsNote ||
+                       hCtl == d->hVoiceBlock || hCtl == d->hVoiceAiNote);
             for (int di = 0; di < d->n_dbg_dim && !dim; di++)
                 dim = (hCtl == d->hDbgDim[di]);
             SetTextColor((HDC)wParam,
@@ -873,8 +1235,22 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
             LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
             if ((int)dis->CtlID == IDC_AI_REFRESH ||
                 (int)dis->CtlID == IDC_DBG_BROWSE ||
-                (int)dis->CtlID == IDC_DBG_OPEN) {
+                (int)dis->CtlID == IDC_DBG_OPEN ||
+                (int)dis->CtlID == IDC_VOICE_TEST) {
                 draw_themed_button(dis, d->theme, 0);
+                return TRUE;
+            }
+            if ((int)dis->CtlID == IDC_VOICE_METER) {
+                /* The microphone level: the page background behind the track,
+                 * and the fill from the Test's levels (0 otherwise). */
+                FillRect(dis->hDC, &dis->rcItem, d->hBrBgPrimary);
+                NsRect bar;
+                bar.x = dis->rcItem.left;
+                bar.y = dis->rcItem.top + (dis->rcItem.bottom - dis->rcItem.top) / 4;
+                bar.w = dis->rcItem.right - dis->rcItem.left;
+                bar.h = (dis->rcItem.bottom - dis->rcItem.top) / 2;
+                if (bar.w > 0 && bar.h > 0)
+                    ns_draw_meter(dis->hDC, &bar, d->voice_level / 1000.0, ns_tokens());
                 return TRUE;
             }
         }
@@ -1069,7 +1445,7 @@ static void debug_open_folder(HWND hwnd, SettingsDlgData *d)
 static void debug_build_page(SettingsDlgData *nd)
 {
     const Settings *st = &nd->cfg->settings;
-    const int on = st->debug_enabled || nd->demo;
+    const int on = st->debug_enabled || nd->demo == 1;
     DlogStatus dst;
     unsigned long long used_bytes = 0;
     unsigned used_files = 0;
@@ -1233,6 +1609,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         SettingsDlgData *nd = (SettingsDlgData *)cs->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
 
+        nd->hDlg = hwnd;
         nd->dpi = get_window_dpi(hwnd);
         SettingsMetrics m;
         settings_metrics_init(&m, nd->dpi);
@@ -1415,10 +1792,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* The master switch: while it is unticked every other AI control
              * on the three AI pages stays created (the help tips stay
              * counted) but disabled (ai_enable_sync). The stored value, never
-             * the --ui-demo override, decides the initial state. */
+             * the --ui-demo override, decides the initial state -- except
+             * --ui-demo=settings-voice (demo == 2), which ticks it in memory. */
             HWND chk = make_check2(nd, IDC_AI_ENABLE, SH_AI_ENABLE);
             SendMessage(chk, BM_SETCHECK,
-                        nd->cfg->settings.ai_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+                        (nd->cfg->settings.ai_enabled || nd->demo == 2) ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 1);
         }
         {
@@ -1620,6 +1998,179 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                      SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 3, 0, 1, 1);
         }
 
+        /* ==== VOICE ==== */
+        {
+            const Settings *vs = &nd->cfg->settings;
+            nd->voice_use_ai_wanted = vs->voice_stt_use_ai;
+            nd->voice_dev_listed = voice_gate_on() && !nd->demo;   /* a demo never lists microphones (no COM) */
+            {
+                HWND chk = make_check2(nd, IDC_VOICE_ENABLE, SH_VOICE_ENABLE);
+                SendMessage(chk, BM_SETCHECK,
+                            (vs->voice_enabled || nd->demo == 2) ? BST_CHECKED : BST_UNCHECKED, 0);
+                add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
+            }
+            {
+                /* "Needs the AI assistant" while the dialog's AI box is off. */
+                nd->hVoiceBlock = make_hint(nd, "");
+                nd->ctrl_voice_block = add_ctrl(nd, NULL, nd->hVoiceBlock, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 0, 1);
+            }
+            {
+                nd->hVoiceHead[0] = make_hint(nd, "Speech to Text");
+                add_ctrl(nd, NULL, nd->hVoiceHead[0], NULL, SETTINGS_PAGE_VOICE,
+                         0, 0, 1, 0, 1, 1);
+            }
+            {
+                HWND chk = make_check2(nd, IDC_VOICE_USE_AI, SH_VOICE_STT_USE_AI);
+                add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
+            }
+            {
+                nd->hVoiceAiNote = make_hint(nd, "");
+                nd->ctrl_voice_ai_note = add_ctrl(nd, NULL, nd->hVoiceAiNote, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 0, 1);
+            }
+            {
+                HWND lbl = make_label2(nd, SH_VOICE_STT_PROVIDER);
+                HWND cmb = make_combo2(nd, IDC_VOICE_PROVIDER, CBS_DROPDOWNLIST,
+                                       SH_VOICE_STT_PROVIDER);
+                size_t np = 0;
+                const SttProvider *tab = voice_stt_providers(&np);
+                int sel = 0;
+                for (size_t i = 0; i < np; i++) {
+                    SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)tab[i].label);
+                    if (_stricmp(vs->voice_stt_provider, tab[i].id) == 0) sel = (int)i;
+                }
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+                nd->ctrl_voice_provider = add_ctrl(nd, lbl, cmb, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                HWND lbl = make_label2(nd, SH_VOICE_STT_KEY);
+                HWND ed = make_edit2(nd, vs->stt_api_key, IDC_VOICE_KEY,
+                                     ES_PASSWORD, SH_VOICE_STT_KEY);
+                SendMessage(ed, EM_SETLIMITTEXT,
+                            (WPARAM)(sizeof(vs->stt_api_key) - 1u), 0);
+                pw_reveal_attach(ed);
+                nd->ctrl_voice_key = add_ctrl(nd, lbl, ed, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                HWND lbl = make_label2(nd, SH_VOICE_STT_URL);
+                HWND ed = make_edit2(nd, vs->voice_stt_url, IDC_VOICE_URL, 0,
+                                     SH_VOICE_STT_URL);
+                SendMessage(ed, EM_SETLIMITTEXT,
+                            (WPARAM)(sizeof(vs->voice_stt_url) - 1u), 0);
+                nd->ctrl_voice_url = add_ctrl(nd, lbl, ed, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 0, 0);
+            }
+            {
+                nd->hVoiceUrlWarn = make_hint(nd,
+                    "Not encrypted: your API key and recordings cross the "
+                    "network in plain text.");
+                nd->ctrl_voice_url_warn = add_ctrl(nd, NULL, nd->hVoiceUrlWarn, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0, 0, 1);
+            }
+            {
+                /* Editable: the list is only a suggestion (voice_model_seed). */
+                HWND lbl = make_label2(nd, SH_VOICE_STT_MODEL);
+                HWND cmb = make_combo2(nd, IDC_VOICE_MODEL, CBS_DROPDOWN,
+                                       SH_VOICE_STT_MODEL);
+                if (vs->voice_stt_model[0]) SetWindowText(cmb, vs->voice_stt_model);
+                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                HWND lbl = make_label2(nd, SH_VOICE_LANGUAGE);
+                HWND ed = make_edit2(nd, vs->voice_stt_language, IDC_VOICE_LANG, 0,
+                                     SH_VOICE_LANGUAGE);
+                SendMessage(ed, EM_SETLIMITTEXT,
+                            (WPARAM)(sizeof(vs->voice_stt_language) - 1u), 0);
+                add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_VOICE, 70, 0, 1, 0, 1, 0);
+            }
+            {
+                nd->hVoiceHead[1] = make_hint(nd, "Microphone");
+                add_ctrl(nd, NULL, nd->hVoiceHead[1], NULL, SETTINGS_PAGE_VOICE,
+                         0, 0, 1, 0, 1, 1);
+            }
+            {
+                /* The list is filled only once voice has been saved on (the
+                 * audio thread enumerates then); until then one placeholder. */
+                HWND lbl = make_label2(nd, SH_VOICE_DEVICE);
+                HWND cmb = make_combo2_wide(nd, IDC_VOICE_DEVICE, SH_VOICE_DEVICE);
+                if (nd->voice_dev_listed) {
+                    voice_combo_add_utf8(cmb, "Windows default");
+                    int sel = 0;
+                    if (vs->voice_input_device[0]) {
+                        const char *nm = vs->voice_input_device_name[0]
+                                             ? vs->voice_input_device_name
+                                             : vs->voice_input_device;
+                        sel = voice_combo_add_utf8(cmb, nm);
+                    }
+                    SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+                } else {
+                    SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Save to list microphones");
+                    SendMessage(cmb, CB_SETCURSEL, 0, 0);
+                }
+                HWND test = page_ctrl(nd, "BUTTON",
+                                      settings_help_get((int)SH_VOICE_TEST)->label,
+                                      BS_OWNERDRAW, IDC_VOICE_TEST, SH_VOICE_TEST);
+                add_ctrl(nd, lbl, cmb, test, SETTINGS_PAGE_VOICE, 0, 70, 1, 0, 1, 0);
+            }
+            {
+                /* The level meter, painted in WM_DRAWITEM; empty until Test. */
+                HWND meter = page_ctrl(nd, "STATIC", "", SS_OWNERDRAW,
+                                       IDC_VOICE_METER, SH_NONE);
+                add_ctrl(nd, NULL, meter, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                /* "No microphone was found." and the like, after a Test. */
+                nd->hVoiceTestNote = make_hint(nd, "");
+                nd->ctrl_voice_test_note = add_ctrl(nd, NULL, nd->hVoiceTestNote, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 0, 1);
+            }
+            {
+                HWND lbl = make_label2(nd, SH_VOICE_PTT_KEY);
+                HWND cmb = make_combo2(nd, IDC_VOICE_PTT_KEY, CBS_DROPDOWNLIST,
+                                       SH_VOICE_PTT_KEY);
+                for (int i = 0; i < VOICE_PTT_COUNT; i++)
+                    SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)voice_ptt_key_label(i));
+                int ksel = vs->voice_ptt_key;
+                if (ksel < 0 || ksel >= VOICE_PTT_COUNT) ksel = VOICE_PTT_RIGHT_CTRL;
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)ksel, 0);
+                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                HWND lbl = make_label2(nd, SH_VOICE_PTT_MODE);
+                HWND cmb = make_combo2(nd, IDC_VOICE_PTT_MODE, CBS_DROPDOWNLIST,
+                                       SH_VOICE_PTT_MODE);
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Hold to talk");
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Toggle");
+                SendMessage(cmb, CB_SETCURSEL,
+                            (WPARAM)(vs->voice_ptt_mode == VOICE_MODE_TOGGLE ? 1 : 0), 0);
+                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                char buf[16];
+                (void)snprintf(buf, sizeof(buf), "%d", vs->voice_mic_delay_ms);
+                HWND lbl = make_label2(nd, SH_VOICE_MIC_DELAY);
+                HWND ed = make_edit2(nd, buf, IDC_VOICE_MIC_DELAY, ES_NUMBER,
+                                     SH_VOICE_MIC_DELAY);
+                add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_VOICE, 70, 0, 1, 0, 1, 0);
+            }
+            {
+                HWND chk = make_check2(nd, IDC_VOICE_REVIEW, SH_VOICE_REVIEW);
+                SendMessage(chk, BM_SETCHECK,
+                            vs->voice_review ? BST_CHECKED : BST_UNCHECKED, 0);
+                add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
+            }
+            /* Voice saved on: ask the audio thread for the microphones and
+             * to tell us when one comes or goes. */
+            g_voice_dlg = nd;
+            if (nd->voice_dev_listed) {
+                voice_audio_enumerate();
+                voice_audio_watch_devices(1);
+            }
+        }
+
         /* ==== AI_WEB ==== */
         {
             HWND chk = make_check2(nd, IDC_AI_WEB_FETCH, SH_AI_WEB_FETCH);
@@ -1700,6 +2251,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 EnumChildWindows(hwnd, SetFontProc, (LPARAM)nd->hDlgFont);
             if (nd->hBoldFont && nd->hPageTitle)
                 SendMessage(nd->hPageTitle, WM_SETFONT, (WPARAM)nd->hBoldFont, TRUE);
+            /* The Voice page's two section labels use the heading font too. */
+            for (int vi = 0; vi < 2; vi++)
+                if (nd->hBoldFont && nd->hVoiceHead[vi])
+                    SendMessage(nd->hVoiceHead[vi], WM_SETFONT,
+                                (WPARAM)nd->hBoldFont, TRUE);
         }
 
         /* ---- Theme: look up from config, create brushes, apply chrome ---- */
@@ -1743,6 +2299,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             nd->hTip = ns_tip_create(hwnd, nd->dpi, nd->hDlgFont, &tok);
             if (nd->hTip) {
                 HWND hModel = GetDlgItem(nd->hPage, IDC_AI_CUSTOM_MODEL);
+                HWND hVModel = GetDlgItem(nd->hPage, IDC_VOICE_MODEL);
                 for (int i = 0; i < nd->n_tips; i++) {
                     const SettingsHelp *e = settings_help_get((int)nd->tips[i].help);
                     if (!e) continue;
@@ -1751,6 +2308,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                      * its edit gets a second tool with the same text. */
                     if (nd->tips[i].hwnd == hModel)
                         (void)ns_tip_add_combo(nd->hTip, hModel, e->text);
+                    if (nd->tips[i].hwnd == hVModel)
+                        (void)ns_tip_add_combo(nd->hTip, hVModel, e->text);
                 }
                 /* A disabled child takes no mouse input; the page host sees it
                  * instead, so Session and the recorder level also get a rect
@@ -1780,6 +2339,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         }
         ai_url_warn_sync(nd);
         ai_enable_sync(nd);
+        voice_enable_sync(nd);
         relayout(hwnd, nd);
 
         return 0;
@@ -1813,6 +2373,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         if (ctx && ctx->result) {
             /* Re-enable the refresh button (only while the switch is on) */
             ai_enable_sync(d);
+            voice_enable_sync(d);
 
             if (strncmp(ctx->result, "Error:", 6) == 0) {
                 /* ctx stays alive until the release below; d is not read
@@ -1855,6 +2416,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
     }
 
     case WM_TIMER:
+        if (wParam == IDT_VOICE_TEST && d) {
+            voice_test_end(d);
+            return 0;
+        }
         if (wParam == IDT_SYSNOTES_SCROLL && d) {
             sys_notes_sync_scroll(d);
             return 0;
@@ -1965,17 +2530,70 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     relayout(hwnd, d);
                     InvalidateRect(d->hPage, NULL, TRUE);
                 }
+                voice_enable_sync(d);   /* the speech-to-text reason and model list follow it */
             }
             break;
 
         case IDC_AI_ENABLE:
-            if (d && HIWORD(wParam) == BN_CLICKED)
+            if (d && HIWORD(wParam) == BN_CLICKED) {
                 ai_enable_sync(d);
+                voice_enable_sync(d);
+            }
             break;
 
         case IDC_AI_CUSTOM_URL:
-            if (HIWORD(wParam) == EN_CHANGE && d)
+            if (HIWORD(wParam) == EN_CHANGE && d) {
                 ai_url_warn_update(d);
+                voice_enable_sync(d);   /* the reason Use current AI assistant is unavailable depends on it */
+            }
+            break;
+
+        case IDC_VOICE_ENABLE:
+            if (d && HIWORD(wParam) == BN_CLICKED)
+                voice_enable_sync(d);
+            break;
+
+        case IDC_VOICE_USE_AI:
+            if (d && HIWORD(wParam) == BN_CLICKED) {
+                d->voice_use_ai_wanted =
+                    IsDlgButtonChecked(d->hPage, IDC_VOICE_USE_AI) == BST_CHECKED;
+                voice_enable_sync(d);
+                relayout(hwnd, d);
+                InvalidateRect(d->hPage, NULL, TRUE);
+            }
+            break;
+
+        case IDC_VOICE_DEVICE:
+            if (d && HIWORD(wParam) == CBN_SELCHANGE) d->voice_dev_touched = 1;
+            break;
+
+        case IDC_VOICE_TEST:
+            if (d && HIWORD(wParam) == BN_CLICKED) voice_test_start(d);
+            break;
+
+        case IDC_VOICE_PROVIDER:
+            if (d && HIWORD(wParam) == CBN_SELCHANGE) {
+                /* A model that is empty or one of the old provider's seeds
+                 * follows the provider; one the user typed is kept. */
+                const SttProvider *prev = d->voice_seeded;
+                char cur[CFG_STR_MAX];
+                cur[0] = '\0';
+                GetDlgItemText(d->hPage, IDC_VOICE_MODEL, cur, (int)sizeof(cur));
+                int follow = (cur[0] == '\0');
+                for (size_t k = 0; !follow && prev && prev->models && prev->models[k]; k++)
+                    if (strcmp(cur, prev->models[k]) == 0) follow = 1;
+                voice_enable_sync(d);
+                if (follow && d->voice_seeded && d->voice_seeded != prev &&
+                    d->voice_seeded->models && d->voice_seeded->models[0])
+                    SetDlgItemText(d->hPage, IDC_VOICE_MODEL, d->voice_seeded->models[0]);
+                relayout(hwnd, d);
+                InvalidateRect(d->hPage, NULL, TRUE);
+            }
+            break;
+
+        case IDC_VOICE_URL:
+            if (d && HIWORD(wParam) == EN_CHANGE)
+                voice_enable_sync(d);
             break;
 
         case IDC_AI_REFRESH:
@@ -2128,6 +2746,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     if (ans != IDYES) {
                         CheckDlgButton(d->hPage, IDC_AI_ENABLE, BST_CHECKED);
                         ai_enable_sync(d);
+                        voice_enable_sync(d);
                         break;
                     }
                 }
@@ -2280,6 +2899,85 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             s->ai_tool_auto_rounds =
                 keep_entry(SH_AI_TOOL_ROUNDS, ok, v, s->ai_tool_auto_rounds);
 
+            /* Voice page. Enable voice is saved as ticked (the assistant's
+             * own switch is applied by voice_feature_apply: it needs both). */
+            s->voice_enabled = (IsDlgButtonChecked(d->hPage, IDC_VOICE_ENABLE)
+                                == BST_CHECKED) ? 1 : 0;
+            s->voice_stt_use_ai = (IsDlgButtonChecked(d->hPage, IDC_VOICE_USE_AI)
+                                   == BST_CHECKED) ? 1 : 0;
+            {
+                size_t np = 0;
+                const SttProvider *tab = voice_stt_providers(&np);
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PROVIDER,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && (size_t)sel < np)
+                    (void)snprintf(s->voice_stt_provider, sizeof(s->voice_stt_provider),
+                                   "%s", tab[sel].id);
+            }
+            GetDlgItemText(d->hPage, IDC_VOICE_KEY,
+                           s->stt_api_key, (int)sizeof(s->stt_api_key));
+            /* As the AI key above: a new, non-empty key drops a stale blob. */
+            config_secret_drop_stale_preserved(s->stt_api_key,
+                s->stt_api_key_enc_preserved, sizeof(s->stt_api_key_enc_preserved));
+            {
+                /* A base URL, not an endpoint: a pasted /audio/transcriptions
+                 * is trimmed. Text that is not a URL is kept as typed, so the
+                 * user sees what they entered. */
+                char raw[512], norm[512];
+                raw[0] = '\0';
+                GetDlgItemText(d->hPage, IDC_VOICE_URL, raw, (int)sizeof(raw));
+                const char *use = raw;
+                if (raw[0] && voice_base_url_normalise(raw, norm, sizeof(norm))) use = norm;
+                (void)snprintf(s->voice_stt_url, sizeof(s->voice_stt_url), "%s", use);
+            }
+            GetDlgItemText(d->hPage, IDC_VOICE_MODEL,
+                           s->voice_stt_model, (int)sizeof(s->voice_stt_model));
+            {
+                /* The shown default is stored as "" so a later default follows. */
+                const SttProvider *ep = voice_effective_provider(d);
+                if (ep && ep->models && ep->models[0] &&
+                    strcmp(s->voice_stt_model, ep->models[0]) == 0)
+                    s->voice_stt_model[0] = '\0';
+            }
+            GetDlgItemText(d->hPage, IDC_VOICE_LANG,
+                           s->voice_stt_language, (int)sizeof(s->voice_stt_language));
+            {
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_DEVICE,
+                                                  CB_GETCURSEL, 0, 0);
+                /* "Windows default" clears the choice, unless it stands for a saved
+                 * microphone that is not plugged in and the user left it alone;
+                 * a listed microphone sets it; the saved entry shown before the
+                 * list arrives and the "Save to list microphones" placeholder
+                 * leave it unchanged. */
+                if (d->voice_dev_listed) {
+                    if (sel == 0) {
+                        if (!(d->voice_dev_missing && !d->voice_dev_touched)) {
+                            s->voice_input_device[0] = '\0';
+                            s->voice_input_device_name[0] = '\0';
+                        }
+                    } else if (sel - 1 < d->voice_dev_n) {
+                        (void)snprintf(s->voice_input_device, sizeof(s->voice_input_device),
+                                       "%s", d->voice_dev[sel - 1].id);
+                        (void)snprintf(s->voice_input_device_name,
+                                       sizeof(s->voice_input_device_name),
+                                       "%s", d->voice_dev[sel - 1].name);
+                    }
+                }
+            }
+            {
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PTT_KEY,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < VOICE_PTT_COUNT) s->voice_ptt_key = sel;
+                sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PTT_MODE,
+                                              CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < VOICE_MODE_COUNT) s->voice_ptt_mode = sel;
+            }
+            v = GetDlgItemInt(d->hPage, IDC_VOICE_MIC_DELAY, &ok, FALSE);
+            s->voice_mic_delay_ms =
+                keep_entry(SH_VOICE_MIC_DELAY, ok, v, s->voice_mic_delay_ms);
+            s->voice_review = (IsDlgButtonChecked(d->hPage, IDC_VOICE_REVIEW)
+                               == BST_CHECKED) ? 1 : 0;
+
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)
                                         == BST_CHECKED) ? 1 : 0;
@@ -2387,6 +3085,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             thread_join_detach_all(&d->models_thread);   /* whatever is left, finished or not */
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
+            if (g_voice_dlg == d) {
+                if (d->voice_testing) { KillTimer(hwnd, IDT_VOICE_TEST); voice_audio_capture_end(0); }
+                if (d->voice_dev_listed) voice_audio_watch_devices(0);
+                g_voice_dlg = NULL;
+            }
             if (d->hTip) DestroyWindow(d->hTip);
             /* d->hDlgFont / d->hBoldFont come from the ns_font cache. */
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
@@ -2547,6 +3250,11 @@ int settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
 void settings_dlg_show_demo_debug(HWND parent, Config *cfg)
 {
     (void)settings_dlg_run(parent, cfg, "", SETTINGS_PAGE_DEBUG, 1);
+}
+
+void settings_dlg_show_demo_page(HWND parent, Config *cfg, int page)
+{
+    (void)settings_dlg_run(parent, cfg, "", page, 2);
 }
 
 #endif

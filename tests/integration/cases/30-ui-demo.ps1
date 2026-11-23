@@ -15,7 +15,7 @@
 #
 # $galleryStates is a hand-kept copy of src/core/ui_demo.c's STATE_NAMES,
 # minus "local" (tab-chrome-only, covered by its own case,
-# 80-local-shell.ps1) and "shortcuts" (the modal sheet; this case captures
+# 80-local-shell.ps1), "settings-voice" and "shortcuts" (the modal sheets; this case captures
 # only the main window, so 50-window.ps1's help_shortcuts_sheet_gallery
 # captures the sheet by its handle) -- there is no cheap way for a PowerShell script to
 # query the C array at build time, and --ui-demo=<unknown>'s error text
@@ -31,12 +31,16 @@
 # "ansi" (2026-10-19) is the 16-colour palette as swatches, so the contact
 # sheet shows what each theme's contrast floor does to it (raw on the dark
 # themes, floored to 4.5:1 on the light ones).
+# "voice-recording" and "voice-transcribing" (2026-11-23) show the mic button
+# in its two busy looks with the cue under the input, with no audio thread
+# and no COM; "settings-voice" (modal, like "shortcuts") is captured by
+# 50-window.ps1's settings_voice_gallery.
 
 if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "ui_gallery")) {
     Write-Host ("[RUN ] ui_gallery")
     $galleryDir = Join-Path $Artifacts "gallery"
     New-Item -ItemType Directory -Force $galleryDir | Out-Null
-    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "nokey", "nosession", "batches", "ansi", "thinking", "thinking-compact", "thinking-extended", "thinking-open", "cmddetail", "runlist", "settings-debug", "policy-auto", "policy-compact", "all")
+    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "nokey", "nosession", "batches", "ansi", "thinking", "thinking-compact", "thinking-extended", "thinking-open", "cmddetail", "runlist", "settings-debug", "policy-auto", "policy-compact", "voice-recording", "voice-transcribing", "all")
     $galleryThemes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
     $galleryOk = $true
     $galleryDetail = New-Object System.Collections.ArrayList

@@ -6,6 +6,9 @@
 #include "ai_conv_guard.h"
 #include "dll_record.h"
 #include "notice_dlg.h"
+#include "voice_win.h"
+#include "voice_config.h"
+#include "voice_ptt.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -94,6 +97,7 @@ static CmdBatch *reply_batch_build(AiChatData *d, AiSessionState *owner,
     CmdBatch *batch = cmd_batch_add(&owner->batches, &defaults,
                                     displayed ? &evicted_id : NULL);
     if (!batch) return NULL;
+    ai_chat_voice_busy_changed(d);   /* a card is waiting: the mic button dims */
 
     /* Record how many conversation messages exist right after this reply --
      * compared against the live count when the batch finishes running to
@@ -726,6 +730,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d && d->hInput && IsWindowVisible(hwnd))
                 SetFocus(d->hInput);
             return 0;
+        case IDC_CHAT_MIC:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                voice_mic_clicked();
+                if (d && d->hInput && IsWindowVisible(hwnd))
+                    SetFocus(d->hInput);
+            }
+            return 0;
         case IDC_CHAT_SUGGESTION_BASE:
         case IDC_CHAT_SUGGESTION_BASE + 1:
         case IDC_CHAT_SUGGESTION_BASE + 2: {
@@ -785,6 +796,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
                 ai_conv_reset(&d->conv);
+                d->conv_gen = ai_chat_next_gen();   /* a voice message recorded before this is dropped */
                 if (d->active_state) {
                     ai_conv_reset(&d->active_state->conv);
                     d->active_state->valid = 1;
@@ -1964,6 +1976,8 @@ next_coalesce:;
         if (!d) return 0;
         if (wParam == TIMER_CMD_QUEUE) {
             ai_chat_dispatch_tick(d);
+        } else if (wParam == TIMER_MOTION || wParam == TIMER_VOICE_STATUS) {
+            ai_chat_voice_timer(d, wParam);
         } else if (wParam == TIMER_STREAM_REAP) {
             /* A reply whose thread ended without its final message getting
              * through (out of memory, or the post failed) would leave its
@@ -2182,6 +2196,8 @@ next_coalesce:;
                     ns_icon_draw(hdc, busy ? NS_ICON_STOP : NS_ICON_SEND,
                                  &rc, theme_cr(0xFFFFFF), (UINT)d->dpi);
                 }
+            } else if ((int)dis->CtlID == IDC_CHAT_MIC) {
+                ai_chat_voice_draw_mic(d, dis);
             } else if ((int)dis->CtlID == IDC_CHAT_SAVE) {
                 ai_chat_draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_SAVE);
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
@@ -2248,6 +2264,7 @@ next_coalesce:;
             KillTimer(hwnd, TIMER_HEARTBEAT);
             KillTimer(hwnd, TIMER_CMD_QUEUE);
             KillTimer(hwnd, TIMER_STREAM_REAP);
+            ai_chat_voice_on_destroy(d);   /* kills TIMER_MOTION and TIMER_VOICE_STATUS */
             /* A command still running when the panel closes (undock/redock
              * builds a new panel over the same session) ends with its cause,
              * an [EXEC] batch as well as a run_command batch: its rows are
@@ -2282,6 +2299,13 @@ next_coalesce:;
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)NULL);
         }
         return 0;
+
+    case WM_ACTIVATEAPP:
+    case WM_ENABLE:
+        /* Losing activation, or a modal dialog disabling the (undocked)
+         * panel, ends a push-to-talk recording. */
+        if (!wParam) voice_on_deactivate();
+        break;
 
     case WM_CLOSE:
         if (d && d->docked) {
@@ -2337,6 +2361,8 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     AiChatData *d = (AiChatData *)calloc(1, sizeof(AiChatData));
     if (!d) return NULL;
 
+    d->session_gen = ai_chat_next_gen();   /* never reused in this process: a */
+    d->conv_gen = ai_chat_next_gen();      /* redock cannot revive an old binding */
     d->indicator_pos = -1;
     d->stream_display_start = -1;
     d->forced_state = -1;
@@ -2652,7 +2678,7 @@ static void do_session_switch(AiChatData *d,
 {
     /* A Critical confirmation still up from the old session must not apply
      * to this one (ai_chat_request_policy_change()). */
-    d->session_gen++;
+    d->session_gen = ai_chat_next_gen();
     /* Kill command timers -- they belong to the old session. The dispatcher
      * itself is per-panel, not per-session, so switching away just stops it
      * silently (no "[command queue stopped]" -- that's the Stop button's
@@ -2873,7 +2899,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
     if (d->active_state == state) {
         d->active_state = NULL;
         d->last_snapshot_len = 0;
-        d->session_gen++;   /* a confirmation box still up must not apply */
+        d->session_gen = ai_chat_next_gen();   /* a confirmation box still up must not apply */
     }
 }
 
@@ -2991,8 +3017,30 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         if (strcmp(state, "empty") == 0) forced = AI_STATE_EMPTY;
         else if (strcmp(state, "nokey") == 0) forced = AI_STATE_NO_KEY;
         else if (strcmp(state, "nosession") == 0) forced = AI_STATE_NO_SESSION;
+        /* The voice states show the "Ask about this session" empty state, so
+         * the voice hint under it is on screen next to the mic button. */
+        else if (strncmp(state, "voice-", 6) == 0) forced = AI_STATE_EMPTY;
     }
     ai_chat_force_state(hwnd, forced);
+
+    /* "voice-recording" and "voice-transcribing": the mic button and its cue
+     * in that look, through the same two calls the feature controller makes
+     * and nothing else -- no audio thread, no COM, no push-to-talk filter.
+     * window.c turned the voice gate's demo override on for these. */
+    if (state && (strcmp(state, "voice-recording") == 0 ||
+                  strcmp(state, "voice-transcribing") == 0)) {
+        ai_chat_voice_attach(hwnd, 1);
+        if (strcmp(state, "voice-recording") == 0) {
+            const Settings *vs = ui_current_settings();
+            char cue[96];
+            voice_cue_text(vs ? vs->voice_ptt_mode : VOICE_MODE_HOLD,
+                           vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_CTRL,
+                           0, cue, sizeof(cue));
+            ai_chat_voice_set_ui(hwnd, AIV_RECORDING, cue);
+        } else {
+            ai_chat_voice_set_ui(hwnd, AIV_TRANSCRIBING, "Transcribing\xE2\x80\xA6");
+        }
+    }
 
     /* The Thinking row's mode in the gallery: "thinking" collapsed,
      * "thinking-compact" compact, "thinking-extended" extended,

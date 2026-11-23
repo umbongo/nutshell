@@ -7,6 +7,9 @@
 #include "ai_chat_internal.h"
 #include "ai_header_layout.h"
 #include "chat_rebuild.h"
+#include "voice_config.h"
+#include "voice_gate.h"
+#include "voice_win.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -22,6 +25,16 @@ LRESULT CALLBACK ai_chat_btn_noerase_subclass(
     if (msg == WM_ERASEBKGND) return 1;
     if (msg == WM_NCDESTROY)
         RemoveWindowSubclass(hwnd, ai_chat_btn_noerase_subclass, uIdSubclass);
+    if (msg == WM_SETTEXT) {
+        /* The Send button flips to Stop and back as the assistant becomes
+         * busy and idle: the mic button's disabled look follows. */
+        LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
+        HWND panel = GetParent(hwnd);
+        AiChatData *pd = panel ? (AiChatData *)(LONG_PTR)GetWindowLongPtr(panel, GWLP_USERDATA)
+                               : NULL;
+        if (pd && pd->hSendBtn == hwnd) ai_chat_voice_busy_changed(pd);
+        return r;
+    }
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
@@ -84,6 +97,17 @@ void ai_chat_update_panel_state(AiChatData *d)
         state = AI_STATE_EMPTY;
 
     chat_listview_set_state(d->hChatList, state, d->context_lines);
+
+    /* The voice hint: one more line under the empty state while voice is on. */
+    char hint[96];
+    hint[0] = '\0';
+    if (state == AI_STATE_EMPTY && voice_gate_on()) {
+        const Settings *vs = ui_current_settings();
+        (void)ai_panel_voice_hint(vs ? vs->voice_ptt_mode : VOICE_MODE_HOLD,
+                                  vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_CTRL,
+                                  hint, sizeof(hint));
+    }
+    chat_listview_set_state_hint(d->hChatList, hint);
 }
 
 /* Start (or replace) the busy-indicator text shown in place of the status
@@ -344,6 +368,7 @@ void ai_chat_relayout(AiChatData *d)
     {
         int input_y = l.composer.y;
         int input_w = l.composer.w - send_w - margin * 3 - CSB_WIDTH;
+        if (d->hMicBtn) input_w -= send_w + margin;   /* the mic button, left of Send */
         if (input_w < 1) input_w = 1;
         if (d->hInput)
             MoveWindow(d->hInput, l.composer.x + margin, input_y,
@@ -353,6 +378,9 @@ void ai_chat_relayout(AiChatData *d)
                        input_y, CSB_WIDTH, input_h, TRUE);
         if (d->hSendBtn)
             MoveWindow(d->hSendBtn, l.composer.x + l.composer.w - send_w - margin,
+                       input_y, send_w, input_h, TRUE);
+        if (d->hMicBtn)
+            MoveWindow(d->hMicBtn, l.composer.x + l.composer.w - 2 * send_w - 2 * margin,
                        input_y, send_w, input_h, TRUE);
     }
 

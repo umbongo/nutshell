@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ai_gate.h"
+#include "voice_gate.h"
 
 #define CHEAT_CLASS       "Nutshell_Shortcuts"
 #define CHEAT_TITLE       "Keyboard Shortcuts"
@@ -385,7 +386,7 @@ void cheatsheet_show(HWND parent, HWND floating_panel, const ThemeColors *theme)
     CheatData d;
     memset(&d, 0, sizeof(d));
     d.theme = theme;
-    d.n_rows = shortcuts_filtered(d.rows, CS_MAX_ROWS, ai_gate_on());
+    d.n_rows = shortcuts_filtered_ex(d.rows, CS_MAX_ROWS, ai_gate_on(), voice_gate_on());
     if (d.n_rows > CS_MAX_ROWS) d.n_rows = CS_MAX_ROWS;
 
     HWND prev_focus = GetFocus();

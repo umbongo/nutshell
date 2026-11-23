@@ -1004,6 +1004,17 @@ void chat_listview_set_state(HWND hwnd, int state_id, int context_lines)
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
+void chat_listview_set_state_hint(HWND hwnd, const char *hint_utf8)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    char next[sizeof(lv->state_hint)];
+    snprintf(next, sizeof(next), "%s", hint_utf8 ? hint_utf8 : "");
+    if (strcmp(next, lv->state_hint) == 0) return;
+    memcpy(lv->state_hint, next, sizeof(next));
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
 void chat_listview_enable_query(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
@@ -2844,6 +2855,17 @@ static int chatlv_list_empty(const ChatListView *lv)
     return !lv || !lv->msg_list || lv->msg_list->count == 0;
 }
 
+/* The state's body, plus (AI_STATE_EMPTY only) the voice hint on its own line
+ * while one is set -- measured and painted from the same text. */
+static void empty_state_body(const ChatListView *lv, char *buf, size_t cap)
+{
+    ai_panel_state_body(lv->state_id, lv->state_context_lines, buf, cap);
+    if (lv->state_id == AI_STATE_EMPTY && lv->state_hint[0]) {
+        size_t n = strlen(buf);
+        if (n < cap) snprintf(buf + n, cap - n, "\n%s", lv->state_hint);
+    }
+}
+
 /* Lay out the glyph circle, title, body and the chip row / action button
  * centred in `client_rc`. Cheap (no allocation, no caching) so painting
  * and hit-testing can each call it fresh and never disagree. */
@@ -2862,9 +2884,8 @@ static void build_empty_state_layout(ChatListView *lv, HDC hdc,
     int ch = client_rc->bottom - client_rc->top;
     int side_pad = ns_scale(BASE_SIDE_PAD, dpi);
 
-    char body_buf[256];
-    ai_panel_state_body(lv->state_id, lv->state_context_lines,
-                        body_buf, sizeof(body_buf));
+    char body_buf[384];
+    empty_state_body(lv, body_buf, sizeof(body_buf));
 
     /* Wrap width: ~28 characters of FONT_BODY, clamped to what actually
      * fits so a narrow docked panel never clips instead of wrapping. */
@@ -3073,9 +3094,8 @@ static void paint_empty_state(ChatListView *lv, HDC hdc, const RECT *client_rc)
 
     /* Body (FONT_BODY, text_dim) */
     {
-        char body_buf[256];
-        ai_panel_state_body(lv->state_id, lv->state_context_lines,
-                            body_buf, sizeof(body_buf));
+        char body_buf[384];
+        empty_state_body(lv, body_buf, sizeof(body_buf));
         SetTextColor(hdc, RGB_FROM_THEME(tok->text_dim));
         HGDIOBJ old = SelectObject(hdc, ns_font(FONT_BODY, dpi));
         RECT body_rc = el.body;

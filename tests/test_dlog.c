@@ -1904,6 +1904,38 @@ int test_dlog_configure_registers_the_api_key_as_a_secret(void)
     TEST_END();
 }
 
+int test_dlog_configure_registers_the_stt_key_as_a_secret(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    Settings s;
+    config_default_settings(&s);
+    s.debug_enabled = 1;
+    s.debug_include_content = 1;
+    for (int i = 0; i < DLOG_CAT_COUNT; i++) s.debug_levels[i] = DLOG_LVL_TRACE;
+    (void)snprintf(s.stt_api_key, sizeof(s.stt_api_key), "stt-first-key-123");
+    dlog_configure(&s);
+    DLOG_CONTENT(DLOG_AI, DLOG_TRACE, 0, "stt.req", "body", "auth stt-first-key-123 end", 26);
+    const char *t = logtext();
+    ASSERT_TRUE(strstr(t, "stt-first-key-123") == NULL);
+    ASSERT_TRUE(strstr(t, "auth [REDACTED] end") != NULL);
+    /* a changed key replaces the old one; the old one is no longer scrubbed */
+    (void)snprintf(s.stt_api_key, sizeof(s.stt_api_key), "stt-second-key-456");
+    dlog_configure(&s);
+    DLOG_CONTENT(DLOG_AI, DLOG_TRACE, 0, "stt.req2", "body", "x stt-second-key-456 y z stt-first-key-123", 43);
+    t = logtext();
+    ASSERT_TRUE(strstr(t, "stt-second-key-456") == NULL);
+    ASSERT_TRUE(strstr(t, "z stt-first-key-123") != NULL);
+    /* an empty key removes it */
+    s.stt_api_key[0] = '\0';
+    dlog_configure(&s);
+    DLOG_CONTENT(DLOG_AI, DLOG_TRACE, 0, "stt.req3", "body", "x stt-second-key-456 y", 22);
+    t = logtext();
+    ASSERT_TRUE(strstr(t, "x stt-second-key-456 y") != NULL);
+    end();
+    TEST_END();
+}
+
 int test_dlog_shutdown_wipes_secrets(void)
 {
     TEST_BEGIN();

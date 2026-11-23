@@ -80,12 +80,33 @@ static int req_arm(HINTERNET req, AiNetCancel *nc)
     return -1;
 }
 
+#endif /* _WIN32 */
+
+/* A content type that cannot be put on a header line safely. */
+static int content_type_ok(const char *ct)
+{
+    if (!ct || !*ct) return 0;
+    size_t n = strlen(ct);
+    if (n > 200) return 0;
+    return strpbrk(ct, "\r\n") == NULL;
+}
+
+#ifdef _WIN32
+
+typedef struct { int resolve, connect, send, recv; } HttpTimeouts;
+
 static int ai_http_post_impl(const char *url, const char * const *headers,
+                             const char *content_type,
                              const char *body, size_t body_len,
+                             const HttpTimeouts *to,
                              AiHttpResponse *resp, AiNetCancel *nc)
 {
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
+    if (!content_type_ok(content_type)) {
+        snprintf(resp->error, sizeof(resp->error), "Invalid content type");
+        return -1;
+    }
 
     if (!url || !body) {
         snprintf(resp->error, sizeof(resp->error), "NULL url or body");
@@ -106,8 +127,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         return -1;
     }
 
-    /* AI responses can take 60+ seconds; raise receive timeout to 120s */
-    WinHttpSetTimeouts(hSession, 0, 60000, 30000, 120000);
+    WinHttpSetTimeouts(hSession, to->resolve, to->connect, to->send, to->recv);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
     if (!hConnect) {
@@ -137,9 +157,18 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
     }
 
     /* Set headers */
-    WinHttpAddRequestHeaders(hRequest,
-        L"Content-Type: application/json\r\n",
-        (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+    {
+        wchar_t ct_w[256];
+        int cn = MultiByteToWideChar(CP_UTF8, 0, "Content-Type: ", -1, ct_w, 20);
+        int cm = MultiByteToWideChar(CP_UTF8, 0, content_type, -1,
+                                     ct_w + (cn - 1), 256 - (cn - 1) - 2);
+        if (cn > 0 && cm > 0) {
+            size_t cl = (size_t)(cn - 1) + (size_t)(cm - 1);
+            ct_w[cl] = L'\r'; ct_w[cl + 1] = L'\n'; ct_w[cl + 2] = L'\0';
+            WinHttpAddRequestHeaders(hRequest, ct_w, (DWORD)-1,
+                                     WINHTTP_ADDREQ_FLAG_ADD);
+        }
+    }
 
     if (headers) {
         for (int i = 0; headers[i]; i++) {
@@ -568,13 +597,30 @@ static void note_cancel(AiNetCancel *nc, char *err, size_t cap)
         snprintf(err, cap, "cancelled");
 }
 
+static int post_with(const char *url, const char * const *headers,
+                     const char *ct, const char *body, size_t body_len,
+                     const HttpTimeouts *to, AiHttpResponse *resp, AiNetCancel *nc)
+{
+    int rc = ai_http_post_impl(url, headers, ct, body, body_len, to, resp, nc);
+    if (rc != 0 && resp) note_cancel(nc, resp->error, sizeof(resp->error));
+    return rc;
+}
+
 int ai_http_post(const char *url, const char * const *headers,
                  const char *body, size_t body_len,
                  AiHttpResponse *resp, AiNetCancel *nc)
 {
-    int rc = ai_http_post_impl(url, headers, body, body_len, resp, nc);
-    if (rc != 0 && resp) note_cancel(nc, resp->error, sizeof(resp->error));
-    return rc;
+    /* AI responses can take 60+ seconds: receive timeout 120 s */
+    static const HttpTimeouts chat = { 0, 60000, 30000, 120000 };
+    return post_with(url, headers, "application/json", body, body_len, &chat, resp, nc);
+}
+
+int ai_http_post_ct(const char *url, const char * const *headers,
+                    const char *content_type, const char *body, size_t body_len,
+                    AiHttpResponse *resp, AiNetCancel *nc)
+{
+    static const HttpTimeouts upload = { 10000, 10000, 30000, 60000 };
+    return post_with(url, headers, content_type, body, body_len, &upload, resp, nc);
 }
 
 int ai_http_get(const char *url, const char * const *headers,
@@ -606,6 +652,21 @@ int ai_http_post(const char *url, const char * const *headers,
     (void)url; (void)headers; (void)body; (void)body_len; (void)nc;
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
+    snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
+    return -1;
+}
+
+int ai_http_post_ct(const char *url, const char * const *headers,
+                    const char *content_type, const char *body, size_t body_len,
+                    AiHttpResponse *resp, AiNetCancel *nc)
+{
+    (void)url; (void)headers; (void)body; (void)body_len; (void)nc;
+    if (!resp) return -1;
+    memset(resp, 0, sizeof(*resp));
+    if (!content_type_ok(content_type)) {
+        snprintf(resp->error, sizeof(resp->error), "Invalid content type");
+        return -1;
+    }
     snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
     return -1;
 }

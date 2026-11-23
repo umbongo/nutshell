@@ -448,6 +448,16 @@ Done, in order (details in the commit messages and the specs named):
   once, and one themed `Nutshell_Notice` dialog for the upgrade notice, the first-run notice
   and the configuration warnings (missing settings are now written at launch). Its Windows
   checks are in Open.
+- Voice input (branch feat/voice-input; spec `2026-11-23-voice-input-output-design.md`,
+  speech-to-text only, no spoken replies): hold Right Ctrl (or F8 or F9, or Toggle mode) with
+  the AI panel focused, speak, release; the words are transcribed by OpenAI, Groq, Mistral,
+  Gemini or a custom endpoint (or the AI provider's own) and go through the chat's normal
+  send path with every approval unchanged. Off by default, needs the assistant; while off
+  nothing of it loads (no audio thread, no COM, no hook, no mic button). Settings has a Voice
+  page; the shortcuts sheet and README gain two rows shown only with voice on
+  (`shortcuts_filtered_ex`, `SC_VOICE`); the empty state gains a voice hint line; the demo
+  gains `voice-recording`, `voice-transcribing` and `settings-voice`. Its Windows checks are
+  in Open.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -484,6 +494,42 @@ Open, in priority order:
       per-monitor DPI when dragged between monitors, Narrator reading it, Ctrl+C copies it);
       the tab strip with the AI button hidden; the Help sheet without the AI section;
       Settings' AI controls disabled while the box is unticked.
+- [ ] **Voice input: nothing run on Windows** (feat/voice-input; the whole path was built and
+      tested here under Wine and the native suite with no microphone). (a) A real microphone
+      in Hold and Toggle at Mic start delays 0, 150 and 400. (b) The privacy-blocked path
+      (Settings > Privacy & security > Microphone off gives the privacy message). (c)
+      Unplugging a USB or Bluetooth mic mid-recording. (d) A Bluetooth headset not dropping to
+      hands-free on a Right Ctrl chord. (e) Right Ctrl chords (Ctrl+C/V, Ctrl+=, Ctrl+wheel,
+      Ctrl+letter to the shell) in the terminal and the AI input, docked and undocked. (f)
+      AltGr on a European layout. (g) F8 and F9. (h) Alt+Tab and a modal opening
+      mid-recording. (i) A real STT round trip on OpenAI, Groq, Mistral, Gemini and a Custom
+      base URL. (j) "Use current AI assistant" with each chat provider. (k) The Settings
+      device list with two microphones, hot-plug while the page is open, a saved device
+      unplugged; Test and the meter. (l) The mic button's pulse and cue on the four themes
+      and at 125 % and 200 %. (m) `mingw32-make wintest`, including
+      `test_voice_stt_cancel_blocked`'s Windows-only "Cancelled" and timing assertions. (n)
+      Harness cases never run (no pwsh): `settings_voice_gallery`,
+      `self_report_voice_off_clean`, `voice_off_right_ctrl_reaches_input`, the updated
+      `settings_help_tool_count` (now "1, 1, 107", the arithmetic unverified) and
+      `ui_gallery` with its two new states (22 x 4 = 88 captures). (o) A microphone with a
+      non-Latin friendly name in the Settings device list: the combo is ANSI, so the name may
+      come out as question marks. (p) The mic button's busy look when a card finishes. (q)
+      The cheat sheet at 1920x1040 and 96 DPI with voice on: its two extra rows push the page
+      past one screen (1013 px against 1001), so it scrolls a little; with voice off (the
+      default) it still fits, and `test_cheatsheet_layout_*` measures it that way. Shortening the voice
+      row's condition did not change the estimate (still 1013 px), so the real sheet needs a look.
+      (r) The upgrade notice on the maintainer's real config shows one "Voice: off until you
+      choose to turn it on" line, not the 12 voice sub-settings. (s) Enable voice, Save, reopen
+      Settings: the microphones are listed with no restart; turning voice (or the assistant)
+      off while recording and while transcribing stops at once, and no transcript arrives
+      later. (t) Changing the STT provider on the Voice page moves a default model to the new
+      provider's default and keeps a typed one.
+      (u) Win+L during a Toggle recording: locking may not send WM_ACTIVATEAPP, so a latched
+      recording can run to the 60 s cap and send; a follow-up could map WTS_SESSION_LOCK
+      through a delay-loaded wtsapi32. (v) With the microphone blocked in Windows privacy
+      settings, an open that returns E_ACCESSDENIED (Activate or Initialize) shows "Windows
+      may be blocking the microphone: Settings > Privacy & security > Microphone" (panel and
+      Settings > Voice Test); never seen, Wine does not return it.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text

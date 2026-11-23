@@ -3,6 +3,7 @@
 #include "ai_panel_states.h"
 #include "ns_scale.h"
 #include "ns_type.h"
+#include "voice_config.h"
 #include <string.h>
 
 /* ===========================================================================
@@ -942,5 +943,28 @@ int test_ai_panel_suggestions_exactly_three_nonempty(void)
     ASSERT_STR_EQ(sug[0], "What's using disk?");
     ASSERT_STR_EQ(sug[1], "Why did that fail?");
     ASSERT_STR_EQ(sug[2], "Summarise the log");
+    TEST_END();
+}
+
+/* The empty state's voice line: one wording per mode, the key label
+ * substituted, truncation safe. */
+int test_ai_panel_voice_hint_wordings(void)
+{
+    TEST_BEGIN();
+    char b[160];
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
+                  "Or hold Right Ctrl and say what you need.");
+    ASSERT_STR_EQ(b, "Or hold Right Ctrl and say what you need.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
+                  "Or press Right Ctrl, say what you need, and press it again.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, b, sizeof b),
+                  "Or hold F8 and say what you need.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F9, b, sizeof b),
+                  "Or press F9, say what you need, and press it again.");
+    /* A small buffer truncates and still terminates; no buffer is a no-op. */
+    char tiny[8];
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, tiny, sizeof tiny),
+                  "Or hold");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, NULL, 0), "");
     TEST_END();
 }

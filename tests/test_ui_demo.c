@@ -34,29 +34,33 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
  * terminal transcript; "thinking" is "chat" with a longer reasoning block;
  * "cmddetail", "settings-debug", "policy-auto", "policy-compact" and "ansi"
  * reuse or swap content too, and "shortcuts" (2026-10-20) opens the modal
- * keyboard shortcuts sheet. None of those is part of "all". */
+ * keyboard shortcuts sheet. None of those is part of "all"; nor are
+ * "voice-recording", "voice-transcribing" and "settings-voice". */
 int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 24);
+    ASSERT_EQ(count, 27);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "notice-warning");
-    ASSERT_STR_EQ(states[count - 3], "notice-info");
-    ASSERT_STR_EQ(states[count - 4], "shortcuts");
-    ASSERT_STR_EQ(states[count - 5], "policy-compact");
-    ASSERT_STR_EQ(states[count - 6], "policy-auto");
-    ASSERT_STR_EQ(states[count - 7], "settings-debug");
-    ASSERT_STR_EQ(states[count - 8], "cmddetail");
-    ASSERT_STR_EQ(states[count - 9], "thinking-open");
-    ASSERT_STR_EQ(states[count - 10], "thinking-extended");
-    ASSERT_STR_EQ(states[count - 11], "thinking-compact");
-    ASSERT_STR_EQ(states[count - 12], "thinking");
-    ASSERT_STR_EQ(states[count - 13], "local");
-    ASSERT_STR_EQ(states[count - 14], "ansi");
-    ASSERT_STR_EQ(states[count - 15], "runlist");   /* not part of "all" */
+    ASSERT_STR_EQ(states[count - 2], "settings-voice");    /* modal, not part of "all" */
+    ASSERT_STR_EQ(states[count - 3], "voice-transcribing");
+    ASSERT_STR_EQ(states[count - 4], "voice-recording");
+    ASSERT_STR_EQ(states[count - 5], "notice-warning");
+    ASSERT_STR_EQ(states[count - 6], "notice-info");
+    ASSERT_STR_EQ(states[count - 7], "shortcuts");
+    ASSERT_STR_EQ(states[count - 8], "policy-compact");
+    ASSERT_STR_EQ(states[count - 9], "policy-auto");
+    ASSERT_STR_EQ(states[count - 10], "settings-debug");
+    ASSERT_STR_EQ(states[count - 11], "cmddetail");
+    ASSERT_STR_EQ(states[count - 12], "thinking-open");
+    ASSERT_STR_EQ(states[count - 13], "thinking-extended");
+    ASSERT_STR_EQ(states[count - 14], "thinking-compact");
+    ASSERT_STR_EQ(states[count - 15], "thinking");
+    ASSERT_STR_EQ(states[count - 16], "local");
+    ASSERT_STR_EQ(states[count - 17], "ansi");
+    ASSERT_STR_EQ(states[count - 18], "runlist");   /* not part of "all" */
     TEST_END();
 }
 
@@ -605,6 +609,34 @@ int test_ui_demo_notice_states_are_empty_states(void)
     }
     ASSERT_TRUE(!ui_demo_state_valid("notice"));
     ASSERT_TRUE(!ui_demo_state_valid("Notice-info"));
+    TEST_END();
+}
+
+/* "voice-recording", "voice-transcribing" and "settings-voice" (voice input,
+ * Task 9) build an empty conversation: the win32 side puts the mic button in
+ * its recording / transcribing look over the empty-state panel (or opens
+ * Settings on the Voice page). None is part of "all". */
+int test_ui_demo_voice_states_are_empty_states(void)
+{
+    TEST_BEGIN();
+    const char *names[3] = { "voice-recording", "voice-transcribing", "settings-voice" };
+    for (int i = 0; i < 3; i++) {
+        AiConversation conv;
+        ApprovalQueue approval, approval2;
+        char term_buf[8192];
+        ASSERT_TRUE(ui_demo_state_valid(names[i]));
+        ASSERT_EQ(ui_demo_build(names[i], &conv, &approval, &approval2,
+                                term_buf, sizeof(term_buf)), 0);
+        ASSERT_EQ(conv.msg_count, 1);
+        ASSERT_EQ(approval.count, 0);
+        ASSERT_EQ(approval2.count, 0);
+        ASSERT_TRUE(!ui_demo_scrolls_to_top(names[i]));
+        ASSERT_TRUE(!ui_demo_is_thinking_state(names[i]));
+        ASSERT_EQ(ui_demo_thinking_pref(names[i]), -1);
+        ai_conv_reset(&conv);
+    }
+    ASSERT_TRUE(!ui_demo_state_valid("voice"));
+    ASSERT_TRUE(!ui_demo_state_valid("Settings-voice"));
     TEST_END();
 }
 

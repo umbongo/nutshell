@@ -365,3 +365,50 @@ if ($ActiveTiers -contains "gate" -and ($Only.Count -eq 0 -or $Only -contains "s
     if ($srOk) { Write-Host "[PASS] self_report_ai_off_clean" } else { Write-Host ("[FAIL] self_report_ai_off_clean -- " + $srDetail) }
     [void]$results.Add([pscustomobject]@{ Name = "self_report_ai_off_clean"; Passed = $srOk; Detail = $srDetail })
 }
+
+# ---- self_report_voice_off_clean: the assistant on, voice off (the default) --------
+# The same hidden --self-report as above, with ai_enabled true and voice_enabled
+# false (New-NutshellTestEnv's default): voice is optional and off, so nothing of
+# its audio code may have been requested or loaded -- no `requested: mmdevapi.dll`
+# (the enumerator's one noting site, src/ui/voice_audio_win.c) and no
+# `module: mmdevapi.dll` or `module: audioses.dll` in the process list. Standalone,
+# for the same reason as self_report_ai_off_clean. Unrun here (no pwsh on
+# automaton); `make selftest-wine` asserts the same under Wine ("voiceoff").
+if ($ActiveTiers -contains "gate" -and ($Only.Count -eq 0 -or $Only -contains "self_report_voice_off_clean")) {
+    Write-Host "[RUN ] self_report_voice_off_clean"
+    $srEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -Settings @{ ai_enabled = $true; voice_enabled = $false }
+    $srOk = $false; $srDetail = ""
+    $srProc = $null
+    try {
+        $srProc = Start-Process -FilePath $srEnv.Exe -ArgumentList @("-nc", "--self-report=self_report.txt") `
+                                -WorkingDirectory $srEnv.Root -PassThru
+        $null = $srProc.Handle
+        if (-not $srProc.WaitForExit(30000)) {
+            Stop-Process -Id $srProc.Id -Force -ErrorAction SilentlyContinue
+            throw "nutshell.exe --self-report did not exit within 30s (a dialog blocking startup?)"
+        }
+        Assert-True ($srProc.ExitCode -eq 0) "exit code was $($srProc.ExitCode), expected 0 (3 means the report could not be written)"
+        $srPath = Join-Path $srEnv.Root "self_report.txt"
+        Assert-True (Test-Path $srPath) "no self_report.txt was written"
+        $srLines = [IO.File]::ReadAllLines($srPath)
+        $srReq = @($srLines | Where-Object { $_ -like "requested: *" } | ForEach-Object { $_.Substring(11).ToLowerInvariant() })
+        $srMods = @($srLines | Where-Object { $_ -like "module: *" } | ForEach-Object { $_.Substring(8).ToLowerInvariant() })
+        Assert-True ($srMods -contains "nutshell.exe") "the module list does not name nutshell.exe: the report is not a real one"
+        Assert-True ($srReq -notcontains "mmdevapi.dll") "mmdevapi.dll was requested with voice off (requested: $($srReq -join ', '))"
+        foreach ($d in @("mmdevapi.dll", "audioses.dll")) {
+            Assert-True ($srMods -notcontains $d) "$d is loaded with voice off (modules: $($srMods -join ', '))"
+        }
+        $srDetail = "AI on, voice off: $($srReq.Count) DLLs requested, no mmdevapi.dll requested, no mmdevapi.dll or audioses.dll loaded"
+        $srOk = $true
+    } catch {
+        $srDetail = $_.Exception.Message
+    } finally {
+        if ($srProc -and -not $srProc.HasExited) { Stop-Process -Id $srProc.Id -Force -ErrorAction SilentlyContinue }
+        for ($try = 0; $try -lt 5 -and (Test-Path $srEnv.Root); $try++) {
+            Remove-Item -Recurse -Force $srEnv.Root -ErrorAction SilentlyContinue
+            if (Test-Path $srEnv.Root) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    if ($srOk) { Write-Host "[PASS] self_report_voice_off_clean" } else { Write-Host ("[FAIL] self_report_voice_off_clean -- " + $srDetail) }
+    [void]$results.Add([pscustomobject]@{ Name = "self_report_voice_off_clean"; Passed = $srOk; Detail = $srDetail })
+}

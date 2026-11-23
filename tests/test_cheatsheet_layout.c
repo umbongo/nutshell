@@ -38,8 +38,11 @@ static int est_measure(void *ctx, NsFontRole role, const char *text)
     return est_w(text, cw, dpi);
 }
 
-/* The real table, measured with the estimates, in a work_w x work_h area. */
-static void fill_input(CsInput *in, int dpi, int work_w, int work_h)
+/* The real table, measured with the estimates, in a work_w x work_h area.
+ * `voice_on` adds the two voice rows (SC_VOICE); the sheet shows them only
+ * with voice on, and voice is off by default, so the default fit assertions
+ * below measure the table without them. */
+static void fill_input_v(CsInput *in, int dpi, int work_w, int work_h, int voice_on)
 {
     memset(in, 0, sizeof(*in));
     in->dpi = dpi;
@@ -52,9 +55,15 @@ static void fill_input(CsInput *in, int dpi, int work_w, int work_h)
     in->heading_h = ns_scale(EST_HEADING_LINE_96, dpi);
     in->scrollbar_w = ns_scale(EST_SCROLLBAR_W_96, dpi);
 
-    size_t n = 0;
-    const Shortcut *t = shortcuts_table(&n);
+    Shortcut t[CS_MAX_ROWS];
+    size_t n = shortcuts_filtered_ex(t, CS_MAX_ROWS, 1, voice_on);
+    if (n > CS_MAX_ROWS) n = CS_MAX_ROWS;
     cheatsheet_input_from_table(in, t, n, est_measure, &dpi);
+}
+
+static void fill_input(CsInput *in, int dpi, int work_w, int work_h)
+{
+    fill_input_v(in, dpi, work_w, work_h, 0);
 }
 
 static int inside(CsRect r, int w, int h)
@@ -491,5 +500,25 @@ int test_cheatsheet_layout_without_the_ai_section_still_has_two_columns(void)
     ASSERT_EQ(check_geometry(&l), 0);
     /* Both columns hold something. */
     ASSERT_TRUE(l.heading[4].x > l.heading[0].x);
+    TEST_END();
+}
+
+/* With voice on the sheet has two rows more (7 sections still, the AI section
+ * longer): the geometry holds whether or not it then needs the scrollbar. */
+int test_cheatsheet_layout_with_the_voice_rows_still_lays_out(void)
+{
+    TEST_BEGIN();
+    CsInput off, on;
+    CsLayout lo, ln;
+    fill_input_v(&off, 96, 1920, 1040, 0);
+    fill_input_v(&on, 96, 1920, 1040, 1);
+    cheatsheet_layout_compute(&lo, &off);
+    cheatsheet_layout_compute(&ln, &on);
+    ASSERT_EQ(ln.n_sections, 7);
+    ASSERT_EQ(ln.n_rows, lo.n_rows + 2);
+    ASSERT_EQ(check_geometry(&ln), 0);
+    ASSERT_TRUE(ln.page_h > lo.page_h);
+    printf("  [cheatsheet] voice on, 1920x1040 @96: page %d px, client %dx%d, %s\n",
+           ln.page_h, ln.client_w, ln.client_h, ln.scrolls ? "scrolls" : "one page");
     TEST_END();
 }

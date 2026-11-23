@@ -41,6 +41,11 @@
 #include "paste_filter.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
+#include "voice_audio_win.h"
+#include "voice_stt_win.h"
+#include "voice_gate.h"
+#include "settings_layout.h"
+#include "voice_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
@@ -116,6 +121,9 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
  * exists, to open the themed notice dialog over it. wParam 0 = the upgrade
  * sample (info), 1 = the invalid-config sample (warning). */
 #define WM_OPEN_DEMO_NOTICE     (WM_USER + 8)
+/* --ui-demo=settings-voice: posted once the demo session exists, to open
+ * Settings on the Voice page (voice and AI ticked in memory only). */
+#define WM_OPEN_DEMO_SETTINGS_VOICE (WM_USER + 10)
 /* Posted by the WM_TIMER poll when a telnet session's auto-login has no saved
  * password and the device asked for one: wParam is the Session*, lParam the
  * transport's serial. The handler re-resolves both before it answers. */
@@ -1273,6 +1281,8 @@ static void on_tab_close(int index, void *user_data) {
  * apart on what "just pump it" means. */
 static void pump_dispatch(MSG *m)
 {
+    /* Push-to-talk: NULL while voice is off, so nothing is hooked then. */
+    if (g_voice_filter && g_voice_filter(m)) return;
     TranslateMessage(m);
     DispatchMessage(m);
 }
@@ -2370,6 +2380,9 @@ static void on_settings_clicked_page(int initial_page) {
         ai_feature_on(parent);
     else if (!g_config->settings.ai_enabled && ai_was_enabled)
         ai_feature_off(parent);
+    /* Voice follows the AI decision (it needs the assistant) and its own
+     * switch: the gate is set from the saved settings. */
+    voice_feature_apply(parent);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -2513,6 +2526,8 @@ static HWND create_ai_chat(HWND parent)
         ai_chat_set_runcmd_mode(hwnd, g_config->settings.ai_runcmd_mode);
         ai_chat_set_policy_default(hwnd, g_config->settings.ai_policy_default);
         ai_chat_set_thinking_pref(hwnd, g_config->settings.ai_thinking_mode);
+        if (voice_feature_running())
+            ai_chat_voice_attach(hwnd, 1);   /* the mic button, while voice is on */
     }
     return hwnd;
 }
@@ -2540,6 +2555,11 @@ static void create_demo_session(HWND hwnd)
     ai_feature_on(hwnd);
 
     const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
+    /* The three voice states show voice as on, again without touching
+     * Settings: the gate's override only. Nothing starts the audio thread,
+     * COM or the push-to-talk filter (voice_feature_apply is not called). */
+    if (strncmp(state, "voice-", 6) == 0 || strcmp(state, "settings-voice") == 0)
+        voice_gate_set_demo_override(1);
     int demo_local = (strcmp(state, "local") == 0);
 
     Session *s = create_session(rows, cols);
@@ -2683,6 +2703,10 @@ static void create_demo_session(HWND hwnd)
         PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 0, 0);
     if (strcmp(state, "notice-warning") == 0)
         PostMessage(hwnd, WM_OPEN_DEMO_NOTICE, 1, 0);
+    /* --ui-demo=settings-voice: Settings on the Voice page, posted for the
+     * same reason. */
+    if (strcmp(state, "settings-voice") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_SETTINGS_VOICE, 0, 0);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -2804,8 +2828,19 @@ static void ai_feature_on(HWND hwnd)
         inited = 1;
     }
     ai_gate_set_enabled(g_config->settings.ai_enabled);
+    voice_feature_apply(hwnd);   /* voice needs the assistant: its gate follows */
     if (g_hwndTabs) tabs_set_ai_visible(g_hwndTabs, 1);
     rebuild_app_menu(hwnd);
+}
+
+HWND ui_ai_panel(void)
+{
+    return (g_hwndAiChat && IsWindow(g_hwndAiChat)) ? g_hwndAiChat : NULL;
+}
+
+const Settings *ui_current_settings(void)
+{
+    return g_config ? &g_config->settings : NULL;
 }
 
 /* 1 while the assistant is working: a reply streaming, a dispatch running,
@@ -2834,6 +2869,7 @@ int ui_ai_is_working(void)
 static void ai_feature_off(HWND hwnd)
 {
     ai_gate_set_enabled(0);
+    voice_feature_apply(hwnd);   /* voice needs the assistant: its gate closes with it */
     if (ai_gate_on()) return;   /* --ui-demo override: the demo keeps its panel */
 
     if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
@@ -4739,6 +4775,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * items, its tab button) exists while the switch is off. */
             if (g_config->settings.ai_enabled)
                 ai_feature_on(hwnd);
+            voice_feature_apply(hwnd);   /* after the AI decision; voice is off unless saved on */
             tabs_set_ai_visible(g_hwndTabs, ai_gate_on());
 
             renderer_init(&g_renderer,
@@ -5323,6 +5360,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             } else if (wParam == IDT_ISSUE_TITLE) {
                 KillTimer(hwnd, IDT_ISSUE_TITLE);
                 SetWindowTextA(hwnd, APP_TITLE);
+            } else if (wParam == VOICE_TIMER_ID) {
+                voice_on_timer();
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
             } else if (wParam == ANIM_TIMER_ID) {
@@ -5361,6 +5400,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_OPEN_DEMO_SETTINGS:
             settings_dlg_show_demo_debug(hwnd, g_config);
+            return 0;
+
+        case WM_OPEN_DEMO_SETTINGS_VOICE:
+            settings_dlg_show_demo_page(hwnd, g_config, SETTINGS_PAGE_VOICE);
             return 0;
 
         case WM_OPEN_DEMO_SHORTCUTS:
@@ -5405,6 +5448,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_VOICE_AUDIO:
+            voice_on_audio_msg(wParam, lParam);
+            return 0;
+
+        case WM_VOICE_STT:
+            voice_on_stt(lParam);
+            return 0;
+
         case WM_SELF_REPORT:
             /* Hidden --self-report=<path> (spec section 6): the record is
              * complete once WM_STARTUP_CONNECT has run. A failed write is
@@ -5415,6 +5466,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 HINTERNET h = ns_winhttp_open(NULL);
                 if (h) WinHttpCloseHandle(h);
             }
+            /* The audio thread notes mmdevapi.dll as it starts: wait for it
+             * (bounded) so the record is complete. Nothing waits with voice off. */
+            if (voice_gate_on())
+                (void)voice_audio_wait_ready(5000);
             if (!ns_self_report_write(g_self_report_path))
                 g_self_report_failed = 1;
             PostMessage(hwnd, WM_CLOSE, 0, 0);
@@ -6144,6 +6199,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_ACTIVATEAPP:
+        case WM_ENABLE:
+            /* Losing activation, or a modal dialog disabling this window,
+             * ends a push-to-talk recording. */
+            if (!wParam) voice_on_deactivate();
+            break;
+
         case WM_NCACTIVATE: {
             /* Repaint non-client area on activation change to keep the
              * menu bar line covered after Windows redraws it. */
@@ -6419,6 +6481,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                 ai_chat_close(g_hwndAiChat);
             g_hwndAiChat = NULL;
+            voice_feature_shutdown();   /* joins the audio thread, drops a posted capture's buffer */
             (void)ai_chat_join_streams(2000);   /* ai_chat_close above orphaned (and fired) every stream */
             {
                 Session *s = g_session_list;

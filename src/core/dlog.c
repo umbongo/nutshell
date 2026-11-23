@@ -115,6 +115,7 @@ static struct {
 static _Thread_local char t_tag[8];
 
 static char g_api_key[256];
+static char g_stt_key[256];   /* the speech-to-text key, scrubbed the same way */
 
 /* A writer that did not stop within the join timeout still points into G, so G
  * and the rings are left alone (leaked on purpose) and a new start is refused
@@ -1127,19 +1128,26 @@ void dlog_apply(const DlogConfig *in)
     wake_writer();          /* an idle writer must notice a changed folder or level */
 }
 
+/* Keeps `slot` (the copy of one registered key) in step with its setting. */
+static void sync_secret(char *slot, size_t cap, const char *key)
+{
+    if (slot[0] && strcmp(slot, key) != 0) {
+        dlog_secret_remove(slot);
+        secure_zero(slot, cap);
+    }
+    if (key[0] && strcmp(slot, key) != 0 && dlog_secret_add(key)) set_str(slot, cap, key);
+}
+
 void dlog_configure(const struct Settings *s)
 {
     if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return;
     DlogConfig c;
     dlog_config_from_settings(s, &c);
     dlog_apply(&c);
-    /* the AI API key is a known secret: scrub it from content */
-    const char *key = s ? s->ai_api_key : "";
-    if (g_api_key[0] && strcmp(g_api_key, key) != 0) {
-        dlog_secret_remove(g_api_key);
-        secure_zero(g_api_key, sizeof(g_api_key));
-    }
-    if (key[0] && strcmp(g_api_key, key) != 0 && dlog_secret_add(key)) set_str(g_api_key, sizeof(g_api_key), key);
+    /* the AI API key and the speech-to-text key are known secrets: scrub
+     * them from content */
+    sync_secret(g_api_key, sizeof(g_api_key), s ? s->ai_api_key : "");
+    sync_secret(g_stt_key, sizeof(g_stt_key), s ? s->stt_api_key : "");
 }
 
 /* ---- lifecycle ------------------------------------------------------------------------------------ */
@@ -1242,6 +1250,7 @@ void dlog_shutdown(void)
         g_content = g_screenshot = g_enabled = 0;
         dlog_secret_clear();
         secure_zero(g_api_key, sizeof(g_api_key));
+        secure_zero(g_stt_key, sizeof(g_stt_key));
         return;
     }
     /* flush every pending repeat, then drain */
@@ -1268,6 +1277,7 @@ void dlog_shutdown(void)
     g_content = g_screenshot = g_enabled = 0;
     dlog_secret_clear();
     secure_zero(g_api_key, sizeof(g_api_key));
+    secure_zero(g_stt_key, sizeof(g_stt_key));
     teardown();
 }
 
