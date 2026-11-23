@@ -20,6 +20,13 @@ enum { ANIM_VOICE_PULSE = 0 };
 #define VOICE_PULSE_MS 1000
 #define MIC_SUBCLASS_ID 44
 
+unsigned ai_chat_next_gen(void)
+{
+    static unsigned g;
+    if (++g == 0) g = 1;
+    return g;
+}
+
 static AiChatData *panel_data(HWND panel)
 {
     if (!panel || !IsWindow(panel)) return NULL;
@@ -334,10 +341,13 @@ void ai_chat_voice_draw_mic(AiChatData *d, LPDRAWITEMSTRUCT dis)
     if (d->voice_ui == AIV_RECORDING) {
         float alpha = 1.0f;
         if (!ns_reduced_motion()) {
-            NsAnimStep st;
-            ns_anim_list_get(&d->anim, ANIM_VOICE_PULSE, (unsigned long)GetTickCount(), 0, &st);
-            const float t = (float)st.t;
+            NsAnimStep st = { 1.0, 0 };
+            float t = 1.0f;
+            if (ns_anim_list_get(&d->anim, ANIM_VOICE_PULSE, (unsigned long)GetTickCount(), 0, &st))
+                t = (float)st.t;
             alpha = 0.45f + 0.55f * (t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f);
+            if (alpha < 0.0f) alpha = 0.0f;
+            if (alpha > 1.0f) alpha = 1.0f;
         }
         fill = rgb_alpha(theme_cr(tok->danger.base), theme_cr(tok->bg_secondary.base), alpha);
         glyph = theme_cr(tok->danger.label);

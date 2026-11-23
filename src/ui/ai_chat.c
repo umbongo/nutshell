@@ -95,6 +95,7 @@ static CmdBatch *reply_batch_build(AiChatData *d, AiSessionState *owner,
     CmdBatch *batch = cmd_batch_add(&owner->batches, &defaults,
                                     displayed ? &evicted_id : NULL);
     if (!batch) return NULL;
+    ai_chat_voice_busy_changed(d);   /* a card is waiting: the mic button dims */
 
     /* Record how many conversation messages exist right after this reply --
      * compared against the live count when the batch finishes running to
@@ -793,7 +794,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
                 ai_conv_reset(&d->conv);
-                d->conv_gen++;   /* a voice message recorded before this is dropped */
+                d->conv_gen = ai_chat_next_gen();   /* a voice message recorded before this is dropped */
                 if (d->active_state) {
                     ai_conv_reset(&d->active_state->conv);
                     d->active_state->valid = 1;
@@ -2358,6 +2359,8 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     AiChatData *d = (AiChatData *)calloc(1, sizeof(AiChatData));
     if (!d) return NULL;
 
+    d->session_gen = ai_chat_next_gen();   /* never reused in this process: a */
+    d->conv_gen = ai_chat_next_gen();      /* redock cannot revive an old binding */
     d->indicator_pos = -1;
     d->stream_display_start = -1;
     d->forced_state = -1;
@@ -2673,7 +2676,7 @@ static void do_session_switch(AiChatData *d,
 {
     /* A Critical confirmation still up from the old session must not apply
      * to this one (ai_chat_request_policy_change()). */
-    d->session_gen++;
+    d->session_gen = ai_chat_next_gen();
     /* Kill command timers -- they belong to the old session. The dispatcher
      * itself is per-panel, not per-session, so switching away just stops it
      * silently (no "[command queue stopped]" -- that's the Stop button's
@@ -2894,7 +2897,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
     if (d->active_state == state) {
         d->active_state = NULL;
         d->last_snapshot_len = 0;
-        d->session_gen++;   /* a confirmation box still up must not apply */
+        d->session_gen = ai_chat_next_gen();   /* a confirmation box still up must not apply */
     }
 }
 

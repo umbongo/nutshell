@@ -699,6 +699,7 @@ void ai_chat_voice_paint_cue(AiChatData *d, HWND edit);
 void ai_chat_voice_timer(AiChatData *d, UINT_PTR id);
 void ai_chat_voice_on_destroy(AiChatData *d);
 void ai_chat_voice_busy_changed(AiChatData *d);
+unsigned ai_chat_next_gen(void);   /* process-wide, never 0, never repeats */
 LRESULT CALLBACK ai_chat_mic_subclass(HWND hwnd, UINT msg, WPARAM wParam,
                                       LPARAM lParam, UINT_PTR uIdSubclass,
                                       DWORD_PTR dwRefData);

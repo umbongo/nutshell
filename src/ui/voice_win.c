@@ -18,6 +18,7 @@ static int g_audio_up;       /* the audio thread was started by voice_feature_ap
 static VoicePtt g_ptt;
 static unsigned g_token_seq;
 static unsigned g_token;     /* the current recording / upload; 0 = none */
+static int g_pending;        /* finished recording, transcript not yet delivered */
 static int g_capturing;      /* between capture_begin and VAM_CAPTURED / VAM_ERROR */
 static VoiceBinding g_bind;  /* the panel state the recording started in */
 
@@ -56,6 +57,7 @@ static void act(VoiceStep st, VoiceEvent ev)
     case VA_OPEN: {
         char cue[128];
         g_token = next_token();
+        g_pending = 0;
         ai_chat_voice_binding(panel, &g_bind);
         g_capturing = 1;
         voice_audio_capture_begin(s ? s->voice_input_device : "", g_token, 0);
@@ -67,16 +69,19 @@ static void act(VoiceStep st, VoiceEvent ev)
     }
     case VA_FINISH:
         voice_audio_capture_end(1);
+        g_pending = 1;
         ai_chat_voice_set_ui(panel, AIV_TRANSCRIBING, CUE_TRANSCRIBING);
         break;
     case VA_DISCARD:
         voice_audio_capture_end(0);
         g_capturing = 0;
         g_token = 0;
+        g_pending = 0;
         ai_chat_voice_set_ui(panel, AIV_IDLE, NULL);
         break;
     case VA_BUSY:
-        ai_chat_voice_status(panel, "Assistant is busy", 0);
+        ai_chat_voice_status(panel, g_pending ? "Still transcribing the last recording"
+                                              : "Assistant is busy", 0);
         break;
     case VA_NONE:
         break;
@@ -87,7 +92,7 @@ static VoiceStep step_now(VoiceEvent ev, int in_panel)
 {
     HWND panel = ui_ai_panel();
     VoiceStep st = voice_ptt_step(&g_ptt, ev, (unsigned long)GetTickCount(), in_panel,
-                                  ai_chat_voice_busy(panel));
+                                  ai_chat_voice_busy(panel) || g_pending);
     act(st, ev);
     arm_timer();
     return st;
@@ -146,6 +151,7 @@ static void stop_everything(void)
     if (g_capturing && g_audio_up) voice_audio_capture_end(0);
     g_capturing = 0;
     g_token = 0;
+    g_pending = 0;
     ptt_reset();
 }
 
@@ -231,6 +237,7 @@ static void on_captured(VoiceCapture *c)
                 ai_chat_voice_set_ui(panel, AIV_IDLE, NULL);
                 ai_chat_voice_status(panel, problem, 1);
                 g_token = 0;
+                g_pending = 0;
                 voice_audio_free_capture(c);
                 return;
             }
@@ -239,6 +246,7 @@ static void on_captured(VoiceCapture *c)
     voice_audio_free_capture(c);   /* the PCM is wiped either way */
     if (problem) {
         g_token = 0;
+        g_pending = 0;
         ai_chat_voice_set_ui(panel, AIV_IDLE, NULL);
         ai_chat_voice_status(panel, problem, problem_is_error);
     }
@@ -262,6 +270,7 @@ static void on_capture_error(VoiceAudioErr e)
     }
     g_capturing = 0;
     g_token = 0;
+    g_pending = 0;
     ptt_reset();
     ai_chat_voice_set_ui(panel, AIV_IDLE, NULL);
     ai_chat_voice_status(panel, text, 1);
@@ -296,6 +305,7 @@ void voice_on_stt(LPARAM lp)
         return;
     }
     g_token = 0;
+    g_pending = 0;
     HWND panel = ui_ai_panel();
     const Settings *s = ui_current_settings();
     ai_chat_voice_set_ui(panel, AIV_IDLE, NULL);
