@@ -1661,6 +1661,46 @@ another host.
   never send. *Hard*: voice or AI off and a voice settings change close
   everything at once. A batch recording that loses activation is still
   discarded, as before.
+**After the final review (claude-fable-5-2, 2026-11-24)**, these replace the
+first build's choices where they differ:
+- **The 3 s wait for the final text (§4.3) falls back instead of giving up.**
+  If the live text is neither final nor failed 3 s after the mic stops, the
+  live connection is treated as failed, and the whole recording is transcribed
+  once in batch (§4.5). The status says "Live text stopped: the rest will appear
+  when you stop". A Send pressed meanwhile sends after the fallback result, so
+  "The last words did not arrive…" (§4.3, §13) is no longer shown. With no
+  audio, the recording ends with "Didn't catch that". A recording is never
+  wiped without a fallback or a status.
+- **Timeouts and overflow.** A live session that is not ready 10 s after it
+  starts is a failed connection ("Live text is unavailable…"). An overflowing
+  send queue is a failed connection too.
+- **Provider errors.** A provider `error` event is shown once in the chat and
+  does not end the session; only the connection closing does. Unknown event
+  types are logged by type only.
+- **OpenAI items.** An OpenAI item is placed in the box in commit order, from
+  `input_audio_buffer.committed`, so a completion that arrives before any delta
+  still lands in the right place. A commit of less than 100 ms of audio is not
+  sent.
+- **Live models.** Only `gpt-live-transcribe` is offered for OpenAI;
+  `gpt-realtime-whisper` was dropped, since its session shape is unverified. An
+  invalid live model name says so in the header: "The live model name is not
+  valid: the words will appear when you stop".
+- **Ends of a recording (§4.4):**
+  - Hold mode's short-tap and chord discards are immediate discards, as before.
+  - Losing activation, a modal, a chat change and a lost device are soft ends:
+    the last words arrive and nothing is sent.
+  - An out-of-panel Escape during the stopping press counts as a chord.
+  - Escape with focus in the panel cancels a running fallback or batch upload,
+    keeps the live text and unlocks the box ("Transcription cancelled").
+  - Send pressed while an upload runs says "Will send when the transcript
+    arrives".
+  - Send with a typed draft and no new words sends the draft.
+- **Teardown.** Each live session's threads tell the UI when they exit, so the
+  session is joined while voice sits idle. A session closed more than 5 s ago
+  is aborted at the next reap.
+- **The input box.** Starting a recording does not move the caret or the
+  selection.
+
 - Send pressed while a fallback transcription runs waits for it (bounded by
   the upload's timeouts, not by 3 s), then sends; if the fallback fails nothing
   is sent.
