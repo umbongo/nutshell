@@ -28,7 +28,9 @@
 
 /* ev.kind VLE_DONE is the "final" (ev.text NULL for OpenAI, the transcript of record for
  * Mistral); VLE_CLOSED means the link ended without a final (ev.text may hold a reason). */
-typedef struct { unsigned token; VoiceLiveEvent ev; } VoiceLiveMsg;
+/* http_status: on the VLE_CLOSED message of a failed connect, the non-101 HTTP status the server
+ * answered (403 ...); 0 for every other message. */
+typedef struct { unsigned token; int http_status; VoiceLiveEvent ev; } VoiceLiveMsg;
 void voice_live_msg_free(VoiceLiveMsg *m);
 
 /* UI thread. Starts a session for recording `token` on target t with the key (copied, wiped

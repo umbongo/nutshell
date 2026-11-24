@@ -59,8 +59,17 @@ typedef struct {
     int kinds[LOG_MAX];
     unsigned tokens[LOG_MAX];
     int has_text[LOG_MAX];
+    int status[LOG_MAX];
+    ULONGLONG tick[LOG_MAX];
     int n;
 } UiLog;
+
+static int log_count(const UiLog *g, int kind)
+{
+    int c = 0;
+    for (int i = 0; i < g->n; i++) if (g->kinds[i] == kind) c++;
+    return c;
+}
 
 static int log_index(const UiLog *g, int kind)
 {
@@ -81,6 +90,8 @@ static void pump(UiLog *g, DWORD ms, int stop_on_end)
                 g->kinds[g->n] = (int)m->ev.kind;
                 g->tokens[g->n] = m->token;
                 g->has_text[g->n] = m->ev.text != NULL;
+                g->status[g->n] = m->http_status;
+                g->tick[g->n] = GetTickCount64();
                 g->n++;
             }
             int endk = m->ev.kind == VLE_DONE || m->ev.kind == VLE_CLOSED;
@@ -96,6 +107,11 @@ static void pump(UiLog *g, DWORD ms, int stop_on_end)
 typedef struct {
     int mistral;
     int drop_after_updated;
+    int manual_ready;            /* the test sends session.updated itself, later */
+    int delay_completed_n;       /* the completion of this commit is held back ... */
+    int delay_ms;                /* ... this long */
+    int dup_first;               /* the first completion is sent twice */
+    volatile ULONGLONG commit_tick[8];
     volatile LONG session_update, bad_session, ready_sent;
     volatile LONG appended_before_ready, appends;
     volatile LONG append_bytes, commits, flushes, ends;
@@ -127,8 +143,10 @@ static int script_on_msg(WsLoop *w, const char *msg, size_t n, void *u)
             if (!strstr(msg, "\"rate\":24000") || !strstr(msg, "\"turn_detection\":null"))
                 InterlockedIncrement(&s->bad_session);
         }
-        InterlockedExchange(&s->ready_sent, 1);
-        ws_loop_send_text(w, "{\"type\":\"session.updated\"}");
+        if (!s->manual_ready) {
+            InterlockedExchange(&s->ready_sent, 1);
+            ws_loop_send_text(w, "{\"type\":\"session.updated\"}");
+        }
         return s->drop_after_updated ? 1 : 0;
     }
     if (strstr(msg, "input_audio_buffer.append") || strstr(msg, "input_audio.append")) {
@@ -138,12 +156,20 @@ static int script_on_msg(WsLoop *w, const char *msg, size_t n, void *u)
         return 0;
     }
     if (strstr(msg, "input_audio_buffer.commit")) {
-        InterlockedIncrement(&s->commits);
-        ws_loop_send_text(w, "{\"type\":\"input_audio_buffer.committed\",\"item_id\":\"item_1\"}");
-        ws_loop_send_text(w, "{\"type\":\"conversation.item.input_audio_transcription.delta\","
-                             "\"item_id\":\"item_1\",\"delta\":\"hel\"}");
-        ws_loop_send_text(w, "{\"type\":\"conversation.item.input_audio_transcription.completed\","
-                             "\"item_id\":\"item_1\",\"transcript\":\"hello\"}");
+        LONG nth = InterlockedIncrement(&s->commits);
+        char item[32], buf[256];
+        snprintf(item, sizeof(item), "item_%ld", (long)nth);
+        if (nth < 8) s->commit_tick[nth] = GetTickCount64();
+        snprintf(buf, sizeof(buf), "{\"type\":\"input_audio_buffer.committed\",\"item_id\":\"%s\"}", item);
+        ws_loop_send_text(w, buf);
+        snprintf(buf, sizeof(buf), "{\"type\":\"conversation.item.input_audio_transcription.delta\","
+                 "\"item_id\":\"%s\",\"delta\":\"hel\"}", item);
+        ws_loop_send_text(w, buf);
+        if (s->delay_completed_n == (int)nth) Sleep((DWORD)s->delay_ms);
+        snprintf(buf, sizeof(buf), "{\"type\":\"conversation.item.input_audio_transcription.completed\","
+                 "\"item_id\":\"%s\",\"transcript\":\"hello\"}", item);
+        ws_loop_send_text(w, buf);
+        if (s->dup_first && nth == 1) ws_loop_send_text(w, buf);   /* a duplicate completion */
         return 0;
     }
     if (strstr(msg, "input_audio.flush")) {
@@ -205,6 +231,7 @@ int test_voice_live_openai_flow(void)
     ASSERT_NOT_NULL(l);
     Script s;
     memset(&s, 0, sizeof(s));
+    s.manual_ready = 1;
     ws_loop_set_script(l, script_on_msg, &s);
     HWND w = vl_window();
     ASSERT_NOT_NULL(w);
@@ -218,6 +245,15 @@ int test_voice_live_openai_flow(void)
     feed_speech(5, 16000);
     feed_silence(5, 16000);
     voice_live_feed_end(5);
+    /* The provider is held in its handshake: session.update is in, session.updated is not.
+     * The audio queued meanwhile must not reach it. */
+    for (int i = 0; i < 300 && !s.session_update; i++) Sleep(10);
+    ASSERT_EQ((int)s.session_update, 1);
+    Sleep(400);
+    ASSERT_EQ((int)s.appends, 0);
+    ASSERT_EQ((int)s.commits, 0);
+    InterlockedExchange(&s.ready_sent, 1);
+    ASSERT_EQ(ws_loop_send_text(l, "{\"type\":\"session.updated\"}"), 0);
     UiLog g;
     memset(&g, 0, sizeof(g));
     pump(&g, 5000, 1);
@@ -234,6 +270,7 @@ int test_voice_live_openai_flow(void)
     ASSERT_EQ((int)s.session_update, 1);
     ASSERT_EQ((int)s.bad_session, 0);
     ASSERT_EQ((int)s.appended_before_ready, 0);
+    ASSERT_TRUE(s.appends > 0);                       /* the held audio arrived after session.updated */
     ASSERT_TRUE(s.append_bytes >= (LONG)(24000 * 2 * 13 / 10));
     ASSERT_TRUE(s.append_bytes % 2 == 0);
     ASSERT_EQ((int)s.commits, 1);
@@ -383,6 +420,119 @@ int test_voice_live_stale_token_feed(void)
     ASSERT_TRUE(voice_live_test_queued() > 0);
     voice_live_close(9);
     feed_speech(9, 16000);                           /* closed: ignored too */
+    voice_live_reap(3000);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ws_loop_stop(l);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* Two utterances, two commits: the second completion is held back, and the first is sent
+ * twice. The final must come once, after the second completion (not after the duplicate). */
+int test_voice_live_openai_final_waits_for_every_commit(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_SILENT);
+    ASSERT_NOT_NULL(l);
+    Script s;
+    memset(&s, 0, sizeof(s));
+    s.delay_completed_n = 2;
+    s.delay_ms = 500;
+    s.dup_first = 1;
+    ws_loop_set_script(l, script_on_msg, &s);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 0, ws_loop_port(l));
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 11, err, sizeof(err)), 1);
+    ASSERT_EQ(ws_loop_send_text(l, "{\"type\":\"session.created\"}"), 0);
+    feed_speech(11, 16000);
+    feed_silence(11, 16000);        /* the hangover closes the gate: commit 1 */
+    feed_speech(11, 16000);
+    feed_silence(11, 16000);        /* commit 2 */
+    voice_live_feed_end(11);
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 5000, 1);
+    pump(&g, 400, 0);               /* a second final would show here */
+    ASSERT_EQ((int)s.commits, 2);
+    ASSERT_EQ(log_count(&g, VLE_DONE), 1);
+    ASSERT_EQ(log_count(&g, VLE_COMPLETED), 3);        /* item_1 twice, item_2 once */
+    int ie = log_index(&g, VLE_DONE);
+    int last_completed = -1;
+    for (int i = 0; i < g.n; i++) if (g.kinds[i] == VLE_COMPLETED) last_completed = i;
+    ASSERT_TRUE(ie > last_completed);                  /* after the held completion */
+    if (ie >= 0 && s.commit_tick[2])
+        ASSERT_TRUE(g.tick[ie] >= s.commit_tick[2] + 450);
+    voice_live_close(11);
+    voice_live_reap(3000);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ws_loop_stop(l);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* Silence only: nothing is committed, and the final arrives at once. */
+int test_voice_live_openai_zero_commits_final_at_once(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_SILENT);
+    ASSERT_NOT_NULL(l);
+    Script s;
+    memset(&s, 0, sizeof(s));
+    ws_loop_set_script(l, script_on_msg, &s);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 0, ws_loop_port(l));
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 12, err, sizeof(err)), 1);
+    ASSERT_EQ(ws_loop_send_text(l, "{\"type\":\"session.created\"}"), 0);
+    feed_silence(12, 16000);
+    voice_live_feed_end(12);
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 3000, 1);
+    ASSERT_EQ(log_count(&g, VLE_DONE), 1);
+    ASSERT_EQ((int)s.commits, 0);
+    ASSERT_EQ((int)s.appends, 0);
+    voice_live_close(12);
+    voice_live_reap(3000);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ws_loop_stop(l);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* A refused upgrade: the closed message carries the HTTP status. */
+int test_voice_live_connect_refused_reports_status(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_REJECT_403);
+    ASSERT_NOT_NULL(l);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 1, ws_loop_port(l));
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 13, err, sizeof(err)), 1);
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 5000, 1);
+    int ic = log_index(&g, VLE_CLOSED);
+    ASSERT_TRUE(ic >= 0);
+    if (ic >= 0) ASSERT_EQ(g.status[ic], 403);
+    voice_live_close(13);
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
     ws_loop_stop(l);

@@ -220,12 +220,13 @@ size_t voice_live_test_queued(void)
 
 /* Posts `*ev` (ownership moves) unless the session was closed; the flag and the
  * post are one step against voice_live_close. */
-static void post_event(LiveSess *s, VoiceLiveEvent *ev)
+static void post_event(LiveSess *s, VoiceLiveEvent *ev, int http_status)
 {
     VoiceLiveMsg *m = (VoiceLiveMsg *)calloc(1, sizeof(*m));
     int posted = 0;
     if (m) {
         m->token = s->token;
+        m->http_status = http_status;
         m->ev = *ev;
         memset(ev, 0, sizeof(*ev));
         EnterCriticalSection(&s->post_cs);
@@ -240,7 +241,8 @@ static void post_event(LiveSess *s, VoiceLiveEvent *ev)
 
 /* The session's one ending message: a final (VLE_DONE, text moved from *text) or VLE_CLOSED.
  * Only the first ending posts; it wakes the sender. */
-static void post_end(LiveSess *s, VoiceLiveEvKind kind, char **text, const char *item)
+static void post_end(LiveSess *s, VoiceLiveEvKind kind, char **text, const char *item,
+                     int http_status)
 {
     if (InterlockedCompareExchange(&s->ended, 1, 0) == 0) {
         VoiceLiveEvent ev;
@@ -248,7 +250,7 @@ static void post_end(LiveSess *s, VoiceLiveEvKind kind, char **text, const char 
         ev.kind = kind;
         if (item) snprintf(ev.item, sizeof(ev.item), "%s", item);
         if (text && *text) { ev.text = *text; *text = NULL; }
-        post_event(s, &ev);
+        post_event(s, &ev, http_status);
         DLOG(DLOG_AI, DLOG_INFO, 0, "voice.live_end", "kind=%d", (int)kind);
     }
     SetEvent(s->ev_over);
@@ -259,7 +261,7 @@ static void try_final(LiveSess *s)
 {
     if (s->t.prov != VLP_OPENAI || !s->end_sent) return;
     if (s->finals < s->commits_sent) return;
-    post_end(s, VLE_DONE, NULL, NULL);
+    post_end(s, VLE_DONE, NULL, NULL, 0);
 }
 
 /* ---- the receiver ----------------------------------------------------------- */
@@ -296,7 +298,7 @@ static DWORD WINAPI recv_thread(LPVOID p)
     if (!ws) {
         DLOG(DLOG_AI, DLOG_INFO, 0, "voice.live_connect_failed", "status=%d", st);
         char *why = _strdup(err);
-        post_end(s, VLE_CLOSED, &why, NULL);
+        post_end(s, VLE_CLOSED, &why, NULL, st);
         free(why);
         goto out;
     }
@@ -304,6 +306,9 @@ static DWORD WINAPI recv_thread(LPVOID p)
     if (s->cancel) voice_ws_abort(ws);             /* closed while connecting */
 
     int created = 0, ready = 0;
+    char seen[64][64];                  /* item ids already counted (a ring): only this thread */
+    unsigned nseen = 0;
+    memset(seen, 0, sizeof(seen));
     for (;;) {
         char *m = NULL;
         size_t n = 0;
@@ -328,7 +333,7 @@ static DWORD WINAPI recv_thread(LPVOID p)
                 created = 1;
                 if (!msg) {
                     char *why = _strdup("could not build the session message");
-                    post_end(s, VLE_CLOSED, &why, NULL);
+                    post_end(s, VLE_CLOSED, &why, NULL, 0);
                     free(why);
                     voice_live_event_free(&ev);
                     goto done;
@@ -344,37 +349,49 @@ static DWORD WINAPI recv_thread(LPVOID p)
         case VLE_READY:
             if (!ready) {
                 ready = 1;
-                post_event(s, &ev);
+                post_event(s, &ev, 0);
                 SetEvent(s->ev_ready);
             }
             voice_live_event_free(&ev);
             break;
         case VLE_ERROR:
-            post_event(s, &ev);
-            post_end(s, VLE_CLOSED, NULL, NULL);
+            post_event(s, &ev, 0);
+            post_end(s, VLE_CLOSED, NULL, NULL, 0);
             voice_live_event_free(&ev);
             goto done;
         case VLE_DONE:
-            if (InterlockedCompareExchange(&s->ended, 1, 0) == 0) post_event(s, &ev);
+            if (InterlockedCompareExchange(&s->ended, 1, 0) == 0) post_event(s, &ev, 0);
             SetEvent(s->ev_over);
             voice_live_event_free(&ev);
             goto done;
         case VLE_COMPLETED:
-        case VLE_ITEM_FAILED:
-            post_event(s, &ev);
-            InterlockedIncrement(&s->finals);      /* after the post: the final comes last */
-            try_final(s);
+        case VLE_ITEM_FAILED: {
+            char item[sizeof(ev.item)];
+            snprintf(item, sizeof(item), "%s", ev.item);     /* post_event moves ev */
+            post_event(s, &ev, 0);
+            {   /* a duplicate or spurious completion never counts twice */
+                int dup = 0;
+                for (unsigned k = 0; k < nseen && k < 64; k++)
+                    if (strcmp(seen[k], item) == 0) { dup = 1; break; }
+                if (!dup) {
+                    snprintf(seen[nseen % 64], sizeof(seen[0]), "%s", item);
+                    nseen++;
+                    InterlockedIncrement(&s->finals);   /* after the post: the final comes last */
+                    try_final(s);
+                }
+            }
             voice_live_event_free(&ev);
             break;
+        }
         default:
-            post_event(s, &ev);
+            post_event(s, &ev, 0);
             voice_live_event_free(&ev);
             break;
         }
         if (s->ended) break;
     }
 done:
-    if (!s->ended) post_end(s, VLE_CLOSED, NULL, NULL);
+    if (!s->ended) post_end(s, VLE_CLOSED, NULL, NULL, 0);
 out:
     SetEvent(s->ev_over);
     sess_unref(s);
@@ -506,7 +523,7 @@ static DWORD WINAPI send_thread(LPVOID p)
     LiveSess *s = (LiveSess *)p;
     dlog_set_thread_tag("live");
     Sender *x = (Sender *)calloc(1, sizeof(*x));
-    if (!x) { post_end(s, VLE_CLOSED, NULL, NULL); goto out; }
+    if (!x) { post_end(s, VLE_CLOSED, NULL, NULL, 0); goto close; }
     x->s = s;
     x->chunk = (size_t)s->t.rate * VOICE_LIVE_CHUNK_MS / 1000u;
     if (x->chunk > VL_MAX_CHUNK) x->chunk = VL_MAX_CHUNK;
@@ -518,14 +535,14 @@ static DWORD WINAPI send_thread(LPVOID p)
     size_t sl = s->session_len;
     s->session_msg = NULL;
     LeaveCriticalSection(&s->cs);
-    if (send_json(x, sm, sl) != 0) { post_end(s, VLE_CLOSED, NULL, NULL); goto close; }
+    if (send_json(x, sm, sl) != 0) { post_end(s, VLE_CLOSED, NULL, NULL, 0); goto close; }
 
     /* Nothing else until the provider says it is ready. */
     if (!wait_for(s, s->ev_ready)) goto close;
     for (;;) {
         if (!wait_for(s, s->ev_feed)) break;
         if (!drain(x)) {
-            if (x->failed && !s->cancel) post_end(s, VLE_CLOSED, NULL, NULL);
+            if (x->failed && !s->cancel) post_end(s, VLE_CLOSED, NULL, NULL, 0);
             break;
         }
     }
@@ -541,7 +558,6 @@ close:
         }
     }
     if (x) { secure_zero(x, sizeof(*x)); free(x); }
-out:
     SetEvent(s->ev_over);
     sess_unref(s);
     return 0;
