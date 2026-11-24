@@ -3805,6 +3805,14 @@ int test_voice_stt_retry_plain(void);
 int test_voice_stt_multipart_target_prompt(void);
 int test_voice_stt_parse(void);
 int test_voice_stt_http_error(void);
+int test_voice_live_resolve(void);
+int test_voice_live_session_openai(void);
+int test_voice_live_session_mistral(void);
+int test_voice_live_audio_msg(void);
+int test_voice_live_gate_and_end_msgs(void);
+int test_voice_live_escape(void);
+int test_voice_live_parse_openai(void);
+int test_voice_live_parse_mistral(void);
 
 /* test_ai_gate.c */
 int test_ai_gate_default_off(void);
@@ -8303,6 +8311,14 @@ int main(void) {
     failed += test_voice_stt_multipart_target_prompt();
     failed += test_voice_stt_parse();
     failed += test_voice_stt_http_error();
+    failed += test_voice_live_resolve();
+    failed += test_voice_live_session_openai();
+    failed += test_voice_live_session_mistral();
+    failed += test_voice_live_audio_msg();
+    failed += test_voice_live_gate_and_end_msgs();
+    failed += test_voice_live_escape();
+    failed += test_voice_live_parse_openai();
+    failed += test_voice_live_parse_mistral();
     failed += test_ai_gate_default_off();
     failed += test_ai_gate_enabled();
     failed += test_ai_gate_override_only();
