@@ -3749,6 +3749,7 @@ int test_voice_config_marker_is_not_a_notice_key(void);
 int test_voice_config_custom_language_roundtrip(void);
 int test_voice_config_language_migration(void);
 int test_voice_config_rshift_migration_rev2_skips(void);
+int test_voice_config_marker_extremes(void);
 int test_voice_config_load_defaults_and_saved_choices(void);
 /* test_voice_lang.c */
 int test_voice_lang_table_order(void);
@@ -3774,6 +3775,7 @@ int test_voice_stt_multipart_en_us_no_prompt(void);
 int test_voice_stt_multipart_auto_detect(void);
 int test_voice_stt_gemini_language_words(void);
 int test_voice_stt_prompt_per_provider(void);
+int test_voice_stt_multipart_target_prompt(void);
 int test_voice_stt_parse(void);
 int test_voice_stt_http_error(void);
 
@@ -8217,6 +8219,7 @@ int main(void) {
     failed += test_voice_config_custom_language_roundtrip();
     failed += test_voice_config_language_migration();
     failed += test_voice_config_rshift_migration_rev2_skips();
+    failed += test_voice_config_marker_extremes();
     failed += test_voice_lang_table_order();
     failed += test_voice_lang_find();
     failed += test_voice_lang_parse_other();
@@ -8239,6 +8242,7 @@ int main(void) {
     failed += test_voice_stt_multipart_auto_detect();
     failed += test_voice_stt_gemini_language_words();
     failed += test_voice_stt_prompt_per_provider();
+    failed += test_voice_stt_multipart_target_prompt();
     failed += test_voice_stt_parse();
     failed += test_voice_stt_http_error();
     failed += test_ai_gate_default_off();

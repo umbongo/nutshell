@@ -46,17 +46,13 @@ int voice_stt_resolve(const Settings *s, SttTarget *t, char *err, size_t cap);
  * does not take a prompt, or the language has no hint). */
 const char *voice_stt_prompt(const SttTarget *t);
 
-/* multipart/form-data body (heap, free()); *out_len is its byte count. language is
- * the stored id ("en-GB"): the part carries its ISO code (`language`, or one
- * `languages[]` for a gpt-transcribe model), none for "". prompt is sent as a
- * `prompt` part when non-NULL and non-empty. NULL for CR/LF in model, language or
- * prompt. */
-char *voice_stt_multipart_ex(const char *boundary, const unsigned char *wav, size_t wav_len,
-                             const char *model, const char *language, const char *prompt,
-                             size_t *out_len);
-/* The same with no prompt. */
+/* multipart/form-data body (heap, free()); *out_len is its byte count. Everything
+ * but the audio comes from the target: model, and the language as its ISO code
+ * (`language`, or one `languages[]` for a gpt-transcribe model; none for ""), plus
+ * the `prompt` part from voice_stt_prompt(t). NULL for CR/LF in the model or
+ * language. */
 char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t wav_len,
-                          const char *model, const char *language, size_t *out_len);
+                          const SttTarget *t, size_t *out_len);
 
 /* OpenAI chat-completions body carrying the audio as an input_audio part. The
  * instruction names the language in words ("The language is English.") and, for

@@ -244,16 +244,12 @@ static int is_gpt_transcribe_model(const char *m)
 }
 
 char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t wav_len,
-                          const char *model, const char *language, size_t *out_len)
+                          const SttTarget *t, size_t *out_len)
 {
-    return voice_stt_multipart_ex(boundary, wav, wav_len, model, language, NULL, out_len);
-}
-
-char *voice_stt_multipart_ex(const char *boundary, const unsigned char *wav, size_t wav_len,
-                             const char *model, const char *language, const char *prompt,
-                             size_t *out_len)
-{
-    if (!boundary || !wav || !model) return NULL;
+    if (!boundary || !wav || !t) return NULL;
+    const char *model = t->model;
+    const char *language = t->language;
+    const char *prompt = voice_stt_prompt(t);
     size_t bl = strlen(boundary);
     if (bl == 0 || bl > 70) return NULL;
     for (size_t i = 0; i < bl; i++) {
@@ -311,18 +307,10 @@ char *voice_stt_gemini_body(const unsigned char *wav, size_t wav_len,
     char text[512];
     char words[64] = "";
     if (language && language[0]) {
-        int idx = voice_lang_find(language);
-        if (idx >= 0) {
-            size_t n = 0;
-            const char *lab = voice_lang_table(&n)[idx].label;
-            size_t k = strcspn(lab, " (");   /* "English (UK)" -> "English" */
-            snprintf(words, sizeof words, "%.*s", (int)k, lab);
-        } else {
-            char iso[16];
-            voice_lang_iso(language, iso, sizeof iso);
-            const char *nm = voice_lang_name(iso);
-            snprintf(words, sizeof words, "%s", nm ? nm : iso);
-        }
+        char iso[16];
+        voice_lang_iso(language, iso, sizeof iso);
+        const char *nm = voice_lang_name(iso);
+        snprintf(words, sizeof words, "%s", nm ? nm : iso);
     }
     const char *hint = voice_lang_spelling_hint(language);
     snprintf(text, sizeof text, "%s%s%s%s%s%s", prompt,

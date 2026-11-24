@@ -879,3 +879,22 @@ int test_voice_config_rshift_migration_rev2_skips(void)
     remove(VCFG);
     TEST_END();
 }
+
+/* A marker that is not a small integer must not be cast to int (UB for NaN or
+ * 1e30): huge counts as current (no migration), negative as before rev 2. */
+int test_voice_config_marker_extremes(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    int key = -1;
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 1e30, ", "", "right_ctrl", "hold",
+                           lang, sizeof lang, &key), 0);
+    ASSERT_STR_EQ(lang, "");
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_CTRL);
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": -5, ", "", "right_ctrl", "hold",
+                           lang, sizeof lang, &key), 1);
+    ASSERT_STR_EQ(lang, "en-GB");
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_SHIFT);
+    remove(VCFG);
+    TEST_END();
+}

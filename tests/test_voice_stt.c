@@ -22,6 +22,26 @@ static const char *find_bytes(const char *h, size_t hl, const char *n, size_t nl
     return NULL;
 }
 
+/* The one builder takes the target: this builds one (an OpenAI-format provider
+ * that accepts `prompt`, or not) from a model and a stored language id. */
+static char *mpt_ex(const char *bnd, const unsigned char *wav, size_t wl, const char *model,
+                    const char *lang, int accepts, size_t *len)
+{
+    SttTarget t;
+    memset(&t, 0, sizeof t);
+    snprintf(t.model, sizeof t.model, "%s", model);
+    snprintf(t.language, sizeof t.language, "%s", lang ? lang : "");
+    snprintf(t.provider, sizeof t.provider, "openai");
+    t.accepts_prompt = accepts;
+    return voice_stt_multipart(bnd, wav, wl, &t, len);
+}
+
+static char *mpt(const char *bnd, const unsigned char *wav, size_t wl, const char *model,
+                 const char *lang, size_t *len)
+{
+    return mpt_ex(bnd, wav, wl, model, lang, 1, len);
+}
+
 static const char *find_str(const char *h, size_t hl, const char *n)
 {
     return find_bytes(h, hl, n, strlen(n));
@@ -206,16 +226,16 @@ int test_voice_stt_multipart_exact_size_long_fields(void)
     TEST_BEGIN();
     unsigned char wav[5000];
     memset(wav, 'W', sizeof wav);
-    char model[201], lang[61], bnd[71];
+    char model[201], lang[16], bnd[71];
     memset(model, 'm', 200); model[200] = '\0';
-    memset(lang, 'l', 60); lang[60] = '\0';
+    memset(lang, 'l', 15); lang[15] = '\0';   /* SttTarget.language is char[16] */
     memset(bnd, 'b', 70); bnd[70] = '\0';
     const char *models[2] = { model, "gpt-4o-transcribe" };
     const char *langs[2] = { lang, "" };
     for (int m = 0; m < 2; m++) {
         for (int g = 0; g < 2; g++) {
             size_t len = 0;
-            char *b = voice_stt_multipart(bnd, wav, sizeof wav, models[m], langs[g], &len);
+            char *b = mpt(bnd, wav, sizeof wav, models[m], langs[g], &len);
             ASSERT_NOT_NULL(b);
             if (!b) continue;
             ASSERT_EQ(b[len], '\0');
@@ -236,7 +256,7 @@ int test_voice_stt_multipart(void)
     TEST_BEGIN();
     const unsigned char wav[4] = {0, 1, 2, 0};
     size_t len = 0;
-    char *b = voice_stt_multipart("b0", wav, sizeof wav, "whisper-1", "en", &len);
+    char *b = mpt("b0", wav, sizeof wav, "whisper-1", "en", &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_TRUE(len > 6 && memcmp(b, "--b0\r\n", 6) == 0);
@@ -252,28 +272,28 @@ int test_voice_stt_multipart(void)
         ASSERT_TRUE(len >= 8 && memcmp(b + len - 8, "--b0--\r\n", 8) == 0);
         free(b);
     }
-    ASSERT_NULL(voice_stt_multipart("", wav, sizeof wav, "m", "en", &len));
-    ASSERT_NULL(voice_stt_multipart("b 0", wav, sizeof wav, "m", "en", &len));
-    ASSERT_NULL(voice_stt_multipart("b\r\n0", wav, sizeof wav, "m", "en", &len));
-    ASSERT_NULL(voice_stt_multipart("b\"0", wav, sizeof wav, "m", "en", &len));
+    ASSERT_NULL(mpt("", wav, sizeof wav, "m", "en", &len));
+    ASSERT_NULL(mpt("b 0", wav, sizeof wav, "m", "en", &len));
+    ASSERT_NULL(mpt("b\r\n0", wav, sizeof wav, "m", "en", &len));
+    ASSERT_NULL(mpt("b\"0", wav, sizeof wav, "m", "en", &len));
     {
         char lb[80];
         memset(lb, 'a', 71); lb[71] = '\0';
-        ASSERT_NULL(voice_stt_multipart(lb, wav, sizeof wav, "m", "en", &len));
+        ASSERT_NULL(mpt(lb, wav, sizeof wav, "m", "en", &len));
         lb[70] = '\0';
-        char *ok70 = voice_stt_multipart(lb, wav, sizeof wav, "m", "en", &len);
+        char *ok70 = mpt(lb, wav, sizeof wav, "m", "en", &len);
         ASSERT_NOT_NULL(ok70);
         free(ok70);
     }
-    ASSERT_NULL(voice_stt_multipart("b0", wav, sizeof wav, "m\r\nX: y", "en", &len));
-    ASSERT_NULL(voice_stt_multipart("b0", wav, sizeof wav, "m", "e\nn", &len));
-    b = voice_stt_multipart("b0", wav, sizeof wav, "whisper-1", "", &len);
+    ASSERT_NULL(mpt("b0", wav, sizeof wav, "m\r\nX: y", "en", &len));
+    ASSERT_NULL(mpt("b0", wav, sizeof wav, "m", "e\nn", &len));
+    b = mpt("b0", wav, sizeof wav, "whisper-1", "", &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NULL(find_str(b, len, "name=\"language\""));
         free(b);
     }
-    b = voice_stt_multipart("b0", wav, sizeof wav, "gpt-4o-mini-transcribe", "en", &len);
+    b = mpt("b0", wav, sizeof wav, "gpt-4o-mini-transcribe", "en", &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NULL(find_str(b, len, "response_format"));
@@ -397,17 +417,17 @@ int test_voice_stt_http_error(void)
 
 #define HINT_BRIT "Use British English spelling, for example colour, organise, centre and travelled."
 
-static char *mp(const char *model, const char *lang, const char *prompt, size_t *len)
+static char *mp(const char *model, const char *lang, int accepts, size_t *len)
 {
     const unsigned char wav[4] = {0, 1, 2, 0};
-    return voice_stt_multipart_ex("b0", wav, sizeof wav, model, lang, prompt, len);
+    return mpt_ex("b0", wav, sizeof wav, model, lang, accepts, len);
 }
 
 int test_voice_stt_multipart_language_gpt_transcribe(void)
 {
     TEST_BEGIN();
     size_t len = 0;
-    char *b = mp("gpt-transcribe", "en-GB", HINT_BRIT, &len);
+    char *b = mp("gpt-transcribe", "en-GB", 1, &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NOT_NULL(find_str(b, len, "name=\"languages[]\"\r\n\r\nen\r\n"));
@@ -417,7 +437,7 @@ int test_voice_stt_multipart_language_gpt_transcribe(void)
         free(b);
     }
     /* gpt-4o-transcribe is not gpt-transcribe: it takes the plain field */
-    b = mp("gpt-4o-transcribe", "en-GB", NULL, &len);
+    b = mp("gpt-4o-transcribe", "en-GB", 0, &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NULL(find_str(b, len, "languages[]"));
@@ -431,7 +451,7 @@ int test_voice_stt_multipart_language_whisper(void)
 {
     TEST_BEGIN();
     size_t len = 0;
-    char *b = mp("whisper-1", "en-GB", HINT_BRIT, &len);
+    char *b = mp("whisper-1", "en-GB", 1, &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\nen\r\n"));
@@ -441,7 +461,7 @@ int test_voice_stt_multipart_language_whisper(void)
         free(b);
     }
     /* a custom code goes out as its iso part */
-    b = mp("whisper-1", "pt-BR", NULL, &len);
+    b = mp("whisper-1", "pt-BR", 1, &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\npt\r\n"));
@@ -507,7 +527,8 @@ int test_voice_stt_multipart_mistral_no_prompt(void)
     SttTarget t;
     ASSERT_EQ(target_for("mistral", "en-GB", &t), 1);
     size_t len = 0;
-    char *b = mp(t.model, t.language, voice_stt_prompt(&t), &len);
+    const unsigned char w4[4] = {0, 1, 2, 0};
+    char *b = voice_stt_multipart("b0", w4, sizeof w4, &t, &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\nen\r\n"));
@@ -523,7 +544,8 @@ int test_voice_stt_multipart_en_us_no_prompt(void)
     SttTarget t;
     ASSERT_EQ(target_for("openai", "en-US", &t), 1);
     size_t len = 0;
-    char *b = mp("whisper-1", t.language, voice_stt_prompt(&t), &len);
+    const unsigned char w4[4] = {0, 1, 2, 0};
+    char *b = voice_stt_multipart("b0", w4, sizeof w4, &t, &len);
     ASSERT_NOT_NULL(b);
     if (b) {
         ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\nen\r\n"));
@@ -541,7 +563,9 @@ int test_voice_stt_multipart_auto_detect(void)
     size_t len = 0;
     const char *models[] = { "whisper-1", "gpt-transcribe" };
     for (int i = 0; i < 2; i++) {
-        char *b = mp(models[i], t.language, voice_stt_prompt(&t), &len);
+        snprintf(t.model, sizeof t.model, "%s", models[i]);
+        const unsigned char w4[4] = {0, 1, 2, 0};
+        char *b = voice_stt_multipart("b0", w4, sizeof w4, &t, &len);
         ASSERT_NOT_NULL(b);
         if (b) {
             ASSERT_NULL(find_str(b, len, "language"));
@@ -549,8 +573,6 @@ int test_voice_stt_multipart_auto_detect(void)
             free(b);
         }
     }
-    /* CR/LF in the prompt is refused */
-    ASSERT_NULL(mp("whisper-1", "en", "a\r\nb", &len));
     TEST_END();
 }
 
@@ -594,8 +616,33 @@ int test_voice_stt_gemini_language_words(void)
     b = gemini_text("cy", tx, sizeof tx);
     free(b);
     ASSERT_NOT_NULL(strstr(tx, " The language is Welsh."));
+    b = gemini_text("gd", tx, sizeof tx);
+    free(b);
+    ASSERT_NOT_NULL(strstr(tx, " The language is Scottish Gaelic."));
     b = gemini_text("", tx, sizeof tx);
     free(b);
     ASSERT_NULL(strstr(tx, "language"));
+    TEST_END();
+}
+
+/* The single builder derives the prompt from the target itself, so a real
+ * en-GB target for each provider carries it (or not) with no caller step. */
+int test_voice_stt_multipart_target_prompt(void)
+{
+    TEST_BEGIN();
+    const unsigned char w4[4] = {0, 1, 2, 0};
+    const char *provs[] = { "openai", "groq", "custom", "mistral" };
+    for (int i = 0; i < 4; i++) {
+        SttTarget t;
+        ASSERT_EQ(target_for(provs[i], "en-GB", &t), 1);
+        size_t len = 0;
+        char *b = voice_stt_multipart("b0", w4, sizeof w4, &t, &len);
+        ASSERT_NOT_NULL(b);
+        if (b) {
+            ASSERT_EQ(find_str(b, len, "name=\"prompt\"\r\n\r\n" HINT_BRIT "\r\n") != NULL, i < 3);
+            free(b);
+        }
+    }
+    ASSERT_NULL(voice_stt_multipart("b0", w4, sizeof w4, NULL, NULL));
     TEST_END();
 }

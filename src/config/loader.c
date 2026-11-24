@@ -990,7 +990,7 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
          * rev < 3: the language had no default (empty); an empty one becomes
          * English (UK). A chosen language is never touched, and rev 3 keeps a
          * deliberate Auto-detect. */
-        int voice_rev = (int)json_obj_num(jset, "voice_defaults_rev", 0.0);
+        double voice_rev = json_obj_num(jset, "voice_defaults_rev", 0.0);   /* a double: no int cast of NaN or 1e30 */
         if (voice_rev < 2 && !s->voice_enabled
             && s->voice_ptt_key == (int)VOICE_PTT_RIGHT_CTRL
             && s->voice_ptt_mode == (int)VOICE_MODE_HOLD) {

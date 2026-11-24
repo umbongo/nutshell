@@ -101,8 +101,7 @@ static DWORD WINAPI stt_thread(LPVOID arg)
             set_fail(j, "Speech-to-text could not start (no random source).");
             goto done;
         }
-        body = voice_stt_multipart(boundary, j->wav, j->wav_len, j->target.model,
-                                   j->target.language, &body_len);
+        body = voice_stt_multipart(boundary, j->wav, j->wav_len, &j->target, &body_len);
         snprintf(ctype, sizeof(ctype), "multipart/form-data; boundary=%s", boundary);
     }
     /* The recording is in the body now: wipe it at once. */
