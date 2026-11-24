@@ -461,6 +461,14 @@ Done, in order (details in the commit messages and the specs named):
   (`shortcuts_filtered_ex`, `SC_VOICE`); the empty state gains a voice hint line; the demo
   gains `voice-recording`, `voice-transcribing` and `settings-voice`. Its Windows checks are
   in Open.
+- Voice review by default (branch feat/voice-review-default; maintainer, 2026-11-23: "for the
+  default, i just want you to write down what im saying for me to review before i send it"): a
+  transcript is written into the AI input (appended after a space to a draft), caret at the end
+  and focus in the box, and never sent; the new tick box "Send automatically when I finish
+  speaking" (`voice_auto_send`, default off) restores the old sending. `voice_review` is no
+  longer read, so every existing config gets auto-send off, and the upgrade notice names it.
+  Voice stays unavailable while the assistant is busy in both modes. Its Windows checks are in
+  Open (voice item, (ae) to (ai)).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -550,7 +558,19 @@ Open, in priority order:
       then released in either order, then a clean Right Shift press works; a capital typed
       with Right Shift during a Toggle recording keeps it recording. Item (u), Win+L during a
       Toggle recording, matters more now that Toggle is the default; the follow-up is not
-      built.
+      built (with auto-send off, the default since feat/voice-review-default, such a
+      recording now only fills the box).
+      Review by default (feat/voice-review-default) adds: (ae) with "Send automatically when I
+      finish speaking" unticked (the default), speak into an empty box: the words appear in
+      it, nothing is sent, the caret is at the end and focus is in the box; the cue reads
+      "press Right Shift again to finish" and the empty-state hint ends "Your words appear in
+      the box for you to review." (af) The same with a typed draft in the box: the words are
+      appended after one space, nothing is sent. (ag) With the box ticked: an empty box sends
+      as before (approvals unchanged), a draft is appended and not sent, and the cue says "to
+      send". (ah) The maintainer's 1.2.93 config (with `voice_review`) opens with one upgrade
+      notice line, "Voice: send automatically: off, so your words wait in the box for you to
+      review", and the next save drops `voice_review`. (ai) The tick box label fits on the
+      Voice page at 100 %, 125 % and 200 %.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text

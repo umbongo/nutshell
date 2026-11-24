@@ -2172,9 +2172,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_VOICE, 70, 0, 1, 0, 1, 0);
             }
             {
-                HWND chk = make_check2(nd, IDC_VOICE_REVIEW, SH_VOICE_REVIEW);
+                HWND chk = make_check2(nd, IDC_VOICE_AUTO_SEND, SH_VOICE_AUTO_SEND);
                 SendMessage(chk, BM_SETCHECK,
-                            vs->voice_review ? BST_CHECKED : BST_UNCHECKED, 0);
+                            vs->voice_auto_send ? BST_CHECKED : BST_UNCHECKED, 0);
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
             }
             /* Voice saved on: ask the audio thread for the microphones and
@@ -2994,8 +2994,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             v = GetDlgItemInt(d->hPage, IDC_VOICE_MIC_DELAY, &ok, FALSE);
             s->voice_mic_delay_ms =
                 keep_entry(SH_VOICE_MIC_DELAY, ok, v, s->voice_mic_delay_ms);
-            s->voice_review = (IsDlgButtonChecked(d->hPage, IDC_VOICE_REVIEW)
-                               == BST_CHECKED) ? 1 : 0;
+            s->voice_auto_send = (IsDlgButtonChecked(d->hPage, IDC_VOICE_AUTO_SEND)
+                                  == BST_CHECKED) ? 1 : 0;
 
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)

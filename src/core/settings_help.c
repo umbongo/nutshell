@@ -474,7 +474,7 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Mode:",
       NULL,
       "Mode:\n\nToggle records from one clean press of the key to the "
-      "next. Hold to talk records while you hold the key and sends when "
+      "next. Hold to talk records while you hold the key and stops when "
       "you let go. A recording stops by itself after 60 seconds, and Escape "
       "throws it away.\nDefault: Toggle.",
       "Toggle",
@@ -489,13 +489,16 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "applies to Hold to talk only.\nDefault: 150.",
       "150",
       VOICE_MIC_DELAY_MIN, VOICE_MIC_DELAY_MAX, 0u),
-    E(SH_VOICE_REVIEW, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
-      "Review before sending",
+    E(SH_VOICE_AUTO_SEND, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Send automatically when I finish speaking",
       NULL,
-      "Review before sending\n\nWhen on, the transcript waits in the "
-      "message box for you to read, edit and press Enter. When off, it is "
-      "sent as soon as it arrives, and every approval still applies as for "
-      "a message you typed.\nDefault: Off.",
+      "Send automatically when I finish speaking\n\nWhen off, your words "
+      "appear in the message box for you to read, edit and send with Enter; "
+      "nothing is sent until you do. When on, the transcript is sent as soon "
+      "as it arrives, as a message you typed would be, and every approval "
+      "still applies. Either way, if the box already holds a draft, or the "
+      "assistant is busy, your words are added to the box and not sent."
+      "\nDefault: Off.",
       "Off",
       0, 0, 0u),
 

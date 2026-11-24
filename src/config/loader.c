@@ -537,7 +537,7 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("voice_ptt_key",                 NULL, NULL, SH_VOICE_PTT_KEY, "Voice: push-to-talk key"),
     CK("voice_ptt_mode",                NULL, NULL, SH_VOICE_PTT_MODE, "Voice: push-to-talk mode"),
     CK("voice_mic_delay_ms",            NULL, NULL, SH_VOICE_MIC_DELAY, "Voice: mic start delay"),
-    CK("voice_review",                  NULL, NULL, SH_VOICE_REVIEW, "Voice: review before sending"),
+    CK("voice_auto_send",               NULL, NULL, SH_VOICE_AUTO_SEND, "Voice: send automatically"),
 };
 #undef CK
 
@@ -974,7 +974,7 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         s->voice_ptt_mode = voice_ptt_mode_from_json(json_obj_str(jset, "voice_ptt_mode"));
         s->voice_mic_delay_ms = (int)json_obj_num(jset, "voice_mic_delay_ms",
                                                   (double)s->voice_mic_delay_ms);
-        s->voice_review = json_obj_bool(jset, "voice_review", s->voice_review);
+        s->voice_auto_send = json_obj_bool(jset, "voice_auto_send", s->voice_auto_send);
         /* One-time migration of untouched voice defaults. 1.2.92 always wrote
          * Right Ctrl + Hold (its defaults) and re-saved every config it opened,
          * so those values say nothing about a choice. The internal marker
@@ -1318,7 +1318,7 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, voice_ptt_mode_json(s->voice_ptt_mode));
     fputs(",\n", f);
     fprintf(f, "    \"voice_mic_delay_ms\": %d,\n", s->voice_mic_delay_ms);
-    fprintf(f, "    \"voice_review\": %s,\n", s->voice_review ? "true" : "false");
+    fprintf(f, "    \"voice_auto_send\": %s,\n", s->voice_auto_send ? "true" : "false");
     /* Internal marker, last and not in k_setting_keys: see config_load_report. */
     fputs("    \"voice_defaults_rev\": 2\n", f);
     fputs("  },\n  \"profiles\": [\n", f);

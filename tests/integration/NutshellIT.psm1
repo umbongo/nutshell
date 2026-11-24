@@ -742,7 +742,7 @@ function New-NutshellTestEnv {
         voice_stt_language = ""; stt_api_key = ""
         voice_input_device = ""; voice_input_device_name = ""
         voice_ptt_key = "right_shift"; voice_ptt_mode = "toggle"
-        voice_mic_delay_ms = 150; voice_review = $false
+        voice_mic_delay_ms = 150; voice_auto_send = $false
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }
 

@@ -9,6 +9,7 @@
 #define VAL_AI_ON   "on, as your API key is already set up"
 #define VAL_OFF     "off until you choose to turn it on"
 #define VAL_DEFAULT "the standard setting"
+#define VAL_VOICE_AUTO_SEND_OFF "off, so your words wait in the box for you to review"
 
 static void blank(Notice *n, NoticeTone tone)
 {
@@ -246,6 +247,9 @@ int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
         } else if (strcmp(k->key, "voice_enabled") == 0) {
             set(label, sizeof(label), "Voice");
             value = VAL_OFF;
+        } else if (strcmp(k->key, "voice_auto_send") == 0) {
+            key_label(k, label, sizeof(label));
+            value = VAL_VOICE_AUTO_SEND_OFF;
         } else {
             key_label(k, label, sizeof(label));
             const SettingsHelp *h = k->sh_id >= 0 ? settings_help_get(k->sh_id) : NULL;

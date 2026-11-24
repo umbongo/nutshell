@@ -93,7 +93,7 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_VOICE_ENABLE), N(SH_VOICE_STT_USE_AI), N(SH_VOICE_STT_PROVIDER), N(SH_VOICE_STT_KEY),
     N(SH_VOICE_STT_URL), N(SH_VOICE_STT_MODEL), N(SH_VOICE_LANGUAGE), N(SH_VOICE_DEVICE),
     N(SH_VOICE_TEST), N(SH_VOICE_PTT_KEY), N(SH_VOICE_PTT_MODE), N(SH_VOICE_MIC_DELAY),
-    N(SH_VOICE_REVIEW),
+    N(SH_VOICE_AUTO_SEND),
     N(SH_AI_WEB_FETCH), N(SH_AI_SEARCH), N(SH_AI_SEARCH_URL), N(SH_AI_MAX_RESULTS),
     N(SH_DBG_ENABLE), N(SH_DBG_LEVEL_RENDER), N(SH_DBG_LEVEL_TERM), N(SH_DBG_LEVEL_AI),
     N(SH_DBG_LEVEL_SSH), N(SH_DBG_LEVEL_SHELL), N(SH_DBG_LEVEL_GENERAL),
@@ -287,9 +287,9 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
         (void)snprintf(out, n, "%s", s->ai_enabled ? "On" : "Off");
         return 1;
     }
-    if (id == SH_VOICE_ENABLE || id == SH_VOICE_REVIEW || id == SH_VOICE_STT_USE_AI) {
+    if (id == SH_VOICE_ENABLE || id == SH_VOICE_AUTO_SEND || id == SH_VOICE_STT_USE_AI) {
         int on = id == SH_VOICE_ENABLE ? s->voice_enabled
-               : id == SH_VOICE_REVIEW ? s->voice_review : s->voice_stt_use_ai;
+               : id == SH_VOICE_AUTO_SEND ? s->voice_auto_send : s->voice_stt_use_ai;
         (void)snprintf(out, n, "%s", on ? "On" : "Off");
         return 1;
     }
@@ -648,17 +648,17 @@ int test_settings_help_ai_enable_entry(void) {
 
 int test_settings_help_voice_entries(void) {
     TEST_BEGIN();
-    for (int id = (int)SH_VOICE_ENABLE; id <= (int)SH_VOICE_REVIEW; id++) {
+    for (int id = (int)SH_VOICE_ENABLE; id <= (int)SH_VOICE_AUTO_SEND; id++) {
         const SettingsHelp *e = settings_help_get(id);
         ASSERT_NOT_NULL(e);
         if (e == NULL) continue;
         ASSERT_EQ(e->page, SETTINGS_PAGE_VOICE);
         ASSERT_EQ(e->kind, id == (int)SH_VOICE_TEST ? SH_KIND_ACTION : SH_KIND_SETTING);
     }
-    ASSERT_EQ((int)SH_VOICE_REVIEW - (int)SH_VOICE_ENABLE + 1, 13);
+    ASSERT_EQ((int)SH_VOICE_AUTO_SEND - (int)SH_VOICE_ENABLE + 1, 13);
     /* between the AI Behaviour and the AI Web entries */
     ASSERT_EQ(settings_help_get((int)SH_VOICE_ENABLE - 1)->page, SETTINGS_PAGE_AI_BEHAVIOUR);
-    ASSERT_EQ(settings_help_get((int)SH_VOICE_REVIEW + 1)->page, SETTINGS_PAGE_AI_WEB);
+    ASSERT_EQ(settings_help_get((int)SH_VOICE_AUTO_SEND + 1)->page, SETTINGS_PAGE_AI_WEB);
     const SettingsHelp *e = settings_help_get((int)SH_VOICE_ENABLE);
     ASSERT_STR_EQ(e->label, "Enable voice");
     ASSERT_STR_EQ(e->default_text, "Off");

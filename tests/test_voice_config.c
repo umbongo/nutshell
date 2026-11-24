@@ -19,7 +19,7 @@ static const char *const k_voice_keys[13] = {
     "voice_enabled", "voice_stt_use_ai", "voice_stt_provider", "voice_stt_url",
     "voice_stt_model", "voice_stt_language", "stt_api_key", "voice_input_device",
     "voice_input_device_name", "voice_ptt_key", "voice_ptt_mode",
-    "voice_mic_delay_ms", "voice_review",
+    "voice_mic_delay_ms", "voice_auto_send",
 };
 
 static int vcfg_write(const char *text)
@@ -61,7 +61,7 @@ int test_voice_config_defaults(void)
     ASSERT_EQ(s.voice_mic_delay_ms, 150);
     ASSERT_EQ(s.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
     ASSERT_EQ(s.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
-    ASSERT_EQ(s.voice_review, 0);
+    ASSERT_EQ(s.voice_auto_send, 0);
     /* the defaults are the first entries, so a zeroed field is the default too */
     ASSERT_EQ((int)VOICE_PTT_RIGHT_SHIFT, 0);
     ASSERT_EQ((int)VOICE_MODE_TOGGLE, 0);
@@ -195,7 +195,7 @@ int test_voice_config_roundtrip(void)
     s->voice_ptt_key = VOICE_PTT_F9;
     s->voice_ptt_mode = VOICE_MODE_TOGGLE;
     s->voice_mic_delay_ms = 400;
-    s->voice_review = 1;
+    s->voice_auto_send = 1;
     ASSERT_EQ(config_save(cfg, VCFG), 0);
     config_free(cfg);
 
@@ -223,7 +223,7 @@ int test_voice_config_roundtrip(void)
         ASSERT_EQ(t->voice_ptt_key, (int)VOICE_PTT_F9);
         ASSERT_EQ(t->voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
         ASSERT_EQ(t->voice_mic_delay_ms, 400);
-        ASSERT_EQ(t->voice_review, 1);
+        ASSERT_EQ(t->voice_auto_send, 1);
         config_free(l);
     }
     remove(VCFG);
@@ -350,6 +350,15 @@ int test_voice_config_validate_clamps(void)
     snprintf(s.voice_stt_provider, sizeof(s.voice_stt_provider), "custom");
     settings_validate(&s);
     ASSERT_STR_EQ(s.voice_stt_provider, "custom");
+    s.voice_auto_send = 7;
+    settings_validate(&s);
+    ASSERT_EQ(s.voice_auto_send, 1);
+    s.voice_auto_send = -3;
+    settings_validate(&s);
+    ASSERT_EQ(s.voice_auto_send, 1);
+    s.voice_auto_send = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.voice_auto_send, 0);
     TEST_END();
 }
 
@@ -442,10 +451,100 @@ int test_notice_upgrade_lists_voice_subkey_when_switch_present(void)
     config_default_settings(&s);
     memset(&r, 0, sizeof(r));
     r.status = CONFIG_LOAD_OK;
-    r.missing[r.missing_count++] = vkey_index("voice_review");
+    r.missing[r.missing_count++] = vkey_index("voice_auto_send");
     ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
     ASSERT_EQ(n.item_count, 1);
-    ASSERT_TRUE(strcmp(n.items[0].label, "Voice") != 0);
+    ASSERT_STR_EQ(n.items[0].label, "Voice: send automatically");
+    ASSERT_STR_EQ(n.items[0].value, "off, so your words wait in the box for you to review");
+    char txt[1024];
+    notice_plain_text(&n, txt, sizeof txt);
+    ASSERT_TRUE(strstr(txt, "- Voice: send automatically: off, so your words wait in the box for you to review") != NULL);
+    /* With the voice switch missing too, the sub-key folds into "Voice". */
+    r.missing[r.missing_count++] = vkey_index("voice_enabled");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice");
+    TEST_END();
+}
+
+/* ---- voice_auto_send replaces voice_review: an old key is ignored ---- */
+
+/* Saves a default config with voice on, then swaps the voice_auto_send line for
+ * the old voice_review one, so every other key is present. */
+static int vcfg_write_with_old_review(int old_value)
+{
+    Config *c = config_new_default();
+    if (!c) return 0;
+    c->settings.voice_enabled = 1;
+    int rc = config_save(c, VCFG);
+    config_free(c);
+    if (rc != 0) return 0;
+    char *t = vcfg_read();
+    if (!t) return 0;
+    char *m = strstr(t, "\"voice_auto_send\": false");
+    if (!m) { free(t); return 0; }
+    size_t len = strlen("\"voice_auto_send\": false");
+    char *tail = strdup(m + len);
+    if (!tail) { free(t); return 0; }
+    snprintf(m, 65536u - (size_t)(m - t), "\"voice_review\": %s%s", old_value ? "true" : "false", tail);
+    free(tail);
+    int ok = vcfg_write(t);
+    free(t);
+    return ok;
+}
+
+static int old_review_case(int old_value)
+{
+    int bad = 0;
+    if (!vcfg_write_with_old_review(old_value)) return 1;
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(VCFG, &rep);
+    if (!cfg) return 1;
+    if (cfg->settings.voice_auto_send != 0) bad++;
+    if (cfg->settings.voice_enabled != 1) bad++;
+    unsigned char want = vkey_index("voice_auto_send");
+    int listed = 0;
+    for (size_t i = 0; i < rep.missing_count; i++)
+        if (rep.missing[i] == want) listed = 1;
+    if (!listed || rep.missing_count != 1) bad++;
+    if (config_save(cfg, VCFG) != 0) bad++;
+    config_free(cfg);
+    char *raw = vcfg_read();
+    if (!raw) return bad + 1;
+    if (!strstr(raw, "\"voice_auto_send\": false")) bad++;
+    if (strstr(raw, "voice_review")) bad++;
+    free(raw);
+    remove(VCFG);
+    return bad;
+}
+
+int test_voice_config_old_voice_review_ignored(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(old_review_case(1), 0);
+    ASSERT_EQ(old_review_case(0), 0);
+    TEST_END();
+}
+
+int test_voice_config_auto_send_true_loads(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_enabled\": true, \"voice_auto_send\": true}, "
+                           "\"profiles\": []}"));
+    Config *c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(c->settings.voice_auto_send, 1);
+        config_free(c);
+    }
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_auto_send\": false}, \"profiles\": []}"));
+    c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(c->settings.voice_auto_send, 0);
+        config_free(c);
+    }
+    remove(VCFG);
     TEST_END();
 }
 

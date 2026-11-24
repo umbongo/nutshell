@@ -169,7 +169,7 @@ void ai_chat_voice_status(HWND panel, const char *text, int is_error)
     SetTimer(panel, TIMER_VOICE_STATUS, VOICE_STATUS_MS, NULL);
 }
 
-void ai_chat_voice_deliver(HWND panel, const char *transcript, int review)
+void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send)
 {
     AiChatData *d = panel_data(panel);
     if (!d || !d->hInput || !transcript) return;
@@ -180,7 +180,7 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript, int review)
     char *out = (char *)malloc(cap);
     if (!out) { secure_zero(cur, cur_len); free(cur); return; }
 
-    VoiceDelivery dv = voice_deliver(cur, transcript, review, out, cap);
+    VoiceDelivery dv = voice_deliver(cur, transcript, auto_send, out, cap);
     const char *busy_note = NULL;
     if (dv == VD_SEND && busy_of(d)) {
         dv = VD_FILL;

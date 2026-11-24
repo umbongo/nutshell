@@ -3682,6 +3682,8 @@ int test_voice_config_first_load_voice_off(void);
 int test_voice_config_stt_key_foreign_blob_preserved(void);
 int test_voice_config_save_aborts_when_stt_encrypt_fails(void);
 int test_voice_config_validate_clamps(void);
+int test_voice_config_old_voice_review_ignored(void);
+int test_voice_config_auto_send_true_loads(void);
 int test_opt_feature_voice_rows(void);
 int test_voice_gate(void);
 int test_notice_upgrade_folds_voice_keys(void);
@@ -8113,6 +8115,8 @@ int main(void) {
     failed += test_voice_config_stt_key_foreign_blob_preserved();
     failed += test_voice_config_save_aborts_when_stt_encrypt_fails();
     failed += test_voice_config_validate_clamps();
+    failed += test_voice_config_old_voice_review_ignored();
+    failed += test_voice_config_auto_send_true_loads();
     failed += test_opt_feature_voice_rows();
     failed += test_voice_gate();
     failed += test_notice_upgrade_folds_voice_keys();

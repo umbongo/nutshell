@@ -200,7 +200,7 @@ long voice_ptt_next_deadline(const VoicePtt *p, unsigned long now)
 
 static int is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
-VoiceDelivery voice_deliver(const char *input, const char *transcript, int review,
+VoiceDelivery voice_deliver(const char *input, const char *transcript, int auto_send,
                             char *out, size_t cap)
 {
     if (!out || cap == 0) return VD_NOTHING;
@@ -213,7 +213,7 @@ VoiceDelivery voice_deliver(const char *input, const char *transcript, int revie
     size_t il = strlen(input);
     if (il == 0) {
         snprintf(out, cap, "%s", transcript);
-        return review ? VD_FILL : VD_SEND;
+        return auto_send ? VD_SEND : VD_FILL;
     }
     int sep = !(input[il - 1] == ' ' || input[il - 1] == '\n');
     snprintf(out, cap, "%s%s%s", input, sep ? " " : "", transcript);
@@ -247,11 +247,13 @@ const char *voice_busy_text(int pending, int no_session)
     return pending ? "Still transcribing the last recording" : "Assistant is busy";
 }
 
-void voice_cue_text(int mode, int ptt_key, int latched, char *out, size_t cap)
+void voice_cue_text(int mode, int ptt_key, int latched, int auto_send,
+                    char *out, size_t cap)
 {
     const char *label = voice_ptt_key_label(ptt_key);
+    const char *verb = auto_send ? "send" : "finish";
     if (mode == VOICE_MODE_HOLD && !latched)
-        snprintf(out, cap, "Listening\xE2\x80\xA6 release %s to send", label);
+        snprintf(out, cap, "Listening\xE2\x80\xA6 release %s to %s", label, verb);
     else
-        snprintf(out, cap, "Listening\xE2\x80\xA6 press %s again to send", label);
+        snprintf(out, cap, "Listening\xE2\x80\xA6 press %s again to %s", label, verb);
 }

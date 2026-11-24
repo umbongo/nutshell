@@ -98,7 +98,7 @@ typedef struct Settings {
     int  voice_ptt_key;                  /* VoicePttKey; JSON "right_shift"/"right_ctrl"/"f8"/"f9" (default right_shift) */
     int  voice_ptt_mode;                 /* VoicePttMode; JSON "toggle"/"hold" (default toggle) */
     int  voice_mic_delay_ms;             /* 0-400, default 150 */
-    int  voice_review;                   /* 1 = put the transcript in the input for review instead of sending */
+    int  voice_auto_send;                /* 1 = send a transcript as soon as it arrives; 0 = put it in the input for review */
 } Settings;
 
 typedef struct {

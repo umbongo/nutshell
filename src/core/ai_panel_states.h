@@ -46,8 +46,10 @@ const char *const *ai_panel_suggestions(int *count);
 /* The empty state's extra line while voice input is on: "Or press Right Shift,
  * say what you need, and press it again." (VOICE_MODE_TOGGLE) or "Or hold Right
  * Shift and say what you need." (VOICE_MODE_HOLD), with the key's label (Right
- * Ctrl, F8 or F9 in place of Right Shift) from voice_config.h. Writes into `out` (truncating,
+ * Ctrl, F8 or F9 in place of Right Shift) from voice_config.h. With auto_send off
+ * (the default) both end with " Your words appear in the box for you to review."
+ * (the longest hint is under 160 bytes). Writes into `out` (truncating,
  * always NUL-terminated) and returns it; out NULL or cap 0 returns "". */
-const char *ai_panel_voice_hint(int mode, int ptt_key, char *out, size_t cap);
+const char *ai_panel_voice_hint(int mode, int ptt_key, int auto_send, char *out, size_t cap);
 
 #endif /* NUTSHELL_AI_PANEL_STATES_H */

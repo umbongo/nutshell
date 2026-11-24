@@ -946,32 +946,52 @@ int test_ai_panel_suggestions_exactly_three_nonempty(void)
     TEST_END();
 }
 
-/* The empty state's voice line: one wording per mode, the key label
- * substituted, truncation safe. */
+/* The empty state's voice line: one wording per mode and auto-send state, the
+ * key label substituted, truncation safe. */
 int test_ai_panel_voice_hint_wordings(void)
 {
     TEST_BEGIN();
     char b[160];
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+    /* Auto-send on: the original wordings. */
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 1, b, sizeof b),
                   "Or hold Right Shift and say what you need.");
     ASSERT_STR_EQ(b, "Or hold Right Shift and say what you need.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, 1, b, sizeof b),
                   "Or press Right Shift, say what you need, and press it again.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, 1, b, sizeof b),
                   "Or press Right Ctrl, say what you need, and press it again.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, 1, b, sizeof b),
                   "Or hold F8 and say what you need.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F9, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F9, 1, b, sizeof b),
                   "Or press F9, say what you need, and press it again.");
+    /* Auto-send off (the default): the words wait for review. */
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, 0, b, sizeof b),
+                  "Or press Right Shift, say what you need, and press it again. "
+                  "Your words appear in the box for you to review.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 0, b, sizeof b),
+                  "Or hold Right Shift and say what you need. "
+                  "Your words appear in the box for you to review.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F9, 0, b, sizeof b),
+                  "Or hold F9 and say what you need. "
+                  "Your words appear in the box for you to review.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F8, 0, b, sizeof b),
+                  "Or press F8, say what you need, and press it again. "
+                  "Your words appear in the box for you to review.");
     /* An out-of-range mode falls back to the toggle wording. */
-    ASSERT_STR_EQ(ai_panel_voice_hint(7, VOICE_PTT_F8, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(7, VOICE_PTT_F8, 1, b, sizeof b),
                   "Or press F8, say what you need, and press it again.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(-1, VOICE_PTT_F8, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(-1, VOICE_PTT_F8, 1, b, sizeof b),
                   "Or press F8, say what you need, and press it again.");
     /* A small buffer truncates and still terminates; no buffer is a no-op. */
     char tiny[8];
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, tiny, sizeof tiny),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, 0, tiny, sizeof tiny),
                   "Or hold");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, NULL, 0), "");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, 1, NULL, 0), "");
+    /* The longest hint fits chat_listview's 160-byte state_hint, and with the
+     * empty-state body still fits its 384-byte body buffer. */
+    ASSERT_TRUE(strlen(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, 0, b, sizeof b)) < 160);
+    char body[384];
+    int blen = ai_panel_state_body(AI_STATE_EMPTY, 50000, body, sizeof body);
+    ASSERT_TRUE(blen > 0 && (size_t)blen + 1 + strlen(b) < sizeof body);
     TEST_END();
 }

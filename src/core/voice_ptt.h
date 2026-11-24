@@ -143,10 +143,10 @@ int voice_ptt_recording(const VoicePtt *p);  /* VS_REC_HOLD, VS_REC_LATCHED, VS_
 long voice_ptt_next_deadline(const VoicePtt *p, unsigned long now_ms);
 
 typedef enum { VD_NOTHING = 0, VD_SEND, VD_FILL, VD_APPEND } VoiceDelivery;
-/* Whitespace-only transcript -> VD_NOTHING. Empty input: review ? VD_FILL : VD_SEND,
+/* Whitespace-only transcript -> VD_NOTHING. Empty input: auto_send ? VD_SEND : VD_FILL,
  * out = transcript. Non-empty input -> VD_APPEND, out = input + (input ends in a space
  * or newline ? "" : " ") + transcript. Truncates to cap. */
-VoiceDelivery voice_deliver(const char *input, const char *transcript, int review,
+VoiceDelivery voice_deliver(const char *input, const char *transcript, int auto_send,
                             char *out, size_t cap);
 
 typedef struct { const void *session; unsigned session_gen; unsigned conv_gen; } VoiceBinding;
@@ -167,7 +167,10 @@ const char *voice_busy_text(int pending, int no_session);
 
 /* "Listening… release Right Shift to send" (hold, key started),
  * "Listening… press Right Shift again to send" (toggle, or a mic-button start),
- * with the selected key's label (Right Ctrl, F8, F9) in place of Right Shift. The ellipsis is U+2026 in UTF-8. */
-void voice_cue_text(int mode, int ptt_key, int latched, char *out, size_t cap);
+ * with auto_send on; with it off "to finish" takes the place of "to send" (the
+ * words wait in the box for review). The selected key's label (Right Ctrl, F8,
+ * F9) takes the place of Right Shift. The ellipsis is U+2026 in UTF-8. */
+void voice_cue_text(int mode, int ptt_key, int latched, int auto_send,
+                    char *out, size_t cap);
 
 #endif /* NUTSHELL_VOICE_PTT_H */

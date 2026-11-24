@@ -195,8 +195,9 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
 - **While the assistant is busy** (streaming, a command running, or a card
   waiting): voice is unavailable. The mic button is disabled, and the key shows
   a brief "Assistant is busy" **(call, from review)**. Parking a transcript in
-  the box would invite an Enter, which means Stop while busy. The key still
-  stops any speech playing (§5).
+  the box would invite an Enter, which means Stop while busy. The start gate is
+  kept in both modes, auto-send on or off: that reason holds either way. The key
+  still stops any speech playing (§5).
 - **Focus and modal dialogs** **(call)**:
   - If Nutshell loses activation (Alt+Tab, another app) or a modal dialog
     opens, the recording is discarded and the device closed (anti-goal 2).
@@ -221,15 +222,20 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
    that session has closed, the transcript is discarded with a short status
    ("Voice message dropped: the chat changed"). It is never sent to another
    host.
-4. If the input box is empty, the transcript is written into `hInput` and sent
-   through `ai_chat_send_user_message`, exactly as the suggestion chips do. It
-   appears in the chat as the maintainer's own message, and every approval
-   applies unchanged **(maintainer)**.
-   If the box already holds typed text, the transcript is appended after it
-   and **not** sent, so a draft is never overwritten or sent half-finished
-   **(call)**.
-5. A setting "Review before sending" (default **off**) always leaves the
-   transcript in the input box for Enter instead **(call)**.
+4. If the input box is empty, the transcript is written into `hInput` with the
+   caret at the end and the focus in the box, and **not** sent, so the
+   maintainer reads it, edits it and sends it with Enter **(maintainer,
+   2026-11-23: review by default, auto-send opt-in)**.
+   If the box already holds typed text, the transcript is appended after it,
+   separated by a space, and **not** sent, so a draft is never overwritten or
+   sent half-finished **(call)**.
+5. A setting "Send automatically when I finish speaking" (default **off**)
+   sends a transcript that arrives in an empty box through
+   `ai_chat_send_user_message`, exactly as the suggestion chips do. It appears
+   in the chat as the maintainer's own message, and every approval applies
+   unchanged. If the assistant has become busy by then, the send is downgraded
+   to a fill, with the status "Assistant is busy: your words are in the box"
+   **(maintainer, 2026-11-23: review by default, auto-send opt-in)**.
 6. An empty or whitespace transcript sends nothing. A short status says
    "Didn't catch that" **(call)**.
 7. Errors (no microphone, Windows has blocked microphone access, network,
@@ -242,8 +248,9 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
 While recording, the mic button is filled with the `danger` intent and pulses
 gently (driven by the panel's one `ns_motion` timer), and the input placeholder
 names the configured key and mode: in the default Toggle mode "Listening…
-press Right Shift again to send", in Hold to talk "release Right Shift to
-send". A thin live level bar under the input is **left to the builder**.
+press Right Shift again to finish", in Hold to talk "release Right Shift to
+finish"; with "Send automatically when I finish speaking" on, "to send" in place
+of "to finish". A thin live level bar under the input is **left to the builder**.
 
 ### 4.4 Capture
 
@@ -427,8 +434,9 @@ The page then has two titled sections.
   meter (`ns_draw_meter`), Push-to-talk key (combo: Right Shift, Right Ctrl, F8, F9; Right
   Shift is first and the default), Mode (Toggle / Hold to talk; Toggle is first
   and the default), Mic start delay (0-400 ms, default 150; greyed while Toggle
-  is selected, since it applies to Hold to talk only), Review
-  before sending (tick, off).
+  is selected, since it applies to Hold to talk only), Send
+  automatically when I finish speaking (tick, off) **(maintainer, 2026-11-23:
+  review by default, auto-send opt-in)**.
 - Language (edit, blank = auto-detect, e.g. `en`) **(call)**.
 
 **Text to Speech**
@@ -446,7 +454,7 @@ key twice. That is accepted for simplicity.
 **Other new settings fields** (in `Settings`, loaded and saved in `loader.c`):
 the voice enable flag (default off); STT use-chat flag, provider, base URL,
 model, language, input device endpoint ID and display name, key choice, mode,
-mic start delay, review flag; TTS use-chat flag, provider, base URL, model,
+mic start delay, auto-send flag; TTS use-chat flag, provider, base URL, model,
 voice; the speaker on/off state. If the stored endpoint ID has gone, Windows
 default is used.
 

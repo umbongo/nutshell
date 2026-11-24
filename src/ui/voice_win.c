@@ -74,7 +74,8 @@ static void act(VoiceStep st, VoiceEvent ev)
         voice_audio_capture_begin(s ? s->voice_input_device : "", g_token, 0);
         voice_cue_text(s ? s->voice_ptt_mode : VOICE_MODE_TOGGLE,
                        s ? s->voice_ptt_key : VOICE_PTT_RIGHT_SHIFT,
-                       ev == VE_MIC_CLICK, cue, sizeof(cue));
+                       ev == VE_MIC_CLICK, s ? s->voice_auto_send : 0,
+                       cue, sizeof(cue));
         ai_chat_voice_set_ui(panel, AIV_RECORDING, cue);
         break;
     }
@@ -364,7 +365,7 @@ void voice_on_stt(LPARAM lp)
     else if (!r->ok)
         ai_chat_voice_status(panel, r->err[0] ? r->err : "Transcription failed", 1);
     else
-        ai_chat_voice_deliver(panel, r->text, s ? s->voice_review : 0);
+        ai_chat_voice_deliver(panel, r->text, s ? s->voice_auto_send : 0);
     secure_zero(r, sizeof(*r));
     free(r);
 }

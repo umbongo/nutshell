@@ -67,7 +67,7 @@ void voice_settings_default(Settings *s)
     s->voice_ptt_key = (int)VOICE_PTT_RIGHT_SHIFT;
     s->voice_ptt_mode = (int)VOICE_MODE_TOGGLE;
     s->voice_mic_delay_ms = VOICE_MIC_DELAY_DEFAULT;
-    s->voice_review = 0;
+    s->voice_auto_send = 0;
 }
 
 void voice_settings_validate(Settings *s)
@@ -75,7 +75,7 @@ void voice_settings_validate(Settings *s)
     if (!s) return;
     s->voice_enabled = s->voice_enabled ? 1 : 0;
     s->voice_stt_use_ai = s->voice_stt_use_ai ? 1 : 0;
-    s->voice_review = s->voice_review ? 1 : 0;
+    s->voice_auto_send = s->voice_auto_send ? 1 : 0;
     if (s->voice_mic_delay_ms < VOICE_MIC_DELAY_MIN) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MIN;
     if (s->voice_mic_delay_ms > VOICE_MIC_DELAY_MAX) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MAX;
     if (s->voice_ptt_key < 0 || s->voice_ptt_key >= (int)VOICE_PTT_COUNT)
