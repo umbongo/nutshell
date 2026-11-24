@@ -137,6 +137,31 @@ int test_vt_openai_interleaved(void)
     TEST_END();
 }
 
+/* I1: committed items are registered in commit order, so a completion that
+ * arrives before any delta (and out of order) still lands in commit order */
+int test_vt_register_commit_order(void)
+{
+    TEST_BEGIN();
+    Box x; x.b[0] = 0;
+    VoiceTranscript t; vt_init(&t, 0, 0);
+    ASSERT_EQ(vt_register(&t, "A"), 0);
+    ASSERT_EQ(vt_register(&t, "B"), 0);
+    ASSERT_EQ(vt_register(&t, "A"), 0);          /* idempotent */
+    ASSERT_EQ(t.nseg, 2);
+    vt_complete(&t, "B", "Second sentence.");
+    step(&t, &x);
+    ASSERT_STR_EQ(x.b, "Second sentence.");
+    vt_complete(&t, "A", "First sentence.");
+    step(&t, &x);
+    ASSERT_STR_EQ(x.b, "First sentence. Second sentence.");
+    ASSERT_EQ(vt_all_done(&t), 1);
+    ASSERT_EQ(vt_register(&t, "A"), 0);          /* finished: ignored */
+    ASSERT_EQ(t.nseg, 0);
+    ASSERT_EQ(vt_register(&t, NULL), -1);
+    vt_free(&t);
+    TEST_END();
+}
+
 int test_vt_mistral_append(void)
 {
     TEST_BEGIN();

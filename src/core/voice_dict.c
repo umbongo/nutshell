@@ -128,9 +128,13 @@ VoiceDictOut voice_dict_step(VoiceDict *d, VoiceDictEvent ev, int a, int b, unsi
         if (d->state == VDS_IDLE) return out(0, VDT_NONE);
         d->send_after = 1;
         if (d->state == VDS_RECORDING) return stop_recording(d, now);
-        return out(0, VDT_NONE);
+        return out(0, d->batch_running ? VDT_WILL_SEND : VDT_NONE);
 
     case VDE_ESCAPE:
+        if (d->state == VDS_FINISHING && d->batch_running)
+            return finish(d, VDA_CANCEL_BATCH | VDA_DROP_AUDIO, VDT_CANCELLED, 0);
+        /* fall through */
+    case VDE_DISCARD:
         if (d->state != VDS_RECORDING) return out(0, VDT_NONE);
         voice_dict_init(d);
         return out(VDA_END_CAPTURE_DISCARD | VDA_CLOSE_LINK | VDA_REMOVE_WORDS |
@@ -179,6 +183,17 @@ VoiceDictOut voice_dict_step(VoiceDict *d, VoiceDictEvent ev, int a, int b, unsi
             (long)(now - d->final_deadline) >= 0) {
             if (d->link == VDL_DONE)               /* the final arrived; the capture was lost */
                 return finish(d, VDA_CLOSE_LINK | VDA_DROP_AUDIO, VDT_NONE, 1);
+            if (!d->captured || d->have_audio) {   /* audio kept or still due: a link failure */
+                d->link = VDL_FAILED;
+                d->fallback = 1;
+                d->final_deadline = 0;
+                if (d->captured) {
+                    VoiceDictOut u = submit(d, VDA_CLOSE_LINK);
+                    u.text = VDT_LIVE_STOPPED;
+                    return u;
+                }
+                return out(VDA_CLOSE_LINK, VDT_LIVE_STOPPED);
+            }
             return finish(d, VDA_CLOSE_LINK | VDA_DROP_AUDIO,
                           d->send_after ? VDT_FINAL_LATE : VDT_NONE, 0);
         }
@@ -204,6 +219,8 @@ const char *voice_dict_text(VoiceDictText t)
     case VDT_FINAL_LATE:       return "The last words did not arrive. Check the text and press Send.";
     case VDT_DIDNT_CATCH:      return "Didn't catch that";
     case VDT_TRANSCRIBING:     return "Transcribing\xE2\x80\xA6";
+    case VDT_WILL_SEND:        return "Will send when the transcript arrives";
+    case VDT_CANCELLED:        return "Transcription cancelled";
     case VDT_NONE:
     default:                   return "";
     }

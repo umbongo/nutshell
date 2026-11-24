@@ -1099,8 +1099,12 @@ int test_voice_ptt_escape_out_of_panel_keeps_recording(void)
     s = st(&p, VE_ESCAPE, 1150, 0, 0);
     ASSERT_EQ(s.action, VA_NONE);
     ASSERT_EQ(s.consume, 0);
-    ASSERT_EQ(p.state, VS_STOP_PRESS);
+    /* M9: Shift+Esc in the terminal is a chord: the press is spent */
+    ASSERT_EQ(p.state, VS_LATCHED_SPENT);
     ASSERT_EQ(voice_ptt_recording(&p), 1);
+    s = st(&p, VE_KEY_UP, 1160, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);              /* the release does not finish */
+    ASSERT_EQ(p.state, VS_REC_LATCHED);
     s = st(&p, VE_ESCAPE, 1200, 1, 0);
     ASSERT_EQ(s.action, VA_DISCARD);
     ASSERT_EQ(s.consume, 1);

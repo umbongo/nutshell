@@ -201,6 +201,15 @@ int vt_delta(VoiceTranscript *t, const char *seg, const char *text, int append_o
     return buf_append_norm(&s->text, &s->tlen, &s->tcap, text, strlen(text));
 }
 
+int vt_register(VoiceTranscript *t, const char *seg)
+{
+    VtSeg *s = NULL;
+    int g;
+    if (!t || !seg) return -1;
+    g = seg_get(t, seg, &s);
+    return g < 0 ? -1 : 0;
+}
+
 int vt_complete(VoiceTranscript *t, const char *seg, const char *final_text)
 {
     if (!t) return -1;

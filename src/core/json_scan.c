@@ -1,6 +1,8 @@
 /* json_scan.c: find one string value in a JSON text without the tokenizer's string cap. */
 #include "json_scan.h"
 
+#include "secure_zero.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -130,7 +132,7 @@ static int decode_string(const char *p, const char *end, size_t max_bytes,
     *out_len = n;
     return 1;
 bad:
-    memset(buf, 0, (size_t)(stop - p));   /* decoded text may be a transcript */
+    secure_zero(buf, (size_t)(stop - p));   /* decoded text may be a transcript */
     free(buf);
     return 0;
 }

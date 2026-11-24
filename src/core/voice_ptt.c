@@ -113,6 +113,7 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now, int in_p
         /* Out of the panel a recording is left alone. Escape keeps its meaning;
          * a chord with it still spends the key. */
         if (p->state == VS_ARMED || p->state == VS_TOGGLE_PRESS) p->state = VS_KEY_SPENT;
+        if (p->state == VS_STOP_PRESS) p->state = VS_LATCHED_SPENT;
         return mk(VA_NONE, 0);
     }
     if (ev == VE_MIC_CLICK) {

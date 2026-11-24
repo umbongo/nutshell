@@ -15,7 +15,7 @@
 
 #define MODEL_MAX_LEN 100
 
-static const char *const k_models_openai[] = {"gpt-live-transcribe", "gpt-realtime-whisper", NULL};
+static const char *const k_models_openai[] = {"gpt-live-transcribe", NULL};
 static const char *const k_models_mistral[] = {"voxtral-mini-transcribe-realtime-3", NULL};
 
 const char *const *voice_live_models(VoiceLiveProvider p)
@@ -58,6 +58,12 @@ static int model_ok(const char *m)
             return 0;
     }
     return 1;
+}
+
+int voice_live_model_invalid(const Settings *s)
+{
+    if (!s || voice_live_provider(s) == VLP_NONE) return 0;
+    return s->voice_stt_live_model[0] && !model_ok(s->voice_stt_live_model);
 }
 
 int voice_live_resolve(const Settings *s, VoiceLiveTarget *t)

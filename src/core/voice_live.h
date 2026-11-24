@@ -34,6 +34,10 @@ VoiceLiveProvider voice_live_provider(const Settings *s);
 /* 1 and *t filled when live dictation applies. 0 when the provider is not live-capable,
  * resolution fails, or the model has a character outside [A-Za-z0-9._-]. */
 int voice_live_resolve(const Settings *s, VoiceLiveTarget *t);
+/* 1 when the effective provider is live-capable but the typed live model name is not valid
+ * (so voice_live_resolve fails and dictation would silently fall back to batch): the glue
+ * says so in the header. 0 otherwise, including an unusable provider (key missing). */
+int voice_live_model_invalid(const Settings *s);
 /* 1 when the Voice page shows the Live model combo, 0 when it shows the dim note:
  * the provider id the page has chosen (the AI provider's id while use_ai) is OpenAI or
  * Mistral. Takes the page's current choice, not the saved settings. */

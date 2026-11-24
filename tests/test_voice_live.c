@@ -75,17 +75,26 @@ int test_voice_live_resolve(void)
     ASSERT_EQ(voice_live_resolve(&s, &t), 1);
     ASSERT_STR_EQ(t.path, "/v1/audio/transcriptions/realtime?model=my.model_2-x");
     const char *bad[] = {"a b", "a&b=c", "a/b", "m\"x", "a%20b", "é"};
+    ASSERT_EQ(voice_live_model_invalid(&s), 0);
     for (int i = 0; i < 6; i++) {
         strcpy(s.voice_stt_live_model, bad[i]);
         ASSERT_EQ(voice_live_resolve(&s, &t), 0);
+        ASSERT_EQ(voice_live_model_invalid(&s), 1);   /* M5: the header says why */
     }
+    s.voice_stt_live_model[0] = '\0';
+    ASSERT_EQ(voice_live_model_invalid(&s), 0);       /* empty = provider default */
+    ASSERT_EQ(voice_live_model_invalid(NULL), 0);
+    ls(&s, "groq");
+    strcpy(s.voice_stt_live_model, "a b");
+    ASSERT_EQ(voice_live_model_invalid(&s), 0);       /* not a live provider: batch is expected */
+    ls(&s, "openai");
+    s.voice_stt_live_model[0] = '\0';
     memset(s.voice_stt_live_model, 'a', sizeof s.voice_stt_live_model - 1);
     ASSERT_EQ(voice_live_resolve(&s, &t), 0);
 
     ASSERT_NOT_NULL(voice_live_models(VLP_OPENAI));
     ASSERT_STR_EQ(voice_live_models(VLP_OPENAI)[0], "gpt-live-transcribe");
-    ASSERT_STR_EQ(voice_live_models(VLP_OPENAI)[1], "gpt-realtime-whisper");
-    ASSERT_NULL(voice_live_models(VLP_OPENAI)[2]);
+    ASSERT_NULL(voice_live_models(VLP_OPENAI)[1]);   /* M4: gpt-realtime-whisper is not seeded */
     ASSERT_STR_EQ(voice_live_models(VLP_MISTRAL)[0], "voxtral-mini-transcribe-realtime-3");
     ASSERT_NULL(voice_live_models(VLP_MISTRAL)[1]);
     ASSERT_NULL(voice_live_models(VLP_NONE));

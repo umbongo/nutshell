@@ -44,6 +44,10 @@ typedef struct {
 void   vt_init(VoiceTranscript *t, size_t draft_u16, int need_sep);
 /* 0 on success, -1 on out of memory or bad arguments. */
 int    vt_delta(VoiceTranscript *t, const char *seg, const char *text, int append_only);
+/* Register a segment in commit order before any text for it arrives (OpenAI's
+ * input_audio_buffer.committed), so completions that come out of order still
+ * land in commit order. A known or finished id is left alone. */
+int    vt_register(VoiceTranscript *t, const char *seg);
 int    vt_complete(VoiceTranscript *t, const char *seg, const char *final_text); /* NULL = keep the deltas */
 int    vt_replace_all(VoiceTranscript *t, const char *text);  /* Mistral done, batch fallback */
 /* Heap UTF-8 for [from, end); caller frees (secure_zero then free). NULL on OOM. */

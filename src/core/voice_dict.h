@@ -41,7 +41,14 @@
  *  - After a stop the audio thread itself sends the gate flush and end
  *    messages, so there is no "finish link" action.
  *  - Send pressed while a fallback upload runs waits for it (no 3 s limit:
- *    the upload's own timeouts bound it).
+ *    the upload's own timeouts bound it) and returns VDT_WILL_SEND.
+ *  - The final deadline with the link still open and audio kept (or the
+ *    capture still due) is a link failure: fallback, CLOSE_LINK, the batch
+ *    upload (when the capture is in), VDT_LIVE_STOPPED. Send stays pending and
+ *    follows the fallback result. With no audio at all it finishes without
+ *    sending; the glue shows "Didn't catch that" when the box gained nothing.
+ *  - Escape while FINISHING with an upload running cancels it (CANCEL_BATCH,
+ *    the live text stays, nothing is sent, VDT_CANCELLED).
  */
 
 typedef enum { VDS_IDLE = 0, VDS_RECORDING, VDS_FINISHING } VoiceDictState;
@@ -51,7 +58,9 @@ typedef enum {
     VDE_START,          /* a = live (1/0), b = auto_send allowed (auto_send on and box empty) */
     VDE_STOP,           /* key, mic button, the cap: finish */
     VDE_SEND,           /* Send or Enter while RECORDING or FINISHING */
-    VDE_ESCAPE,         /* Escape in the panel while RECORDING */
+    VDE_ESCAPE,         /* Escape in the panel: RECORDING discards; FINISHING with an upload cancels it */
+    VDE_DISCARD,        /* a real discard that is not Escape (Hold short tap, chord): same as
+                         * Escape while RECORDING, nothing otherwise */
     VDE_END_SOFT,       /* deactivate, modal, chat change, device lost: finish, never send */
     VDE_END_HARD,       /* voice/AI off, voice settings changed: close at once, never send */
     VDE_LINK_READY,
@@ -81,7 +90,7 @@ enum {  /* action bits */
 
 typedef enum {
     VDT_NONE = 0, VDT_LIVE_UNAVAILABLE, VDT_LIVE_STOPPED, VDT_FALLBACK_FAILED,
-    VDT_FINAL_LATE, VDT_DIDNT_CATCH, VDT_TRANSCRIBING
+    VDT_FINAL_LATE, VDT_DIDNT_CATCH, VDT_TRANSCRIBING, VDT_WILL_SEND, VDT_CANCELLED
 } VoiceDictText;
 
 typedef struct { unsigned actions; VoiceDictText text; } VoiceDictOut;
