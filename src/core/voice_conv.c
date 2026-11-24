@@ -166,10 +166,12 @@ static VoiceConvOut on_sent(VoiceConv *c, int status, unsigned long now)
     }
 }
 
-static VoiceConvOut speaking_stopped(VoiceConv *c, unsigned extra, VoiceConvNote note)
+static VoiceConvOut speaking_stopped(VoiceConv *c, unsigned extra, VoiceConvNote note,
+                                     unsigned long now)
 {
     VoiceConvOut o;
     c->state = VCS_LISTENING;
+    c->idle_at = now;   /* the silence clock restarts when listening resumes */
     o = out(extra | VCA_MODE_LISTEN | release_caption(c), VCH_LISTENING);
     o.note = note;
     return o;
@@ -195,13 +197,13 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
         return none;
 
     case VCE_PRESS:
-        if (st == VCS_SPEAKING) return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE);
+        if (st == VCS_SPEAKING) return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE, now);
         return go_idle(c, VCN_NONE, 0);
     case VCE_ESCAPE:
-        if (st == VCS_SPEAKING) return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE);
+        if (st == VCS_SPEAKING) return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE, now);
         return go_idle(c, VCN_NONE, st == VCS_WORKING);
     case VCE_STOP:
-        if (st == VCS_SPEAKING) return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE);
+        if (st == VCS_SPEAKING) return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE, now);
         return go_idle(c, VCN_NONE, 0);
 
     case VCE_END:
@@ -260,6 +262,11 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
         if (st == VCS_HEARING || st == VCS_ENDING) { if (c->link) c->link_ready = 1; }
         return none;
     case VCE_LINK_FAILED:
+        if (st == VCS_HEARING && c->link) {
+            /* record it now: at the end of the turn it goes straight to the batch */
+            VoiceConvHeader h = c->link_ready ? VCH_LIVE_STOPPED : VCH_LIVE_UNAVAILABLE;
+            return out(release_link(c), h);
+        }
         if (st != VCS_ENDING || !c->link) return none;
         return live_fallback(c);
     case VCE_LINK_FINAL:
@@ -300,10 +307,10 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
 
     case VCE_SPEECH_DONE:
         if (st != VCS_SPEAKING) return none;
-        return speaking_stopped(c, 0, VCN_NONE);
+        return speaking_stopped(c, 0, VCN_NONE, now);
     case VCE_SPEECH_FAILED:
         if (st != VCS_SPEAKING) return none;
-        return speaking_stopped(c, 0, c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE);
+        return speaking_stopped(c, 0, c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE, now);
 
     case VCE_TICK:
         if (st == VCS_ENDING) {

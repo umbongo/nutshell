@@ -138,7 +138,7 @@ int test_vconv_each_send_status(void)
     VoiceConv c; VoiceConvOut o;
     static const VoiceSendStatus st[4] = { VSS_BUSY, VSS_NO_SESSION, VSS_FULL, VSS_LAUNCH_FAILED };
     static const VoiceConvNote nt[4] = { VCN_BUSY, VCN_NO_SESSION, VCN_FULL, VCN_LAUNCH };
-    int i, ended;
+    int i;
     for (i = 0; i < 4; i++) {
         goto_state(&c, VCS_ENDING, 1);
         run(&c, VCE_LINK_FINAL, 0, 0, 300);
@@ -164,7 +164,6 @@ int test_vconv_each_send_status(void)
     ASSERT_EQ(c.state, VCS_LISTENING);
     run(&c, VCE_PRESS, 0, 0, 400);
     ASSERT_TRUE(clean());
-    ended = 0;
     goto_state(&c, VCS_ENDING, 1);
     run(&c, VCE_LINK_FINAL, 0, 0, 300);
     run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, 310);
@@ -172,7 +171,6 @@ int test_vconv_each_send_status(void)
     ASSERT_EQ(c.state, VCS_LISTENING);
     ASSERT_EQ(o.header, VCH_DIDNT_CATCH);
     ASSERT_TRUE(has(o, VCA_UNLOCK_TYPING | VCA_MODE_LISTEN));
-    (void)ended;
     run(&c, VCE_PRESS, 0, 0, 400);
     ASSERT_TRUE(clean());
     TEST_END();
@@ -678,5 +676,109 @@ int test_vconv_texts(void)
     ASSERT_STR_EQ(voice_conv_phrase_text(VCPH_APPROVE_OTHER), "I need your approval for the next step.");
     ASSERT_STR_EQ(voice_conv_phrase_text(VCPH_NOT_SENT), "I couldn't send that. The details are on screen.");
     ASSERT_STR_EQ(voice_conv_phrase_text(VCPH_WENT_WRONG), "Something went wrong. The details are on screen.");
+    TEST_END();
+}
+
+int test_vconv_silence_restarts_after_speaking(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_state(&c, VCS_SPEAKING, 1);
+    run(&c, VCE_SPEECH_DONE, 0, 0, 300000);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, 300001).actions, 0u);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 300000), 180000);
+    o = run(&c, VCE_TICK, 0, 0, 480000);
+    ASSERT_EQ(c.state, VCS_IDLE);
+    ASSERT_EQ(o.note, VCN_END_SILENCE);
+    ASSERT_TRUE(clean());
+    /* SPEECH_FAILED and a stop restart it too */
+    goto_state(&c, VCS_SPEAKING, 0);
+    run(&c, VCE_SPEECH_FAILED, 0, 0, 300000);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 300000), 180000);
+    run(&c, VCE_PRESS, 0, 0, 300001);
+    goto_state(&c, VCS_SPEAKING, 0);
+    run(&c, VCE_ESCAPE, 0, 0, 300000);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 300000), 180000);
+    run(&c, VCE_PRESS, 0, 0, 300001);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_noise_does_not_extend_silence(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; unsigned long t;
+    begin(&c, 0);
+    for (t = 10000; t < 100000; t += 20000) {
+        run(&c, VCE_TURN_START, 0, 0, t);
+        run(&c, VCE_TURN_ABANDON, 0, 0, t + 100);
+    }
+    run(&c, VCE_TURN_START, 0, 0, 100000);
+    run(&c, VCE_TURN_END, 0, 0, 100100);
+    run(&c, VCE_BATCH_OK, 0, 0, 100200);
+    run(&c, VCE_TRANSCRIPT, VTC_EMPTY, 0, 100300);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 100300), 180000 - 100300);
+    run(&c, VCE_TICK, 0, 0, 179999);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    run(&c, VCE_TICK, 0, 0, 180000);
+    ASSERT_EQ(c.state, VCS_IDLE);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_link_failed_while_hearing(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_state(&c, VCS_HEARING, 1);   /* link ready */
+    o = run(&c, VCE_LINK_FAILED, 0, 0, 200);
+    ASSERT_TRUE(has(o, VCA_CLOSE_LINK));
+    ASSERT_EQ(o.header, VCH_LIVE_STOPPED);
+    ASSERT_EQ(c.state, VCS_HEARING);
+    o = run(&c, VCE_TURN_END, 0, 0, 300);
+    ASSERT_TRUE(has(o, VCA_SUBMIT_BATCH | VCA_MODE_HOLD));
+    ASSERT_FALSE(o.actions & VCA_END_TURN_AUDIO);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 300), -1);
+    run(&c, VCE_BATCH_OK, 0, 0, 400);
+    run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, 410);
+    run(&c, VCE_SENT, VSS_SENT, 0, 420);
+    run(&c, VCE_PRESS, 0, 0, 430);
+    ASSERT_TRUE(clean());
+    /* never ready, then Send */
+    begin(&c, 1);
+    run(&c, VCE_TURN_START, 0, 0, 10);
+    o = run(&c, VCE_LINK_FAILED, 1, 0, 20);
+    ASSERT_EQ(o.header, VCH_LIVE_UNAVAILABLE);
+    o = run(&c, VCE_SEND, 0, 0, 30);
+    ASSERT_TRUE(has(o, VCA_SUBMIT_BATCH));
+    run(&c, VCE_PRESS, 0, 0, 40);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_sending_guards(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_state(&c, VCS_ENDING, 1);
+    run(&c, VCE_LINK_FINAL, 0, 0, 300);
+    /* SENT before a send was handed over: ignored */
+    o = run(&c, VCE_SENT, VSS_SENT, 0, 305);
+    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(c.state, VCS_ENDING);
+    o = run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, 310);
+    ASSERT_TRUE(has(o, VCA_SEND_TURN));
+    o = run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, 311);
+    ASSERT_EQ(o.actions, 0u);
+    o = run(&c, VCE_TRANSCRIPT, VTC_EMPTY, 0, 312);
+    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(c.state, VCS_ENDING);
+    run(&c, VCE_SENT, VSS_SENT, 0, 320);
+    ASSERT_EQ(c.state, VCS_WORKING);
+    run(&c, VCE_PRESS, 0, 0, 330);
+    ASSERT_TRUE(clean());
     TEST_END();
 }
