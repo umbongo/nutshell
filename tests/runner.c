@@ -3833,6 +3833,7 @@ int test_voice_live_session_mistral(void);
 int test_voice_live_audio_msg(void);
 int test_voice_live_gate_and_end_msgs(void);
 int test_voice_live_escape(void);
+int test_voice_live_row_kind(void);
 int test_vdict_live_key_stop(void);
 int test_vdict_live_auto_send(void);
 int test_vdict_live_send_while_recording(void);
@@ -8382,6 +8383,7 @@ int main(void) {
     failed += test_voice_live_audio_msg();
     failed += test_voice_live_gate_and_end_msgs();
     failed += test_voice_live_escape();
+    failed += test_voice_live_row_kind();
     failed += test_voice_live_parse_openai();
     failed += test_voice_live_parse_mistral();
     failed += test_voice_live_parse_embedded_nul();

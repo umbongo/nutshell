@@ -474,3 +474,24 @@ int test_voice_live_parse_large_done(void)
     free(j);
     TEST_END();
 }
+
+int test_voice_live_row_kind(void)
+{
+    TEST_BEGIN();
+    /* Own provider chosen: only OpenAI and Mistral get the combo; the AI provider is ignored. */
+    ASSERT_EQ(voice_live_row_kind("openai", 0, "groq"), 1);
+    ASSERT_EQ(voice_live_row_kind("mistral", 0, "openai"), 1);
+    ASSERT_EQ(voice_live_row_kind("groq", 0, "openai"), 0);
+    ASSERT_EQ(voice_live_row_kind("custom", 0, "mistral"), 0);
+    ASSERT_EQ(voice_live_row_kind("deepgram", 0, "openai"), 0);
+    /* Use current AI assistant: the AI provider decides, the Voice provider is ignored. */
+    ASSERT_EQ(voice_live_row_kind("groq", 1, "openai"), 1);
+    ASSERT_EQ(voice_live_row_kind("groq", 1, "mistral"), 1);
+    ASSERT_EQ(voice_live_row_kind("openai", 1, "groq"), 0);
+    ASSERT_EQ(voice_live_row_kind("openai", 1, "custom"), 0);
+    /* Missing or empty ids: a note, never a crash. */
+    ASSERT_EQ(voice_live_row_kind(NULL, 0, NULL), 0);
+    ASSERT_EQ(voice_live_row_kind("", 1, ""), 0);
+    ASSERT_EQ(voice_live_row_kind(NULL, 1, "openai"), 1);
+    TEST_END();
+}

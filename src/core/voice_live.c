@@ -25,6 +25,13 @@ const char *const *voice_live_models(VoiceLiveProvider p)
     return NULL;
 }
 
+int voice_live_row_kind(const char *provider, int use_ai, const char *ai_provider)
+{
+    const char *id = use_ai ? ai_provider : provider;
+    if (!id) return 0;
+    return strcmp(id, "openai") == 0 || strcmp(id, "mistral") == 0;
+}
+
 static VoiceLiveProvider provider_of(const SttTarget *st)
 {
     if (strcmp(st->provider, "openai") == 0) return VLP_OPENAI;
