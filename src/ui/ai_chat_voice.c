@@ -255,7 +255,39 @@ size_t ai_chat_voice_live_begin(HWND panel, int *need_sep)
             free(w);
         }
     }
-    return box_end_pos(d->hInput);
+    /* Measure by moving the caret to the end, then put the selection back: starting a
+     * recording must not visibly change the box (the first update moves the caret to the
+     * end, as the spec says). */
+    DWORD sel_s = 0, sel_e = 0;
+    SendMessageW(d->hInput, EM_GETSEL, (WPARAM)&sel_s, (LPARAM)&sel_e);
+    const size_t end = box_end_pos(d->hInput);
+    SendMessageW(d->hInput, EM_SETSEL, (WPARAM)sel_s, (LPARAM)sel_e);
+    return end;
+}
+
+size_t ai_chat_voice_box_chars(HWND panel)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hInput) return 0;
+    int len = GetWindowTextLengthW(d->hInput);
+    return len > 0 ? (size_t)len : 0;
+}
+
+int ai_chat_voice_box_has_text(HWND panel)
+{
+    int has = 0;
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hInput) return 0;
+    char *cur = ai_chat_input_text_utf8(d->hInput);
+    if (!cur) return 0;
+    const size_t n = strlen(cur);
+    for (size_t i = 0; i < n; i++) {
+        const char c = cur[i];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') { has = 1; break; }
+    }
+    secure_zero(cur, n);
+    free(cur);
+    return has;
 }
 
 size_t ai_chat_voice_live_replace(HWND panel, size_t from, const char *text_utf8)

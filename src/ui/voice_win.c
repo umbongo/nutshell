@@ -55,13 +55,15 @@ static VoiceCapture *g_kept;       /* audio kept for the final / the fallback up
 
 static int g_link_open;            /* voice_live_start succeeded and voice_live_close was not called */
 static unsigned g_link_token;
-static int g_fail_reported;        /* the link's failure was reported (an ERROR then CLOSED is one failure) */
+static int g_fail_reported;        /* the link's failure was reported */
+static int g_err_reported;         /* a provider error event's text was shown once this recording */
 
 static int g_upload_open;          /* a VRES_STT_UPLOAD is held */
 static unsigned g_upload_token;
 static char *g_result_text;        /* the upload's transcript while DELIVER_BATCH runs (not owned) */
 
 static int g_start_latched;        /* the recording was started by the mic button (cue text) */
+static int g_note_invalid_model;   /* tell the user the live model name is not valid, once, at start */
 static int g_suppress_dc;          /* the privacy text already told the user: no "Didn't catch that" */
 static AiVoiceUi g_ui = AIV_IDLE;  /* what the panel's mic/cue shows */
 
@@ -157,8 +159,7 @@ static void close_link(void)
 {
     if (!g_link_open) return;
     g_link_open = 0;
-    voice_live_close(g_link_token);
-    voice_live_reap(0);
+    voice_live_close(g_link_token);   /* the session's threads wake the UI when they exit: it reaps then */
 }
 
 static void free_transcript(void)
@@ -223,6 +224,11 @@ static void open_capture(const Settings *s)
                    g_start_latched, s ? s->voice_auto_send : 0, g_live,
                    cue, sizeof(cue));
     set_ui(AIV_RECORDING, cue);
+    if (g_note_invalid_model) {
+        g_note_invalid_model = 0;
+        ai_chat_voice_status(ui_ai_panel(),
+                             "The live model name is not valid: the words will appear when you stop", 0);
+    }
 }
 
 static void open_link(const Settings *s)
@@ -281,7 +287,9 @@ static void submit_batch(const Settings *s)
 /* Send what the live recording left in the box. */
 static void send_box(void)
 {
-    if (!shown_has_words()) {
+    /* No new words: a typed draft is still what the user pressed Send on; only an empty
+     * box has nothing to send. */
+    if (!shown_has_words() && !ai_chat_voice_box_has_text(ui_ai_panel())) {
         if (!g_suppress_dc) ai_chat_voice_status(ui_ai_panel(), MSG_DIDNT_CATCH, 0);
         return;
     }
@@ -324,6 +332,8 @@ static void show_text(VoiceDictText t)
         break;
     case VDT_LIVE_UNAVAILABLE:
     case VDT_LIVE_STOPPED:
+    case VDT_WILL_SEND:
+    case VDT_CANCELLED:
         ai_chat_voice_status(panel, voice_dict_text(t), 0);
         break;
     case VDT_FALLBACK_FAILED:
@@ -357,6 +367,12 @@ static void run_out(VoiceDictOut o)
     /* Deliver first, then send: DELIVER_BATCH never sends on its own. */
     if (a & VDA_DELIVER_BATCH) deliver_batch((a & VDA_SEND_BOX) != 0);   /* live fallback only: batch ignores it */
     else if (a & VDA_SEND_BOX) send_box();
+    /* A live recording that finished normally with nothing in the box is never silent. */
+    if ((a & VDA_UNLOCK_TYPING) && g_live && g_vt_on && o.text == VDT_NONE && !g_sent
+        && !(a & (VDA_SEND_BOX | VDA_END_CAPTURE_DISCARD | VDA_REMOVE_WORDS | VDA_CANCEL_BATCH
+                  | VDA_DELIVER_BATCH))
+        && !g_pre_no_send && !shown_has_words())
+        show_text(VDT_DIDNT_CATCH);
     show_text(o.text);
     if (a & VDA_UNLOCK_TYPING) ai_chat_voice_lock_typing(ui_ai_panel(), 0);
 }
@@ -389,9 +405,8 @@ static void post_step(void)
         g_token = 0;
         g_live = 0;
         if (g_ui != AIV_IDLE) set_ui(AIV_IDLE, NULL);
-    } else if (g_live && g_dict.state == VDS_FINISHING && g_dict.link == VDL_READY
-               && g_ui != AIV_TRANSCRIBING) {
-        /* The mic stopped and the last words are really awaited. */
+    } else if (g_live && g_dict.state == VDS_FINISHING && g_ui != AIV_TRANSCRIBING) {
+        /* The mic stopped: whatever the link, the last words (or the fallback) are awaited. */
         set_ui(AIV_TRANSCRIBING, CUE_TRANSCRIBING);
     }
     arm_timer();
@@ -401,7 +416,7 @@ static void dict_event(VoiceDictEvent ev, int a, int b)
 {
     /* A soft end that swallowed a pending Send says so when the recording finishes. */
     const int swallowed = g_dict.send_after && g_dict.no_send
-                          && ev != VDE_END_HARD && ev != VDE_ESCAPE;
+                          && ev != VDE_END_HARD && ev != VDE_ESCAPE && ev != VDE_DISCARD;
     g_pre_no_send = g_dict.no_send;   /* the step may re-initialise the dict */
     const VoiceDictOut o = voice_dict_step(&g_dict, ev, a, b, now_ms());
     run_out(o);
@@ -421,10 +436,14 @@ static void start_recording(void)
     g_live = s && voice_live_resolve(s, &g_live_t);
     g_suppress_dc = 0;
     g_fail_reported = 0;
+    g_err_reported = 0;
     g_result_text = NULL;
     g_digest = s ? voice_settings_digest(s) : 0;
-    const size_t draft = ai_chat_voice_live_begin(panel, &need_sep);
-    g_draft_end = g_box_end = draft;
+    /* Only a live recording measures the box end (selection kept); a batch one just asks
+     * whether the box is empty and touches nothing. */
+    const size_t draft = g_live ? ai_chat_voice_live_begin(panel, &need_sep)
+                                : ai_chat_voice_box_chars(panel);
+    g_draft_end = g_box_end = g_live ? draft : 0;
     g_send_pressed = 0;
     g_sent = 0;
     free_transcript();
@@ -433,6 +452,8 @@ static void start_recording(void)
         g_vt_on = 1;
     }
     voice_ptt_set_cap(&g_ptt, g_live ? VOICE_LIVE_CAP_MS : 0);
+    if (!g_live && voice_live_model_invalid(s))   /* typed an invalid live model name */
+        g_note_invalid_model = 1;
     dict_event(VDE_START, g_live, (s && s->voice_auto_send && draft == 0) ? 1 : 0);
 }
 
@@ -448,7 +469,10 @@ static void act(VoiceStep st, VoiceEvent ev)
         dict_event(VDE_STOP, 0, 0);   /* nothing open (the cap ended it): a no-op */
         break;
     case VA_DISCARD:
-        dict_event(ev == VE_ESCAPE ? VDE_ESCAPE : VDE_END_SOFT, 0, 0);
+        /* Deactivate is a soft end; Escape and the Hold short tap / chord are real discards:
+         * capture dropped, link closed, words removed, typing unlocked at once. */
+        dict_event(ev == VE_DEACTIVATE ? VDE_END_SOFT
+                   : ev == VE_ESCAPE ? VDE_ESCAPE : VDE_DISCARD, 0, 0);
         break;
     case VA_BUSY:
         ai_chat_voice_status(panel, voice_busy_text(g_dict.state != VDS_IDLE || g_capturing,
@@ -505,6 +529,11 @@ int voice_pump_filter(const MSG *m)
     }
     HWND panel = ui_ai_panel();
     int in_panel = panel && ai_chat_focus_role(panel, GetFocus()) != NULL;
+    if (in == VI_ESCAPE && in_panel && g_dict.state == VDS_FINISHING && g_dict.batch_running) {
+        /* An upload locks the box and swallows Send: Escape is the way out. */
+        dict_event(VDE_ESCAPE, 0, 0);
+        return 1;
+    }
     VoiceStep st = step_now(ev, in_panel);
 
     if (in == VI_ESCAPE) return st.consume;
@@ -687,9 +716,17 @@ static void on_capture_error(VoiceAudioErr e)
         text = "The microphone could not be opened.";
         break;
     }
-    if (g_dict.state != VDS_IDLE) dict_event(VDE_END_HARD, 0, 0);
+    if (e == VAE_DEVICE_LOST && g_dict.state != VDS_IDLE) {
+        /* A lost device is a soft end: the last words still arrive, nothing is sent. The
+         * capture is gone, so tell the link and the machine so it does not wait for it. */
+        if (g_live && g_token) voice_live_feed_end(g_token);
+        dict_event(VDE_END_SOFT, 0, 0);
+        dict_event(VDE_CAPTURED, 0, 0);
+    } else if (g_dict.state != VDS_IDLE) {
+        dict_event(VDE_END_HARD, 0, 0);
+    }
     ptt_reset();
-    set_ui(AIV_IDLE, NULL);
+    if (g_dict.state == VDS_IDLE) set_ui(AIV_IDLE, NULL);
     chat_error(text);
 }
 
@@ -797,6 +834,11 @@ void voice_on_live(LPARAM lp)
     case VLE_COMPLETED:
         if (box_intact() && vt_complete(&g_vt, ev->item, ev->text) == 0) live_flush();
         break;
+    case VLE_COMMITTED:
+        /* Register the item in commit order, so completions that arrive before any delta
+         * (or out of order) still land in commit order. */
+        if (ev->item[0] && vt_register(&g_vt, ev->item) != 0) { /* out of memory: later events cope */ }
+        break;
     case VLE_ITEM_FAILED:
         /* The item will never complete: keep the words that arrived for it. */
         if (box_intact() && vt_complete(&g_vt, ev->item, NULL) == 0) live_flush();
@@ -809,6 +851,16 @@ void voice_on_live(LPARAM lp)
         close_link();   /* the session is over */
         break;
     case VLE_ERROR:
+        /* Not a link failure: show the provider's text once; only the socket closing ends
+         * the link (VLE_CLOSED below). */
+        if (!g_err_reported) {
+            char text[400];
+            g_err_reported = 1;
+            snprintf(text, sizeof(text), LIVE_ERR_PREFIX "%s",
+                     ev->text && ev->text[0] ? ev->text : "unknown error");
+            chat_error(text);
+        }
+        break;
     case VLE_CLOSED: {
         const int never_opened = g_dict.link == VDL_CONNECTING;
         report_link_failure(m);

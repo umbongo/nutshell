@@ -33,6 +33,8 @@
 typedef struct { unsigned token; int http_status; VoiceLiveEvent ev; } VoiceLiveMsg;
 void voice_live_msg_free(VoiceLiveMsg *m);
 
+/* A thread posts WM_VOICE_LIVE with lParam NULL when it exits: the UI thread reaps then. */
+
 /* UI thread. Starts a session for recording `token` on target t with the key (copied, wiped
  * at the end). 0 with err when it cannot start. */
 int  voice_live_start(HWND notify, const VoiceLiveTarget *t, const char *key, unsigned token,
@@ -49,9 +51,14 @@ void voice_live_close(unsigned token);
 
 /* UI thread: join the closed sessions' threads (wait_ms 0: only those already done). With
  * wait_ms > 0 (voice off, shutdown) the current session is closed first; a session still
- * running after wait_ms gets voice_ws_abort and is detached (its threads free it). Releases
- * VRES_LIVE_THREAD per joined or detached thread. */
+ * running after wait_ms gets voice_ws_abort and is detached (its threads free it). With 0 a
+ * session closed more than 5 s ago is aborted, and detached after 5 s more if still not
+ * joined. Releases VRES_LIVE_THREAD per joined or detached thread. */
 void voice_live_reap(DWORD wait_ms);
+
+/* TEST-ONLY seam, not for product code: sessions detached by reap whose threads still run
+ * (0 once they ended). Not meaningful under Wine, which cannot wake a blocked receive. */
+int voice_live_test_detached_count(void);
 
 /* TEST-ONLY seam, not for product code: samples (and markers) queued for the current session. */
 size_t voice_live_test_queued(void);

@@ -148,6 +148,8 @@ int test_vt_register_commit_order(void)
     ASSERT_EQ(vt_register(&t, "B"), 0);
     ASSERT_EQ(vt_register(&t, "A"), 0);          /* idempotent */
     ASSERT_EQ(t.nseg, 2);
+    step(&t, &x);                                /* registered but empty: renders nothing */
+    ASSERT_STR_EQ(x.b, "");
     vt_complete(&t, "B", "Second sentence.");
     step(&t, &x);
     ASSERT_STR_EQ(x.b, "Second sentence.");

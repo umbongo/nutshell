@@ -60,6 +60,11 @@ static int model_ok(const char *m)
     return 1;
 }
 
+int voice_live_commit_due(size_t samples, unsigned rate)
+{
+    return rate != 0 && samples >= (size_t)rate * VOICE_LIVE_MIN_COMMIT_MS / 1000u;
+}
+
 int voice_live_model_invalid(const Settings *s)
 {
     if (!s || voice_live_provider(s) == VLP_NONE) return 0;

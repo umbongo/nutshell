@@ -101,6 +101,19 @@ int test_voice_live_resolve(void)
     TEST_END();
 }
 
+/* M1: a commit needs 100 ms of appended audio */
+int test_voice_live_commit_due(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(voice_live_commit_due(2399, 24000), 0);
+    ASSERT_EQ(voice_live_commit_due(2400, 24000), 1);
+    ASSERT_EQ(voice_live_commit_due(0, 24000), 0);
+    ASSERT_EQ(voice_live_commit_due(1599, 16000), 0);
+    ASSERT_EQ(voice_live_commit_due(1600, 16000), 1);
+    ASSERT_EQ(voice_live_commit_due(100000, 0), 0);
+    TEST_END();
+}
+
 int test_voice_live_session_openai(void)
 {
     TEST_BEGIN();

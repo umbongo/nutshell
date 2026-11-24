@@ -14,6 +14,7 @@ typedef enum { VLP_NONE = 0, VLP_OPENAI, VLP_MISTRAL } VoiceLiveProvider;
 #define VOICE_LIVE_HANGOVER_OPENAI_MS 500
 #define VOICE_LIVE_HANGOVER_MISTRAL_MS 800
 #define VOICE_LIVE_CHUNK_MS 100
+#define VOICE_LIVE_MIN_COMMIT_MS 100    /* OpenAI rejects a commit of less audio than this */
 
 typedef struct {
     VoiceLiveProvider prov;
@@ -44,6 +45,11 @@ int voice_live_model_invalid(const Settings *s);
 int voice_live_row_kind(const char *provider, int use_ai, const char *ai_provider);
 /* NULL-terminated seed list, [0] the default. */
 const char *const *voice_live_models(VoiceLiveProvider p);
+
+/* 1 when `samples` appended since the last commit (at `rate` Hz) are at least
+ * VOICE_LIVE_MIN_COMMIT_MS: a shorter commit would be an error, so the sender skips it and
+ * the audio stays in the provider's buffer for the next commit. */
+int voice_live_commit_due(size_t samples, unsigned rate);
 
 /* Client messages: heap JSON, NUL-terminated, *len excludes the NUL; the caller wipes and
  * frees. NULL on failure. */

@@ -3829,6 +3829,7 @@ int test_json_scan_large(void);
 int test_json_scan_path(void);
 int test_voice_live_parse_large_done(void);
 int test_voice_live_resolve(void);
+int test_voice_live_commit_due(void);
 int test_voice_live_session_openai(void);
 int test_voice_live_session_mistral(void);
 int test_voice_live_audio_msg(void);
@@ -8383,6 +8384,7 @@ int main(void) {
     failed += test_json_scan_path();
     failed += test_voice_live_parse_large_done();
     failed += test_voice_live_resolve();
+    failed += test_voice_live_commit_due();
     failed += test_voice_live_session_openai();
     failed += test_voice_live_session_mistral();
     failed += test_voice_live_audio_msg();

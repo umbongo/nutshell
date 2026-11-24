@@ -62,6 +62,7 @@ typedef struct {
     int status[LOG_MAX];
     ULONGLONG tick[LOG_MAX];
     int n;
+    int wakes;                  /* NULL-payload exit wake-ups seen */
 } UiLog;
 
 static int log_count(const UiLog *g, int kind)
@@ -86,6 +87,7 @@ static void pump(UiLog *g, DWORD ms, int stop_on_end)
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message != WM_VOICE_LIVE) continue;
             VoiceLiveMsg *m = (VoiceLiveMsg *)msg.lParam;
+            if (!m) { g->wakes++; continue; }       /* a thread's exit wake-up */
             if (g->n < LOG_MAX) {
                 g->kinds[g->n] = (int)m->ev.kind;
                 g->tokens[g->n] = m->token;
@@ -111,6 +113,7 @@ typedef struct {
     int delay_completed_n;       /* the completion of this commit is held back ... */
     int delay_ms;                /* ... this long */
     int dup_first;               /* the first completion is sent twice */
+    int error_after_ready;       /* an error event right after session.updated (not fatal) */
     volatile ULONGLONG commit_tick[8];
     volatile LONG session_update, bad_session, ready_sent;
     volatile LONG appended_before_ready, appends;
@@ -146,6 +149,8 @@ static int script_on_msg(WsLoop *w, const char *msg, size_t n, void *u)
         if (!s->manual_ready) {
             InterlockedExchange(&s->ready_sent, 1);
             ws_loop_send_text(w, "{\"type\":\"session.updated\"}");
+            if (s->error_after_ready)
+                ws_loop_send_text(w, "{\"type\":\"error\",\"error\":{\"message\":\"boom\"}}");
         }
         return s->drop_after_updated ? 1 : 0;
     }
@@ -278,6 +283,7 @@ int test_voice_live_openai_flow(void)
     ASSERT_EQ(voice_ledger_count(VRES_LIVE_SESSION), 0);
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
     ASSERT_EQ(voice_ledger_underflow(), 0);
     ws_loop_stop(l);
     DestroyWindow(w);
@@ -322,6 +328,7 @@ int test_voice_live_mistral_flow(void)
     voice_live_close(6);
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
     ws_loop_stop(l);
     DestroyWindow(w);
     gates(0);
@@ -393,6 +400,7 @@ int test_voice_live_server_drops(void)
     voice_live_close(8);
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
     if (l) ws_loop_stop(l);
     DestroyWindow(w);
     gates(0);
@@ -422,6 +430,7 @@ int test_voice_live_stale_token_feed(void)
     feed_speech(9, 16000);                           /* closed: ignored too */
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
     ws_loop_stop(l);
     DestroyWindow(w);
     gates(0);
@@ -471,6 +480,7 @@ int test_voice_live_openai_final_waits_for_every_commit(void)
     voice_live_close(11);
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
     ws_loop_stop(l);
     DestroyWindow(w);
     gates(0);
@@ -506,6 +516,7 @@ int test_voice_live_openai_zero_commits_final_at_once(void)
     voice_live_close(12);
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
     ws_loop_stop(l);
     DestroyWindow(w);
     gates(0);
@@ -535,6 +546,199 @@ int test_voice_live_connect_refused_reports_status(void)
     voice_live_close(13);
     voice_live_reap(3000);
     ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
+    ws_loop_stop(l);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* M11: nothing starts while voice is off: no thread, no ledger count */
+int test_voice_live_start_refused_while_voice_off(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_gate_set_enabled(0);
+    voice_ledger_reset();
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 0, 1);
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 20, err, sizeof(err)), 0);
+    ASSERT_STR_EQ(err, "Voice input is turned off.");
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* C1b: the provider upgrades but never sends session.created: VLE_CLOSED after about 10 s */
+int test_voice_live_ready_timeout(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_SILENT);
+    ASSERT_NOT_NULL(l);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 0, ws_loop_port(l));
+    char err[128] = "";
+    ULONGLONG t0 = GetTickCount64();
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 21, err, sizeof(err)), 1);
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 14000, 1);
+    int ic = log_index(&g, VLE_CLOSED);
+    ASSERT_TRUE(ic >= 0);
+    if (ic >= 0) {
+        ASSERT_EQ(g.status[ic], 0);
+        ASSERT_TRUE(g.tick[ic] - t0 >= 9500);
+        ASSERT_TRUE(g.tick[ic] - t0 <= 12000);
+    }
+    ASSERT_EQ(log_index(&g, VLE_READY), -1);
+    voice_live_close(21);
+    ws_loop_stop(l);                       /* ends the receiver's blocked read on any host */
+    voice_live_reap(3000);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    if (!running_under_wine()) ASSERT_EQ(voice_live_test_detached_count(), 0);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* C1c: a queue that fills (3 minutes unsent) fails the link once, never silently */
+int test_voice_live_queue_overflow_fails_link(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_SILENT);      /* never answers: nothing drains the queue */
+    ASSERT_NOT_NULL(l);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 0, ws_loop_port(l));
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 22, err, sizeof(err)), 1);
+    feed_speech(22, 16000u * 185u);              /* 185 s of audio > the 180 s queue bound (24 kHz output) */
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 3000, 1);
+    ASSERT_EQ(log_count(&g, VLE_CLOSED), 1);
+    pump(&g, 300, 0);
+    ASSERT_EQ(log_count(&g, VLE_CLOSED), 1);     /* once */
+    voice_live_close(22);
+    ws_loop_stop(l);
+    voice_live_reap(3000);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* M2: a provider error event is posted but does not end the session */
+int test_voice_live_error_event_not_fatal(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_SILENT);
+    ASSERT_NOT_NULL(l);
+    Script s;
+    memset(&s, 0, sizeof(s));
+    s.error_after_ready = 1;
+    ws_loop_set_script(l, script_on_msg, &s);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 0, ws_loop_port(l));
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 23, err, sizeof(err)), 1);
+    ASSERT_EQ(ws_loop_send_text(l, "{\"type\":\"session.created\"}"), 0);
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 800, 0);
+    ASSERT_EQ(log_count(&g, VLE_ERROR), 1);
+    ASSERT_EQ(log_count(&g, VLE_CLOSED), 0);
+    feed_speech(23, 16000);
+    feed_silence(23, 16000);
+    voice_live_feed_end(23);
+    pump(&g, 5000, 1);
+    ASSERT_EQ(log_count(&g, VLE_CLOSED), 0);
+    ASSERT_EQ(log_count(&g, VLE_DONE), 1);       /* the session went on to its final */
+    ASSERT_EQ((int)s.commits, 1);
+    voice_live_close(23);
+    voice_live_reap(3000);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ws_loop_stop(l);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* M1: under 100 ms appended: no commit is sent or counted, and the final still comes */
+int test_voice_live_short_utterance_not_committed(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_SILENT);
+    ASSERT_NOT_NULL(l);
+    Script s;
+    memset(&s, 0, sizeof(s));
+    ws_loop_set_script(l, script_on_msg, &s);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 0, ws_loop_port(l));
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 24, err, sizeof(err)), 1);
+    ASSERT_EQ(ws_loop_send_text(l, "{\"type\":\"session.created\"}"), 0);
+    feed_speech(24, 640);               /* two 20 ms windows: the gate opens, 40 ms of audio */
+    voice_live_feed_end(24);
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 4000, 1);
+    ASSERT_TRUE(s.appends > 0);
+    ASSERT_EQ((int)s.commits, 0);
+    ASSERT_EQ(log_count(&g, VLE_DONE), 1);
+    voice_live_close(24);
+    voice_live_reap(3000);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ws_loop_stop(l);
+    DestroyWindow(w);
+    gates(0);
+    TEST_END();
+}
+
+/* I3: both threads post a NULL wake-up as they exit, so the UI reaps at once */
+int test_voice_live_exit_wakes_ui(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    voice_ledger_reset();
+    WsLoop *l = ws_loop_start(WSL_REJECT_403);
+    ASSERT_NOT_NULL(l);
+    HWND w = vl_window();
+    ASSERT_NOT_NULL(w);
+    VoiceLiveTarget t;
+    make_target(&t, 1, ws_loop_port(l));
+    char err[128] = "";
+    ASSERT_EQ(voice_live_start(w, &t, "test-key", 25, err, sizeof(err)), 1);
+    UiLog g;
+    memset(&g, 0, sizeof(g));
+    pump(&g, 5000, 1);
+    ASSERT_TRUE(log_index(&g, VLE_CLOSED) >= 0);
+    voice_live_close(25);
+    pump(&g, 1500, 0);                  /* the exit wake-ups arrive without any further call */
+    ASSERT_EQ(g.wakes, 2);
+    voice_live_reap(0);                 /* what the UI does on the wake-up */
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ASSERT_EQ(voice_live_test_detached_count(), 0);
     ws_loop_stop(l);
     DestroyWindow(w);
     gates(0);

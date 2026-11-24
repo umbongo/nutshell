@@ -235,8 +235,17 @@ int  ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int auto_sen
 /* The box's end position in the control's OWN units (what EM_SETSEL/EM_GETSEL count:
  * the box is an ANSI EDIT, so these are not UTF-16 units) and whether a space must
  * separate a new word from the draft: *need_sep (may be NULL) is 1 when the box is
- * non-empty and does not end in whitespace. 0 and *need_sep 0 for a missing panel. */
+ * non-empty and does not end in whitespace. 0 and *need_sep 0 for a missing panel.
+ * The selection and caret are left as they were (saved and restored around the
+ * measurement): nothing visibly changes until the first update writes. */
 size_t ai_chat_voice_live_begin(HWND panel, int *need_sep);
+
+/* The box's length in the control's own units, without touching the caret or the
+ * selection: 0 means empty. A batch recording reads only this. */
+size_t ai_chat_voice_box_chars(HWND panel);
+
+/* 1 when the box holds anything but whitespace (what a Send would send). */
+int  ai_chat_voice_box_has_text(HWND panel);
 
 /* Replace [from, end) of the box (control units, from ai_chat_voice_live_begin or a
  * previous replace) with the UTF-8 text: EM_SETSEL(from, -1) then EM_REPLACESEL(FALSE)
