@@ -1,5 +1,6 @@
 #include "wav.h"
 #include "secure_zero.h"
+#include "voice_config.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -109,6 +110,24 @@ double pcm_peak(const int16_t *s, size_t n)
         if (v > peak) peak = v;
     }
     return (double)peak / 32768.0 > 1.0 ? 1.0 : (double)peak / 32768.0;
+}
+
+uint32_t pcm_gain_q16(int db)
+{
+    db = voice_gain_clamp(db);
+    return (uint32_t)lround(65536.0 * pow(10.0, (double)db / 20.0));
+}
+
+void pcm_apply_gain_q16(int16_t *s, size_t n, uint32_t q16)
+{
+    if (!s || n == 0 || q16 == 65536u) return;
+    for (size_t i = 0; i < n; i++) {
+        int64_t p = (int64_t)s[i] * (int64_t)q16;
+        int64_t v = (p >= 0 ? p + 32768 : p - 32768) / 65536;   /* round half away from zero */
+        if (v > 32767) v = 32767;
+        if (v < -32768) v = -32768;
+        s[i] = (int16_t)v;
+    }
 }
 
 static double sumsq(const int16_t *s, size_t n)

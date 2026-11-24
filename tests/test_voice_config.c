@@ -15,10 +15,10 @@
 
 #define VCFG TEST_TMP_DIR "/nutshell_voice_test.config"
 
-static const char *const k_voice_keys[13] = {
+static const char *const k_voice_keys[14] = {
     "voice_enabled", "voice_stt_use_ai", "voice_stt_provider", "voice_stt_url",
     "voice_stt_model", "voice_stt_language", "stt_api_key", "voice_input_device",
-    "voice_input_device_name", "voice_ptt_key", "voice_ptt_mode",
+    "voice_input_device_name", "voice_mic_gain_db", "voice_ptt_key", "voice_ptt_mode",
     "voice_mic_delay_ms", "voice_auto_send",
 };
 
@@ -195,6 +195,7 @@ int test_voice_config_roundtrip(void)
     s->voice_ptt_key = VOICE_PTT_F9;
     s->voice_ptt_mode = VOICE_MODE_TOGGLE;
     s->voice_mic_delay_ms = 400;
+    s->voice_mic_gain_db = 12;
     s->voice_auto_send = 1;
     ASSERT_EQ(config_save(cfg, VCFG), 0);
     config_free(cfg);
@@ -223,6 +224,7 @@ int test_voice_config_roundtrip(void)
         ASSERT_EQ(t->voice_ptt_key, (int)VOICE_PTT_F9);
         ASSERT_EQ(t->voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
         ASSERT_EQ(t->voice_mic_delay_ms, 400);
+        ASSERT_EQ(t->voice_mic_gain_db, 12);
         ASSERT_EQ(t->voice_auto_send, 1);
         config_free(l);
     }
@@ -253,10 +255,10 @@ int test_voice_config_first_load_voice_off(void)
     const ConfigSettingKey *keys = config_setting_keys(&nk);
     size_t found = 0;
     for (size_t i = 0; i < rep.missing_count; i++) {
-        if (found < 13u && strcmp(keys[rep.missing[i]].key, k_voice_keys[found]) == 0)
+        if (found < 14u && strcmp(keys[rep.missing[i]].key, k_voice_keys[found]) == 0)
             found++;
     }
-    ASSERT_EQ(found, (size_t)13);
+    ASSERT_EQ(found, (size_t)14);
     remove(VCFG);
     TEST_END();
 }
@@ -434,7 +436,7 @@ int test_notice_upgrade_folds_voice_keys(void)
     config_default_settings(&s);
     memset(&r, 0, sizeof(r));
     r.status = CONFIG_LOAD_OK;
-    for (int i = 0; i < 13; i++) r.missing[r.missing_count++] = vkey_index(k_voice_keys[i]);
+    for (int i = 0; i < 14; i++) r.missing[r.missing_count++] = vkey_index(k_voice_keys[i]);
     ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
     ASSERT_EQ(n.item_count, 1);
     ASSERT_STR_EQ(n.items[0].label, "Voice");
@@ -726,5 +728,52 @@ int test_voice_config_marker_is_not_a_notice_key(void)
         config_free(c);
     }
     remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_gain_default_and_clamp(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(s.voice_mic_gain_db, 0);
+    ASSERT_EQ(voice_gain_clamp(99), 30);
+    ASSERT_EQ(voice_gain_clamp(-50), -12);
+    ASSERT_EQ(voice_gain_clamp(7), 7);
+    s.voice_mic_gain_db = 99;
+    voice_settings_validate(&s);
+    ASSERT_EQ(s.voice_mic_gain_db, 30);
+    s.voice_mic_gain_db = -50;
+    voice_settings_validate(&s);
+    ASSERT_EQ(s.voice_mic_gain_db, -12);
+    TEST_END();
+}
+
+int test_voice_gain_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    cfg->settings.voice_mic_gain_db = 12;
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_EQ(l->settings.voice_mic_gain_db, 12);
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_gain_label(void)
+{
+    TEST_BEGIN();
+    char b[16];
+    voice_gain_label(12, b, sizeof b);  ASSERT_STR_EQ(b, "+12 dB");
+    voice_gain_label(0, b, sizeof b);   ASSERT_STR_EQ(b, "0 dB");
+    voice_gain_label(-12, b, sizeof b); ASSERT_STR_EQ(b, "-12 dB");
+    voice_gain_label(30, b, sizeof b);  ASSERT_STR_EQ(b, "+30 dB");
     TEST_END();
 }

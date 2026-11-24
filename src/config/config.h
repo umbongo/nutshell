@@ -95,6 +95,7 @@ typedef struct Settings {
     char stt_api_key_enc_preserved[CFG_BLOB_MAX]; /* same contract as ai_api_key_enc_preserved */
     char voice_input_device[CFG_STR_MAX];      /* endpoint ID, empty = Windows default */
     char voice_input_device_name[CFG_STR_MAX]; /* its friendly name, for display */
+    int  voice_mic_gain_db;              /* software gain, -12..30 dB, default 0 */
     int  voice_ptt_key;                  /* VoicePttKey; JSON "right_shift"/"right_ctrl"/"f8"/"f9" (default right_shift) */
     int  voice_ptt_mode;                 /* VoicePttMode; JSON "toggle"/"hold" (default toggle) */
     int  voice_mic_delay_ms;             /* 0-400, default 150 */

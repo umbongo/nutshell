@@ -456,6 +456,14 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "disabled until voice is saved on.",
       NULL,
       0, 0, 0u),
+    E(SH_VOICE_MIC_GAIN, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Microphone gain:",
+      "Microphone gain",
+      "Microphone gain\n\nBoosts or lowers the microphone in Nutshell only, "
+      "before the recording is sent. Other apps are not affected. Watch the "
+      "meter while you press Test and aim for Good. The range is -12 to 30 dB.\nDefault: 0 dB.",
+      "0 dB",
+      VOICE_GAIN_MIN_DB, VOICE_GAIN_MAX_DB, 0u),
     E(SH_VOICE_PTT_KEY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Push-to-talk key:",
       NULL,

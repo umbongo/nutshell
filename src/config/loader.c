@@ -534,6 +534,7 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("stt_api_key",                   NULL, NULL, SH_VOICE_STT_KEY, "Voice: speech-to-text API key"),
     CK("voice_input_device",            NULL, NULL, SH_VOICE_DEVICE, "Voice: microphone"),
     CK("voice_input_device_name",       NULL, NULL, SH_VOICE_DEVICE, "Voice: microphone name"),
+    CK("voice_mic_gain_db",             NULL, NULL, SH_VOICE_MIC_GAIN, "Voice: microphone gain"),
     CK("voice_ptt_key",                 NULL, NULL, SH_VOICE_PTT_KEY, "Voice: push-to-talk key"),
     CK("voice_ptt_mode",                NULL, NULL, SH_VOICE_PTT_MODE, "Voice: push-to-talk mode"),
     CK("voice_mic_delay_ms",            NULL, NULL, SH_VOICE_MIC_DELAY, "Voice: mic start delay"),
@@ -970,6 +971,8 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         if ((sv = json_obj_str(jset, "voice_input_device_name"))) {
             field_copy(s->voice_input_device_name, sizeof(s->voice_input_device_name), sv);
         }
+        s->voice_mic_gain_db = voice_gain_clamp((int)json_obj_num(jset, "voice_mic_gain_db",
+                                                                  (double)s->voice_mic_gain_db));
         s->voice_ptt_key = voice_ptt_key_from_json(json_obj_str(jset, "voice_ptt_key"));
         s->voice_ptt_mode = voice_ptt_mode_from_json(json_obj_str(jset, "voice_ptt_mode"));
         s->voice_mic_delay_ms = (int)json_obj_num(jset, "voice_mic_delay_ms",
@@ -1311,6 +1314,7 @@ int config_save(const Config *cfg, const char *path)
     fputs("    \"voice_input_device_name\": ", f);
     fprint_json_str(f, s->voice_input_device_name);
     fputs(",\n", f);
+    fprintf(f, "    \"voice_mic_gain_db\": %d,\n", s->voice_mic_gain_db);
     fputs("    \"voice_ptt_key\": ", f);
     fprint_json_str(f, voice_ptt_key_json(s->voice_ptt_key));
     fputs(",\n", f);

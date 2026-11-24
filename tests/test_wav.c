@@ -126,3 +126,61 @@ int test_pcm_classify(void)
     ASSERT_EQ(pcm_classify(buf, 100), PCM_SPEECH);
     TEST_END();
 }
+
+int test_pcm_gain_q16_values(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(pcm_gain_q16(0), 65536u);
+    ASSERT_TRUE(labs((long)pcm_gain_q16(6) - 130762L) <= 1);
+    ASSERT_TRUE(labs((long)pcm_gain_q16(-12) - 16462L) <= 1);
+    ASSERT_EQ(pcm_gain_q16(31), pcm_gain_q16(30));
+    ASSERT_EQ(pcm_gain_q16(-99), pcm_gain_q16(-12));
+    TEST_END();
+}
+
+int test_pcm_apply_gain_identity(void)
+{
+    TEST_BEGIN();
+    int16_t s[5] = { -32768, -1, 0, 1, 32767 };
+    pcm_apply_gain_q16(s, 5, pcm_gain_q16(0));
+    ASSERT_EQ(s[0], -32768);
+    ASSERT_EQ(s[1], -1);
+    ASSERT_EQ(s[2], 0);
+    ASSERT_EQ(s[3], 1);
+    ASSERT_EQ(s[4], 32767);
+    TEST_END();
+}
+
+int test_pcm_apply_gain_saturates(void)
+{
+    TEST_BEGIN();
+    int16_t s[5] = { 20000, -20000, -32768, 32767, 1000 };
+    pcm_apply_gain_q16(s, 5, pcm_gain_q16(30));
+    ASSERT_EQ(s[0], 32767);
+    ASSERT_EQ(s[1], -32768);
+    ASSERT_EQ(s[2], -32768);
+    ASSERT_EQ(s[3], 32767);
+    ASSERT_TRUE(abs(s[4] - 31623) <= 1);
+    TEST_END();
+}
+
+int test_pcm_apply_gain_negative(void)
+{
+    TEST_BEGIN();
+    int16_t s[2] = { 1000, -1000 };
+    pcm_apply_gain_q16(s, 2, pcm_gain_q16(-6));
+    ASSERT_TRUE(abs(s[0] - 501) <= 1);
+    ASSERT_TRUE(abs(s[1] + 501) <= 1);
+    TEST_END();
+}
+
+int test_pcm_apply_gain_null_is_noop(void)
+{
+    TEST_BEGIN();
+    int16_t s[2] = { 1000, -1000 };
+    pcm_apply_gain_q16(NULL, 2, pcm_gain_q16(12));
+    pcm_apply_gain_q16(s, 0, pcm_gain_q16(12));
+    ASSERT_EQ(s[0], 1000);
+    ASSERT_EQ(s[1], -1000);
+    TEST_END();
+}

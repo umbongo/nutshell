@@ -283,6 +283,11 @@ of "to finish". A thin live level bar under the input is **left to the builder**
     error. A capture whose samples are all zero reports "Windows may be
     blocking the microphone: Settings > Privacy & security > Microphone"
     instead of "Didn't catch that" **(from review)**.
+- **Microphone gain** is a software stage **(maintainer, 2026-11-24)**: each
+  captured block is scaled by `voice_mic_gain_db` (-12 to +30 dB, default 0)
+  with saturating 16-bit maths, before the silence gate, the WAV encode and the
+  level meter, so the meter shows what is sent. It is not the Windows endpoint
+  volume, which would change the level for every app.
 - The COM work is in `src/ui`, written in C with `COBJMACROS` against
   MinGW's `mmdeviceapi.h` / `audioclient.h`. **One audio thread**, initialised
   for the MTA, owns every audio COM object, including enumeration for
@@ -433,7 +438,9 @@ The page then has two titled sections.
   endpoint by its full friendly name), a **Test** button that records 3 s and shows the live level on a
   meter (`ns_draw_meter`), Push-to-talk key (combo: Right Shift, Right Ctrl, F8, F9; Right
   Shift is first and the default), Mode (Toggle / Hold to talk; Toggle is first
-  and the default), Mic start delay (0-400 ms, default 150; greyed while Toggle
+  and the default), Microphone gain (slider, -12 to +30 dB in 1 dB steps,
+  default 0 dB, shown as "+12 dB" beside it; software gain in Nutshell only,
+  set while watching the Test meter) **(maintainer, 2026-11-24)**, Mic start delay (0-400 ms, default 150; greyed while Toggle
   is selected, since it applies to Hold to talk only), Send
   automatically when I finish speaking (tick, off) **(maintainer, 2026-11-23:
   review by default, auto-send opt-in)**.
