@@ -288,6 +288,12 @@ static void va_begin(VaState *st, const VaCmd *c)
     st->gain_q16 = pcm_gain_q16(c->gain_db);
 }
 
+/* The one place a gain command takes effect, for the thread and the seam. */
+static void va_set_gain(VaState *st, int gain_db)
+{
+    st->gain_q16 = pcm_gain_q16(gain_db);
+}
+
 /* Takes freshly captured samples: appended, then the software gain applied to
  * exactly the new ones, so the meter, pcm_classify and pcm_to_wav all see the
  * gained signal. A Settings Test only measures: it folds the peak into the
@@ -448,7 +454,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_BEGIN: va_begin(&st, &c); break;
             case VC_END:   va_finish(&st, c.flag); break;
             case VC_WATCH: va_watch(&st, c.flag); break;
-            case VC_SET_GAIN: st.gain_q16 = pcm_gain_q16(c.gain_db); break;
+            case VC_SET_GAIN: va_set_gain(&st, c.gain_db); break;
             }
         }
         if (st.active) {
@@ -552,7 +558,13 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag, int g
      * dropped: the queue grows for them. */
     int done = 0;
     if (k == VC_ENUM || k == VC_WATCH || k == VC_SET_GAIN) {
-        for (int i = 0; i < cx->qn; i++) {
+        /* A gain folds only into a gain queued after the last begin: one
+         * ahead of it would be overwritten by that begin's own gain. */
+        int from = 0;
+        if (k == VC_SET_GAIN)
+            for (int i = 0; i < cx->qn; i++)
+                if (cx->q[i].kind == VC_BEGIN) from = i + 1;
+        for (int i = from; i < cx->qn; i++) {
             if (cx->q[i].kind != k) continue;
             if (k == VC_WATCH) cx->q[i].flag = flag;
             if (k == VC_SET_GAIN) cx->q[i].gain_db = gain_db;
@@ -640,7 +652,7 @@ void voice_audio_test_ingest(int test_only, int gain_db, int gain2_db,
     va_ingest(&st, s, n);
     peak[0] = st.level_peak;
     st.level_peak = 0;
-    st.gain_q16 = pcm_gain_q16(gain2_db);
+    va_set_gain(&st, gain2_db);   /* as a VC_SET_GAIN on the running capture */
     va_ingest(&st, s, n);
     peak[1] = st.level_peak;
     *pcm_len = st.pcm.n;

@@ -104,6 +104,7 @@ int test_voice_audio_test_capture_has_no_time_limit(void);
 int test_voice_audio_test_capture_keeps_no_samples(void);
 int test_voice_audio_ingest_applies_gain_live(void);
 int test_voice_audio_set_gain_coalesces(void);
+int test_voice_audio_set_gain_after_begin_is_kept(void);
 int test_voice_ptt_posted_keys(void);
 int test_voice_ptt_posted_right_shift(void);
 int test_voice_stt_refused_when_gate_off(void);
@@ -420,6 +421,7 @@ int main(int argc, char **argv)
     failed += test_voice_audio_test_capture_keeps_no_samples();
     failed += test_voice_audio_ingest_applies_gain_live();
     failed += test_voice_audio_set_gain_coalesces();
+    failed += test_voice_audio_set_gain_after_begin_is_kept();
     failed += test_voice_ptt_posted_keys();
     failed += test_voice_ptt_posted_right_shift();
     failed += test_voice_stt_refused_when_gate_off();

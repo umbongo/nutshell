@@ -355,8 +355,10 @@ int test_voice_audio_test_capture_has_no_time_limit(void)
         ASSERT_EQ(peak[0], 1000);
         ASSERT_EQ(peak[1], 1000);
     }
-    /* The product thread, with a real endpoint or none: a test-only begin
-     * must never post VAM_CAPTURED. */
+    /* The product thread. NOTE: without a capture endpoint (Wine here) this
+     * half passes vacuously, as begin only posts an error; with one it shows
+     * a test-only begin never posts VAM_CAPTURED. The ingest half above is
+     * what always runs. */
     va_begin_test();
     HWND w = va_window();
     ASSERT_NOT_NULL(w);
@@ -403,10 +405,10 @@ int test_voice_audio_ingest_applies_gain_live(void)
     ASSERT_TRUE(peak[0] >= 1950 && peak[0] <= 2050);
     ASSERT_EQ(peak[1], 1000);                        /* live change back */
     /* Saturation: a loud signal at the top gain stays inside int16. */
-    va_fixture(s, 30000);
+    va_fixture(s, 30000);   /* alternates +30000, -30000 */
     voice_audio_test_ingest(1, 12, 12, s, VA_FEED, peak, &len, &verdict);
     ASSERT_TRUE(peak[0] >= 32767);
-    ASSERT_TRUE(peak[1] <= 32768);
+    ASSERT_EQ(peak[1], 32768);   /* -30000 x +12 dB saturates at full scale */
     /* Quiet speech below the speech threshold becomes speech with gain, and
      * a push-to-talk capture classifies the gained samples. */
     va_fixture(s, 100);
@@ -414,6 +416,30 @@ int test_voice_audio_ingest_applies_gain_live(void)
     ASSERT_EQ(verdict, (int)PCM_SILENT);
     voice_audio_test_ingest(0, 12, 12, s, VA_FEED, peak, &len, &verdict);
     ASSERT_EQ(verdict, (int)PCM_SPEECH);
+    TEST_END();
+}
+
+/* The latest gain always wins: SET(a), BEGIN(g), SET(b) must not fold b into
+ * the first SET (the begin would then overwrite it). Held, so nothing drains. */
+int test_voice_audio_set_gain_after_begin_is_kept(void)
+{
+    TEST_BEGIN();
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_NOT_NULL(w);
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_test_hold(1);
+    voice_audio_set_gain(3);
+    voice_audio_capture_begin("", 0, 1, 5);
+    voice_audio_set_gain(9);
+    voice_audio_set_gain(11);      /* folds into the one after the begin */
+    int last = -999;
+    int n = voice_audio_test_pending_gain(&last);
+    voice_audio_test_hold(0);
+    ASSERT_EQ(n, 2);               /* one before the begin, one after */
+    ASSERT_EQ(last, 11);
+    va_end_test(w);
     TEST_END();
 }
 
