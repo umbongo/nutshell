@@ -3740,6 +3740,8 @@ int test_vlisten_hd_cough_unducks_without_abandon(void);
 int test_vlisten_hd_echo_alone_never_cuts(void);
 int test_vlisten_set_mode_drops_turn(void);
 int test_vlisten_partial_windows_and_wipe(void);
+int test_vlisten_cutin_hd_modulated_user(void);
+int test_vlisten_cutin_aec_modulated_user(void);
 /* test_voice_transcript.c */
 int test_vt_draft_sep(void);
 int test_vt_rendered_full_text(void);
@@ -8338,6 +8340,8 @@ int main(void) {
     failed += test_vlisten_hd_echo_alone_never_cuts();
     failed += test_vlisten_set_mode_drops_turn();
     failed += test_vlisten_partial_windows_and_wipe();
+    failed += test_vlisten_cutin_hd_modulated_user();
+    failed += test_vlisten_cutin_aec_modulated_user();
     failed += test_vt_draft_sep();
     failed += test_vt_rendered_full_text();
     failed += test_vt_openai_revision();

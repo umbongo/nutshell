@@ -21,20 +21,21 @@
  *    the lead-in; it is emptied at turn start and end.
  *  - VLM_SPEAK_AEC (echo cancellation on): floor frozen, detector margin
  *    +6 dB. Cut-in speech windows (VV_SPEECH; the burst's first VV_SPEECH
- *    credits the 6 candidates that opened it): at 10 (200 ms), with no more
- *    than 2 non-speech windows between them, VLN_DUCK, VLN_TURN_START and the
+ *    credits the 6 candidates that opened it) accumulate from the first one,
+ *    real speech being modulated: the count resets only after 15 consecutive
+ *    non-speech windows (300 ms; controller ruling). At 10 (200 ms) VLN_DUCK, VLN_TURN_START and the
  *    pre-roll; at 20 (400 ms) VLN_CUT and the mode becomes VLM_LISTEN with the
  *    turn carrying on (the endpointer takes over). 15 windows (300 ms) without
  *    speech before the cut: VLN_UNDUCK, VLN_TURN_ABANDON.
  *  - VLM_SPEAK_HD (no echo cancellation): the detector is not run (floor
  *    frozen). The echo estimate starts at the floor; during the first
  *    VL_HD_PRIME = 25 windows (500 ms) it follows the capture level at once
- *    (else our own reply, entering from a floor 30 dB under it, would count as
- *    a cut-in until the 0.5 dB steps caught up); afterwards it follows the
+ *    (the builder's call: else our own reply, entering from a floor 30 dB under
+ *    it, would count as a cut-in until the 0.5 dB steps caught up); afterwards it follows the
  *    capture level up by at most 0.5 dB a window and down by 0.1 dB a window.
- *    It does not rise on a candidate window, so the user's voice does not lift
- *    it. A candidate window has level >= max(floor + 12, echo + 10) and
- *    >= -55 dBFS. At 10 candidates (with the same 2-window gap rule) VLN_DUCK
+ *    It does not move while a cut-in is accumulating (the count is above 0),
+ *    so neither the user's voice nor its modulation dips lift it. A candidate window has level >= max(floor + 12, echo + 10) and
+ *        >= -55 dBFS. Candidates accumulate under the same 15-window rule. At 10 candidates VLN_DUCK
  *    only; at 20 VLN_CUT, VLN_TURN_START with no pre-roll and no audio from
  *    before the cut (the cut window is the first audio), then listening.
  *    Un-duck: 15 windows without a candidate after the duck gives VLN_UNDUCK

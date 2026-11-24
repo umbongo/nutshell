@@ -4,7 +4,6 @@
 
 #define CI_DUCK_WINDOWS 10      /* 200 ms */
 #define CI_CUT_WINDOWS 20       /* 400 ms */
-#define CI_GAP_MAX 2            /* non-speech windows allowed between cut-in windows */
 #define CI_ABANDON_WINDOWS 15   /* 300 ms without speech */
 #define AEC_EXTRA_DB 6.0
 #define HD_FLOOR_MARGIN 12.0
@@ -154,7 +153,7 @@ static void win_cutin(VoiceListen *l, const int16_t *w, int speech, int credit, 
         return;
     }
     if (l->ci_speech == 0) return;
-    if (l->ci_gap > CI_GAP_MAX) { ci_reset(l); return; }
+    if (l->ci_gap >= CI_ABANDON_WINDOWS) { ci_reset(l); return; }
     if (l->ci_speech >= CI_DUCK_WINDOWS) {
         l->ci_ducked = 1;
         ev(k, VLN_DUCK);
@@ -182,7 +181,7 @@ static void win_hd(VoiceListen *l, const int16_t *w, double level, const VoiceLi
     }
     if (l->echo_db + HD_ECHO_MARGIN > thr) thr = l->echo_db + HD_ECHO_MARGIN;
     cand = level >= thr && level >= HD_MIN_DB;
-    if (!cand) {
+    if (!cand && l->ci_speech == 0) {   /* held while a cut-in accumulates */
         if (level > l->echo_db) {
             l->echo_db += level - l->echo_db > HD_UP_DB ? HD_UP_DB : level - l->echo_db;
         } else {

@@ -309,3 +309,39 @@ int test_vlisten_partial_windows_and_wipe(void)
     ASSERT_EQ(t.l.ring_n, 0);
     TEST_END();
 }
+
+int test_vlisten_cutin_hd_modulated_user(void)
+{
+    TEST_BEGIN();
+    LT t;
+    lt_init(&t, 500);
+    voice_listen_set_mode(&t.l, VLM_LISTEN);
+    lt_run(&t, 40, NONE_DB, 0.0, -60.0);
+    voice_listen_set_mode(&t.l, VLM_SPEAK_HD);
+    lt_run(&t, 60, -30.0, 0.4, -60.0);
+    lt_run(&t, 80, -12.0, 0.4, -60.0);          /* 4 Hz modulated user from window 100 */
+    lt_run(&t, 60, NONE_DB, 0.0, -60.0);
+    int d = lt_find(&t, VLN_DUCK), c = lt_find(&t, VLN_CUT);
+    ASSERT_TRUE(d >= 0 && c > d);
+    ASSERT_EQ(lt_count(&t, VLN_UNDUCK), 0);
+    ASSERT_TRUE(t.first_audio >= t.evwin[c]);
+    TEST_END();
+}
+
+int test_vlisten_cutin_aec_modulated_user(void)
+{
+    TEST_BEGIN();
+    LT t;
+    lt_init(&t, 500);
+    voice_listen_set_mode(&t.l, VLM_LISTEN);
+    lt_run(&t, 40, NONE_DB, 0.0, -60.0);
+    voice_listen_set_mode(&t.l, VLM_SPEAK_AEC);
+    lt_run(&t, 10, NONE_DB, 0.0, -60.0);
+    lt_run(&t, 80, -12.0, 0.4, -60.0);
+    lt_run(&t, 60, NONE_DB, 0.0, -60.0);
+    int d = lt_find(&t, VLN_DUCK), c = lt_find(&t, VLN_CUT);
+    ASSERT_TRUE(d >= 0 && c > d);
+    ASSERT_EQ(lt_count(&t, VLN_UNDUCK), 0);
+    ASSERT_EQ(lt_count(&t, VLN_TURN_END), 1);
+    TEST_END();
+}
