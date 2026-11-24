@@ -237,6 +237,23 @@ static const char *error_text(const JsonNode *root)
     return "Provider error";
 }
 
+/* json_free releases string values with plain free(), and they hold transcript text and
+ * error strings (user content). Wipe every string value in the tree before freeing it. */
+static void wipe_tree(const JsonNode *n)
+{
+    if (!n) return;
+    if (n->type == JSON_STRING) {
+        if (n->as.str_val) secure_zero(n->as.str_val, n->str_len > strlen(n->as.str_val)
+                                                          ? n->str_len : strlen(n->as.str_val));
+    } else if (n->type == JSON_ARRAY) {
+        size_t c = vec_size(&n->as.arr);
+        for (size_t i = 0; i < c; i++) wipe_tree((const JsonNode *)vec_get(&n->as.arr, i));
+    } else if (n->type == JSON_OBJECT) {
+        size_t c = vec_size(&n->as.obj.vals);
+        for (size_t i = 0; i < c; i++) wipe_tree((const JsonNode *)vec_get(&n->as.obj.vals, i));
+    }
+}
+
 int voice_live_parse(VoiceLiveProvider p, const char *json, size_t len, VoiceLiveEvent *ev)
 {
     if (!ev) return 0;
@@ -279,14 +296,18 @@ int voice_live_parse(VoiceLiveProvider p, const char *json, size_t len, VoiceLiv
     const char *item = NULL;
     if (need_item) {
         item = json_obj_str(root, "item_id");
-        if (!item) goto done;
+        if (!item || strlen(item) >= sizeof ev->item) goto done;
     }
     char *text = NULL;
     if (field) {
         const char *v = json_obj_str(root, field);
-        if (!v) goto done;
-        text = dup_str(v);
-        if (!text) goto done;
+        /* A completion without a transcript still counts as a completion (the caller
+         * matches commits to completions); every other text field is required. */
+        if (!v && kind != VLE_COMPLETED) goto done;
+        if (v) {
+            text = dup_str(v);
+            if (!text) goto done;
+        }
     } else if (err_text) {
         text = dup_str(error_text(root));
         if (!text) goto done;
@@ -296,6 +317,7 @@ int voice_live_parse(VoiceLiveProvider p, const char *json, size_t len, VoiceLiv
     if (item) snprintf(ev->item, sizeof ev->item, "%s", item);
     ok = 1;
 done:
+    wipe_tree(root);
     json_free(root);
     return ok;
 }

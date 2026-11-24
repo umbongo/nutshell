@@ -179,6 +179,17 @@ int test_voice_live_audio_msg(void)
     m = voice_live_msg_audio(&t, big, 1600, &len);
     ASSERT_NOT_NULL(m);
     ASSERT_EQ(len, strlen(m));
+    size_t b64 = ((1600 * 2 + 2) / 3) * 4;  /* 3,200 bytes -> 4,268 chars */
+    ASSERT_EQ(b64, 4268);
+    ASSERT_EQ(len, strlen("{\"type\":\"input_audio.append\",\"audio\":\"\"}") + b64);
+    free(m);
+    ls(&s, "openai");
+    ASSERT_EQ(voice_live_resolve(&s, &t), 1);
+    static int16_t big24[2400];
+    m = voice_live_msg_audio(&t, big24, 1600, &len);
+    ASSERT_NOT_NULL(m);
+    ASSERT_EQ(len, strlen("{\"type\":\"input_audio_buffer.append\",\"audio\":\"\"}") + b64);
+    ASSERT_EQ(len, 4315); /* 47-char wrapper + 4,268 */
     free(m);
     TEST_END();
 }
@@ -292,6 +303,30 @@ int test_voice_live_parse_openai(void)
     ASSERT_EQ(ev.kind, VLE_IGNORE);
     ASSERT_EQ(parse1(VLP_OPENAI, "{\"type\":\"conversation.item.input_audio_transcription.delta\","
                      "\"item_id\":\"i\"}", &ev), 0);
+    /* a completion without a usable transcript is still a completion */
+    const char *nc[] = {"{\"type\":\"conversation.item.input_audio_transcription.completed\",\"item_id\":\"i9\"}",
+        "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"item_id\":\"i9\",\"transcript\":null}",
+        "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"item_id\":\"i9\",\"transcript\":5}"};
+    for (int i = 0; i < 3; i++) {
+        ASSERT_EQ(parse1(VLP_OPENAI, nc[i], &ev), 1);
+        ASSERT_EQ(ev.kind, VLE_COMPLETED);
+        ASSERT_STR_EQ(ev.item, "i9");
+        ASSERT_NULL(ev.text);
+        voice_live_event_free(&ev);
+    }
+    /* an item id of 64+ chars is malformed, 63 fits */
+    char longj[300];
+    char id[80];
+    memset(id, 'a', 64);
+    id[64] = '\0';
+    snprintf(longj, sizeof longj, "{\"type\":\"input_audio_buffer.committed\",\"item_id\":\"%s\"}", id);
+    ASSERT_EQ(parse1(VLP_OPENAI, longj, &ev), 0);
+    ASSERT_EQ(ev.kind, VLE_IGNORE);
+    id[63] = '\0';
+    snprintf(longj, sizeof longj, "{\"type\":\"input_audio_buffer.committed\",\"item_id\":\"%s\"}", id);
+    ASSERT_EQ(parse1(VLP_OPENAI, longj, &ev), 1);
+    ASSERT_STR_EQ(ev.item, id);
+    voice_live_event_free(&ev);
     ASSERT_EQ(parse1(VLP_OPENAI, "{}", &ev), 0);
     ASSERT_EQ(parse1(VLP_OPENAI, "[1]", &ev), 0);
     ASSERT_EQ(voice_live_parse(VLP_OPENAI, NULL, 0, &ev), 0);
