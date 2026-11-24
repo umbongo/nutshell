@@ -3838,6 +3838,7 @@ int test_vdict_text(void);
 int test_voice_ledger_counts(void);
 int test_voice_live_parse_openai(void);
 int test_voice_live_parse_mistral(void);
+int test_voice_live_parse_embedded_nul(void);
 
 /* test_ai_gate.c */
 int test_ai_gate_default_off(void);
@@ -8353,6 +8354,7 @@ int main(void) {
     failed += test_voice_live_escape();
     failed += test_voice_live_parse_openai();
     failed += test_voice_live_parse_mistral();
+    failed += test_voice_live_parse_embedded_nul();
     failed += test_vdict_live_key_stop();
     failed += test_vdict_live_auto_send();
     failed += test_vdict_live_send_while_recording();

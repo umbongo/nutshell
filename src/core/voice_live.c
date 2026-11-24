@@ -243,8 +243,9 @@ static void wipe_tree(const JsonNode *n)
 {
     if (!n) return;
     if (n->type == JSON_STRING) {
-        if (n->as.str_val) secure_zero(n->as.str_val, n->str_len > strlen(n->as.str_val)
-                                                          ? n->str_len : strlen(n->as.str_val));
+        /* Exactly strlen bytes: the allocation is strlen+1 even when str_len is larger
+         * (a \u0000 escape ends the C string early). */
+        if (n->as.str_val) secure_zero(n->as.str_val, strlen(n->as.str_val));
     } else if (n->type == JSON_ARRAY) {
         size_t c = vec_size(&n->as.arr);
         for (size_t i = 0; i < c; i++) wipe_tree((const JsonNode *)vec_get(&n->as.arr, i));

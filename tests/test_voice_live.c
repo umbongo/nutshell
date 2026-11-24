@@ -335,6 +335,40 @@ int test_voice_live_parse_openai(void)
     TEST_END();
 }
 
+/* A \u0000 escape ends the C string early while str_len stays larger: the wipe must not
+ * run past the allocation (ASan checks it), and the text is the part before the NUL. */
+int test_voice_live_parse_embedded_nul(void)
+{
+    TEST_BEGIN();
+    char pad[256];
+    memset(pad, 'A', 200);
+    pad[200] = '\0';
+    char j[1024];
+    VoiceLiveEvent ev;
+    snprintf(j, sizeof j, "{\"type\":\"transcription.done\",\"text\":\"ab\\u0000%s\"}", pad);
+    ASSERT_EQ(parse1(VLP_MISTRAL, j, &ev), 1);
+    ASSERT_EQ(ev.kind, VLE_DONE);
+    ASSERT_STR_EQ(ev.text, "ab");
+    voice_live_event_free(&ev);
+    snprintf(j, sizeof j, "{\"type\":\"conversation.item.input_audio_transcription.delta\","
+             "\"item_id\":\"i\",\"delta\":\"cd\\u0000%s\"}", pad);
+    ASSERT_EQ(parse1(VLP_OPENAI, j, &ev), 1);
+    ASSERT_EQ(ev.kind, VLE_DELTA);
+    ASSERT_STR_EQ(ev.text, "cd");
+    voice_live_event_free(&ev);
+    snprintf(j, sizeof j, "{\"type\":\"conversation.item.input_audio_transcription.completed\","
+             "\"item_id\":\"i\",\"transcript\":\"ef\\u0000%s\"}", pad);
+    ASSERT_EQ(parse1(VLP_OPENAI, j, &ev), 1);
+    ASSERT_STR_EQ(ev.text, "ef");
+    voice_live_event_free(&ev);
+    snprintf(j, sizeof j, "{\"type\":\"error\",\"error\":{\"message\":\"gh\\u0000%s\"}}", pad);
+    ASSERT_EQ(parse1(VLP_OPENAI, j, &ev), 1);
+    ASSERT_EQ(ev.kind, VLE_ERROR);
+    ASSERT_STR_EQ(ev.text, "gh");
+    voice_live_event_free(&ev);
+    TEST_END();
+}
+
 int test_voice_live_parse_mistral(void)
 {
     TEST_BEGIN();
