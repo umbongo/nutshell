@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "base64.h"
+#include "json_scan.h"
 #include "json_validate.h"
 #include "secure_zero.h"
 #include "voice_lang.h"
@@ -255,6 +256,40 @@ static void wipe_tree(const JsonNode *n)
     }
 }
 
+/* The tokenizer refuses a string over 8,191 bytes, so a long final transcript fails
+ * json_parse. Scan the type, and for a completion (only) the text and item id by hand.
+ * 1 and *ev filled, or 0. */
+static int parse_large_final(VoiceLiveProvider p, const char *json, size_t len, VoiceLiveEvent *ev)
+{
+    char *type = NULL, *item = NULL, *text = NULL;
+    size_t tl = 0, il = 0, xl = 0;
+    int ok = 0;
+    if (!json_scan_string(json, len, 1, "type", 128, &type, &tl)) goto out;
+    VoiceLiveEvKind kind;
+    const char *field;
+    if (p == VLP_MISTRAL && strcmp(type, "transcription.done") == 0) {
+        kind = VLE_DONE; field = "text";
+    } else if (p == VLP_OPENAI && strcmp(type, "conversation.item.input_audio_transcription.completed") == 0) {
+        kind = VLE_COMPLETED; field = "transcript";
+    } else {
+        goto out;
+    }
+    if (kind == VLE_COMPLETED &&
+        !json_scan_string(json, len, 1, "item_id", sizeof ev->item - 1, &item, &il))
+        goto out;
+    if (!json_scan_string(json, len, 1, field, (size_t)1 << 20, &text, &xl)) goto out;
+    ev->kind = kind;
+    ev->text = text;
+    text = NULL;
+    if (item) snprintf(ev->item, sizeof ev->item, "%s", item);
+    ok = 1;
+out:
+    if (type) { secure_zero(type, tl); free(type); }
+    if (item) { secure_zero(item, il); free(item); }
+    if (text) { secure_zero(text, xl); free(text); }
+    return ok;
+}
+
 int voice_live_parse(VoiceLiveProvider p, const char *json, size_t len, VoiceLiveEvent *ev)
 {
     if (!ev) return 0;
@@ -268,7 +303,7 @@ int voice_live_parse(VoiceLiveProvider p, const char *json, size_t len, VoiceLiv
     JsonNode *root = json_parse(z);
     secure_zero(z, len);
     free(z);
-    if (!root) return 0;
+    if (!root) return len > 8192 ? parse_large_final(p, json, len, ev) : 0;
     int ok = 0;
     const char *type = root->type == JSON_OBJECT ? json_obj_str(root, "type") : NULL;
     if (!type) goto done;

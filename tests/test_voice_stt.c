@@ -458,6 +458,23 @@ int test_voice_stt_parse_large(void)
             ASSERT_TRUE(strncmp(o2, "caf\xC3\xA9 \xF0\x9F\x98\x80\nbbb", 14) == 0);
             ASSERT_EQ((int)strlen(o2), 11 + 10000);   /* leading spaces and the trailing newline trimmed */
         }
+        /* a "content" under another member of the first choice must not be taken */
+        if (b2 && o2) {
+            size_t k = (size_t)sprintf(b2, "{\"choices\":[{\"logprobs\":{\"content\":\"wrong\"},\"message\":{\"role\":\"a\",\"content\":\"right ");
+            memset(b2 + k, 'c', 9000);
+            k += 9000;
+            k += (size_t)sprintf(b2 + k, "\"}}]}");
+            ASSERT_EQ(voice_stt_parse(STT_SHAPE_GEMINI_CHAT, b2, k, o2, cap2, err, sizeof err), 1);
+            ASSERT_TRUE(strncmp(o2, "right cc", 8) == 0);
+            ASSERT_EQ((int)strlen(o2), 6 + 9000);
+            /* and one with no message.content at all fails rather than taking the other */
+            k = (size_t)sprintf(b2, "{\"choices\":[{\"logprobs\":{\"content\":\"wrong\"},\"message\":{\"role\":\"a\"}}],\"pad\":\"");
+            memset(b2 + k, 'c', 9000);
+            k += 9000;
+            k += (size_t)sprintf(b2 + k, "\"}");
+            ASSERT_EQ(voice_stt_parse(STT_SHAPE_GEMINI_CHAT, b2, k, o2, cap2, err, sizeof err), 0);
+            ASSERT_EQ((int)o2[0], 0);
+        }
         free(b2);
         free(o2);
     }

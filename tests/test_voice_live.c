@@ -415,3 +415,62 @@ int test_voice_live_parse_mistral(void)
     voice_live_event_free(&ev);
     TEST_END();
 }
+
+/* The tokenizer refuses a string over 8,191 bytes: a long final transcript must still arrive. */
+int test_voice_live_parse_large_done(void)
+{
+    TEST_BEGIN();
+    enum { N = 20000 };
+    char *j = (char *)malloc((size_t)N + 256);
+    ASSERT_NOT_NULL(j);
+    if (!j) { TEST_END(); }
+    VoiceLiveEvent ev;
+    size_t off = (size_t)sprintf(j, "{\"type\":\"transcription.done\",\"model\":\"m\",\"text\":\"");
+    memset(j + off, 'a', N);
+    off += N;
+    off += (size_t)sprintf(j + off, "\"}");
+    ASSERT_EQ(voice_live_parse(VLP_MISTRAL, j, off, &ev), 1);
+    ASSERT_EQ(ev.kind, VLE_DONE);
+    ASSERT_NOT_NULL(ev.text);
+    if (ev.text) ASSERT_EQ((int)strlen(ev.text), N);
+    voice_live_event_free(&ev);
+
+    off = (size_t)sprintf(j, "{\"type\":\"conversation.item.input_audio_transcription.completed\","
+                          "\"item_id\":\"item_9\",\"content_index\":0,\"transcript\":\"");
+    memset(j + off, 'b', N);
+    off += N;
+    off += (size_t)sprintf(j + off, "\"}");
+    ASSERT_EQ(voice_live_parse(VLP_OPENAI, j, off, &ev), 1);
+    ASSERT_EQ(ev.kind, VLE_COMPLETED);
+    ASSERT_STR_EQ(ev.item, "item_9");
+    ASSERT_NOT_NULL(ev.text);
+    if (ev.text) ASSERT_EQ((int)strlen(ev.text), N);
+    voice_live_event_free(&ev);
+
+    /* an item id that does not fit is refused, as on the normal path */
+    off = (size_t)sprintf(j, "{\"type\":\"conversation.item.input_audio_transcription.completed\","
+                          "\"item_id\":\"%0100d\",\"transcript\":\"", 7);
+    memset(j + off, 'b', N);
+    off += N;
+    off += (size_t)sprintf(j + off, "\"}");
+    ASSERT_EQ(voice_live_parse(VLP_OPENAI, j, off, &ev), 0);
+    ASSERT_EQ(ev.kind, VLE_IGNORE);
+    ASSERT_NULL(ev.text);
+
+    /* no fallback for a delta, nor for another provider's type */
+    off = (size_t)sprintf(j, "{\"type\":\"transcription.text.delta\",\"text\":\"");
+    memset(j + off, 'c', N);
+    off += N;
+    off += (size_t)sprintf(j + off, "\"}");
+    ASSERT_EQ(voice_live_parse(VLP_MISTRAL, j, off, &ev), 0);
+    ASSERT_EQ(ev.kind, VLE_IGNORE);
+    ASSERT_NULL(ev.text);
+    off = (size_t)sprintf(j, "{\"type\":\"transcription.done\",\"text\":\"");
+    memset(j + off, 'd', N);
+    off += N;
+    off += (size_t)sprintf(j + off, "\"}");
+    ASSERT_EQ(voice_live_parse(VLP_OPENAI, j, off, &ev), 0);   /* a Mistral type on OpenAI */
+    ASSERT_EQ(ev.kind, VLE_IGNORE);
+    free(j);
+    TEST_END();
+}
