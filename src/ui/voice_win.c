@@ -44,6 +44,8 @@ static VoiceTranscript g_vt;       /* valid while g_vt_on */
 static int g_vt_on;
 static size_t g_draft_end;         /* box end at START, in the control's own units (not UTF-16) */
 static size_t g_box_end;           /* box end after our last write, same units */
+static int g_sent;                 /* the box was sent for this recording */
+static int g_pre_no_send;          /* the dict's no_send as it was before the current step */
 static int g_send_pressed;         /* Send/Enter was pressed during this recording */
 static uint64_t g_digest;          /* voice_settings_digest at START */
 
@@ -289,7 +291,7 @@ static void send_box(void)
         ai_chat_voice_status(ui_ai_panel(), "Voice message not sent: the chat changed", 0);
         return;
     }
-    (void)ai_chat_voice_send_box(ui_ai_panel());
+    if (ai_chat_voice_send_box(ui_ai_panel())) g_sent = 1;
 }
 
 /* The upload's transcript arrived: a batch recording appends it, a fallback
@@ -301,8 +303,9 @@ static void deliver_batch(int send)
         /* As before: auto-send is decided now (voice_deliver sends only into an empty
          * box); only Send pressed during the recording forces it. */
         const Settings *s = ui_current_settings();
-        ai_chat_voice_deliver(ui_ai_panel(), g_result_text, s ? s->voice_auto_send : 0,
-                              g_send_pressed);
+        if (ai_chat_voice_deliver(ui_ai_panel(), g_result_text, s ? s->voice_auto_send : 0,
+                                  g_send_pressed && !g_pre_no_send))
+            g_sent = 1;
         return;
     }
     if (g_vt_on && vt_replace_all(&g_vt, g_result_text) == 0) live_flush();
@@ -386,6 +389,10 @@ static void post_step(void)
         g_token = 0;
         g_live = 0;
         if (g_ui != AIV_IDLE) set_ui(AIV_IDLE, NULL);
+    } else if (g_live && g_dict.state == VDS_FINISHING && g_dict.link == VDL_READY
+               && g_ui != AIV_TRANSCRIBING) {
+        /* The mic stopped and the last words are really awaited. */
+        set_ui(AIV_TRANSCRIBING, CUE_TRANSCRIBING);
     }
     arm_timer();
 }
@@ -395,9 +402,10 @@ static void dict_event(VoiceDictEvent ev, int a, int b)
     /* A soft end that swallowed a pending Send says so when the recording finishes. */
     const int swallowed = g_dict.send_after && g_dict.no_send
                           && ev != VDE_END_HARD && ev != VDE_ESCAPE;
+    g_pre_no_send = g_dict.no_send;   /* the step may re-initialise the dict */
     const VoiceDictOut o = voice_dict_step(&g_dict, ev, a, b, now_ms());
     run_out(o);
-    if (swallowed && (o.actions & VDA_UNLOCK_TYPING))
+    if (swallowed && (o.actions & VDA_UNLOCK_TYPING) && !g_sent)
         ai_chat_voice_status(ui_ai_panel(), "Not sent: check the text and press Send", 0);
     post_step();
 }
@@ -418,6 +426,7 @@ static void start_recording(void)
     const size_t draft = ai_chat_voice_live_begin(panel, &need_sep);
     g_draft_end = g_box_end = draft;
     g_send_pressed = 0;
+    g_sent = 0;
     free_transcript();
     if (g_live) {
         vt_init(&g_vt, draft, need_sep);   /* draft only says whether the box was empty */

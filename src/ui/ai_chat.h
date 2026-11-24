@@ -227,7 +227,8 @@ void ai_chat_voice_status(HWND panel, const char *text_utf8, int is_error);
  * ai_chat_send_user_message). Nothing heard says "Didn't catch that". A busy
  * panel turns SEND into FILL, with a status note. force_send: after the words
  * are in (FILL or APPEND too), send the box, the same busy rule applying. */
-void ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int auto_send, int force_send);
+/* Returns 1 when the box was sent. */
+int  ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int auto_send, int force_send);
 
 /* ---- Live dictation: the controller writes the words into the box as they arrive ---- */
 

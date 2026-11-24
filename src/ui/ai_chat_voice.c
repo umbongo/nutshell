@@ -171,16 +171,19 @@ void ai_chat_voice_status(HWND panel, const char *text, int is_error)
     SetTimer(panel, TIMER_VOICE_STATUS, VOICE_STATUS_MS, NULL);
 }
 
-void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send, int force_send)
+static size_t box_end_pos(HWND edit);
+
+int ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send, int force_send)
 {
+    int sent = 0;
     AiChatData *d = panel_data(panel);
-    if (!d || !d->hInput || !transcript) return;
+    if (!d || !d->hInput || !transcript) return 0;
     char *cur = ai_chat_input_text_utf8(d->hInput);
-    if (!cur) return;
+    if (!cur) return 0;
     const size_t cur_len = strlen(cur);
     const size_t cap = cur_len + strlen(transcript) + 4;
     char *out = (char *)malloc(cap);
-    if (!out) { secure_zero(cur, cur_len); free(cur); return; }
+    if (!out) { secure_zero(cur, cur_len); free(cur); return 0; }
 
     VoiceDelivery dv = voice_deliver(cur, transcript, auto_send, out, cap);
     /* VD_SEND is the auto-send rule; force_send is the controller's "send now"
@@ -193,8 +196,8 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send, in
     } else if (dv == VD_APPEND) {
         wchar_t *w = utf8_to_wide(out + cur_len);
         if (w) {
-            int len = GetWindowTextLengthW(d->hInput);
-            SendMessageW(d->hInput, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+            const size_t end = box_end_pos(d->hInput);   /* the control's own units */
+            SendMessageW(d->hInput, EM_SETSEL, (WPARAM)end, (LPARAM)end);
             SendMessageW(d->hInput, EM_REPLACESEL, TRUE, (LPARAM)w);
             wipe_free_wide(w);
         }
@@ -204,13 +207,13 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send, in
             SetWindowTextW(d->hInput, w);
             wipe_free_wide(w);
         }
-        int len = GetWindowTextLengthW(d->hInput);
-        SendMessageW(d->hInput, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+        (void)box_end_pos(d->hInput);   /* caret to the end */
     }
     if (dv != VD_NOTHING) {
         if (send && !busy_note) {
             /* Exactly the suggestion chips' path. */
             ai_chat_send_user_message(d);
+            sent = 1;
         } else if (busy_note) {
             ai_chat_voice_status(panel, busy_note, 0);
         }
@@ -220,6 +223,7 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send, in
     free(cur);
     secure_zero(out, cap);
     free(out);
+    return sent;
 }
 
 /* The end of the text in the control's own units: the caret goes to the end and
