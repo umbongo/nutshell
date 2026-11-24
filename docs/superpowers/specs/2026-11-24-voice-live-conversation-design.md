@@ -83,7 +83,9 @@ modes** **(maintainer)**:
   non-goal.
 - Voice spec §2 anti-goal "a microphone that is open when the maintainer is
   not talking to Nutshell": superseded in conversation mode only. There the
-  microphone stays open between turns, and §5.7 lists what keeps that safe.
+  microphone stays open while listening for a turn and while a reply is
+  spoken (closed while the assistant works or Nutshell is paused), and §5.7
+  lists what keeps that safe.
   Dictation keeps the anti-goal: the device is open only while recording.
 - Voice spec §2 non-goal "offline engines (whisper.cpp, SAPI)": SAPI comes
   into scope as the Windows speech engine for spoken replies (§8.2).
@@ -100,9 +102,16 @@ modes** **(maintainer)**:
   sounds during a conversation, as its Sound > Communications setting says
   (§7.3) **(critique)**. Dictation does not use that category and never ducks.
 - Voice spec §4.1 "While the assistant is busy ... voice is unavailable": in
-  conversation mode the microphone stays open while the assistant works, but
-  speech is not sent (§5.2). Starting a conversation still needs the
-  assistant idle.
+  conversation mode the conversation carries on while the assistant works,
+  with the microphone closed until listening or speaking resumes (§5.2)
+  **(critique round 2)**. Starting a conversation still needs the assistant
+  idle.
+- Voice spec §5 to §7, spoken replies: AI speech keeps that spec's G3, its own
+  provider setting (§8.4). What changes: it speaks in conversation mode only,
+  not behind a speaker toggle; the providers are OpenAI and Custom (an
+  OpenAI-compatible `/audio/speech`), with Groq's and Gemini's speech not in
+  this design; and the key is shared with speech-to-text when both use the
+  same provider **(critique round 2)**.
 
 **Non-goals (this design)**
 - A wake word, and listening while Nutshell is closed.
@@ -128,6 +137,11 @@ modes** **(maintainer)**:
   dictation when not recording.
 - Our own spoken reply transcribed and sent back as the maintainer's turn.
 - A loud noise (a door, a keyboard, a radio) sent as a turn **(critique)**.
+  Said plainly **(critique round 2)**: the detector cannot tell the
+  maintainer's voice from other voices in the room, so another person, or a
+  video playing, can be heard and sent. The safeguards are the pause while
+  Nutshell is in the background or behind a dialog (§5.4), the auto-approve
+  round cap that a voice turn does not reset (§5.2), and approvals.
 - Audio sent while Nutshell is in the background during a conversation
   **(critique)**.
 - A refused send that leaves the conversation waiting for a reply that will
@@ -201,7 +215,16 @@ Surveyed facts, file:line as of `main` eca4b37 (v1.2.94).
 - `ai_chat_send_user_message` returns `void`. It returns silently when busy
   or with no session (`ai_chat_send.c:575-576`), puts a "conversation full"
   line in the chat instead of sending (`:613`), and the stream launch
-  (`:671`) can fail with nothing reported to its caller.
+  (`:671`) can fail with nothing reported to its caller. On a send it resets
+  the auto-approve round counter (`ai_rounds_user_message`, `:628`); Stop
+  does too (`ai_chat.c:723`).
+- The busy callback `ai_chat_voice_busy_changed` fires at
+  `src/ui/ai_chat_dispatch.c:1304` and `:1350`, before the relaunch decision
+  at `:1313` and `:1365`, so "not busy" there does not mean the turn is over.
+- Voice errors go to the chat as a persistent status line; other statuses go
+  to the header (`ai_chat_voice_status`, `ai_chat_voice.c:156-170`).
+- A transcript result is a fixed `char text[4096]` (`VoiceSttResult`,
+  `src/ui/voice_stt_win.h:18`).
 - The input is a plain `EDIT` (`src/ui/ai_chat.c:389`) with a subclass
   (`src/ui/ai_chat_input.c:121`). It is shared by every tab.
 - A reply completes in `WM_AI_RESPONSE` (`ai_chat.c:1462`), with `wParam`
@@ -305,12 +328,13 @@ with the words arriving as they are spoken.
 |---|---|---|---|
 | Key or mic button again (Toggle), key up (Hold) | closed | kept, final text added | only with auto-send on |
 | Send or Enter | closed | kept, final text added | yes, after the final text (§4.3) |
-| Escape with focus in the AI panel (PR 2 onwards; anywhere in PR 1, as today) | closed | this recording's words removed; the draft is as it was | no |
+| Escape with focus in the AI panel | closed | this recording's words removed; the draft is as it was | no |
 | The 10-minute cap | closed | kept, final text added | as for a key press |
 | Nutshell loses activation, or a modal dialog opens | closed | kept | no, even with auto-send on |
 | Tab change, New chat, or the session closes | closed | kept | no, even with auto-send on |
 | Session lock (Win+L), PR 2 onwards | closed | kept | no |
 | Voice or AI switched off | closed at once | kept | no |
+| Settings saved with any voice setting changed (critique round 2) | closed at once | kept | no; the next press starts cleanly with the new settings |
 | Device lost | closed | kept | no; error shown |
 
 Notes:
@@ -318,7 +342,8 @@ Notes:
   deliberate cancel, as Escape discards a recording today. Every other end
   keeps what is in the box, because those words are already on screen and a
   draft is never thrown away by an accident such as Alt+Tab.
-- **Escape only in the panel** **(critique)**: from PR 2, Escape ends a
+- **Escape only in the panel** **(critique; in PR 1 since round 2, because
+  PR 1 ships 10-minute recordings)**: Escape ends a
   recording or a conversation only while keyboard focus is in the AI panel
   (or voice-owned UI such as the mic button). In the terminal, Escape goes to
   the terminal as normal and the recording carries on. Recordings are now up
@@ -341,6 +366,15 @@ Notes:
   with the provider's batch model (`voice_stt_model`) **(main session)**. Its
   result replaces this recording's live text in the box, so nothing is doubled
   **(spec author's call)**.
+- **Sized for the cap** **(critique round 2)**: the transcript result is
+  heap-allocated and sized for a 10-minute recording, at least 64 KB,
+  replacing `VoiceSttResult`'s fixed 4,096-byte `text`
+  (`voice_stt_win.h:18`).
+- The audio is kept until the fallback succeeds, then wiped
+  (`secure_zero`) and freed.
+- If the fallback fails, the live text already in the box stays, and the
+  error says so: "The recording could not be transcribed again: the text in
+  the box is what arrived live" (error, §13).
 - Status at the failure: "Live text stopped: the rest will appear when you
   stop" (or "Live text is unavailable: the words will appear when you stop" if
   it never opened) **(spec author's call)**.
@@ -366,7 +400,9 @@ Notes:
 - Settings > Voice gains "Mode: Dictation / Conversation", default Dictation
   **(main session)**.
 - In Conversation mode, pressing the key or the mic button starts a
-  conversation; pressing again ends it **(main session)**.
+  conversation; pressing it again ends it, except while a reply is being
+  spoken, when it stops the speech (§5.2) **(main session; the speaking case
+  critique round 2)**.
 - The key always toggles in Conversation mode. Hold to talk and the Mic start
   delay apply to Dictation only, and the Settings page greys them in
   Conversation mode **(spec author's call)**: a conversation lasts many turns,
@@ -378,17 +414,26 @@ Notes:
   started (`VoiceBinding`).
 - It cannot start while the assistant is busy, or with no session, with
   today's statuses (`voice_busy_text`).
-- **A draft in the box** at start becomes the beginning of the first turn: the
-  first turn sends the draft, a space, then the spoken words. The cue says
-  "Your text and what you say next will be sent after a pause."
-  **(spec author's call)**. Later turns start from an empty box.
-- The box does not accept typing for the whole conversation **(spec author's
-  call)**. To type, end the conversation.
+- **The box and typing** **(critique round 2, replacing the first draft's
+  "no typing for the whole conversation")**:
+  - The box is locked only while speech is being captured into it (Hearing
+    and Ending the turn, §5.2).
+  - It accepts typing at other times, Working and Paused included. A typed
+    message is sent with Enter as normal, and is a typed turn in every way
+    (it resets the round counter, §5.2).
+  - A draft in the box when a turn starts becomes the start of that turn: the
+    turn sends the draft, a space, then the spoken words. A draft left in the
+    box when Listening resumes therefore starts the next turn. The cue says
+    "Your text and what you say next will be sent after a pause."
 
 ### 5.2 The turn cycle
 
-A pure state machine in `src/core` drives it, with time injected, like
-`voice_ptt` **(spec author's call)**. Its states:
+The conversation and recording logic is a pure state machine in `src/core`,
+with time injected, like `voice_ptt`. It owns the states, every end and the
+calls to the resource ledger (§12), so all of it is tested natively;
+`voice_win.c` becomes thin Win32 glue that feeds it events and carries out
+its actions **(critique round 2, a refactor of today's controller)**. Its
+states:
 
 1. **Listening**: the mic is open, no speech yet. Header: "Listening… speak,
    then pause to send".
@@ -400,16 +445,23 @@ A pure state machine in `src/core` drives it, with time injected, like
    **(spec author's call)**. With a batch provider the turn's audio is uploaded
    as today. Header: "Sending…" or "Transcribing…". A short repeat or continue
    phrase is handled here, without a model turn (§10).
-4. **Working**: the turn has been sent. The mic stays open but speech is not
-   sent **(main session)**. Header: "Working… press Escape to stop".
-5. **Speaking**: the reply's prose is read aloud (§8). Speech from the
-   maintainer here is a cut-in (§9). Header: "Speaking… talk to cut in".
-6. Back to **Listening** when the reply has been read, cut short, or had
-   nothing to read.
+4. **Working**: the turn has been sent. **The capture device is closed**
+   **(critique round 2)**, so an approval card that waits holds no open mic.
+   Header: "Working… press Escape to stop".
+5. **Speaking**: the reply's prose is read aloud (§8). The capture device is
+   open again, for cutting in (§9). Header: "Speaking… talk to cut in".
+   - The voice key or the mic button stops the speech and returns to
+     Listening; the conversation carries on **(critique round 2)**.
+   - Escape stops the speech only, and only with focus in the AI panel
+     (§4.4).
+   - The panel's Stop stops the speech too.
+6. Back to **Listening** when the reply has been read, cut short, stopped, or
+   had nothing to read. The capture device reopens.
 
 And one state outside the cycle:
-- **Paused**: Nutshell is not the active app (§5.4). Header: "Paused while
-  Nutshell is in the background".
+- **Paused**: Nutshell is in the background, or behind one of its own modal
+  dialogs (§5.4). The capture device is closed. Header: "Paused while
+  Nutshell is in the background" (or "Paused while a dialog is open").
 
 **Sending a turn** **(critique)**:
 - The turn goes through the typed message's path, so every approval applies
@@ -417,17 +469,31 @@ And one state outside the cycle:
   it, **builder's call**) returns a status: sent, busy, no session,
   conversation full, launch failed.
 - Anything but "sent" leaves Working at once. A short phrase is spoken, "I
-  couldn't send that. The details are on screen.", and the header says why:
-  "The assistant is busy", "Connect a session first", "The conversation is
-  full: start a New Chat", "The request could not start". Then back to
-  Listening.
+  couldn't send that. The details are on screen.", and a note in the chat
+  says why: "The assistant is busy", "Connect a session first", "The
+  conversation is full: start a New Chat", "The request could not start".
+  Then back to Listening.
 - The full-conversation and launch-failure paths (`ai_chat_send.c:613`,
   `:671`) report back to the caller instead of only writing to the chat.
+- **The auto-approve round cap** **(critique round 2; main session's call,
+  for the maintainer to confirm)**: a voice turn does **not** reset the
+  auto-approve round counter (`ai_rounds_user_message`,
+  `ai_chat_send.c:628`). Only a typed message, Stop as today, or an on-screen
+  click on an approval card resets it. So once the usual cap of unattended
+  rounds is reached, an on-screen approval is needed again, however many
+  voice turns there were. An open mic in a room is not the maintainer typing.
+  The tool-round count still resets as for a typed message **(spec author's
+  call)**.
 
-**When Working ends** **(critique)**:
-- Working ends when the chat is idle: no request in flight, no tool round
-  pending, and no approval card waiting. It is not inferred from
-  `WM_AI_RESPONSE`'s `wParam`.
+**When Working ends** **(critique; event named in round 2)**:
+- Working ends on one **"chat turn idle"** notification from the chat. The
+  builder adds it. It fires only after the relaunch decision, when there is no
+  request in flight, no tool round about to relaunch and no card pending, and
+  it is posted (`PostMessage`), never called synchronously.
+- The existing busy callback is not enough: it fires at
+  `ai_chat_dispatch.c:1304` and `:1350`, before the relaunch decision at
+  `:1313` and `:1365`.
+- It is not inferred from `WM_AI_RESPONSE`'s `wParam`.
 - Then the prose of the last assistant reply that this turn produced is read
   (§8.1). With no prose, nothing is read and listening resumes.
 - A reply that ended in an error is not read in full. A short phrase is
@@ -437,10 +503,10 @@ And one state outside the cycle:
   **(main session: the final answer only)**.
 - **Safety timeout, tied to the chat state**: while Working, the controller
   rechecks the chat's idle state once a second. If the chat has been idle for
-  3 s and Working is still set (a missed message), Working ends as above. There
-  is no wall-clock limit while the chat is really busy, since commands may run
-  for minutes; Escape, Stop and the tool timeout (`ai_tool_timeout_sec`) cover
-  that **(spec author's call of the numbers)**.
+  3 s and no "chat turn idle" arrived (a lost message), Working ends as above.
+  There is no wall-clock limit while the chat is really busy, since commands
+  may run for minutes; Escape, Stop and the tool timeout
+  (`ai_tool_timeout_sec`) cover that **(spec author's call of the numbers)**.
 
 **Approval cards** **(critique)**:
 - A pending approval card of any kind is announced aloud once, whether it is
@@ -459,6 +525,11 @@ Other rules:
   pause had been reached **(spec author's call)**.
 - Send pressed while Listening or Hearing ends the turn at once, as if the
   pause had been reached **(spec author's call)**.
+- **Saving Settings** with any voice setting changed ends a running
+  conversation (or dictation recording); the next press starts cleanly with
+  the new settings **(critique round 2)**.
+- **Play sample** pressed during a conversation stops the conversation's
+  speech first **(critique round 2)**.
 
 ### 5.3 Speech and the pause
 
@@ -468,6 +539,7 @@ Other rules:
   over that floor, held for a minimum duration. A door, a click or a steady
   fan is not a turn. The builder tunes the numbers, with native tests for
   steady noise, clicks and speech.
+- It cannot tell the maintainer's voice from anyone else's (§2, anti-goals).
 - Turn taking is by pause, detected in Nutshell for every provider, so one
   setting means the same thing everywhere **(main session)**. Provider-side
   turn detection (Mistral's) is not used for this.
@@ -476,23 +548,25 @@ Other rules:
   turn needs at least about 300 ms of speech in total (`VOICE_SHORT_TAP_MS`),
   so a cough is not a turn.
 
-### 5.4 In the background
+### 5.4 Paused: in the background or behind a dialog
 
-**(critique)**:
-- When Nutshell stops being the active app (`WM_ACTIVATEAPP` with FALSE), the
-  conversation moves to Paused. No audio is sent and nothing is captured into
-  a turn: the audio thread drops the frames. Header: "Paused while Nutshell is
-  in the background".
+**(critique; dialogs and held replies critique round 2)**:
+- The conversation moves to Paused when Nutshell stops being the active app
+  (`WM_ACTIVATEAPP` with FALSE), or when the main window is disabled by one of
+  Nutshell's own modal dialogs (`WM_ENABLE` FALSE on the owner: Settings, a
+  password prompt, the shared notice dialog).
+- While Paused, the capture device is closed: no audio is captured or sent
+  **(spec author's call, consistent with Working)**.
 - A turn being heard at that moment is dropped, not sent, and its words are
-  cleared from the box **(spec author's call)**: the box is read-only during a
-  conversation, so they would otherwise ride along with the next turn.
-- A reply being spoken may carry on. Cutting in is off while Paused, since
-  nothing is captured.
-- Working carries on; when it ends, the reply is read even while Paused.
-- When Nutshell is active again, the conversation resumes in the state the
-  assistant is in (Listening, Working or Speaking).
-- Whether the capture device stays open while Paused (frames dropped) or is
-  closed and reopened is the **builder's call**, if reopening is quick.
+  cleared from the box **(spec author's call)**.
+- **Replies are not spoken while Paused**: they are held. On resume, the
+  first held reply is spoken if it is less than 30 s old; older ones stay on
+  screen only **(main session's call)**. A reply that was being spoken when
+  the pause began stops, and is held from its cut-off point under the same
+  rule **(spec author's call)**.
+- Working carries on while Paused; its reply is held as above.
+- When Nutshell is active and enabled again, the conversation resumes in the
+  state the assistant is in (Listening, Working or Speaking a held reply).
 
 ### 5.5 With a batch provider
 
@@ -504,29 +578,31 @@ while speaking. The Voice page says "Live text needs OpenAI or Mistral".
 
 ### 5.6 Every way a conversation ends
 
-| How | Assistant's work | Speech | Status |
+| How | Assistant's work | Speech | Note in the chat |
 |---|---|---|---|
-| Key or mic button again | left running; its reply is not read | stopped | none |
-| Escape with focus in the AI panel, or the panel's Stop | cancelled as today | stopped | none |
+| Key or mic button, except while Speaking | left running; its reply is not read | stopped | none |
+| Escape with focus in the AI panel, or the panel's Stop, except while Speaking | cancelled as today | stopped | none |
 | Closing the panel | as today | stopped | none |
 | Voice or AI switched off | as today for AI off | stopped | none |
+| Settings saved with any voice setting changed | left running | stopped | "Conversation ended: the voice settings changed" |
 | Session lock (Win+L) | left running | stopped | "Conversation ended: Windows was locked" |
 | 3 minutes with no turn sent | left running | stopped | "Conversation ended: nothing said for 3 minutes" |
 | Tab change, New chat, or the session closes | as today | stopped | "Conversation ended: the chat changed" |
 | Device lost | left running | stopped | the device error |
 
-- Every end closes the microphone at once, stops playback, cancels any speech
+- Every end closes the microphone at once, stops speech, cancels any speech
   request and closes the WebSocket (§12).
 - Words in the box from an unfinished turn stay there and are not sent
   **(spec author's call)**, as in dictation.
-- The first six rows are **(main session)**, with Escape limited to the panel
-  **(critique)**: in the terminal, Escape goes to the terminal.
+- Ending and error messages are persistent notes in the chat, as voice
+  errors are today (`ai_chat_voice.c:160-167`); the header carries transient
+  states only **(critique round 2)**.
+- The first four rows are **(main session)**, with Escape limited to the
+  panel **(critique)** and the speaking exception **(critique round 2)**.
 - The tab-change row is **(spec author's call)**, kept after the critique
   because the panel holds one chat per tab (§3): a turn must never reach
   another chat.
-- **A modal dialog does not end or pause a conversation** **(critique)**.
-  A dialog inside Nutshell (Settings, a password prompt) is still Nutshell;
-  leaving the app is covered by Paused (§5.4).
+- **A modal dialog pauses a conversation and does not end it** (§5.4).
 - **The 3-minute end** counts from the last turn sent, not from the last
   sound **(critique)**, so a noisy room cannot keep it alive. It is checked
   only while Listening or Paused, and counts from the later of the last turn
@@ -537,17 +613,20 @@ while speaking. The Voice page says "Live text needs OpenAI or Mistral".
 ### 5.7 The open-mic safeguards
 
 These are the conditions under which the voice spec's anti-goal is
-superseded **(main session, with the critique's additions)**:
+superseded **(main session, with the critiques' additions)**:
 - The mic button and the header show a clear Listening state for the whole
   conversation. The mic button keeps the recording look (`danger` fill) from
   start to end; its pulse follows the input level so it is visibly alive
   (**builder's call** within `ns_motion`).
 - It ends on a second press, Escape in the panel, the panel's Stop, closing
-  the panel, voice or AI off, session lock, and 3 minutes without a turn
-  (§5.6).
-- Nothing is sent while Nutshell is in the background (§5.4).
-- The adaptive detector keeps noise out of turns (§5.3); only speech is
-  streamed (§7.2); silence never leaves the machine.
+  the panel, voice or AI off, session lock, a voice settings change, and 3
+  minutes without a turn (§5.6).
+- The microphone is closed while the assistant works and while Paused (§5.2,
+  §5.4).
+- Voice turns do not reset the auto-approve round cap (§5.2).
+- Only speech is sent, plus at most the pre-roll before it and the hangover
+  after it (§7.2) **(critique round 2 wording)**. The adaptive detector keeps
+  noise out of turns (§5.3).
 - Nothing is recorded to disk; audio buffers are wiped with `secure_zero`.
 
 ## 6. Providers and protocols
@@ -560,11 +639,12 @@ superseded **(main session, with the critique's additions)**:
 | Mistral | yes, WebSocket | live | no (Voxtral TTS later) |
 | Groq | no, batch after stop | batch per turn | no |
 | Gemini | no (Gemini Live later) | batch per turn | no |
-| Custom | no | batch per turn | no |
+| Custom | no | batch per turn | yes, an OpenAI-compatible `/audio/speech` |
 
-"Provider" here is the effective speech-to-text provider: the Voice page's, or
-the AI assistant's when "Use current AI assistant" is ticked (`voice_stt_resolve`).
-Windows speech works with any of them.
+For speech-to-text, "provider" is the effective one: the Voice page's, or the
+AI assistant's when "Use current AI assistant" is ticked (`voice_stt_resolve`).
+AI speech has its own provider setting (§8.4). Windows speech works with any
+of them.
 
 ### 6.2 OpenAI live transcription
 
@@ -588,6 +668,8 @@ From the research; **verify every name at build time**:
   default.
 - Reported price about $0.017 a minute, against $0.003 for batch
   `gpt-4o-mini-transcribe`. Only speech is streamed, which keeps this down.
+- Its idle limit (how long a session may go without audio) is a must-verify
+  item (§16).
 
 ### 6.3 Mistral live transcription
 
@@ -601,10 +683,12 @@ From the research; **verify every name at build time**:
 - `language`: the two-letter code. `target_streaming_delay_ms`: 480
   recommended.
 - About $0.006 a minute.
-- Open questions for the builder (§16): whether audio goes as binary frames or
-  base64 JSON; how to get a segment's final text without closing the session;
-  whether gaps in the audio (only speech is sent) are accepted, and whether
-  the session survives `transcription.done`.
+- Must verify (§16): whether the session closes after `transcription.done`,
+  which would mean one session per utterance; its idle limit; its batch size
+  limit for the fallback (§4.5).
+- Open questions for the builder (§16): whether audio goes as binary frames
+  or base64 JSON; how to get a segment's final text; whether gaps in the
+  audio (only speech is sent) are accepted.
 
 ### 6.4 Batch providers
 
@@ -616,13 +700,17 @@ pseudo-live mode is a later item (§15).
 
 - **One opener for all voice traffic** **(critique)**: a single
   `voice_net_open(kind, ...)` in `src/ui` through which the batch STT upload,
-  the live WebSocket and the AI speech request all go. It makes the one
-  `voice_gate_on()` check and gets its session from `ns_winhttp_open`, the
-  existing network choke point (TLS 1.2 or newer, AI gate). That is the "one
-  gate per entry point" rule for voice's network side.
-- It increments a counter of voice network opens, which the self-report
-  prints, so a test can show that an idle launch with voice on opens none
-  (§14) **(critique)**.
+  the live WebSocket and the AI speech request all go, with the one
+  `voice_gate_on()` check.
+- **A voice-only WinHTTP session opener** sits under it **(critique round
+  2)**: `voice_winhttp_open`, which checks the voice gate, counts the open and
+  then calls `ns_winhttp_open`, the existing choke point (TLS 1.2 or newer, AI
+  gate). `ai_http_post_ct` (when called for voice) and the WebSocket path both
+  take their session from it, so a voice request that bypasses it shows up as
+  a missing count. How `ai_http_post_ct` is handed the voice session (an
+  `_ex` variant taking the session, say) is the **builder's call**.
+- The counter of voice network opens is printed by the self-report, so a test
+  can show that an idle launch with voice on opens none (§14).
 - Today's STT worker (`voice_stt_win.c`) moves onto it in PR 1.
 
 ### 6.6 The WebSocket transport
@@ -641,16 +729,22 @@ pseudo-live mode is a later item (§15).
   a connection is cancelled only by closing its handle **(critique)**. Must
   verify, with a fallback, in §16.
 - One connection per recording (dictation) or per turn (conversation),
-  opened at start and really cancelled at the end: the handle is armed on an
-  `AiNetCancel` and closed from the UI thread on stop, cancel, voice off or AI
-  off **(main session)**. In conversation mode a turn's connection opens at
-  the first speech of the turn; pre-roll and the audio until it is ready are
-  held locally **(spec author's call)**. Keeping one connection across turns
-  instead is the **builder's call** if latency needs it.
-- Threads: a sender fed from the audio thread through a locked queue, and a
-  receiver blocked in `WinHttpWebSocketReceive`. One thread with WinHTTP's
-  async mode instead is the **builder's call**. Events reach the UI thread as
-  a new `WM_VOICE_LIVE` message whose payload the receiver frees.
+  opened at start and really cancelled at the end, from the UI thread, on
+  stop, cancel, voice off or AI off **(main session)**. In conversation mode a
+  turn's connection opens at the first speech of the turn; pre-roll and the
+  audio until it is ready are held locally **(spec author's call)**. Keeping
+  one connection across turns instead is the **builder's call** if latency
+  needs it and the provider's idle limit allows.
+- **Two workers, one cancel** **(critique round 2)**: a sender fed from the
+  audio thread through a locked queue, and a receiver blocked in
+  `WinHttpWebSocketReceive`. Cancelling must wake both, by closing the
+  WebSocket handle from the UI thread. Today's `AiNetCancel` arms one handle
+  for one worker and is not reused as is: the builder defines a two-worker
+  cancel, or gives each worker its own handle. Must verify that closing the
+  handle wakes a blocked synchronous receive; the fallback is a receive loop
+  with short timeouts that checks a cancel flag (§16).
+- Events reach the UI thread as a new `WM_VOICE_LIVE` message whose payload
+  the receiver frees.
 - Provider messages are parsed in `src/core` into a small event set: text to
   append, tail to replace, segment complete, session ready, error, closed.
 
@@ -671,7 +765,8 @@ pseudo-live mode is a later item (§15).
 
 - Only speech is streamed **(main session)**. A gate opens on speech and
   sends the audio from about 300 ms before it (pre-roll), so the first
-  syllable is not cut. It closes after a hangover of silence.
+  syllable is not cut. It closes after a hangover of silence. Nothing else is
+  sent.
 - In dictation the gate is the fixed threshold of `PCM_SPEECH_RMS`: the
   maintainer has pressed the key, so a noise costs only a little streamed
   audio. In conversation mode it is the adaptive detector of §5.3
@@ -683,46 +778,57 @@ pseudo-live mode is a later item (§15).
   the plan **(main session)**; §16.
 - The whole recording is still kept in memory, for the batch fallback (§4.5)
   and for batch providers. A live recording's buffer is sized for 10 minutes
-  (19.2 MB), wiped and freed at the end.
+  (19.2 MB), and wiped and freed once the transcript is final (after the
+  fallback, when there is one).
 - The gate and pre-roll ring are pure code in `src/core`; the audio thread
   feeds frames to the live sender through a locked queue.
 
 ### 7.3 Conversation capture
 
-- The device is opened at conversation start and closed at its end
-  **(main session)**, not per turn.
+- The device is opened when a conversation starts listening and closed at
+  its end **(main session)**, and in between it is closed during Working and
+  Paused and reopened for Listening and Speaking **(critique round 2)**.
 - It is opened with the communications category for echo cancellation (§9.1):
   `IAudioClient2_SetClientProperties` with `AudioCategory_Communications`
   before `Initialize` **(main session)**. The device is the same as dictation's
   (the chosen endpoint, else the `eConsole` default) **(spec author's call)**,
   so the maintainer's choice of microphone holds in both modes.
 - **Ducking** **(critique)**: Windows may lower other sounds while a
-  conversation runs, as set in Control Panel > Sound > Communications ("When
-  Windows detects communications activity"). Nutshell does not claim to stop
-  it. The Voice page says, in Conversation mode: "Windows may lower other
-  sounds during a conversation. To stop that: Control Panel > Sound >
-  Communications > Do nothing." The builder verifies whether ducking happens
-  at all when the capture device is not the default communications device.
+  conversation's capture is open, as set in Control Panel > Sound >
+  Communications ("When Windows detects communications activity"). Nutshell
+  does not claim to stop it for other apps. The Voice page says, in
+  Conversation mode: "Windows may lower other sounds during a conversation.
+  To stop that: Control Panel > Sound > Communications > Do nothing." The
+  builder verifies whether ducking happens at all when the capture device is
+  not the default communications device.
+- **Nutshell's own speech** must not be ducked by its own capture. Whether it
+  is, is a must-verify item; the fallback is `IAudioSessionManager2` to reach
+  our process's session and `IAudioSessionControl2::SetDuckingPreference(TRUE)`
+  on it, the documented opt-out for a non-communications stream (§16)
+  **(critique round 2)**.
 - The buffer keeps only the current turn (and the pre-roll ring), never the
   whole conversation **(spec author's call)**.
 
-### 7.4 Playback (new)
+### 7.4 Playback
 
-- WASAPI render in shared mode on the default output (`eRender`, `eConsole`),
-  24 kHz mono 16-bit with auto-convert, event-driven, on the audio thread.
-  Both Windows speech (rendered to memory, §8.2) and AI speech arrive as 24 kHz
-  PCM, so there is one format.
-- The render client opens at conversation start and closes at its end; it is
-  stopped between replies **(spec author's call)**. Leaving it started and
-  silent is the **builder's call** if starting costs too much latency.
-- A play queue of PCM chunks, each with a map from its bytes to characters of
-  the spoken text (§10). The audio thread reports bytes played to the UI
-  (`VAM_PLAYED`, say) so the cut-off point is known.
-- The last reply's spoken text and its chunk boundaries are kept for repeat
-  and continue (§10) until the next reply or the end of the conversation.
-- A software gain on the render path, for ducking during a cut-in (§9.2).
-- Stop is immediate: the queue is dropped and the buffer flushed
-  (`IAudioClient_Stop` + `Reset`).
+- **PR 2: SAPI speaks directly to the default output device** **(critique
+  round 2, replacing the first draft's in-memory stream)**. Stop is
+  `SPF_PURGEBEFORESPEAK`; the position comes from word-boundary events; the
+  duck during a cut-in is `ISpVoice::SetVolume`. The echo reference is the
+  render endpoint's loopback, so playing through SAPI is equivalent for echo
+  cancellation. PR 2 has no render client of its own.
+- **PR 3: Nutshell's own render client**, for AI speech's PCM: WASAPI render
+  in shared mode on the default output (`eRender`, `eConsole`), 24 kHz mono
+  16-bit with auto-convert, event-driven, on the audio thread. A play queue of
+  PCM chunks, each with a map from its bytes to characters of the spoken text
+  (§10); the audio thread reports bytes played (`VAM_PLAYED`, say). A software
+  gain for the duck. Stop drops the queue and flushes the buffer
+  (`IAudioClient_Stop` + `Reset`). It opens with the first reply and closes at
+  the conversation's end; whether it stays started between replies is the
+  **builder's call**.
+- Both PRs keep the last reply's spoken text and where it was cut off, for
+  repeat and continue (§10), until the next reply or the end of the
+  conversation.
 
 ### 7.5 Hand-copied COM declarations
 
@@ -739,7 +845,7 @@ pseudo-live mode is a later item (§15).
 ## 8. Speech output
 
 PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
-**(critique, splitting the main session's PR 2)**.
+**(critique)**.
 
 ### 8.1 What is read
 
@@ -763,21 +869,17 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
 
 - "Speech: Windows speech (default) / AI speech" **(maintainer)**. The row
   appears in PR 3; PR 2 has Windows speech only.
-- SAPI 5: `CoCreateInstance(CLSID_SpVoice)` at conversation start, on a speech
-  thread (MTA) **(main session; thread spec author's call)**. COM maps
+- SAPI 5: `CoCreateInstance(CLSID_SpVoice)` when a conversation starts, on a
+  speech thread (MTA) **(main session; thread spec author's call)**. COM maps
   `sapi.dll`; the creation site notes it in the DLL record, as
   `voice_audio_win.c` does for `mmdevapi.dll`.
-- Output goes to an in-memory SAPI stream at 24 kHz 16-bit mono, which
-  Nutshell plays through its own render client (§7.4) **(main session)**. So
-  stop is immediate and the echo reference is our own endpoint.
-  `CreateStreamOnHGlobal` (ole32, already linked) under an `ISpStream`
-  needs no new DLL.
+- It speaks to the default output device (§7.4) **(critique round 2)**.
 - Text goes in with `SPF_ASYNC | SPF_IS_NOT_XML` **(spec author's call)**: a
   reply can never steer SAPI with XML tags.
-- Word-boundary events give each word's character offset and its audio stream
-  offset, which is what §10 needs.
-- Stopping: drop the render queue, then purge SAPI (`SPF_PURGEBEFORESPEAK` on
-  an empty speak).
+- Word-boundary events give each word's character offset, which is what §10
+  needs.
+- Stopping: `SPF_PURGEBEFORESPEAK` on an empty speak. Its latency, and
+  `SetVolume` taking effect mid-utterance, are must-verify items (§16).
 - A speed setting (SAPI rate, -10 to 10, default 0) is optional: the
   **builder's call** **(main session)**.
 
@@ -809,33 +911,46 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
   `sapi.dll`. A voice in both lists is shown once (**builder's call** which
   token wins).
 - The choice rule is a pure function in `src/core` over that list.
-- **When the voice is not a British woman's** **(critique)**: if the voice in
-  use (Automatic or chosen) is not an English (UK) female voice, a one-line
-  note appears in the panel at the conversation's first spoken reply, once per
-  launch: "Speaking with Microsoft Zira: no English (UK) woman's voice is
-  installed. Settings > Voice says how to add one." The Voice page shows the
-  same fact and the way to add the voices: "To add the English (UK) voices:
-  Windows Settings > Time & language > Speech > Add voices > English (United
-  Kingdom)." (verify the path on Windows 10 and 11).
+- **With no British woman's voice installed** **(critique round 2; main
+  session's call, for the maintainer to confirm)**: Windows speech stays the
+  default. At the first spoken reply, once per launch, and only when
+  Automatic resolved to a voice that is not an English (UK) woman's
+  **(spec author's call of that condition)**, the shared notice dialog (not a
+  `MessageBox`) says: "Windows has no British English woman's voice
+  installed, so replies use <voice>. To get one, add English (United Kingdom)
+  under Windows Settings > Time & language > Speech, or choose AI speech in
+  Settings > Voice." The dialog is modal, so the conversation is Paused while
+  it shows and the reply is held (§5.4); it is spoken when the dialog closes.
+  The Voice page shows the same fact. Verify the Windows Settings path on
+  Windows 10 and 11.
 - **Play sample** speaks "Hello. This is how replies will sound." with the
   chosen engine and voice. It is enabled only in Conversation mode, loads
   `sapi.dll` (or, in PR 3, makes one speech request) on the click, and
-  releases it when done **(spec author's call)**.
+  releases it when done **(spec author's call)**. During a conversation it
+  stops the conversation's speech first (§5.2).
 
 ### 8.4 AI speech (PR 3)
 
-- OpenAI `gpt-4o-mini-tts`, or its current successor **(main session)**.
-  PR 3 checks its retirement date (reported early 2027), its successor, its
-  2,000-token input limit and its price.
+- **Its own provider setting**, as the voice spec's G3 says **(critique
+  round 2, replacing the main session's "uses the voice provider's key,
+  OpenAI only")**:
+  - Speech provider: OpenAI, or Custom (an OpenAI-compatible server; Base URL,
+    with `{base}/audio/speech`, normalised by `voice_base_url_normalise`, and
+    the existing clear-text-URL warning).
+  - Key: when the speech provider is the same as the effective speech-to-text
+    provider (OpenAI with OpenAI; Custom with the same base URL), that key is
+    reused and no second key is asked for. Otherwise the speech key is its
+    own DPAPI secret, `tts_api_key` with its `*_enc_preserved` twin, as voice
+    spec §7 defined it.
+  - The §2 supersede list records what differs from the voice spec.
+- OpenAI's model is `gpt-4o-mini-tts`, or its current successor
+  **(main session)**. PR 3 checks its retirement date (reported early 2027),
+  its successor, its 2,000-token input limit and its price.
 - `POST {base}/audio/speech` with JSON `model`, `voice`, `input`,
   `instructions` and `response_format: "pcm"` (24 kHz mono PCM16), streamed
-  through `ai_http_post_stream`, opened by `voice_net_open` (§6.5), into the
-  play queue as chunks arrive. Each chunk of §8.1 is one request.
-- Uses the voice provider's key (§6.1), so it needs the effective
-  speech-to-text provider to be OpenAI. Otherwise the choice is disabled with
-  the reason "AI speech needs OpenAI as the speech-to-text provider"
-  **(main session)**. A custom OpenAI-compatible server is treated as not
-  OpenAI here **(spec author's call)**; it is a later item.
+  through `ai_http_post_stream`, opened through `voice_net_open` (§6.5), into
+  Nutshell's own play queue (§7.4) as chunks arrive. Each chunk of §8.1 is one
+  request.
 - Settings **(main session)**:
   - "AI voice": an editable combo of the preset voices (verify the list at
     build time). Default `coral`, a female-sounding voice that takes accent
@@ -845,18 +960,19 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
     **(spec author's call, following voice spec §6's editable-combo rule)**.
   - "Accent and style": free text, default "Speak as an English woman with a
     standard British accent (received pronunciation), clear and natural."
+    A custom server may ignore `instructions`.
 - Bytes played map to characters in proportion within the chunk (§10).
 - About $0.015 a minute, reported; PR 3 rechecks.
 
 ### 8.5 Speech fallback
 
 - AI speech fails for a reply (network, HTTP error, unavailable): the rest of
-  that reply is read with Windows speech, and the status says "AI speech
+  that reply is read with Windows speech, and the header says "AI speech
   failed: using Windows speech" **(spec author's call)**. The next reply tries
   AI speech again. (PR 3.)
 - Windows speech cannot start (no voice, SAPI error): the reply is not read,
-  the status says "Could not speak the reply: it is on screen", and listening
-  resumes **(spec author's call)**. The conversation does not end.
+  a note in the chat says "Could not speak the reply: it is on screen", and
+  listening resumes **(spec author's call)**. The conversation does not end.
 
 ## 9. Echo cancellation and cutting in
 
@@ -870,19 +986,22 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
   22000) and how widely devices offer echo cancellation are must-verify items
   (§16).
 - On build 22621 and later, `IAcousticEchoCancellationControl` sets the
-  reference render endpoint to the one Nutshell plays on. The reference is
-  that endpoint's loopback, so our own playback is cancelled.
+  reference render endpoint to the default output, which SAPI (PR 2) and our
+  render client (PR 3) both play on. The reference is that endpoint's
+  loopback, so our own speech is cancelled.
 - MinGW's headers may lack these interfaces. Their GUIDs and vtables are
   copied locally, as `voice_audio_win.c` already does for the device
   enumerator (no `libuuid`), each guarded as §7.5 says.
 - **Without echo cancellation** (Windows 10, some drivers, or not verified):
   the half-duplex fallback. While Speaking, the capture is used only to detect
-  a cut-in, at a raised threshold, and nothing heard is transcribed until the
-  cut-in has stopped the reply **(main session's raised threshold; half-duplex
-  wording spec author's call)**. The Voice page says "Your microphone reports
-  no echo cancellation: a headset works best". The report is made at the first
-  conversation and kept for the Settings page until the next one **(spec
-  author's call)**, so Settings itself opens no capture stream.
+  a cut-in, at a raised threshold. **Audio from before the cut-in is
+  confirmed is not included in the turn** **(critique round 2)**: the turn
+  starts after stage 2 (§9.2), so the first words said over the reply may be
+  lost, but our own speech is never transcribed. The Voice page says "Your
+  microphone reports no echo cancellation: a headset works best". The report
+  is made at the first conversation and kept for the Settings page until the
+  next one **(spec author's call)**, so Settings itself opens no capture
+  stream.
 - A software fallback (speexdsp) for Windows 10 and devices without echo
   cancellation is later (§15).
 
@@ -890,12 +1009,13 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
 
 Two stages while Speaking **(main session)**:
 1. **Duck**: sustained voice, as the adaptive detector judges it and well
-   over the echo estimate, for about 200 ms lowers our playback (a software
-   gain, about -15 dB, **builder's call**). The STT connection opens now, so
-   the pre-roll holds the first words.
-2. **Stop**: about 400 ms of voice stops the reply. Playback and speech
-   synthesis stop at once, any speech request is cancelled, and the cut-off
-   point is recorded (§10). The state moves to Hearing.
+   over the echo estimate, for about 200 ms lowers our speech
+   (`ISpVoice::SetVolume` in PR 2, the render gain in PR 3; about -15 dB,
+   **builder's call**). With echo cancellation, the STT connection opens now,
+   so the pre-roll holds the first words.
+2. **Stop**: about 400 ms of voice stops the reply. Speech stops at once, any
+   speech request is cancelled, and the cut-off point is recorded (§10). The
+   state moves to Hearing.
 
 - If the voice stops before stage 2 (a cough, a word to someone else), the
   reply un-ducks within about 300 ms and carries on **(spec author's call)**.
@@ -907,18 +1027,24 @@ Two stages while Speaking **(main session)**:
 
 ### 9.3 Listening during speaking
 
-The capture stream is never paused while Speaking (except while Paused,
-§5.4). Speech that does not reach stage 2 is not sent.
+The capture stream is open while Speaking (not while Paused, §5.4). Speech
+that does not reach stage 2 is not sent.
 
 ### 9.4 The echo filter
 
-**(critique, replacing the first draft's looser rule)**:
-- It applies only while Speaking and for about 2 s after playback ends. At
-  any other time no transcript is dropped as echo.
-- A transcript is echo only on a near-exact match. Both are normalised (lower
-  case, no punctuation, words). The transcript's words must form a contiguous
-  run of at least 4 words inside the last spoken sentence, and that run must
-  cover at least 90% of the transcript's words.
+**(critique, rule revised in round 2)**:
+- It applies only during playback and for 2 s after it ends. At any other
+  time no transcript is dropped as echo.
+- It matches against the **whole last spoken reply**, not one sentence. Both
+  are normalised: lower case, no punctuation, split into words.
+- A transcript is dropped when it is covered by runs of 3 or more contiguous
+  words that also appear in the reply, and those runs together cover 90% or
+  more of the transcript's words.
+  - Example: the reply said "...the C drive has 120 GB free..."; the
+    transcript "120 GB free" is one 3-word run covering 100%: dropped.
+  - Example: the transcript "yes, check the D drive". Even if the reply held
+    the run "check the D drive", it covers 4 of the transcript's 5 words,
+    80%: kept.
 - A drop is visible: the header says "Ignored the assistant's own voice". The
   transcript is logged only through `DLOG_CONTENT`.
 - Pure code in `src/core` with native tests (§14).
@@ -926,31 +1052,36 @@ The capture stream is never paused while Speaking (except while Paused,
 ## 10. Repeat and continue
 
 **(critique, replacing the main session's "ordinary requests to the
-assistant, not local commands")**:
+assistant, not local commands"; matcher widened in round 2)**:
 - Nutshell records how far the spoken reply got:
-  - Windows speech: the word-boundary event of the last word whose audio was
-    played.
+  - Windows speech: the word-boundary event of the last word spoken.
   - AI speech (PR 3): bytes played, mapped to characters in proportion within
     the chunk.
 - **A short repeat or continue phrase is handled by Nutshell**, with no model
   turn. The phrases: "repeat", "repeat that", "say that again", "again",
-  "continue", "carry on", "go on", "keep going", "what did you say". A match
-  needs the whole utterance to be one of them, 4 words or fewer, with case
-  and punctuation ignored.
+  "continue", "carry on", "go on", "keep going", "what did you say".
+  - Polite forms count: an optional leading "please", "can you", "could you"
+    or "can you please", and an optional trailing "please".
+  - The whole utterance must be one of these, 6 words or fewer, with case and
+    punctuation ignored.
   - **Repeat** ("repeat", "repeat that", "say that again", "again", "what did
     you say") replays the last spoken reply from its start.
   - **Continue** ("continue", "carry on", "go on", "keep going") resumes the
     last reply from where it was cut off.
-- The phrase is not added to the chat. The header says "Repeating" or
-  "Carrying on" **(spec author's call)**.
-- With nothing to act on, the phrase goes to the model as an ordinary
-  message: "continue" when the last reply was read to the end, either phrase
-  when nothing has been spoken in this conversation **(spec author's call)**.
-- Anything else goes to the model as an ordinary message, with no hidden
-  note about where speech stopped.
+- **It acts locally only when** a spoken reply exists from the last 5
+  minutes, and that reply did not end with a question. "Carry on" after
+  "Shall I delete them?" is an answer, so it goes to the model.
+  Otherwise, and for "continue" when the last reply was read to the end, the
+  phrase goes to the model as an ordinary message **(critique round 2)**.
+- The phrase is not added to the chat when handled locally. The header says
+  "Repeating" or "Carrying on" **(spec author's call)**.
+- Anything else goes to the model as an ordinary message.
+- **No hidden cut-off note is sent to the model** **(critique round 2:
+  the proposal was rejected)**: voice never builds turn content itself
+  (§2, anti-goals).
 - Replay re-synthesises from the kept text (§7.4); caching the last reply's
-  PCM instead is the **builder's call**.
-- The phrase matcher, and the mapping from bytes played to a character
+  PCM in PR 3 instead is the **builder's call**.
+- The phrase matcher, and the mapping from the speech position to a character
   offset, are pure code in `src/core` with native tests.
 
 ## 11. Settings and the upgrade notice
@@ -965,7 +1096,8 @@ assistant, not local commands")**:
 - **The live note**: with Groq, Gemini or a custom URL, a dim line under Model
   says "Live text as you speak needs OpenAI or Mistral" **(main session)**.
 - The Mode row's help text says a live recording stops by itself after 10
-  minutes and a batch one after 60 seconds.
+  minutes and a batch one after 60 seconds, and that Escape cancels only with
+  the AI panel focused.
 - Upgrade notice line: "Voice: live speech-to-text model — the provider's
   default".
 
@@ -982,11 +1114,11 @@ New rows, in this order **(spec author's call)**:
 - A new section **"Conversation"** after Microphone, greyed in Dictation mode:
   - Pause before sending (0.5 to 3.0 s, default 1.2; an edit in tenths or a
     slider, **builder's call** within the design system).
-  - Windows voice (drop-down, §8.3), with the English (UK) note when needed.
+  - Windows voice (drop-down, §8.3), with the English (UK) line when needed.
   - Speed, if the builder adds it.
   - Play sample.
-  - The echo-cancellation note when the last conversation found none (§9.1).
-  - The ducking note (§7.3).
+  - The echo-cancellation line when the last conversation found none (§9.1).
+  - The ducking line (§7.3).
 
 New keys (`Settings`, loaded and saved in `loader.c`, each with a
 `settings_help` entry and a `k_setting_keys` row):
@@ -995,36 +1127,44 @@ New keys (`Settings`, loaded and saved in `loader.c`, each with a
 |---|---|---|
 | `voice_mode` | `"dictation"` | Voice: mode — Dictation, so your words wait in the box for you to press Send |
 | `voice_pause_ms` | 1200 | Voice: pause before sending — 1.2 seconds |
-| `voice_windows_voice`, `voice_windows_voice_name` | empty (Automatic) | Voice: Windows voice — Automatic (an English (UK) woman's voice if one is installed) |
+| `voice_windows_voice` | empty (Automatic) | Voice: Windows voice — Automatic (an English (UK) woman's voice if one is installed) |
+| `voice_windows_voice_name` | empty | Voice: Windows voice name — none, as Automatic is used |
 | `voice_speech_rate` (only if built) | 0 | Voice: speed — normal |
+
+`voice_windows_voice_name` gets its own line, following the precedent of
+`voice_input_device_name` (`loader.c:536-537`) **(critique round 2)**.
 
 ### 11.3 PR 3
 
-- Under Conversation: Speech (Windows speech / AI speech), then AI voice, AI
-  speech model and Accent and style (multi-line edit). Disabled with the
-  reason when AI speech is unavailable (§8.4), and greyed while Speech is
-  Windows speech.
+- Under Conversation: Speech (Windows speech / AI speech), then Speech
+  provider (OpenAI / Custom), Base URL (Custom only), API key (shown only when
+  it is not shared with speech-to-text, §8.4), AI voice, AI speech model and
+  Accent and style (multi-line edit). Greyed while Speech is Windows speech.
 
 | Key | Default | Notice line |
 |---|---|---|
 | `voice_speech_engine` | `"windows"` | Voice: speech — Windows speech |
+| `voice_tts_provider` | `"openai"` | Voice: speech provider — OpenAI |
+| `voice_tts_url` | empty | Voice: speech URL — none |
+| `tts_api_key` (and `tts_api_key_enc_preserved`) | empty | Voice: speech API key — none; the speech-to-text key is used when the provider is the same |
 | `voice_ai_voice` | `"coral"` | Voice: AI voice — coral |
 | `voice_ai_tts_model` | empty (`gpt-4o-mini-tts`) | Voice: AI speech model — the provider's default |
 | `voice_ai_style` | the text in §8.4 | Voice: accent and style — an English woman with a standard British accent |
 
-### 11.4 Both
+### 11.4 All three
 
 - The notice values come from each entry's `default_text`, as the notice does
   today (`notice.c:266`). With the voice switch itself new, all of them fold
-  into the one "Voice" line, as today. Each PR adds at most four lines, well
-  under `NOTICE_ITEMS_MAX` (24).
+  into the one "Voice" line, as today. No PR adds more than seven lines, under
+  `NOTICE_ITEMS_MAX` (24).
 - An older exe drops the new keys; the next launch adds them and says so.
   That is accepted (CLAUDE.md, "Optional features").
-- **Shortcuts** (`src/core/shortcuts.c:71-74`, README block regenerated, PR
-  2): the voice-key row reads "Talk to the assistant: press, speak, press
-  again (in Conversation mode, press to start and end a conversation)"; the
-  Escape row reads "Cancel a voice recording or end a conversation", with the
-  condition "AI panel focused".
+- **Shortcuts** (`src/core/shortcuts.c:71-74`, README block regenerated): in
+  PR 1 the Escape row gains the condition "AI panel focused". In PR 2 the
+  voice-key row reads "Talk to the assistant: press, speak, press again (in
+  Conversation mode, press to start and end a conversation, or to stop a
+  spoken reply)"; the Escape row reads "Cancel a voice recording, stop a
+  spoken reply or end a conversation".
 
 ## 12. Optional features: what loads when
 
@@ -1039,71 +1179,84 @@ extends to each mode:
 | Voice on, idle (either mode) | the audio thread and device enumerator (as today); no voice network opens |
 | Dictation, batch recording | + the capture device (as today) |
 | Dictation, live recording | + the WebSocket (new WinHTTP entry points), its sender and receiver threads |
-| Conversation active | + capture with the communications category and echo-cancellation objects, the render client, the speech thread with `SpVoice` (Windows speech), the WebSocket per turn (live providers), one speech request per chunk (AI speech, PR 3) |
+| Conversation, Listening or Speaking | + capture with the communications category and echo-cancellation objects, the speech thread with `SpVoice` (Windows speech), the WebSocket per turn (live providers); in PR 3, the render client and one speech request per chunk (AI speech) |
+| Conversation, Working or Paused | as above but with the capture device closed and no WebSocket |
 | Any recording or conversation (PR 2 onwards) | + the session-lock registration (`wtsapi32.dll`) |
 | Settings > Voice open | no `sapi.dll` (voices read from the registry); Play sample loads it on the click only |
 
-- **sapi.dll** is requested only at conversation start with Windows speech,
-  and by Play sample **(main session)**. Never in Dictation mode.
+- **sapi.dll** is requested only when a conversation starts with Windows
+  speech, and by Play sample **(main session)**. Never in Dictation mode.
 - **Session lock**: `WTSRegisterSessionNotification` on the main window,
   through a delay-loaded `wtsapi32.dll` (a new `wtsapi32.def`) **(main
   session)**. Registered when a recording or conversation starts and
   unregistered when it ends **(spec author's call)**, so the DLL is requested
   only once voice is actually used. `WTS_SESSION_LOCK` ends a dictation
   recording (closing notes item (u)) and a conversation.
-- **One gate per entry point**: `voice_net_open` for every voice network
-  request (§6.5) **(critique)**, and one `SpVoice` constructor, each refusing
-  unless `voice_gate_on()`.
+- **One gate per entry point**: `voice_net_open` over `voice_winhttp_open`
+  for every voice network request (§6.5) **(critique)**, and one `SpVoice`
+  constructor, each refusing unless `voice_gate_on()`.
 - **A resource ledger** in `src/core` **(critique)**: acquire and release
-  counts for the capture client, the render client, `SpVoice`, the WebSocket,
-  speech requests, the session-lock registration and the voice threads. The
-  Win32 code calls it at each acquire and release. Tests use it to show that
-  every end of a conversation returns it to zero (§14).
+  counts for the capture client, `SpVoice`, the WebSocket, speech requests,
+  the render client (PR 3), the session-lock registration and the voice
+  threads. The Win32 code calls it at each acquire and release; the
+  `src/core` controller (§5.2) checks it. Tests use it to show that every end
+  of a conversation returns it to zero (§14).
+- **The self-report lists the modules actually loaded** **(critique round
+  2)**, not only the DLLs our code asked for: `EnumProcessModules` (psapi,
+  delay-loaded) or Toolhelp (`CreateToolhelp32Snapshot`, kernel32), the
+  **builder's call**. So a DLL mapped by a path the DLL record does not see
+  (COM mapping `sapi.dll`, say) still shows.
 - **Teardown at the end of a conversation, and at voice or AI off**, at once:
-  - playback stopped, the queue dropped, SAPI purged and `SpVoice` released;
+  - speech stopped (`SPF_PURGEBEFORESPEAK`) and `SpVoice` released; in PR 3
+    the play queue dropped and the render client released;
   - any speech request cancelled by closing its handle (`AiNetCancel`);
-  - the WebSocket closed the same way;
+  - the WebSocket closed from the UI thread, waking both its workers (§6.6);
   - the live and speech threads joined (bounded, as `voice_audio_stop`'s 3 s);
-  - the echo-cancellation objects, render client and capture client released,
-    the device closed;
+  - the echo-cancellation objects and capture client released, the device
+    closed;
   - the session-lock registration removed.
   Windows may keep the DLLs mapped until exit; the claim covers our code.
 
 ## 13. Error states and their wording
 
-All in the panel header's status slot, the panel's error style where marked
-"error" **(spec author's call for each wording, except where marked
-critique)**:
+**Where messages go** **(critique round 2)**: conversation-ending and error
+messages are persistent notes in the chat, as voice errors are today
+(`ai_chat_voice.c:160-167`). The header carries transient states only (the
+cues of §5.2 and short statuses).
 
-| When | Text |
-|---|---|
-| Live connection never opened | Live text is unavailable: the words will appear when you stop |
-| Live connection dropped | Live text stopped: the rest will appear when you stop |
-| Live key rejected, rate limit, provider error | today's `voice_stt_http_error` texts (error) |
-| Batch fallback failed | today's transcription errors (error) |
-| Send pressed, final text late | The last words did not arrive. Check the text and press Send. |
-| Empty turn | Didn't catch that |
-| Turn dropped as echo (critique) | Ignored the assistant's own voice |
-| Turn not sent (critique) | The assistant is busy / Connect a session first / The conversation is full: start a New Chat / The request could not start (error) |
-| Nutshell in the background (critique) | Paused while Nutshell is in the background |
-| Conversation ended by lock | Conversation ended: Windows was locked |
-| Conversation ended by silence | Conversation ended: nothing said for 3 minutes |
-| Conversation ended by a chat change | Conversation ended: the chat changed |
-| Repeat or continue handled | Repeating / Carrying on |
-| AI speech failed (PR 3) | AI speech failed: using Windows speech |
-| No speech at all | Could not speak the reply: it is on screen (error) |
-| Device lost, privacy block, no microphone | today's texts (error) |
-| Start refused | today's `voice_busy_text` |
+Each wording is the **spec author's call**, except where marked:
 
-Panel note, once per launch (critique): "Speaking with <voice>: no English
-(UK) woman's voice is installed. Settings > Voice says how to add one."
+| When | Where | Text |
+|---|---|---|
+| Live connection never opened | header | Live text is unavailable: the words will appear when you stop |
+| Live connection dropped | header | Live text stopped: the rest will appear when you stop |
+| Live key rejected, rate limit, provider error | chat | today's `voice_stt_http_error` texts |
+| Batch fallback failed (critique round 2) | chat | The recording could not be transcribed again: the text in the box is what arrived live |
+| Send pressed, final text late | chat | The last words did not arrive. Check the text and press Send. |
+| Empty turn | header | Didn't catch that |
+| Turn dropped as echo (critique) | header | Ignored the assistant's own voice |
+| Turn not sent (critique) | chat | The assistant is busy / Connect a session first / The conversation is full: start a New Chat / The request could not start |
+| Paused (critique) | header | Paused while Nutshell is in the background / Paused while a dialog is open |
+| Conversation ended by a settings change (critique round 2) | chat | Conversation ended: the voice settings changed |
+| Conversation ended by lock | chat | Conversation ended: Windows was locked |
+| Conversation ended by silence | chat | Conversation ended: nothing said for 3 minutes |
+| Conversation ended by a chat change | chat | Conversation ended: the chat changed |
+| Repeat or continue handled | header | Repeating / Carrying on |
+| AI speech failed (PR 3) | header | AI speech failed: using Windows speech |
+| No speech at all | chat | Could not speak the reply: it is on screen |
+| Device lost, privacy block, no microphone | chat | today's texts |
+| Start refused | header | today's `voice_busy_text` |
+
+The notice dialog, once per launch (critique round 2; main session's call):
+"Windows has no British English woman's voice installed, so replies use
+<voice>. To get one, add English (United Kingdom) under Windows Settings >
+Time & language > Speech, or choose AI speech in Settings > Voice."
 
 Settings > Voice lines: "Live text as you speak needs OpenAI or Mistral";
-"AI speech needs OpenAI as the speech-to-text provider" (PR 3); the English
-(UK) voices line (§8.3); "Your microphone reports no echo cancellation: a
-headset works best"; "Windows may lower other sounds during a conversation.
-To stop that: Control Panel > Sound > Communications > Do nothing."; "The
-saved voice is not installed on this PC: using Automatic".
+the English (UK) voices line (§8.3); "Your microphone reports no echo
+cancellation: a headset works best"; "Windows may lower other sounds during a
+conversation. To stop that: Control Panel > Sound > Communications > Do
+nothing."; "The saved voice is not installed on this PC: using Automatic".
 
 Spoken phrases: "I need your approval to run a command."; "I need your
 approval to write a file."; "I need your approval for the next step."; "I
@@ -1112,14 +1265,16 @@ details are on screen."; "The code is on screen."; "The table is on screen."
 
 ## 14. Testing
 
-**Native (`src/core`, `make test`)** **(main session's list, with the
-critique's additions)**:
+**Native (`src/core`, `make test`)** **(main session's list, with both
+critiques' additions)**:
 - OpenAI and Mistral event parsers: deltas, revisions, segment complete,
   errors, unknown events ignored, malformed JSON.
 - The message builders: session configuration (language, prompt, model), the
   audio append with base64, commit; CR/LF and quote escaping.
 - The live-transcript buffer: committed text plus revisable tail, append-only
   mode, the draft prefix and one space, replacing the tail, Escape's removal.
+- The transcript result for a 10-minute recording (over 4,096 bytes, up to
+  the 64 KB minimum) and the fallback keeping the live text when it fails.
 - The 16-to-24 kHz resampler: length, DC, a tone, no overflow.
 - The streaming speech gate (dictation): pre-roll length, hangover, a cough,
   steady noise under the threshold.
@@ -1128,62 +1283,86 @@ critique's additions)**:
   speech after the noise floor changes.
 - The pause endpointer at 0.5, 1.2 and 3 s, the 300 ms minimum, the 2-minute
   turn cap.
-- The conversation state machine: every state, every end in §5.6, Paused on
-  deactivation and back, the turn dropped on deactivation, Send in Listening
-  and Hearing, each send status leaving Working, Working ending on chat idle
-  and on the safety timeout, the 3-minute end counted from the last turn sent
-  (and from the assistant going idle), approval announcements for each card
-  kind, error replies.
+- **The `src/core` controller** (§5.2), for dictation and conversation:
+  every state; every end in §4.4 and §5.6, each followed by the ledger at
+  zero; the capture closed in Working and Paused and reopened for Listening
+  and Speaking; Paused on deactivation and on `WM_ENABLE` FALSE and back; the
+  turn dropped on pause; held replies spoken on resume under 30 s and not
+  over; the key, Escape and Stop while Speaking stopping speech only; Send in
+  Listening and Hearing; each send status leaving Working; Working ending on
+  "chat turn idle" and on the safety timeout, never on a busy-changed alone;
+  the 3-minute end; a settings change ending a conversation and a recording;
+  Play sample stopping speech; approval announcements for each card kind;
+  error replies; typing allowed in Working and Paused and locked in Hearing;
+  a draft at Listening starting the next turn.
+- **The round cap**: a voice turn does not reset the auto-approve round
+  counter; a typed message and an approval click do (portable parts in
+  `src/core`, the rest in `wintest`).
 - The Escape rule: `voice_ptt_step` with Escape in and out of the panel, in
   dictation and conversation; out of the panel it neither discards nor is
   consumed.
 - The cut-in detector: duck at about 200 ms, stop at about 400 ms, un-duck
-  after a cough, with and without echo cancellation (half-duplex).
+  after a cough, with and without echo cancellation; in half-duplex, no audio
+  from before stage 2 in the turn.
 - The speakable-text extractor: Markdown stripped, code blocks and tables
   replaced once each, link text without URL, inline code, thinking skipped,
   a reply that is only code.
 - The sentence chunker against the 200 and 1,000 character targets.
-- The cut-off mapping: SAPI word offsets, proportional bytes.
-- The repeat and continue matcher: each phrase, case and punctuation, five
-  words never matching, a phrase inside a longer request never matching,
-  "continue" with no cut-off pending.
-- The echo filter: dropped only while Speaking and within 2 s after; a
-  contiguous 4-word run inside the last spoken sentence covering 90% or more
-  is dropped; 3 words, a non-contiguous match, 85% cover, a match in an
-  earlier sentence, and a real answer that shares words with the reply are all
-  kept.
+- The cut-off mapping: SAPI word offsets; proportional bytes (PR 3).
+- The repeat and continue matcher: each phrase; each polite form; case and
+  punctuation; 7 words never matching; a phrase inside a longer request never
+  matching; no local action with no spoken reply, with one older than 5
+  minutes, or with one ending in a question; "continue" after a reply read to
+  the end going to the model.
+- The echo filter: dropped only during playback and within 2 s after; matched
+  against the whole reply; "120 GB free" dropped; "yes, check the D drive"
+  (80%) kept; runs of 2 words never counting; two 3-word runs together
+  covering 90% dropped; a real answer that shares words with the reply kept.
 - The voice choice chain: en-GB female (known names first), any English
   female, any en-GB, system default; duplicates across SAPI and OneCore; a
-  saved voice that is gone; the "not a British woman" flag for the panel note.
+  saved voice that is gone; when the notice dialog is due (Automatic resolved
+  to a voice that is not an en-GB woman's, once per launch).
 - The resource ledger's counts.
-- Settings: load and save round-trip of every new key, defaults, range
-  clamps, the notice lines and the folding when the switch is new, the
-  `k_setting_keys` table against a saved file; `voice_auto_send` unchanged.
+- Settings: load and save round-trip of every new key, including
+  `tts_api_key` and its preserved twin in PR 3; defaults, range clamps, the
+  notice lines (one for `voice_windows_voice_name`) and the folding when the
+  switch is new; the `k_setting_keys` table against a saved file;
+  `voice_auto_send` unchanged; the shared-key rule for AI speech.
 - Shortcuts and README block.
 
 **`wintest` (Wine on `automaton`, and on Windows)**:
 - The WebSocket client against a loopback WebSocket server written in the
   test (`ws://127.0.0.1`), if Wine's WinHTTP supports the API; otherwise a
-  defined SKIP. Cancelling by closing the handle from another thread must
-  return promptly; on Wine this may SKIP like
-  `test_ai_nc_fire_wakes_blocked_winhttp_call`.
-- **Every end of §5.6 through the controller**, with fakes where Wine cannot
-  provide the real object (capture, render, `SpVoice`, WebSocket), asserting
-  that the resource ledger returns to zero **(critique)**.
-- The render client and the communications-category capture: a defined "no
-  device" or "no echo cancellation" outcome under headless Wine, no hang, no
-  leak.
+  defined SKIP. Closing the handle from the UI thread must wake both the
+  sender and a receiver blocked in `WinHttpWebSocketReceive`; on Wine this may
+  SKIP like `test_ai_nc_fire_wakes_blocked_winhttp_call`.
+- **Every end of §5.6 through the Win32 glue**, with fakes where Wine cannot
+  provide the real object (capture, `SpVoice`, WebSocket), asserting that the
+  resource ledger returns to zero **(critique)**.
+- A voice upload and a WebSocket open both counted by `voice_winhttp_open`;
+  a chat request not counted.
+- The communications-category capture: a defined "no device" or "no echo
+  cancellation" outcome under headless Wine, no hang, no leak. The render
+  client the same in PR 3.
 - The registry voice list against keys the test writes under `HKCU\Software`
   (the reader takes its root keys as parameters).
 - `SpVoice` creation: a defined outcome under Wine (it may have no voices).
 - Session-lock registration and a posted `WM_WTSSESSION_CHANGE` ending a
   recording.
-- A posted `WM_ACTIVATEAPP` moving a conversation to Paused and back.
+- Posted `WM_ACTIVATEAPP` and `WM_ENABLE` moving a conversation to Paused and
+  back.
 
-**The real exe (`make selftest-wine`)**: new runs with voice on in Dictation
-mode and in Conversation mode with no conversation started. Both assert that
-`sapi.dll` and `wtsapi32.dll` were never requested, and that the self-report's
-voice network open count is zero **(critique)**.
+**The real exe (`make selftest-wine`)** **(critique round 2 for the module
+list and the control)**:
+- New runs with voice on in Dictation mode and in Conversation mode with no
+  conversation started. Each asserts that `sapi.dll` and `wtsapi32.dll` were
+  neither requested by our code nor present in the loaded-module list, and
+  that the voice network open count is zero.
+- **A control** proves the check can fail: a selftest config, or a
+  `--self-report` flag, that does load SAPI (a Play-sample-like call at
+  launch), with the check expecting `sapi.dll` in both lists. If Wine cannot
+  load `sapi.dll` that way, the control is a Windows hand check instead, and
+  the spec's claim rests on it.
 
 **Integration harness (written, not run here: no `pwsh` on `automaton`)**:
 - A way to feed a WAV file in place of the microphone is the **builder's
@@ -1193,58 +1372,69 @@ voice network open count is zero **(critique)**.
 - Live dictation with a fixture: words appear in the box, nothing is sent
   until Send.
 - A conversation with a fixture "list the files in my home directory": the
-  turn is sent after the pause and the run_command card waits and is
-  announced.
-- The self-report case on Windows for Dictation and Conversation modes.
+  turn is sent after the pause and the run_command card waits, is announced,
+  and holds no open mic.
+- The self-report case on Windows for Dictation and Conversation modes, and
+  the SAPI control.
 
 **Windows hand checks before each merge** (into the notes' Open list):
 - Every PR: `mingw32-make test` and a release build on the Windows box
   (§7.5).
 - PR 1: live text with OpenAI and Mistral, revisions settling, typing paused,
-  Send while recording, Escape removing the words, Alt+Tab keeping them, the
-  connection pulled mid-recording (fallback), a 5-minute recording with
-  pauses (the connection survives idle gaps), English (UK) spelling on OpenAI
-  live.
+  Send while recording, Escape in the panel removing the words and Escape in
+  the terminal going to the terminal, Alt+Tab keeping them, the connection
+  pulled mid-recording (fallback, and the fallback failing), a 5-minute
+  recording with pauses (the connection survives idle gaps), a 10-minute
+  recording's fallback, English (UK) spelling on OpenAI live.
 - PR 2, each listed on its own **(critique)**:
   - **Echo cancellation**: what the effects manager reports on the
     maintainer's devices; a reply on speakers not transcribed back.
   - **Ducking**: whether other apps' audio is lowered during a conversation,
     with the Communications setting at its default and at "Do nothing", and
-    with a capture device that is not the default communications device.
+    with a capture device that is not the default communications device;
+    whether Nutshell's own speech is lowered.
   - **Cutting in**: on speakers and on a headset; a cough does not stop the
-    reply; "carry on" and "say that again" handled locally.
+    reply; the key stopping speech and keeping the conversation; "carry on"
+    and "say that again" handled locally; SAPI's stop and volume latency.
   - **Voices**: the default on a PC with and without the English (UK) pack;
-    which en-GB voices are listed; a OneCore voice speaking; the panel note.
+    which en-GB voices are listed; a OneCore voice speaking; the notice
+    dialog.
   - **Bluetooth**: a Bluetooth headset in a conversation (the communications
     category may move it to its hands-free profile, with worse sound).
-  - A full conversation with the free-space question and its approval card;
-    Escape in the terminal during a conversation goes to the terminal;
-    Alt+Tab pauses; Win+L; 3 minutes without a turn; the self-report.
-- PR 3: AI speech with the default style; the fallback to Windows speech;
+  - A full conversation with the free-space question and its approval card
+    (the mic indicator off while the card waits); the round cap needing an
+    on-screen approval after voice turns; Alt+Tab and Settings pausing;
+    Win+L; 3 minutes without a turn; the self-report and the SAPI control.
+- PR 3: AI speech with the default style, with OpenAI and with a custom
+  server; the shared and separate keys; the fallback to Windows speech;
   price and model checks.
 
 ## 15. Delivery
 
 Three code pull requests, in order, each with its own version bump and build
-**(critique, splitting the main session's PR 2)**. Each is merged before the
-next starts.
+**(critique)**. Each is merged before the next starts.
 
 1. **PR 1, "live dictation"** (branch `feat/voice-live-dictation`): this spec;
-   §4 (all of dictation, except the PR 2 Escape rule); §6.1 to §6.3, §6.5 and
-   §6.6 (OpenAI and Mistral live, the single voice network opener and its
-   counter, the WebSocket transport, `winhttp.def`); §7.1, §7.2 and §7.5 (the
-   speech gate, pre-roll, the 10-minute buffer, the resampler, guarded COM
-   declarations where any are added); §11.1; the PR 1 rows of §12 and §13; the
-   PR 1 parts of §14. No conversation mode, no playback, no `sapi.dll`, no
+   §4 (all of dictation, with the Escape-in-the-panel rule and the 64 KB
+   transcript result); §6.1 to §6.3, §6.5 and §6.6 (OpenAI and Mistral live,
+   `voice_net_open` and `voice_winhttp_open` with the counter, the WebSocket
+   transport with its two-worker cancel, `winhttp.def`); §7.1, §7.2 and §7.5
+   (the speech gate, pre-roll, the 10-minute buffer, the resampler, guarded
+   COM declarations where any are added); §11.1; the PR 1 rows of §12, §13
+   and §14. No conversation mode, no playback, no `sapi.dll`, no
    `wtsapi32.dll`.
-2. **PR 2, "conversation mode"**: §5 (turn taking, the adaptive detector,
-   Paused, every end); §6.4 for conversation turns; §7.3 and §7.4; §8.1 to
-   §8.3 and §8.5 (Windows speech); §9 (echo cancellation, cutting in, the echo
-   filter); §10 (local repeat and continue); §11.2; the session lock and the
-   resource ledger of §12, for both modes; the Escape rule (§4.4), for both
-   modes; the PR 2 rows of §13 and §14.
-3. **PR 3, "AI speech"**: §8.4 and the AI half of §8.5; §11.3; the PR 3 rows
-   of §12, §13 and §14.
+2. **PR 2, "conversation mode"**: the controller refactor into `src/core`
+   (§5.2); §5 (turn taking, the adaptive detector, Paused, the round cap,
+   "chat turn idle", every end); §6.4 for conversation turns; §7.3 and the PR
+   2 half of §7.4 (SAPI to the default output); §8.1 to §8.3 and §8.5
+   (Windows speech, the notice dialog); §9 (echo cancellation, cutting in,
+   the echo filter); §10 (local repeat and continue); §11.2; the session
+   lock, the resource ledger and the loaded-module self-report of §12; the
+   PR 2 rows of §13 and §14.
+3. **PR 3, "AI speech"**: the PR 3 half of §7.4 (Nutshell's own render
+   client, play queue and byte-to-character map); §8.4 (its own provider
+   setting and key) and the AI half of §8.5; §11.3; the PR 3 rows of §12,
+   §13 and §14.
 
 **Reordering was rejected** (critique): the critique suggested building
 conversation mode before live dictation. Live dictation stays first because
@@ -1255,12 +1445,12 @@ Later, outside this design (todo) **(main session, plus the last three
 spec author's)**:
 - Gemini Live (`gemini-3.5-transcribe-live`, BidiGenerateContent WebSocket,
   en-GB supported, 10-minute sessions).
-- Mistral (Voxtral) TTS as a second AI speech provider.
+- Mistral (Voxtral) TTS as a further AI speech provider.
 - speexdsp as a fallback echo canceller for Windows 10 and devices without one.
 - Pseudo-live text for Groq and custom URLs by rolling re-transcription.
 - Spoken replies in dictation mode (voice spec §5's speaker toggle), built on
   §8 rather than voice spec §5's design.
-- AI speech through a custom OpenAI-compatible server.
+- Groq's and Gemini's speech as AI speech providers (voice spec §6).
 - A spoken "stop" while the assistant works.
 
 Already filed, not in this design: an Other... choice for the push-to-talk
@@ -1268,61 +1458,92 @@ key, and revisiting the header status design.
 
 ## 16. Left to the builder: open questions
 
-**Must verify, each with its fallback** **(critique)**:
+**For the maintainer to confirm** (main session's calls from critique round
+2):
+- A. A voice turn does not reset the auto-approve round cap; only a typed
+  message, Stop or an on-screen approval click does (§5.2).
+- B. With no British woman's voice installed, Windows speech stays the
+  default, and the shared notice dialog says so once per launch (§8.3).
+- C. Replies held while Paused are spoken on resume only if under 30 s old
+  (§5.4).
+
+**Must verify, each with its fallback** **(both critiques)**:
 1. **WebSocket timeouts and idle gaps**: set the WebSocket handle's receive
    timeout to infinite and cancel by closing the handle. If idle gaps (only
    speech is sent) drop the session, send silence keep-alives at a low rate,
-   or reconnect per utterance. Check OpenAI's and Mistral's tolerance of gaps,
-   and whether a Mistral session survives `transcription.done`.
-2. **OneCore voices with SAPI**: whether a OneCore token works with
+   or reconnect per utterance.
+2. **Closing a WebSocket handle wakes a blocked synchronous
+   `WinHttpWebSocketReceive`** (and the sender). Fallback: a receive loop with
+   short timeouts that checks a cancel flag.
+3. **Provider idle limits**: how long OpenAI's and Mistral's live sessions
+   survive without audio. Fallback: as item 1.
+4. **Mistral after `transcription.done`**: whether the session closes, which
+   means one session per utterance. Fallback: open a session per utterance.
+5. **Mistral's batch size limit**, for a 10-minute fallback (§4.5). Fallback:
+   split the fallback upload, or cap the live recording at what fits.
+6. **OneCore voices with SAPI**: whether a OneCore token works with
    `ISpVoice::SetVoice` in a desktop app on Windows 10 and 11. Fallback: list
    SAPI desktop voices only.
-3. **Echo cancellation**: `IAudioEffectsManager`'s minimum build, and how
-   widely devices offer echo cancellation. Fallback: the half-duplex path of
-   §9.1 stays for every device that does not report it.
-4. **Bluetooth hands-free profile**: what the communications category does to
-   a Bluetooth headset. A Windows hand check; no code fallback beyond the
-   Voice page's headset note.
-5. **Prices, and `gpt-4o-mini-tts`'s retirement and successor**: PR 3 checks.
-6. **The §3 counts** (57 settings keys, `CFG_KEYS_MAX` 96,
-   `NOTICE_ITEMS_MAX` 24, 13 `winhttp.def` entries): rechecked against the
-   code on 2026-11-24; recheck at build time, since other work may land first.
-7. **Which en-GB voices are usable** (SAPI, OneCore, Natural-only), §8.3.
-8. **Ducking** with a capture device that is not the default communications
-   device, §7.3.
+7. **SAPI purge latency, and `SetVolume` taking effect mid-utterance.**
+   Fallback: PR 3's own render client for Windows speech too (an in-memory
+   SAPI stream played through it).
+8. **Self-ducking**: whether Nutshell's own SAPI output is lowered while its
+   communications capture is open. Fallback: `IAudioSessionManager2` to our
+   process session, then `IAudioSessionControl2::SetDuckingPreference(TRUE)`.
+9. **Ducking of other apps** with a capture device that is not the default
+   communications device (§7.3). No code fallback; the Voice page line stays.
+10. **Echo cancellation**: `IAudioEffectsManager`'s minimum build, and how
+    widely devices offer echo cancellation. Fallback: the half-duplex path of
+    §9.1 for every device that does not report it.
+11. **Bluetooth hands-free profile**: what the communications category does
+    to a Bluetooth headset. A Windows hand check; no code fallback beyond the
+    Voice page's headset line.
+12. **Which en-GB voices are usable** (SAPI, OneCore, Natural-only), §8.3.
+13. **Prices, and `gpt-4o-mini-tts`'s retirement and successor**: PR 3
+    checks.
+14. **The §3 counts** (57 settings keys, `CFG_KEYS_MAX` 96,
+    `NOTICE_ITEMS_MAX` 24, 13 `winhttp.def` entries): rechecked against the
+    code on 2026-11-24; recheck at build time, since other work may land
+    first.
+15. **The SAPI control under Wine** (§14). Fallback: a Windows hand check.
 
 **Other open questions**:
-9. OpenAI live: the exact event names, how revisions are signalled, whether
-   text arrives before a commit, whether the model takes a prompt, and the
-   `delay` value.
-10. Mistral live: binary or base64 JSON audio; how to get a segment's final
-    text without closing the session; whether it needs silence sent to flush
-    its delay (§7.2). If it needs continuous audio, the plan says so and the
-    "only speech" rule bends for it.
-11. Which MinGW headers lack `IAudioClient2`, `AudioClientProperties`,
+16. OpenAI live: the exact event names, how revisions are signalled, whether
+    text arrives before a commit, whether the model takes a prompt, and the
+    `delay` value.
+17. Mistral live: binary or base64 JSON audio; how to get a segment's final
+    text; whether it needs silence sent to flush its delay (§7.2). If it
+    needs continuous audio, the plan says so and the "only speech" rule bends
+    for it.
+18. Which MinGW headers lack `IAudioClient2`, `AudioClientProperties`,
     `IAudioEffectsManager` and `IAcousticEchoCancellationControl`; copy what
     is missing, guarded (§7.5).
-12. The thresholds: the adaptive detector's margin over the floor and minimum
+19. The thresholds: the adaptive detector's margin over the floor and minimum
     duration, the hangover, cut-in margins with and without echo
     cancellation, the duck level.
-13. The current OpenAI preset voice list (PR 3).
-14. The module split (for example `src/core/voice_live.c`, `voice_conv.c`,
+20. The current OpenAI preset voice list (PR 3).
+21. The module split (for example `src/core/voice_live.c`, `voice_conv.c`,
     `voice_vad.c`, `voice_speak.c`, `voice_echo.c`, `voice_ledger.c`;
-    `src/ui/voice_net_win.c`, `voice_tts_win.c`) and the thread layout (one or
-    two threads per WebSocket, the speech thread).
-15. Whether the send status comes from `ai_chat_send_user_message` itself or
+    `src/ui/voice_net_win.c`, `voice_tts_win.c`) and the thread layout (the
+    WebSocket's two workers and their cancel, the speech thread).
+22. Whether the send status comes from `ai_chat_send_user_message` itself or
     a new voice entry point (§5.2), and the tool-gate card kinds to announce.
-16. Whether the render stream stays started between replies (§7.4), whether
-    one WebSocket should span a conversation's turns (§6.6), and whether the
-    capture device stays open while Paused (§5.4).
-17. Upload timeouts for a long batch fallback (§4.5).
-18. How typing is paused in the box (§4.2).
-19. The WAV-injection seam for the harness, kept out of the exe's normal
+23. Where "chat turn idle" is posted from, after the relaunch decision
+    (§5.2).
+24. How `ai_http_post_ct` takes the voice session (§6.5), and
+    `EnumProcessModules` or Toolhelp for the module list (§12).
+25. Whether PR 3's render client stays started between replies (§7.4), and
+    whether one WebSocket should span a conversation's turns (§6.6).
+26. Upload timeouts for a long batch fallback (§4.5).
+27. How typing is locked in the box while speech is captured (§4.2).
+28. The WAV-injection seam for the harness, kept out of the exe's normal
     paths (§14).
 
 ## 17. Critique (2026-11-24, claude-fable-5-2 high)
 
 Each finding in one line, then the main session's disposition.
+
+### Round 1
 
 1. The open mic sends anything loud, and Alt+Tab keeps it alive. — Accepted:
    an adaptive speech detector replaces the fixed gate in conversation mode
@@ -1336,20 +1557,20 @@ Each finding in one line, then the main session's disposition.
 3. `SetDuckingPreference` does not stop other apps being ducked. — Accepted:
    the claim is dropped, only conversation mode uses the communications
    category, and the Voice page says where to turn ducking off (§7.3).
-4. The echo filter would drop real answers. — Accepted: it applies only while
-   speaking and 2 s after, needs a contiguous 4-word run in the last sentence
-   covering 90%, and shows a header status (§9.4, §14).
+4. The echo filter would drop real answers. — Accepted: it was narrowed to
+   playback time and near-exact matches with a header status; round 2 revised
+   the rule again (§9.4, §14).
 5. Removing "Send automatically" went against the maintainer's earlier
    decision. — Accepted: it stays a dictation option, with no migration;
    conversation mode ignores it (§4.3, §11.2).
 6. Escape anywhere ends a long recording, and modals ended conversations. —
-   Accepted: Escape counts only with focus in the AI panel, in both modes from
-   PR 2, and a modal no longer ends a conversation; the tab change stays
-   because the panel holds one chat per tab (§4.4, §5.6).
+   Accepted: Escape counts only with focus in the AI panel, and a modal no
+   longer ends a conversation; the tab change stays because the panel holds
+   one chat per tab (§4.4, §5.6).
 7. The default voice chain was too short and the Libby claim unchecked. —
-   Accepted: the chain adds any English female voice, a panel note shows when
-   the voice is not a British woman's, and the builder verifies which en-GB
-   voices are usable (§8.3).
+   Accepted: the chain adds any English female voice, the maintainer is told
+   when the voice is not a British woman's, and the builder verifies which
+   en-GB voices are usable (§8.3).
 8. Repeat and continue as model turns are slow and need a hidden note. —
    Accepted: short phrases are handled locally and everything else goes to the
    model with no note (§10).
@@ -1359,8 +1580,8 @@ Each finding in one line, then the main session's disposition.
    live words and conversation mode shows them (§15).
 10. The off-and-teardown claims were not testable. — Accepted: a voice network
     open counter in the self-report, a resource ledger driven to zero by
-    every end in `wintest`, a WAV seam kept out of normal paths, and the
-    device behaviours listed as Windows hand checks (§12, §14).
+    every end, a WAV seam kept out of normal paths, and the device behaviours
+    listed as Windows hand checks (§12, §14).
 11. Voice had several network openers. — Accepted: one `voice_net_open(kind,
     ...)` with a single `voice_gate_on()` check carries batch STT, the
     WebSocket and TTS (§6.5).
@@ -1372,3 +1593,60 @@ Each finding in one line, then the main session's disposition.
     `IAudioEffectsManager`'s build, Bluetooth, prices and TTS retirement, the
     §3 counts). — Accepted: each is a must-verify item with a fallback in
     §16; the §3 counts were rechecked against the code.
+
+### Round 2
+
+1. Open-mic voice turns reset the auto-approve round cap. — Accepted: a voice
+   turn no longer resets it, as a main session's call for the maintainer to
+   confirm, and the anti-goal now says plainly that other voices can be heard
+   (§2, §5.2, §16 A).
+2. The echo filter's sentence-scoped, 4-word rule was still wrong. —
+   Accepted: it matches the whole reply with 3-word runs covering 90%, within
+   playback plus 2 s, and half-duplex drops audio from before the cut-in
+   (§9.1, §9.4, §14).
+3. The fallback for a 10-minute recording overflowed a 4,096-byte result. —
+   Accepted: the result is heap-allocated, at least 64 KB, the audio is kept
+   until the fallback succeeds, and live text stays if it fails (§4.5, §13).
+4. Modals and settings changes were unhandled. — Accepted: a Nutshell modal
+   pauses a conversation, a voice settings change ends it, and Play sample
+   stops its speech first (§5.2, §5.4, §5.6).
+5. An approval card waiting kept the microphone open. — Accepted: capture is
+   closed during Working and reopened for Listening and Speaking (§5.2, §7.3).
+6. A reply could not be stopped without ending the conversation. — Accepted:
+   the key, Escape in the panel and Stop stop speech only while Speaking, and
+   replies are held while Paused, spoken on resume if under 30 s old as a
+   main session's call (§5.2, §5.4).
+7. The repeat and continue matcher was too narrow and could hijack answers. —
+   Partly accepted: polite forms and 6 words are allowed, it acts only on a
+   recent reply that did not end with a question; the hidden cut-off note is
+   rejected because voice never builds turn content itself (§10).
+8. The event that ends Working was not named. — Accepted: a posted "chat turn
+   idle" notification after the relaunch decision, with the early busy
+   callback sites named (§3, §5.2).
+9. An in-memory SAPI stream through our own render client was more than PR 2
+   needs. — Accepted: SAPI speaks to the default output in PR 2, and the
+   render client, play queue and byte map move to PR 3 (§7.4, §8, §9, §15).
+10. Several tests could pass without the feature working. — Accepted: the
+    self-report lists loaded modules with a SAPI control, voice traffic goes
+    through a voice-only WinHTTP session opener with the counter, and the
+    controller moves into a `src/core` state machine (§5.2, §6.5, §12, §14).
+11. The spec contradicted itself in five places. — Accepted: AI speech has its
+    own provider as the voice spec's G3 says; endings and errors go to the
+    chat; the "silence" wording is exact; Escape-in-the-panel moves to PR 1;
+    `voice_windows_voice_name` gets its own notice line (§2, §8.4, §5.7, §11,
+    §13, §15).
+12. A PC with no English woman's voice gets a silent, wrong default. — Main
+    session's call, for the maintainer to confirm: Windows speech stays the
+    default and the shared notice dialog says so once per launch (§8.3, §16
+    B).
+13. The box was locked for the whole conversation. — Accepted: it is locked
+    only while speech is captured into it, and a draft left when Listening
+    resumes starts the next turn (§5.1).
+14. The WebSocket's two threads could not both be cancelled with
+    `AiNetCancel`. — Accepted: a two-worker cancel or separate handles, the
+    builder's choice, with the wake-up a must-verify item and a short-timeout
+    receive loop as the fallback (§6.6, §16).
+15. Further facts were unverified (self-ducking of our own speech, SAPI purge
+    latency and mid-utterance volume, Mistral's batch limit and closing after
+    `transcription.done`, provider idle limits). — Accepted: each is a
+    must-verify item with a fallback in §16.
