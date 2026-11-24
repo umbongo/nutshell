@@ -444,6 +444,19 @@ The page then has two titled sections.
   is selected, since it applies to Hold to talk only), Send
   automatically when I finish speaking (tick, off) **(maintainer, 2026-11-23:
   review by default, auto-send opt-in)**.
+- **Test is a toggle** **(maintainer, 2026-11-24)**: "Test" starts the
+  capture and the live meter, "Stop test" stops it (rules in
+  `src/core/voice_test.c`). It also stops when Settings closes, when the page
+  is left, when voice is unticked or when the capture fails; changing the input
+  device while it runs restarts it on the new microphone, so the maintainer can
+  compare microphones. It never uploads anything.
+- **The meter** shows dBFS of the gained signal (`src/core/voice_level.c`):
+  fast attack, 20 dB/s release, a peak-hold tick held 1 s, floor -60 dBFS. A
+  label classifies the peak of the last 1 s: below -45 "Speak to see the
+  level", -45 to -18 "Too quiet", -18 to -6 "Good", -6 to -3 "Good" (hot,
+  drawn amber), -3 and above "Too loud". The -45 figure is the silence gate's
+  speech threshold (RMS 250, about -42 dBFS) with margin: a peak below -45
+  cannot pass the gate, so nobody is speaking **(maintainer, 2026-11-24)**.
 - Language (edit, blank = auto-detect, e.g. `en`) **(call)**.
 
 **Text to Speech**
