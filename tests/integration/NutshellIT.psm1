@@ -739,6 +739,7 @@ function New-NutshellTestEnv {
         ai_policy_default = "read/none"
         voice_enabled = $false; voice_stt_use_ai = $true
         voice_stt_provider = "openai"; voice_stt_url = ""; voice_stt_model = ""
+        voice_stt_live_model = ""
         voice_stt_language = ""; stt_api_key = ""
         voice_input_device = ""; voice_input_device_name = ""
         voice_mic_gain_db = 0

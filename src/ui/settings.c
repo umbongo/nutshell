@@ -2262,6 +2262,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     SETTINGS_PAGE_VOICE, 0, 0, 2, 0, 0, 1);
             }
             {
+                /* SH_VOICE_STT_LIVE_MODEL: its control is added with the live
+                 * dictation Settings work; until then only the key exists. */
                 /* Editable: the list is only a suggestion (voice_model_seed). */
                 HWND lbl = make_label2(nd, SH_VOICE_STT_MODEL);
                 HWND cmb = make_combo2(nd, IDC_VOICE_MODEL, CBS_DROPDOWN,

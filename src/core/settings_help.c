@@ -428,6 +428,17 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "in.\nDefault: empty (the provider's default model).",
       "empty (the provider's default model)",
       0, 0, 0u),
+    E(SH_VOICE_STT_LIVE_MODEL, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Live model:",
+      NULL,
+      "Live model:\n\nThe model used while the words appear as you speak, "
+      "with OpenAI or Mistral. Shown only for those two providers. Left "
+      "empty, OpenAI uses gpt-live-transcribe and Mistral uses "
+      "voxtral-mini-transcribe-realtime-3. A typed name must match the "
+      "provider's model id exactly."
+      "\nDefault: the provider's default.",
+      "the provider's default",
+      0, 0, 0u),
     E(SH_VOICE_LANGUAGE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Language:",
       NULL,

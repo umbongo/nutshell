@@ -10,15 +10,16 @@
 #include "crypto_dpapi.h"
 #include "fake_dpapi.h"
 #include "json_parser.h"
+#include "settings_help.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #define VCFG TEST_TMP_DIR "/nutshell_voice_test.config"
 
-static const char *const k_voice_keys[14] = {
+static const char *const k_voice_keys[15] = {
     "voice_enabled", "voice_stt_use_ai", "voice_stt_provider", "voice_stt_url",
-    "voice_stt_model", "voice_stt_language", "stt_api_key", "voice_input_device",
+    "voice_stt_model", "voice_stt_live_model", "voice_stt_language", "stt_api_key", "voice_input_device",
     "voice_input_device_name", "voice_mic_gain_db", "voice_ptt_key", "voice_ptt_mode",
     "voice_mic_delay_ms", "voice_auto_send",
 };
@@ -54,6 +55,7 @@ int test_voice_config_defaults(void)
     ASSERT_STR_EQ(s.voice_stt_provider, "openai");
     ASSERT_STR_EQ(s.voice_stt_url, "");
     ASSERT_STR_EQ(s.voice_stt_model, "");
+    ASSERT_STR_EQ(s.voice_stt_live_model, "");
     ASSERT_STR_EQ(s.voice_stt_language, "en-GB");
     ASSERT_STR_EQ(s.stt_api_key, "");
     ASSERT_STR_EQ(s.stt_api_key_enc_preserved, "");
@@ -187,6 +189,7 @@ int test_voice_config_roundtrip(void)
     snprintf(s->voice_stt_provider, sizeof(s->voice_stt_provider), "groq");
     snprintf(s->voice_stt_url, sizeof(s->voice_stt_url), "https://h/v1");
     snprintf(s->voice_stt_model, sizeof(s->voice_stt_model), "m");
+    snprintf(s->voice_stt_live_model, sizeof(s->voice_stt_live_model), "lm");
     snprintf(s->voice_stt_language, sizeof(s->voice_stt_language), "en");
     snprintf(s->stt_api_key, sizeof(s->stt_api_key), "sk-stt");
     snprintf(s->voice_input_device, sizeof(s->voice_input_device),
@@ -218,6 +221,7 @@ int test_voice_config_roundtrip(void)
         ASSERT_STR_EQ(t->voice_stt_provider, "groq");
         ASSERT_STR_EQ(t->voice_stt_url, "https://h/v1");
         ASSERT_STR_EQ(t->voice_stt_model, "m");
+        ASSERT_STR_EQ(t->voice_stt_live_model, "lm");
         ASSERT_STR_EQ(t->voice_stt_language, "en");
         ASSERT_STR_EQ(t->stt_api_key, "sk-stt");
         ASSERT_STR_EQ(t->voice_input_device, "{0.0.1.00000000}.{abc}");
@@ -256,10 +260,10 @@ int test_voice_config_first_load_voice_off(void)
     const ConfigSettingKey *keys = config_setting_keys(&nk);
     size_t found = 0;
     for (size_t i = 0; i < rep.missing_count; i++) {
-        if (found < 14u && strcmp(keys[rep.missing[i]].key, k_voice_keys[found]) == 0)
+        if (found < 15u && strcmp(keys[rep.missing[i]].key, k_voice_keys[found]) == 0)
             found++;
     }
-    ASSERT_EQ(found, (size_t)14);
+    ASSERT_EQ(found, (size_t)15);
     remove(VCFG);
     TEST_END();
 }
@@ -437,7 +441,7 @@ int test_notice_upgrade_folds_voice_keys(void)
     config_default_settings(&s);
     memset(&r, 0, sizeof(r));
     r.status = CONFIG_LOAD_OK;
-    for (int i = 0; i < 14; i++) r.missing[r.missing_count++] = vkey_index(k_voice_keys[i]);
+    for (int i = 0; i < 15; i++) r.missing[r.missing_count++] = vkey_index(k_voice_keys[i]);
     ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
     ASSERT_EQ(n.item_count, 1);
     ASSERT_STR_EQ(n.items[0].label, "Voice");
@@ -974,5 +978,141 @@ int test_voice_config_language_migration_notice(void)
     ASSERT_EQ(rep.voice_lang_migrated, 0);
     (void)lang;
     remove(VCFG);
+    TEST_END();
+}
+
+/* ---- live dictation: the live model setting and the settings digest ---- */
+
+int test_voice_live_model_default_and_roundtrip(void)
+{
+    TEST_BEGIN();
+    Settings d;
+    config_default_settings(&d);
+    ASSERT_STR_EQ(d.voice_stt_live_model, "");
+
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    snprintf(cfg->settings.voice_stt_live_model, sizeof(cfg->settings.voice_stt_live_model),
+             "gpt-live-transcribe");
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_STR_EQ(l->settings.voice_stt_live_model, "gpt-live-transcribe");
+        config_free(l);
+    }
+    remove(VCFG);
+
+    /* a name with a line break is not a model id: validation empties it */
+    Settings s;
+    config_default_settings(&s);
+    snprintf(s.voice_stt_live_model, sizeof(s.voice_stt_live_model), "gpt\r\nx");
+    settings_validate(&s);
+    ASSERT_STR_EQ(s.voice_stt_live_model, "");
+    snprintf(s.voice_stt_live_model, sizeof(s.voice_stt_live_model), "gpt\nx");
+    settings_validate(&s);
+    ASSERT_STR_EQ(s.voice_stt_live_model, "");
+    snprintf(s.voice_stt_live_model, sizeof(s.voice_stt_live_model), "voxtral-mini-transcribe-realtime-3");
+    settings_validate(&s);
+    ASSERT_STR_EQ(s.voice_stt_live_model, "voxtral-mini-transcribe-realtime-3");
+    TEST_END();
+}
+
+int test_voice_live_model_missing_key_reported(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (!txt) { TEST_END(); }
+    char *p = strstr(txt, "    \"voice_stt_live_model\":");
+    ASSERT_NOT_NULL(p);   /* the save writes the key */
+    if (p) {
+        char *e = strchr(p, '\n');
+        memmove(p, e + 1, strlen(e + 1) + 1);
+    }
+    ASSERT_TRUE(vcfg_write(txt));
+    free(txt);
+
+    ConfigLoadReport rep;
+    Config *l = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(l);
+    if (l) config_free(l);
+    ASSERT_EQ(rep.missing_count, (size_t)1);
+    unsigned char idx = vkey_index("voice_stt_live_model");
+    ASSERT_TRUE(idx != 255);
+    ASSERT_EQ(rep.missing[0], idx);
+
+    Notice n;
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(notice_upgrade(&n, "1.2.95", &rep, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice: live speech-to-text model");
+    ASSERT_STR_EQ(n.items[0].value, "the provider's default");
+
+    /* with the voice switch missing too it folds into "Voice" */
+    rep.missing[rep.missing_count++] = vkey_index("voice_enabled");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.95", &rep, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice");
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_settings_digest(void)
+{
+    TEST_BEGIN();
+    Settings a, b;
+    config_default_settings(&a);
+    config_default_settings(&b);
+    ASSERT_TRUE(voice_settings_digest(&a) == voice_settings_digest(&b));
+    ASSERT_TRUE(voice_settings_digest(&a) != 0);
+
+    const uint64_t base = voice_settings_digest(&a);
+    snprintf(b.voice_stt_provider, sizeof(b.voice_stt_provider), "mistral");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_stt_live_model, sizeof(b.voice_stt_live_model), "x");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    b.voice_ptt_key = (int)VOICE_PTT_F9;
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_input_device, sizeof(b.voice_input_device), "{dev}");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.stt_api_key, sizeof(b.stt_api_key), "k");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    b.voice_stt_use_ai = 0;
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.ai_provider, sizeof(b.ai_provider), "zz-other");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.ai_api_key, sizeof(b.ai_api_key), "ak");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.ai_custom_url, sizeof(b.ai_custom_url), "https://h/v1");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+
+    /* a string boundary is part of the hash: ("ab","c") is not ("a","bc") */
+    config_default_settings(&a);
+    config_default_settings(&b);
+    snprintf(a.voice_stt_url, sizeof(a.voice_stt_url), "ab");
+    snprintf(a.voice_stt_model, sizeof(a.voice_stt_model), "c");
+    snprintf(b.voice_stt_url, sizeof(b.voice_stt_url), "a");
+    snprintf(b.voice_stt_model, sizeof(b.voice_stt_model), "bc");
+    ASSERT_TRUE(voice_settings_digest(&a) != voice_settings_digest(&b));
+
+    /* a non-voice field does not move it */
+    config_default_settings(&b);
+    b.font_size = b.font_size + 3;
+    ASSERT_TRUE(voice_settings_digest(&b) == base);
     TEST_END();
 }

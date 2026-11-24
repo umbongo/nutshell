@@ -3754,6 +3754,9 @@ int test_voice_config_language_migration(void);
 int test_voice_config_rshift_migration_rev2_skips(void);
 int test_voice_config_marker_extremes(void);
 int test_voice_config_language_migration_notice(void);
+int test_voice_live_model_default_and_roundtrip(void);
+int test_voice_live_model_missing_key_reported(void);
+int test_voice_settings_digest(void);
 int test_selftest_configs_complete(void);
 int test_voice_config_load_defaults_and_saved_choices(void);
 /* test_voice_lang.c */
@@ -8239,6 +8242,9 @@ int main(void) {
     failed += test_voice_config_rshift_migration_rev2_skips();
     failed += test_voice_config_marker_extremes();
     failed += test_voice_config_language_migration_notice();
+    failed += test_voice_live_model_default_and_roundtrip();
+    failed += test_voice_live_model_missing_key_reported();
+    failed += test_voice_settings_digest();
     failed += test_selftest_configs_complete();
     failed += test_voice_lang_table_order();
     failed += test_voice_lang_find();
