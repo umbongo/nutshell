@@ -3988,6 +3988,8 @@ int test_vconv_repeat_local(void);
 int test_vconv_continue_local(void);
 int test_vconv_paused_ends_ledger_zero(void);
 int test_vconv_pause_while_send_pending(void);
+int test_vconv_card_announced_on_resume(void);
+int test_vconv_typed_send_while_paused(void);
 int test_voice_ledger_counts(void);
 int test_voice_live_parse_openai(void);
 int test_voice_live_parse_mistral(void);
@@ -8674,6 +8676,8 @@ int main(void) {
     failed += test_vconv_continue_local();
     failed += test_vconv_paused_ends_ledger_zero();
     failed += test_vconv_pause_while_send_pending();
+    failed += test_vconv_card_announced_on_resume();
+    failed += test_vconv_typed_send_while_paused();
     failed += test_voice_ledger_counts();
     failed += test_ai_gate_default_off();
     failed += test_ai_gate_enabled();

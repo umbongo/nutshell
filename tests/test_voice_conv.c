@@ -816,9 +816,8 @@ int test_vconv_pause_dialog_header(void)
     o = run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 110);
     ASSERT_EQ(o.actions, 0u);
     ASSERT_EQ(o.header, VCH_PAUSED_BG);
-    /* turn events, a typed send and cut-in events are ignored while paused */
+    /* turn events and cut-in events are ignored while paused */
     ASSERT_EQ(run(&c, VCE_TURN_START, 0, 0, 120).actions, 0u);
-    ASSERT_EQ(run(&c, VCE_SEND, 0, 0, 120).actions, 0u);
     ASSERT_EQ(run(&c, VCE_DUCK, 0, 0, 120).actions, 0u);
     ASSERT_EQ(run(&c, VCE_CUT, 0, 0, 120).actions, 0u);
     ASSERT_EQ(c.state, VCS_LISTENING);
@@ -972,8 +971,6 @@ int test_vconv_working_continues_while_paused(void)
     o = run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 2000);
     ASSERT_EQ(o.actions, 0u);
     ASSERT_EQ(c.state, VCS_WORKING);
-    /* a card is not announced aloud while paused */
-    ASSERT_EQ(run(&c, VCE_CARD, VCARD_COMMAND, 0, 2500).actions, 0u);
     run(&c, VCE_CHAT_IDLE, 1, 0, 3000);
     ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
     ASSERT_EQ(c.state, VCS_LISTENING);
@@ -1201,7 +1198,10 @@ int test_vconv_pause_while_send_pending(void)
     run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, 310);
     o = run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 320);   /* already handed to the chat */
     ASSERT_FALSE(o.actions & VCA_DROP_TURN);
+    ASSERT_TRUE(has(o, VCA_CLOSE_CAPTURE));
+    ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
     o = run(&c, VCE_SENT, VSS_SENT, 0, 330);
+    ASSERT_FALSE(o.actions & VCA_CLOSE_CAPTURE);
     ASSERT_EQ(c.state, VCS_WORKING);
     ASSERT_EQ(o.header, VCH_PAUSED_BG);
     ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
@@ -1222,6 +1222,87 @@ int test_vconv_pause_while_send_pending(void)
     ASSERT_EQ(c.state, VCS_LISTENING);
     ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
     ASSERT_EQ(o.header, VCH_PAUSED_DIALOG);
+    run(&c, VCE_PRESS, 0, 0, 400);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_card_announced_on_resume(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_state(&c, VCS_WORKING, 1);
+    run(&c, VCE_PAUSE, VCP_DIALOG, 0, 2000);
+    o = run(&c, VCE_CARD, VCARD_COMMAND, 0, 2500);
+    ASSERT_EQ(o.actions, 0u);
+    o = run(&c, VCE_RESUME, 0, 0, 3000);
+    ASSERT_TRUE(has(o, VCA_SPEAK_PHRASE));
+    ASSERT_EQ(o.phrase, VCPH_APPROVE_COMMAND);
+    ASSERT_EQ(o.header, VCH_APPROVAL);
+    ASSERT_EQ(c.state, VCS_WORKING);
+    /* a second pause/resume cycle does not repeat it */
+    run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 3100);
+    o = run(&c, VCE_RESUME, 0, 0, 3200);
+    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(o.header, VCH_WORKING);
+    /* the latest card wins */
+    run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 3300);
+    run(&c, VCE_CARD, VCARD_COMMAND, 0, 3400);
+    run(&c, VCE_CARD, VCARD_WRITE, 0, 3500);
+    o = run(&c, VCE_RESUME, 0, 0, 3600);
+    ASSERT_EQ(o.phrase, VCPH_APPROVE_WRITE);
+    /* cleared when the turn finishes: nothing is announced for a finished turn */
+    run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 3700);
+    run(&c, VCE_CARD, VCARD_OTHER, 0, 3800);
+    run(&c, VCE_CHAT_IDLE, 0, 0, 3900);
+    o = run(&c, VCE_RESUME, 0, 0, 4000);
+    ASSERT_FALSE(o.actions & VCA_SPEAK_PHRASE);
+    run(&c, VCE_PRESS, 0, 0, 4100);
+    ASSERT_TRUE(clean());
+    /* cleared by an end: the next conversation starts clean */
+    goto_state(&c, VCS_WORKING, 1);
+    run(&c, VCE_PAUSE, VCP_DIALOG, 0, 2000);
+    run(&c, VCE_CARD, VCARD_OTHER, 0, 2100);
+    run(&c, VCE_PRESS, 0, 0, 2200);
+    ASSERT_EQ(c.card, 0);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_typed_send_while_paused(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_state(&c, VCS_WORKING, 1);
+    run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 2000);
+    run(&c, VCE_CHAT_IDLE, 1, 0, 3000);       /* a reply is held */
+    o = run(&c, VCE_SEND, 0, 0, 4000);
+    ASSERT_TRUE(has(o, VCA_SEND_TYPED | VCA_DROP_HELD));
+    ASSERT_FALSE(o.actions & VCA_OPEN_CAPTURE);
+    ASSERT_EQ(c.state, VCS_ENDING);
+    ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
+    o = run(&c, VCE_SENT, VSS_SENT, 0, 4100);
+    ASSERT_EQ(c.state, VCS_WORKING);
+    ASSERT_EQ(o.header, VCH_PAUSED_BG);
+    ASSERT_FALSE(o.actions & VCA_CLOSE_CAPTURE);
+    /* the held reply is gone: the resume after the new reply speaks the new one only */
+    run(&c, VCE_CHAT_IDLE, 1, 0, 5000);
+    o = run(&c, VCE_RESUME, 0, 0, 5100);
+    ASSERT_TRUE(has(o, VCA_SPEAK_REPLY));
+    ASSERT_FALSE(o.actions & VCA_SPEAK_CONTINUE);
+    run(&c, VCE_PRESS, 0, 0, 5200);
+    run(&c, VCE_PRESS, 0, 0, 5300);
+    ASSERT_TRUE(clean());
+    /* no held reply: no DROP_HELD */
+    begin(&c, 0);
+    run(&c, VCE_PAUSE, VCP_DIALOG, 0, 100);
+    o = run(&c, VCE_SEND, 0, 0, 200);
+    ASSERT_TRUE(has(o, VCA_SEND_TYPED));
+    ASSERT_FALSE(o.actions & VCA_DROP_HELD);
+    /* refused while paused: back to paused LISTENING, capture still closed */
+    o = run(&c, VCE_SENT, VSS_EMPTY, 0, 300);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
     run(&c, VCE_PRESS, 0, 0, 400);
     ASSERT_TRUE(clean());
     TEST_END();

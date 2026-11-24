@@ -75,6 +75,7 @@ static VoiceConvOut go_idle(VoiceConv *c, VoiceConvNote note, int cancel_work)
     c->held = 0;
     c->held_continue = 0;
     c->held_phrase = 0;
+    c->card = 0;
     o = out(a, VCH_NONE);
     o.note = note;
     return o;
@@ -126,6 +127,7 @@ static VoiceConvOut work_finished(VoiceConv *c, int prose, int err, unsigned lon
 {
     c->idle_at = now;
     c->idle_seen = 0;
+    c->card = 0;
     if (c->pause != VCP_NONE) {
         /* replies are not spoken while paused: held (a phrase like a reply) */
         VoiceConvOut o;
@@ -164,7 +166,6 @@ static VoiceConvOut on_transcript(VoiceConv *c, int cls)
     if (cls == VTC_REPEAT || cls == VTC_CONTINUE) {
         unsigned x = VCA_DROP_TURN | release_typing(c) | release_link(c) | release_batch(c);
         VoiceConvOut o;
-        if (c->pause != VCP_NONE) return ending_to_listening(c, x, VCH_NONE);
         o = enter_speaking(c, cls == VTC_REPEAT ? VCA_SPEAK_REPEAT : VCA_SPEAK_CONTINUE,
                            VCPH_NONE, 1);
         o.actions |= x;
@@ -188,6 +189,7 @@ static VoiceConvOut on_sent(VoiceConv *c, int status, unsigned long now)
         a = release_link(c) | release_batch(c) | release_typing(c);
         if (c->capture) { a |= VCA_CLOSE_CAPTURE; c->capture = 0; }
         c->state = VCS_WORKING;
+        c->card = 0;
         c->turn = 0;
         c->sent_at = now;
         c->idle_seen = 0;
@@ -244,7 +246,8 @@ static VoiceConvOut on_pause(VoiceConv *c, int reason, unsigned long now)
     case VCS_ENDING:
         if (c->state == VCS_ENDING && c->sending) {   /* already handed over: pause on arrival */
             c->pause = (VoiceConvPause)reason;
-            return out(0, pause_header(c));
+            if (c->capture) { c->capture = 0; x |= VCA_CLOSE_CAPTURE; }
+            return out(x, pause_header(c));
         }
         x |= VCA_DROP_TURN | release_link(c) | release_batch(c) | release_typing(c);
         c->turn = 0;
@@ -276,10 +279,19 @@ static VoiceConvOut on_resume(VoiceConv *c, unsigned long now)
 {
     if (c->pause == VCP_NONE) return out(0, VCH_NONE);
     c->pause = VCP_NONE;
-    if (c->state == VCS_WORKING) return out(0, VCH_WORKING);
+    if (c->state == VCS_WORKING) {
+        if (c->card) {
+            VoiceConvOut o = out(VCA_SPEAK_PHRASE, VCH_APPROVAL);
+            o.phrase = c->card - 1 == VCARD_COMMAND ? VCPH_APPROVE_COMMAND
+                     : c->card - 1 == VCARD_WRITE ? VCPH_APPROVE_WRITE : VCPH_APPROVE_OTHER;
+            c->card = 0;
+            return o;
+        }
+        return out(0, VCH_WORKING);
+    }
     if (c->state != VCS_LISTENING) return out(0, VCH_NONE);
     if (c->held) {
-        int fresh = now - c->held_at < VOICE_CONV_HELD_MAX_MS;
+        int fresh = (now - c->held_at) < VOICE_CONV_HELD_MAX_MS;
         int cont = c->held_continue, ph = c->held_phrase;
         c->held = c->held_continue = c->held_phrase = 0;
         if (fresh) {
@@ -326,10 +338,16 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
                         : a == VCX_CHAT_CHANGED ? VCN_END_CHAT : VCN_NONE, 0);
 
     case VCE_SEND:
-        if (st == VCS_LISTENING && c->pause == VCP_NONE) {
+        if (st == VCS_LISTENING) {
+            /* typing is accepted while paused too; a held reply is not spoken over it */
+            unsigned x = VCA_SEND_TYPED;
             c->state = VCS_ENDING;
             c->sending = 1;
-            return out(VCA_SEND_TYPED, VCH_SENDING);
+            if (c->held) {
+                x |= VCA_DROP_HELD;
+                c->held = c->held_continue = c->held_phrase = 0;
+            }
+            return out(x, c->pause != VCP_NONE ? pause_header(c) : VCH_SENDING);
         }
         if (st == VCS_HEARING) goto turn_end;
         return none;
@@ -407,7 +425,8 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
         return on_sent(c, a, now);
 
     case VCE_CARD:
-        if (st != VCS_WORKING || c->pause != VCP_NONE) return none;
+        if (st != VCS_WORKING) return none;
+        if (c->pause != VCP_NONE) { c->card = a + 1; return none; }   /* announced on resume */
         {
             VoiceConvOut o = out(VCA_SPEAK_PHRASE, VCH_APPROVAL);
             o.phrase = a == VCARD_COMMAND ? VCPH_APPROVE_COMMAND

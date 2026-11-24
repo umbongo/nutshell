@@ -92,6 +92,7 @@ typedef struct {
     int speaking_reply;           /* SPEAKING a reply (1) or a phrase (0) */
     int held, held_continue;      /* a held reply (held_phrase: the WENT_WRONG phrase) */
     int held_phrase;
+    int card;                     /* a card raised while paused: VoiceCardKind + 1, 0 none */
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
 } VoiceConv;
 #define VOICE_CONV_FINAL_WAIT_MS   3000
