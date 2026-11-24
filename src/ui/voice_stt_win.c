@@ -76,6 +76,8 @@ static DWORD WINAPI stt_thread(LPVOID arg)
     ULONGLONG t0 = GetTickCount64();
     char *body = NULL;
     size_t body_len = 0;
+    char *plain = NULL;    /* the same request without language and prompt, for one retry */
+    size_t plain_len = 0;
     char ctype[160];
     char boundary[64] = "";
     char auth[CFG_STR_MAX + 32];
@@ -92,9 +94,18 @@ static DWORD WINAPI stt_thread(LPVOID arg)
         goto done;
     }
 
+    /* A request that carries a language or a prompt may be rejected with HTTP 400
+     * (a provider that does not know the field or the language): the plain body
+     * is built now, from the recording, because the recording is wiped below. */
+    SttTarget plain_target;
+    voice_stt_target_plain(&j->target, &plain_target);
+    const int can_retry = voice_stt_retry_plain(400, &j->target);
     if (j->target.shape == STT_SHAPE_GEMINI_CHAT) {
         body = voice_stt_gemini_body(j->wav, j->wav_len, j->target.model,
                                      j->target.language, &body_len);
+        if (body && can_retry)
+            plain = voice_stt_gemini_body(j->wav, j->wav_len, plain_target.model,
+                                          plain_target.language, &plain_len);
         snprintf(ctype, sizeof(ctype), "application/json");
     } else {
         if (!random_boundary(boundary, sizeof(boundary))) {
@@ -102,9 +113,11 @@ static DWORD WINAPI stt_thread(LPVOID arg)
             goto done;
         }
         body = voice_stt_multipart(boundary, j->wav, j->wav_len, &j->target, &body_len);
+        if (body && can_retry)
+            plain = voice_stt_multipart(boundary, j->wav, j->wav_len, &plain_target, &plain_len);
         snprintf(ctype, sizeof(ctype), "multipart/form-data; boundary=%s", boundary);
     }
-    /* The recording is in the body now: wipe it at once. */
+    /* The recording is in the bodies now: wipe it at once. */
     secure_zero(j->wav, j->wav_len);
     free(j->wav);
     j->wav = NULL;
@@ -129,6 +142,26 @@ static DWORD WINAPI stt_thread(LPVOID arg)
     AiHttpResponse resp;
     int rc = ai_http_post_ct(j->target.url, headers, ctype, body, body_len, &resp, &j->nc);
     if (j->secret[0]) secure_zero(auth, sizeof(auth));
+    /* At most one retry, and never for a cancelled job or once voice is off:
+     * the first body is wiped, then the plain one goes out. */
+    if (rc == 0 && plain && voice_stt_retry_plain(resp.status_code, &j->target) &&
+        voice_gate_on() && !ai_nc_cancelled(&j->nc)) {
+        DLOG(DLOG_AI, DLOG_INFO, 0, "stt.retry_plain",
+             "shape=%d http=%d sent_bytes=%zu retry_bytes=%zu", (int)j->target.shape,
+             resp.status_code, body_len, plain_len);
+        ai_http_response_free(&resp);
+        secure_zero(body, body_len);
+        free(body);
+        body = plain;
+        body_len = plain_len;
+        plain = NULL;
+        if (j->secret[0]) {
+            snprintf(auth, sizeof(auth), "Authorization: Bearer %s", j->secret);
+            headers[0] = auth;
+        }
+        rc = ai_http_post_ct(j->target.url, headers, ctype, body, body_len, &resp, &j->nc);
+        if (j->secret[0]) secure_zero(auth, sizeof(auth));
+    }
     status = resp.status_code;
     resp_len = resp.body_len;
 
@@ -153,6 +186,7 @@ static DWORD WINAPI stt_thread(LPVOID arg)
 
 done:
     if (body) { secure_zero(body, body_len); free(body); }
+    if (plain) { secure_zero(plain, plain_len); free(plain); }
     if (j->wav) { secure_zero(j->wav, j->wav_len); free(j->wav); j->wav = NULL; }
     secure_zero(j->secret, sizeof(j->secret));
     r->token = j->token;

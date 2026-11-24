@@ -647,3 +647,66 @@ int test_voice_stt_multipart_target_prompt(void)
     ASSERT_NULL(voice_stt_multipart("b0", w4, sizeof w4, NULL, NULL));
     TEST_END();
 }
+
+/* ---- the one retry without the language hint ---- */
+
+int test_voice_stt_retry_plain(void)
+{
+    TEST_BEGIN();
+    SttTarget t;
+    ASSERT_EQ(target_for("openai", "en-GB", &t), 1);
+    ASSERT_EQ(voice_stt_retry_plain(400, &t), 1);
+    ASSERT_EQ(voice_stt_retry_plain(401, &t), 0);
+    ASSERT_EQ(voice_stt_retry_plain(429, &t), 0);
+    ASSERT_EQ(voice_stt_retry_plain(500, &t), 0);
+    ASSERT_EQ(voice_stt_retry_plain(200, &t), 0);
+    ASSERT_EQ(voice_stt_retry_plain(0, &t), 0);
+    ASSERT_EQ(voice_stt_retry_plain(400, NULL), 0);
+    /* a language alone (no prompt: en-US, mistral) is enough */
+    ASSERT_EQ(target_for("openai", "en-US", &t), 1);
+    ASSERT_EQ(voice_stt_retry_plain(400, &t), 1);
+    ASSERT_EQ(target_for("mistral", "fr", &t), 1);
+    ASSERT_EQ(voice_stt_retry_plain(400, &t), 1);
+    ASSERT_EQ(target_for("gemini", "en-GB", &t), 1);
+    ASSERT_EQ(voice_stt_retry_plain(400, &t), 1);
+    /* Auto-detect with no prompt carried nothing to drop */
+    ASSERT_EQ(target_for("openai", "", &t), 1);
+    ASSERT_EQ(voice_stt_retry_plain(400, &t), 0);
+    /* the plain copy: no language, no prompt, otherwise the same, so it never
+     * retries again and its request carries neither part */
+    SttTarget q, p;
+    ASSERT_EQ(target_for("openai", "en-GB", &q), 1);
+    voice_stt_target_plain(&q, &p);
+    ASSERT_STR_EQ(p.language, "");
+    ASSERT_EQ(p.accepts_prompt, 0);
+    ASSERT_STR_EQ(p.model, q.model);
+    ASSERT_STR_EQ(p.url, q.url);
+    ASSERT_STR_EQ(p.provider, q.provider);
+    ASSERT_EQ(voice_stt_retry_plain(400, &p), 0);
+    ASSERT_STR_EQ(q.language, "en-GB");   /* the original is untouched */
+    const unsigned char w4[4] = {0, 1, 2, 0};
+    size_t len = 0;
+    const char *models[] = { "whisper-1", "gpt-transcribe" };
+    for (int i = 0; i < 2; i++) {
+        snprintf(p.model, sizeof p.model, "%s", models[i]);
+        char *b = voice_stt_multipart("b0", w4, sizeof w4, &p, &len);
+        ASSERT_NOT_NULL(b);
+        if (b) {
+            ASSERT_NULL(find_str(b, len, "name=\"language\""));
+            ASSERT_NULL(find_str(b, len, "languages[]"));
+            ASSERT_NULL(find_str(b, len, "name=\"prompt\""));
+            ASSERT_NOT_NULL(find_str(b, len, "name=\"model\""));
+            free(b);
+        }
+    }
+    /* the Gemini plain body names no language and has no spelling sentence */
+    ASSERT_EQ(target_for("gemini", "en-GB", &q), 1);
+    voice_stt_target_plain(&q, &p);
+    char tx[512];
+    char *g = gemini_text(p.language, tx, sizeof tx);
+    ASSERT_NOT_NULL(g);
+    free(g);
+    ASSERT_NULL(strstr(tx, "language"));
+    ASSERT_NULL(strstr(tx, "British"));
+    TEST_END();
+}

@@ -46,6 +46,15 @@ int voice_stt_resolve(const Settings *s, SttTarget *t, char *err, size_t cap);
  * does not take a prompt, or the language has no hint). */
 const char *voice_stt_prompt(const SttTarget *t);
 
+/* 1 when a request that got HTTP `http_status` should be sent once more without
+ * its language and prompt parts: only a 400 (the provider rejected a field, such as
+ * a language it does not know) and only when the request carried a language or a
+ * prompt, so there is something to drop. 401, 429, 5xx and the rest never retry. */
+int voice_stt_retry_plain(int http_status, const SttTarget *t);
+/* *out = *t with the language cleared and no prompt: the retry's request (it
+ * carries neither part, and voice_stt_retry_plain says no for it). */
+void voice_stt_target_plain(const SttTarget *t, SttTarget *out);
+
 /* multipart/form-data body (heap, free()); *out_len is its byte count. Everything
  * but the audio comes from the target: model, and the language as its ISO code
  * (`language`, or one `languages[]` for a gpt-transcribe model; none for ""), plus

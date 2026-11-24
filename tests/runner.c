@@ -3781,6 +3781,7 @@ int test_voice_stt_multipart_en_us_no_prompt(void);
 int test_voice_stt_multipart_auto_detect(void);
 int test_voice_stt_gemini_language_words(void);
 int test_voice_stt_prompt_per_provider(void);
+int test_voice_stt_retry_plain(void);
 int test_voice_stt_multipart_target_prompt(void);
 int test_voice_stt_parse(void);
 int test_voice_stt_http_error(void);
@@ -8260,6 +8261,7 @@ int main(void) {
     failed += test_voice_stt_multipart_auto_detect();
     failed += test_voice_stt_gemini_language_words();
     failed += test_voice_stt_prompt_per_provider();
+    failed += test_voice_stt_retry_plain();
     failed += test_voice_stt_multipart_target_prompt();
     failed += test_voice_stt_parse();
     failed += test_voice_stt_http_error();

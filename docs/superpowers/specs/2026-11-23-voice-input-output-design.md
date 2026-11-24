@@ -395,6 +395,12 @@ names the language in words ("The language is English."). Mistral
 gets no prompt: its `context_bias` is vocabulary biasing, not a spelling
 switch.
 
+**One retry** **(final review, 2026-11-24)**: a transcription request that
+carried a language or a prompt and got HTTP 400 is sent once more without them
+(Gemini: without the language and spelling sentences), then the result or the
+error is delivered as usual. No other status retries, nor a cancelled job.
+The `languages[]` form follows OpenAI's reference (read 2026-11-24).
+
 Notes:
 - Model names and voices are **editable combos** seeded with defaults, never
   hard-coded only. Several audio models change or retire within months (some

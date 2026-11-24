@@ -136,6 +136,20 @@ static void fill_common(const Settings *s, SttTarget *t, const SttProvider *p,
     t->shape = p->shape;
 }
 
+int voice_stt_retry_plain(int http_status, const SttTarget *t)
+{
+    if (!t || http_status != 400) return 0;
+    return t->language[0] != '\0' || voice_stt_prompt(t) != NULL;
+}
+
+void voice_stt_target_plain(const SttTarget *t, SttTarget *out)
+{
+    if (!t || !out) return;
+    *out = *t;
+    out->language[0] = '\0';
+    out->accepts_prompt = 0;
+}
+
 const char *voice_stt_prompt(const SttTarget *t)
 {
     if (!t || !t->accepts_prompt) return NULL;
@@ -238,6 +252,12 @@ static int text_part(char **b, size_t *l, size_t *c, const char *boundary,
            buf_str(b, l, c, value) && buf_str(b, l, c, "\r\n");
 }
 
+/* OpenAI's transcription reference (developers.openai.com, audio/transcriptions/
+ * create, read 2026-11-24): `language` is an ISO-639-1 string for any model;
+ * `languages` is an array "supported by gpt-transcribe", sent as repeated
+ * `languages[]` parts (the official SDKs' brackets array format); `prompt` is
+ * accepted for gpt-transcribe and gpt-4o-transcribe. If a provider still rejects
+ * one of them, the caller retries once without them (voice_stt_retry_plain). */
 static int is_gpt_transcribe_model(const char *m)
 {
     return m && strncmp(m, "gpt-transcribe", 14) == 0;
