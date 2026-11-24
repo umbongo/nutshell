@@ -731,6 +731,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     chat_listview_invalidate(d->hChatList);
                     chat_listview_scroll_to_bottom(d->hChatList);
                 }
+            } else if (voice_send_pressed()) {
+                /* A dictation recording is running or finishing: voice took the
+                 * Send (it ends the recording, then sends once the words are in). */
             } else {
                 ai_chat_send_user_message(d);
             }
@@ -806,6 +809,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                  * Other sessions' AiSessionState objects are untouched. */
                 ai_conv_reset(&d->conv);
                 d->conv_gen = ai_chat_next_gen();   /* a voice message recorded before this is dropped */
+                voice_on_chat_changed();            /* a live recording ends (posted, not re-entered) */
                 if (d->active_state) {
                     ai_conv_reset(&d->active_state->conv);
                     d->active_state->valid = 1;
@@ -2683,6 +2687,7 @@ static void do_session_switch(AiChatData *d,
     /* A Critical confirmation still up from the old session must not apply
      * to this one (ai_chat_request_policy_change()). */
     d->session_gen = ai_chat_next_gen();
+    voice_on_chat_changed();   /* a live recording ends (posted, not re-entered) */
     /* Kill command timers -- they belong to the old session. The dispatcher
      * itself is per-panel, not per-session, so switching away just stops it
      * silently (no "[command queue stopped]" -- that's the Stop button's
@@ -2904,6 +2909,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
         d->active_state = NULL;
         d->last_snapshot_len = 0;
         d->session_gen = ai_chat_next_gen();   /* a confirmation box still up must not apply */
+        voice_on_chat_changed();               /* a live recording ends (posted, not re-entered) */
     }
 }
 
@@ -3039,7 +3045,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
             char cue[96];
             voice_cue_text(vs ? vs->voice_ptt_mode : VOICE_MODE_TOGGLE,
                            vs ? vs->voice_ptt_key : VOICE_PTT_RIGHT_SHIFT,
-                           0, vs ? vs->voice_auto_send : 0, cue, sizeof(cue));
+                           0, vs ? vs->voice_auto_send : 0, 0, cue, sizeof(cue));
             ai_chat_voice_set_ui(hwnd, AIV_RECORDING, cue);
         } else {
             ai_chat_voice_set_ui(hwnd, AIV_TRANSCRIBING, "Transcribing\xE2\x80\xA6");

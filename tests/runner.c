@@ -3761,6 +3761,8 @@ int test_voice_ptt_live_cap(void);
 int test_voice_toggle_cap_during_stop_press_tick(void);
 int test_voice_toggle_cap_during_stop_press_audio_first(void);
 int test_voice_cue_text(void);
+int test_voice_cue_text_live(void);
+int test_voice_typing_lock_swallows(void);
 int test_voice_toggle_chord_in_stop_press_keeps_recording(void);
 int test_voice_toggle_latched_spent_escape_deactivate_cap(void);
 int test_voice_key_spent_lost_up_new_down_is_a_press(void);
@@ -8309,6 +8311,8 @@ int main(void) {
     failed += test_voice_toggle_cap_during_stop_press_tick();
     failed += test_voice_toggle_cap_during_stop_press_audio_first();
     failed += test_voice_cue_text();
+    failed += test_voice_cue_text_live();
+    failed += test_voice_typing_lock_swallows();
     failed += test_voice_toggle_chord_in_stop_press_keeps_recording();
     failed += test_voice_toggle_latched_spent_escape_deactivate_cap();
     failed += test_voice_key_spent_lost_up_new_down_is_a_press();

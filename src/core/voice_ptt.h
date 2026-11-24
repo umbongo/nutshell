@@ -173,7 +173,15 @@ const char *voice_busy_text(int pending, int no_session);
  * with auto_send on; with it off "to finish" takes the place of "to send" (the
  * words wait in the box for review). The selected key's label (Right Ctrl, F8,
  * F9) takes the place of Right Shift. The ellipsis is U+2026 in UTF-8. */
-void voice_cue_text(int mode, int ptt_key, int latched, int auto_send,
+void voice_cue_text(int mode, int ptt_key, int latched, int auto_send, int live,
                     char *out, size_t cap);
+/* live: ". Typing is paused." follows the verb (the box is locked while a live
+ * recording runs). */
+
+/* 1 when a live recording's typing lock swallows this message for the input box:
+ * WM_CHAR (all but Ctrl+C, 0x03), WM_IME_CHAR, WM_PASTE, WM_CUT, WM_CLEAR, WM_UNDO,
+ * EM_UNDO and the key-down of Delete and Backspace. Arrow keys, Enter (which posts
+ * Send), copy and the control's own EM_REPLACESEL are never swallowed. */
+int voice_typing_swallows(unsigned msg, uintptr_t wparam);
 
 #endif /* NUTSHELL_VOICE_PTT_H */

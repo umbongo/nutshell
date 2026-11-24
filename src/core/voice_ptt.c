@@ -254,13 +254,33 @@ const char *voice_busy_text(int pending, int no_session)
     return pending ? "Still transcribing the last recording" : "Assistant is busy";
 }
 
-void voice_cue_text(int mode, int ptt_key, int latched, int auto_send,
+void voice_cue_text(int mode, int ptt_key, int latched, int auto_send, int live,
                     char *out, size_t cap)
 {
     const char *label = voice_ptt_key_label(ptt_key);
     const char *verb = auto_send ? "send" : "finish";
+    const char *tail = live ? ". Typing is paused." : "";
     if (mode == VOICE_MODE_HOLD && !latched)
-        snprintf(out, cap, "Listening\xE2\x80\xA6 release %s to %s", label, verb);
+        snprintf(out, cap, "Listening\xE2\x80\xA6 release %s to %s%s", label, verb, tail);
     else
-        snprintf(out, cap, "Listening\xE2\x80\xA6 press %s again to %s", label, verb);
+        snprintf(out, cap, "Listening\xE2\x80\xA6 press %s again to %s%s", label, verb, tail);
+}
+
+int voice_typing_swallows(unsigned msg, uintptr_t wparam)
+{
+    switch (msg) {
+    case 0x0102:                       /* WM_CHAR: Ctrl+C (0x03) still copies */
+        return wparam != 0x03;
+    case 0x0286:                       /* WM_IME_CHAR */
+    case 0x0302:                       /* WM_PASTE */
+    case 0x0300:                       /* WM_CUT */
+    case 0x0303:                       /* WM_CLEAR */
+    case 0x0304:                       /* WM_UNDO */
+    case 0x00C7:                       /* EM_UNDO */
+        return 1;
+    case 0x0100:                       /* WM_KEYDOWN: VK_DELETE, VK_BACK */
+        return wparam == 0x2E || wparam == 0x08;
+    default:
+        return 0;
+    }
 }

@@ -57,4 +57,21 @@ void voice_on_audio_msg(WPARAM wp, LPARAM lp);
  * panel (or dropped when the chat changed); any other is only freed. */
 void voice_on_stt(LPARAM lp);
 
+/* WM_VOICE_LIVE from window.c's WndProc: lParam is a VoiceLiveMsg the receiver
+ * frees (voice_live_msg_free). A message for the current recording's live session
+ * goes into the box; any other is only freed. */
+void voice_on_live(LPARAM lp);
+
+/* Posted by ai_chat when the conversation or session changes (never re-entered
+ * synchronously); window.c routes WM_VOICE_CHAT to voice_on_chat_changed_msg, which
+ * ends a live recording whose binding no longer matches. */
+#define WM_VOICE_CHAT (WM_APP + 0x43)
+void voice_on_chat_changed(void);
+void voice_on_chat_changed_msg(void);
+
+/* The IDC_CHAT_SEND handler's plain-send branch (and so Enter) asks this first: 1 when
+ * a dictation recording is running or finishing and voice took the Send (it ends the
+ * recording and sends once the words are in); the handler then returns without sending. */
+int voice_send_pressed(void);
+
 #endif /* NUTSHELL_VOICE_WIN_H */

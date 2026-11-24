@@ -549,17 +549,64 @@ int test_voice_cue_text(void)
             const char *verb = as ? "send" : "finish";
             /* Toggle, and a latched hold (mic-button start): press again. */
             snprintf(want, sizeof want, "Listening\xE2\x80\xA6 press %s again to %s", keys[i].label, verb);
-            voice_cue_text(VOICE_MODE_TOGGLE, keys[i].key, 0, as, o, sizeof o);
+            voice_cue_text(VOICE_MODE_TOGGLE, keys[i].key, 0, as, 0, o, sizeof o);
             ASSERT_STR_EQ(o, want);
-            voice_cue_text(VOICE_MODE_HOLD, keys[i].key, 1, as, o, sizeof o);
+            voice_cue_text(VOICE_MODE_HOLD, keys[i].key, 1, as, 0, o, sizeof o);
             ASSERT_STR_EQ(o, want);
             snprintf(want, sizeof want, "Listening\xE2\x80\xA6 release %s to %s", keys[i].label, verb);
-            voice_cue_text(VOICE_MODE_HOLD, keys[i].key, 0, as, o, sizeof o);
+            voice_cue_text(VOICE_MODE_HOLD, keys[i].key, 0, as, 0, o, sizeof o);
             ASSERT_STR_EQ(o, want);
         }
     }
-    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 0, 0, o, sizeof o);
+    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 0, 0, 0, o, sizeof o);
     ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 release Right Shift to finish");
+    TEST_END();
+}
+
+/* The live forms add " Typing is paused." and nothing else changes. */
+int test_voice_cue_text_live(void)
+{
+    TEST_BEGIN();
+    char o[160];
+    voice_cue_text(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, 0, 0, 1, o, sizeof o);
+    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press Right Shift again to finish. Typing is paused.");
+    voice_cue_text(VOICE_MODE_TOGGLE, VOICE_PTT_F8, 0, 1, 1, o, sizeof o);
+    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press F8 again to send. Typing is paused.");
+    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_CTRL, 0, 0, 1, o, sizeof o);
+    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 release Right Ctrl to finish. Typing is paused.");
+    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_CTRL, 1, 1, 1, o, sizeof o);
+    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press Right Ctrl again to send. Typing is paused.");
+    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 0, 1, 0, o, sizeof o);
+    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 release Right Shift to send");
+    TEST_END();
+}
+
+/* While typing is paused the box swallows these and nothing else (Win32 numbers). */
+int test_voice_typing_lock_swallows(void)
+{
+    TEST_BEGIN();
+    /* WM_CHAR: every character but Ctrl+C (0x03). */
+    ASSERT_TRUE(voice_typing_swallows(0x0102, 'a'));
+    ASSERT_TRUE(voice_typing_swallows(0x0102, '\r'));
+    ASSERT_TRUE(voice_typing_swallows(0x0102, 0x16));   /* Ctrl+V */
+    ASSERT_TRUE(voice_typing_swallows(0x0102, 0x18));   /* Ctrl+X */
+    ASSERT_TRUE(voice_typing_swallows(0x0102, 0x1A));   /* Ctrl+Z */
+    ASSERT_TRUE(!voice_typing_swallows(0x0102, 0x03));  /* Ctrl+C copies */
+    ASSERT_TRUE(voice_typing_swallows(0x0286, 0x3042)); /* WM_IME_CHAR */
+    ASSERT_TRUE(voice_typing_swallows(0x0302, 0));      /* WM_PASTE */
+    ASSERT_TRUE(voice_typing_swallows(0x0300, 0));      /* WM_CUT */
+    ASSERT_TRUE(voice_typing_swallows(0x0303, 0));      /* WM_CLEAR */
+    ASSERT_TRUE(voice_typing_swallows(0x0304, 0));      /* WM_UNDO */
+    ASSERT_TRUE(voice_typing_swallows(0x00C7, 0));      /* EM_UNDO */
+    ASSERT_TRUE(voice_typing_swallows(0x0100, 0x2E));   /* WM_KEYDOWN VK_DELETE */
+    ASSERT_TRUE(voice_typing_swallows(0x0100, 0x08));   /* WM_KEYDOWN VK_BACK */
+    /* Not swallowed: arrows, Enter (posts Send), our own replace, copy, selection. */
+    ASSERT_TRUE(!voice_typing_swallows(0x0100, 0x25));  /* VK_LEFT */
+    ASSERT_TRUE(!voice_typing_swallows(0x0100, 0x0D));  /* VK_RETURN */
+    ASSERT_TRUE(!voice_typing_swallows(0x0101, 0x2E));  /* WM_KEYUP VK_DELETE */
+    ASSERT_TRUE(!voice_typing_swallows(0x00C2, 0));     /* EM_REPLACESEL */
+    ASSERT_TRUE(!voice_typing_swallows(0x00B1, 0));     /* EM_SETSEL */
+    ASSERT_TRUE(!voice_typing_swallows(0x0301, 0));     /* WM_COPY */
     TEST_END();
 }
 
