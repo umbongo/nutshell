@@ -3692,6 +3692,21 @@ int test_pcm_apply_gain_null_is_noop(void);
 int test_voice_gain_default_and_clamp(void);
 int test_voice_gain_roundtrip(void);
 int test_voice_gain_label(void);
+/* test_voice_resample.c */
+int test_voice_rs_length(void);
+int test_voice_rs_chunking_identical(void);
+int test_voice_rs_dc(void);
+int test_voice_rs_tone(void);
+int test_voice_rs_no_overflow(void);
+/* test_voice_sgate.c */
+int test_voice_sgate_silence_never_opens(void);
+int test_voice_sgate_preroll(void);
+int test_voice_sgate_preroll_short_history(void);
+int test_voice_sgate_click(void);
+int test_voice_sgate_cough(void);
+int test_voice_sgate_flush(void);
+int test_voice_sgate_two_utterances(void);
+int test_voice_sgate_reset_wipes(void);
 /* test_voice_config.c */
 int test_voice_config_defaults(void);
 int test_voice_config_json_names(void);
@@ -8181,6 +8196,19 @@ int main(void) {
     failed += test_voice_gain_default_and_clamp();
     failed += test_voice_gain_roundtrip();
     failed += test_voice_gain_label();
+    failed += test_voice_rs_length();
+    failed += test_voice_rs_chunking_identical();
+    failed += test_voice_rs_dc();
+    failed += test_voice_rs_tone();
+    failed += test_voice_rs_no_overflow();
+    failed += test_voice_sgate_silence_never_opens();
+    failed += test_voice_sgate_preroll();
+    failed += test_voice_sgate_preroll_short_history();
+    failed += test_voice_sgate_click();
+    failed += test_voice_sgate_cough();
+    failed += test_voice_sgate_flush();
+    failed += test_voice_sgate_two_utterances();
+    failed += test_voice_sgate_reset_wipes();
     failed += test_voice_config_defaults();
     failed += test_voice_config_json_names();
     failed += test_voice_config_roundtrip();
