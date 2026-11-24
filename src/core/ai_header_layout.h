@@ -3,12 +3,14 @@
 
 /*
  * ai_header_layout -- pure geometry for the AI panel's header row, laid out
- * right to left so nothing the user needs to read is ever painted under
- * something else: the icon-button cluster at the right edge, the model chip
- * a gap to its left, the status word (activity dot + one word) a gap left of
- * the chip, and the session name taking what is left of the row, ellipsised
- * when it does not fit. Portable, no windows.h; src/ui/ai_chat_view.c
- * measures the texts and paints into the rects this returns.
+ * so nothing the user needs to read is ever painted under something else:
+ * the icon-button cluster at the right edge, the session name at the left,
+ * and between them a status slot (activity dot and/or text) that follows the
+ * name and takes the free width up to the buttons minus a gap. The name
+ * keeps at least `min_name_w` before the status is narrowed; the status is
+ * dropped only when its slot would be under `min_status_w`. Portable, no
+ * windows.h; src/ui/ai_chat_view.c measures the texts and paints into the
+ * rects this returns.
  *
  * All inputs and outputs are device pixels in the header's own coordinate
  * space (the caller scales the SP_ and SZ_ sizes through ns_scale() first).
@@ -17,34 +19,39 @@
 #include "ns_layout.h"
 
 typedef struct {
-    NsRect header;   /* the header row, as ai_panel_layout() tiles it */
-    int pad;         /* inset from the header's left and right edges */
-    int gap;         /* between neighbouring items */
-    int buttons_w;   /* width of the whole button cluster; 0 = none */
-    int btn_h;       /* height of a button */
-    int chip_w;      /* width of the model chip; 0 = none (takes no gap) */
-    int chip_h;      /* height of the chip */
-    int status_w;    /* dot + gap + word; 0 = no activity, nothing to place */
-    int name_w;      /* the session name's natural text width */
+    NsRect header;     /* the header row, as ai_panel_layout() tiles it */
+    int pad;           /* inset from the header's left and right edges */
+    int gap;           /* between neighbouring items */
+    int buttons_w;     /* width of the whole button cluster; 0 = none */
+    int btn_h;         /* height of a button */
+    int status_w;      /* natural width of the status (dot + gap + text); 0 = nothing */
+    int name_w;        /* the session name's natural text width */
+    int min_name_w;    /* the least the name keeps before the status narrows */
+    int min_status_w;  /* a status slot narrower than this is dropped */
 } AiHeaderMeasure;
 
 typedef struct {
-    NsRect buttons;      /* the cluster; w = 0 when there are none */
-    NsRect chip;         /* w = 0 when there is no chip or no room for it */
-    NsRect status;       /* w = 0 when idle or dropped */
-    NsRect name;         /* the session label's rect (may be w = 0) */
-    int    status_shown; /* 1 when status holds a placed word */
-    int    name_clipped; /* 1 when name.w is narrower than the name's text */
+    NsRect buttons;        /* the cluster; w = 0 when there are none */
+    NsRect status;         /* w = 0 when nothing to show or dropped */
+    NsRect name;           /* the session label's rect (may be w = 0) */
+    int    status_shown;   /* 1 when status holds a placed slot */
+    int    status_clipped; /* 1 when status.w is narrower than status_w */
+    int    name_clipped;   /* 1 when name.w is narrower than the name's text */
 } AiHeaderLayout;
 
-/* Places the four items. The status word has priority over the name: while
- * name + gap + word fit, the word follows the name directly; once they do
- * not, the word is flush against the chip (one gap left of it) and the name
- * is cut to the room that remains. When even the word does not fit between
- * the left pad and the chip it is dropped (status_shown = 0, w = 0) and the
- * name gets the whole span. A chip that cannot fit is narrowed rather than
- * pushed over the buttons. No two returned rects with a non-zero size ever
- * overlap. NULL `m` or `out` is a no-op; negative widths count as 0. */
+/* Places the three items. While name + gap + status fit, the status follows
+ * the name directly. Otherwise the status keeps what it needs (the name is
+ * cut to the rest) until the name would fall under min(min_name_w, name_w);
+ * from there the status is narrowed (status_clipped = 1). If that slot is
+ * under min_status_w the status is dropped and the name gets the whole span.
+ * No two returned rects with a non-zero size ever overlap. NULL `m` or `out`
+ * is a no-op; negative widths count as 0. */
 void ai_header_layout(const AiHeaderMeasure *m, AiHeaderLayout *out);
+
+/* The text the header shows: the first non-empty of `transient` (a status
+ * note), `voice_cue` (while recording or transcribing) and `activity_word`;
+ * NULL when all are empty or NULL. */
+const char *ai_header_status_pick(const char *transient, const char *voice_cue,
+                                  const char *activity_word);
 
 #endif

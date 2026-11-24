@@ -220,11 +220,13 @@ void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8);
  * status line. */
 void ai_chat_voice_status(HWND panel, const char *text_utf8, int is_error);
 
-/* Runs voice_deliver against the box and acts: SEND goes the chips' way
- * (SetWindowText + ai_chat_send_user_message); FILL/APPEND put the words in
- * the box with the caret at the end and the focus there; nothing says
- * "Didn't catch that". A busy panel turns SEND into FILL. */
-void ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int review);
+/* Runs voice_deliver against the box and acts: with auto_send off (the
+ * default) an empty box is FILLed and a draft gets the words APPENDed, both
+ * with the caret at the end and the focus in the box; nothing is sent. With
+ * auto_send on, SEND goes the chips' way (SetWindowText +
+ * ai_chat_send_user_message). Nothing heard says "Didn't catch that". A busy
+ * panel turns SEND into FILL, with a status note. */
+void ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int auto_send);
 
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */

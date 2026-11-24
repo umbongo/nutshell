@@ -431,11 +431,22 @@ static const SettingsHelp k_help[SH_COUNT] = {
     E(SH_VOICE_LANGUAGE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Language:",
       NULL,
-      "Language:\n\nThe language you speak. Left blank, the provider "
-      "detects it from the recording. A two-letter code such as en or de "
-      "makes recognition faster and more accurate when you always speak "
-      "one language.\nDefault: empty (the provider detects it).",
-      "empty (the provider detects it)",
+      "Language:\n\nTells the speech-to-text service which language you will "
+      "speak. Auto-detect lets it guess, which is weakest on short commands. "
+      "English (UK) also asks for British spelling where the provider allows "
+      "it (OpenAI, Groq, custom servers, Gemini). Not listed? Choose Other... "
+      "and type a two-letter ISO 639-1 language code such as cy for Welsh or "
+      "mi for Maori, or the language's English name such as Welsh; your "
+      "provider must support it.\nDefault: English (UK).",
+      "English (UK)",
+      0, 0, 0u),
+    E(SH_VOICE_LANGUAGE_OTHER, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Other language:",
+      NULL,
+      "Other language:\n\nType a two-letter ISO 639-1 language code such as "
+      "cy for Welsh or mi for Maori, or the language's English name such as "
+      "Welsh. Your speech-to-text provider must support it.\nDefault: empty.",
+      "empty",
       0, 0, 0u),
     E(SH_VOICE_DEVICE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Input device:",
@@ -450,12 +461,19 @@ static const SettingsHelp k_help[SH_COUNT] = {
     E(SH_VOICE_TEST, SETTINGS_PAGE_VOICE, SH_KIND_ACTION,
       "Test",
       NULL,
-      "Test\n\nRecords three seconds from the chosen microphone and shows "
-      "its level in the meter beside it, so you can see the microphone "
-      "works. Nothing is sent anywhere and nothing is kept. The button is "
-      "disabled until voice is saved on.",
+      "Test\n\nListens to the microphone and shows the level on the meter until "
+      "you press Stop test, change page or close Settings. Nothing is "
+      "recorded or sent.",
       NULL,
       0, 0, 0u),
+    E(SH_VOICE_MIC_GAIN, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Microphone gain:",
+      "Microphone gain",
+      "Microphone gain\n\nBoosts or lowers the microphone in Nutshell only, "
+      "before the recording is sent. Other apps are not affected. Watch the "
+      "meter while you press Test and aim for Good. The range is -12 to 30 dB.\nDefault: 0 dB.",
+      "0 dB",
+      VOICE_GAIN_MIN_DB, VOICE_GAIN_MAX_DB, 0u),
     E(SH_VOICE_PTT_KEY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Push-to-talk key:",
       NULL,
@@ -474,7 +492,7 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Mode:",
       NULL,
       "Mode:\n\nToggle records from one clean press of the key to the "
-      "next. Hold to talk records while you hold the key and sends when "
+      "next. Hold to talk records while you hold the key and stops when "
       "you let go. A recording stops by itself after 60 seconds, and Escape "
       "throws it away.\nDefault: Toggle.",
       "Toggle",
@@ -489,13 +507,16 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "applies to Hold to talk only.\nDefault: 150.",
       "150",
       VOICE_MIC_DELAY_MIN, VOICE_MIC_DELAY_MAX, 0u),
-    E(SH_VOICE_REVIEW, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
-      "Review before sending",
+    E(SH_VOICE_AUTO_SEND, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Send automatically when I finish speaking",
       NULL,
-      "Review before sending\n\nWhen on, the transcript waits in the "
-      "message box for you to read, edit and press Enter. When off, it is "
-      "sent as soon as it arrives, and every approval still applies as for "
-      "a message you typed.\nDefault: Off.",
+      "Send automatically when I finish speaking\n\nWhen off, your words "
+      "appear in the message box for you to read, edit and send with Enter; "
+      "nothing is sent until you do. When on, the transcript is sent as soon "
+      "as it arrives, as a message you typed would be, and every approval "
+      "still applies. Either way, if the box already holds a draft, or the "
+      "assistant is busy, your words are added to the box and not sent."
+      "\nDefault: Off.",
       "Off",
       0, 0, 0u),
 

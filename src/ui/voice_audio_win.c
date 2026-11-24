@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "dll_record.h"
+#include "secure_zero.h"
 #include "voice_config.h"
 #include "voice_gate.h"
 
@@ -33,16 +34,16 @@ static const PROPERTYKEY VA_PKEY_FriendlyName =
     {{0xA45C254E, 0xDF1C, 0x4EFD, {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
 
 #define VA_CAP_SAMPLES  ((size_t)VOICE_CAP_MS * WAV_RATE / 1000u)
-#define VA_TEST_MS      3000u
 #define VA_STALL_MS     2000u
 #define VA_LEVEL_MS     50u
 
-typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH } VaCmdKind;
+typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH, VC_SET_GAIN } VaCmdKind;
 typedef struct {
     VaCmdKind kind;
     char      id[256];
     unsigned  token;
     int       flag;      /* test_only / keep / on */
+    int       gain_db;   /* VC_BEGIN, VC_SET_GAIN */
 } VaCmd;
 
 /* Everything one audio thread uses lives in its own context, so a thread
@@ -141,7 +142,9 @@ typedef struct {
     int                  test_only;
     int                  used_default;
     ULONGLONG            t_start, t_last_ev, t_last_level;
-    size_t               level_from;   /* first sample not yet in a level */
+    uint32_t             gain_q16;     /* applied to every new sample */
+    int                  level_peak;   /* raw 0..32768, max since the last post */
+    int                  raw_nonzero;  /* any non-zero sample seen before the gain */
     int                  active;
 } VaState;
 
@@ -169,7 +172,7 @@ static void va_finish(VaState *st, int keep)
         }
         c->pcm = st->pcm;                    /* ownership moves */
         memset(&st->pcm, 0, sizeof(st->pcm));
-        c->verdict = pcm_classify(c->pcm.s, c->pcm.n);
+        c->verdict = pcm_classify_raw(c->pcm.s, c->pcm.n, st->raw_nonzero);
         c->used_default = st->used_default;
         c->token = st->token;
         va_post(st->ctx, VAM_CAPTURED, (LPARAM)c);
@@ -282,7 +285,36 @@ static void va_begin(VaState *st, const VaCmd *c)
     st->test_only = c->flag;
     st->active = 1;
     st->t_start = st->t_last_ev = st->t_last_level = GetTickCount64();
-    st->level_from = 0;
+    st->level_peak = 0;
+    st->raw_nonzero = 0;
+    st->gain_q16 = pcm_gain_q16(c->gain_db);
+}
+
+/* The one place a gain command takes effect, for the thread and the seam. */
+static void va_set_gain(VaState *st, int gain_db)
+{
+    st->gain_q16 = pcm_gain_q16(gain_db);
+}
+
+/* Takes freshly captured samples: appended, then the software gain applied to
+ * exactly the new ones, so the meter, pcm_classify and pcm_to_wav all see the
+ * gained signal. A Settings Test only measures: it folds the peak into the
+ * pending level, then wipes the samples, so it never accumulates audio. */
+static void va_ingest(VaState *st, const int16_t *src, size_t frames)
+{
+    size_t before = st->pcm.n;
+    size_t take = pcm_append(&st->pcm, src, frames);
+    if (take == 0) return;
+    int16_t *fresh = st->pcm.s + before;
+    /* Decided on the raw samples: at -12 dB a quiet mic's +-1 noise becomes 0. */
+    if (!st->raw_nonzero && pcm_any_nonzero(fresh, take)) st->raw_nonzero = 1;
+    pcm_apply_gain_q16(fresh, take, st->gain_q16);
+    if (st->test_only) {
+        int pk = (int)(pcm_peak(fresh, take) * 32768.0 + 0.5);
+        if (pk > st->level_peak) st->level_peak = pk;
+        secure_zero(fresh, take * sizeof(int16_t));
+        st->pcm.n = before;
+    }
 }
 
 /* Drains every packet. Returns 0 on a device error. */
@@ -304,11 +336,11 @@ static int va_drain(VaState *st)
                 UINT32 left = frames;
                 while (left > 0) {
                     UINT32 n = left > 480 ? 480 : left;
-                    pcm_append(&st->pcm, zeros, n);
+                    va_ingest(st, zeros, n);
                     left -= n;
                 }
             } else {
-                pcm_append(&st->pcm, (const int16_t *)data, frames);
+                va_ingest(st, (const int16_t *)data, frames);
             }
         }
         IAudioCaptureClient_ReleaseBuffer(st->cap, frames);
@@ -319,12 +351,9 @@ static void va_level(VaState *st, ULONGLONG now)
 {
     if (!st->test_only || now - st->t_last_level < VA_LEVEL_MS) return;
     st->t_last_level = now;
-    size_t from = st->level_from, n = st->pcm.n;
-    double pk = (n > from) ? pcm_peak(st->pcm.s + from, n - from) : 0.0;
-    st->level_from = n;
-    int lv = (int)(pk * 1000.0 + 0.5);
-    if (lv > 1000) lv = 1000;
-    va_post(st->ctx, VAM_LEVEL, (LPARAM)lv);
+    int pk = st->level_peak > 32768 ? 32768 : st->level_peak;
+    st->level_peak = 0;
+    va_post(st->ctx, VAM_LEVEL, (LPARAM)pk);
 }
 
 /* An enumeration failure is VAE_COM_FAILED, never a capture error, so the
@@ -429,6 +458,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_BEGIN: va_begin(&st, &c); break;
             case VC_END:   va_finish(&st, c.flag); break;
             case VC_WATCH: va_watch(&st, c.flag); break;
+            case VC_SET_GAIN: va_set_gain(&st, c.gain_db); break;
             }
         }
         if (st.active) {
@@ -436,17 +466,13 @@ static DWORD WINAPI va_thread(LPVOID arg)
             if (w == WAIT_OBJECT_0 + 2) st.t_last_ev = now;
             if (!va_drain(&st)) { va_fail(&st, VAE_DEVICE_LOST); continue; }
             /* The cap ends a push-to-talk capture here, so the device never
-             * stays open past it whatever the UI does (a Test ends at 3 s). */
+             * stays open past it whatever the UI does (a Test runs until stopped). */
             if (!st.test_only && st.token != 0 && pcm_full(&st.pcm)) {
                 va_finish(&st, 1);
                 continue;
             }
             va_level(&st, now);
             if (now - st.t_last_ev > VA_STALL_MS) { va_fail(&st, VAE_DEVICE_LOST); continue; }
-            if (st.test_only && now - st.t_start >= VA_TEST_MS) {
-                va_finish(&st, 0);
-                va_post(cx, VAM_LEVEL, 0);
-            }
         }
     }
 
@@ -526,7 +552,7 @@ int voice_audio_wait_ready(DWORD ms)
     return WaitForSingleObject(g_ctx->ready, ms) == WAIT_OBJECT_0;
 }
 
-static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
+static void va_push(VaCmdKind k, const char *id, unsigned token, int flag, int gain_db)
 {
     VaCtx *cx = g_ctx;
     if (!cx) return;
@@ -535,10 +561,17 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
      * last watch state matters: both are coalesced. Begin and end are never
      * dropped: the queue grows for them. */
     int done = 0;
-    if (k == VC_ENUM || k == VC_WATCH) {
-        for (int i = 0; i < cx->qn; i++) {
+    if (k == VC_ENUM || k == VC_WATCH || k == VC_SET_GAIN) {
+        /* A gain folds only into a gain queued after the last begin: one
+         * ahead of it would be overwritten by that begin's own gain. */
+        int from = 0;
+        if (k == VC_SET_GAIN)
+            for (int i = 0; i < cx->qn; i++)
+                if (cx->q[i].kind == VC_BEGIN) from = i + 1;
+        for (int i = from; i < cx->qn; i++) {
             if (cx->q[i].kind != k) continue;
             if (k == VC_WATCH) cx->q[i].flag = flag;
+            if (k == VC_SET_GAIN) cx->q[i].gain_db = gain_db;
             done = 1;
             break;
         }
@@ -555,6 +588,7 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag)
         if (id) snprintf(c->id, sizeof(c->id), "%s", id);
         c->token = token;
         c->flag = flag;
+        c->gain_db = gain_db;
     }
     LeaveCriticalSection(&cx->qcs);
     SetEvent(cx->wake);
@@ -583,11 +617,52 @@ int voice_audio_queue_cap(void)
     return n;
 }
 
-void voice_audio_enumerate(void) { va_push(VC_ENUM, NULL, 0, 0); }
-void voice_audio_capture_begin(const char *id, unsigned token, int test_only)
-{ va_push(VC_BEGIN, id ? id : "", token, test_only ? 1 : 0); }
-void voice_audio_capture_end(int keep) { va_push(VC_END, NULL, 0, keep ? 1 : 0); }
-void voice_audio_watch_devices(int on) { va_push(VC_WATCH, NULL, 0, on ? 1 : 0); }
+void voice_audio_enumerate(void) { va_push(VC_ENUM, NULL, 0, 0, 0); }
+void voice_audio_capture_begin(const char *id, unsigned token, int test_only, int gain_db)
+{ va_push(VC_BEGIN, id ? id : "", token, test_only ? 1 : 0, gain_db); }
+void voice_audio_capture_end(int keep) { va_push(VC_END, NULL, 0, keep ? 1 : 0, 0); }
+void voice_audio_watch_devices(int on) { va_push(VC_WATCH, NULL, 0, on ? 1 : 0, 0); }
+void voice_audio_set_gain(int gain_db) { va_push(VC_SET_GAIN, NULL, 0, 0, gain_db); }
+
+/* TEST-ONLY seam (wintest), never called by product code: how many gain
+ * commands are queued (coalescing keeps it at most 1) and the last value. */
+int voice_audio_test_pending_gain(int *last_db)
+{
+    VaCtx *cx = g_ctx;
+    int n = 0;
+    if (!cx) return 0;
+    EnterCriticalSection(&cx->qcs);
+    for (int i = 0; i < cx->qn; i++)
+        if (cx->q[i].kind == VC_SET_GAIN) { n++; if (last_db) *last_db = cx->q[i].gain_db; }
+    LeaveCriticalSection(&cx->qcs);
+    return n;
+}
+
+/* TEST-ONLY seam (wintest), never called by product code: runs the audio
+ * thread's ingest path on a private capture state, no device or thread. `s`
+ * is fed twice, the gain set to gain_db first and gain2_db before the second
+ * feed (the live change). Fills peak[2] (the level each feed contributes,
+ * 0..32768), *pcm_len (samples kept) and *verdict (pcm_classify of what is
+ * kept). */
+void voice_audio_test_ingest(int test_only, int gain_db, int gain2_db,
+                             const int16_t *s, size_t n, int peak[2],
+                             size_t *pcm_len, int *verdict)
+{
+    VaState st;
+    memset(&st, 0, sizeof(st));
+    pcm_init(&st.pcm, VA_CAP_SAMPLES);
+    st.test_only = test_only;
+    st.gain_q16 = pcm_gain_q16(gain_db);
+    va_ingest(&st, s, n);
+    peak[0] = st.level_peak;
+    st.level_peak = 0;
+    va_set_gain(&st, gain2_db);   /* as a VC_SET_GAIN on the running capture */
+    va_ingest(&st, s, n);
+    peak[1] = st.level_peak;
+    *pcm_len = st.pcm.n;
+    *verdict = (int)pcm_classify_raw(st.pcm.s, st.pcm.n, st.raw_nonzero);
+    pcm_free(&st.pcm);
+}
 
 void voice_audio_free_devices(VoiceDeviceList *l) { free(l); }
 

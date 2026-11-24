@@ -35,6 +35,12 @@ int test_chat_select_win_query_word(void);
 int test_chat_select_win_drag_ignores_buttonless_move(void);
 int test_chat_select_win_short_list(void);
 
+/* test_ns_slider_win.c */
+int test_ns_slider_win_keys_and_notify(void);
+
+/* test_ns_draw_level_meter_win.c */
+int test_ns_draw_level_meter_win_zones_fill_and_hold(void);
+
 /* test_ns_check_win.c */
 int test_ns_check_win_check_state_round_trips(void);
 int test_ns_check_win_click_toggles_and_paints(void);
@@ -100,12 +106,21 @@ int test_voice_audio_bad_id_falls_back(void);
 int test_voice_audio_queue_keeps_begin_and_end(void);
 int test_voice_audio_queue_grows_past_initial_capacity(void);
 int test_voice_audio_never_started(void);
+int test_voice_audio_test_capture_has_no_time_limit(void);
+int test_voice_audio_test_capture_keeps_no_samples(void);
+int test_voice_audio_ingest_applies_gain_live(void);
+int test_voice_audio_ingest_quiet_mic_not_all_zero(void);
+int test_voice_audio_set_gain_coalesces(void);
+int test_voice_audio_set_gain_after_begin_is_kept(void);
 int test_voice_ptt_posted_keys(void);
 int test_voice_ptt_posted_right_shift(void);
 int test_voice_stt_refused_when_gate_off(void);
 int test_voice_stt_unresolvable_target(void);
 int test_voice_stt_cancel_unreachable(void);
 int test_voice_stt_cancel_all_idle(void);
+int test_voice_stt_retry_after_400_drops_language(void);
+int test_voice_stt_retry_twice_400_delivers_the_error(void);
+int test_voice_stt_no_retry_without_language_or_other_status(void);
 int test_voice_stt_cancel_closes_a_blocked_request(void);
 int test_voice_stt_gate_off_before_send_sends_nothing(void);
 int test_ai_http_post_ct_rejects_bad_content_type(void);
@@ -412,12 +427,21 @@ int main(int argc, char **argv)
     failed += test_voice_audio_queue_keeps_begin_and_end();
     failed += test_voice_audio_queue_grows_past_initial_capacity();
     failed += test_voice_audio_never_started();
+    failed += test_voice_audio_test_capture_has_no_time_limit();
+    failed += test_voice_audio_test_capture_keeps_no_samples();
+    failed += test_voice_audio_ingest_applies_gain_live();
+    failed += test_voice_audio_ingest_quiet_mic_not_all_zero();
+    failed += test_voice_audio_set_gain_coalesces();
+    failed += test_voice_audio_set_gain_after_begin_is_kept();
     failed += test_voice_ptt_posted_keys();
     failed += test_voice_ptt_posted_right_shift();
     failed += test_voice_stt_refused_when_gate_off();
     failed += test_voice_stt_unresolvable_target();
     failed += test_voice_stt_cancel_unreachable();
     failed += test_voice_stt_cancel_all_idle();
+    failed += test_voice_stt_retry_after_400_drops_language();
+    failed += test_voice_stt_retry_twice_400_delivers_the_error();
+    failed += test_voice_stt_no_retry_without_language_or_other_status();
     failed += test_voice_stt_cancel_closes_a_blocked_request();
     failed += test_voice_stt_gate_off_before_send_sends_nothing();
     failed += test_ai_http_post_ct_rejects_bad_content_type();
@@ -425,6 +449,8 @@ int main(int argc, char **argv)
     failed += test_thread_join_is_bounded();
     failed += test_thread_join_full_list_closes_handle();
     failed += test_ai_nc_fire_wakes_blocked_winhttp_call();
+    failed += test_ns_slider_win_keys_and_notify();
+    failed += test_ns_draw_level_meter_win_zones_fill_and_hold();
     failed += run_ns_tip_tests();
 
     printf("\n[pty] re-executing with a console of our own "

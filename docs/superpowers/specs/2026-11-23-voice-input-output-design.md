@@ -195,8 +195,9 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
 - **While the assistant is busy** (streaming, a command running, or a card
   waiting): voice is unavailable. The mic button is disabled, and the key shows
   a brief "Assistant is busy" **(call, from review)**. Parking a transcript in
-  the box would invite an Enter, which means Stop while busy. The key still
-  stops any speech playing (§5).
+  the box would invite an Enter, which means Stop while busy. The start gate is
+  kept in both modes, auto-send on or off: that reason holds either way. The key
+  still stops any speech playing (§5).
 - **Focus and modal dialogs** **(call)**:
   - If Nutshell loses activation (Alt+Tab, another app) or a modal dialog
     opens, the recording is discarded and the device closed (anti-goal 2).
@@ -206,9 +207,17 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
     the main window.
 - **The microphone is opened at recording start and closed at its end.**
   Nothing captures between recordings.
-- **Language:** optional, in Settings (blank = provider auto-detect), passed as
-  the provider's `language` field **(call, from review)**. Auto-detect is
-  weakest on one- or two-second commands.
+- **Language:** a dropdown in Settings, **English (UK) by default**: Auto-detect,
+  English (UK), English (US), then Arabic, Chinese, Dutch, French, German,
+  Hindi, Italian, Japanese, Korean, Polish, Portuguese, Russian, Spanish,
+  Swedish, Turkish, Ukrainian, and **Other...**, which shows a text box for a
+  two-letter ISO 639-1 code or the language's English name (`cy` or Welsh),
+  with an inline hint that says which format is wanted and what it recognised
+  ("Welsh (cy)"). An unrecognised entry is not saved. Auto-detect is weakest on
+  one- or two-second commands. The provider gets the ISO code, never the
+  region **(maintainer, 2026-11-24)**. A config saved before this (no
+  `voice_defaults_rev` of 3) with an empty language becomes English (UK) once;
+  a chosen language, and a later deliberate Auto-detect, are never touched.
 
 ### 4.2 What happens after you stop
 
@@ -219,17 +228,24 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
    session (tab) and conversation that were active when it started. If, when
    the transcript returns, a different tab is shown, New chat was pressed, or
    that session has closed, the transcript is discarded with a short status
-   ("Voice message dropped: the chat changed"). It is never sent to another
+   ("Voice message dropped: the chat changed"). Short statuses appear in the
+   panel header after the session name, not in the bottom strip, where they
+   were truncated **(maintainer, 2026-11-24)**. It is never sent to another
    host.
-4. If the input box is empty, the transcript is written into `hInput` and sent
-   through `ai_chat_send_user_message`, exactly as the suggestion chips do. It
-   appears in the chat as the maintainer's own message, and every approval
-   applies unchanged **(maintainer)**.
-   If the box already holds typed text, the transcript is appended after it
-   and **not** sent, so a draft is never overwritten or sent half-finished
-   **(call)**.
-5. A setting "Review before sending" (default **off**) always leaves the
-   transcript in the input box for Enter instead **(call)**.
+4. If the input box is empty, the transcript is written into `hInput` with the
+   caret at the end and the focus in the box, and **not** sent, so the
+   maintainer reads it, edits it and sends it with Enter **(maintainer,
+   2026-11-23: review by default, auto-send opt-in)**.
+   If the box already holds typed text, the transcript is appended after it,
+   separated by a space, and **not** sent, so a draft is never overwritten or
+   sent half-finished **(call)**.
+5. A setting "Send automatically when I finish speaking" (default **off**)
+   sends a transcript that arrives in an empty box through
+   `ai_chat_send_user_message`, exactly as the suggestion chips do. It appears
+   in the chat as the maintainer's own message, and every approval applies
+   unchanged. If the assistant has become busy by then, the send is downgraded
+   to a fill, with the status "Assistant is busy: your words are in the box"
+   **(maintainer, 2026-11-23: review by default, auto-send opt-in)**.
 6. An empty or whitespace transcript sends nothing. A short status says
    "Didn't catch that" **(call)**.
 7. Errors (no microphone, Windows has blocked microphone access, network,
@@ -242,8 +258,9 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
 While recording, the mic button is filled with the `danger` intent and pulses
 gently (driven by the panel's one `ns_motion` timer), and the input placeholder
 names the configured key and mode: in the default Toggle mode "Listening…
-press Right Shift again to send", in Hold to talk "release Right Shift to
-send". A thin live level bar under the input is **left to the builder**.
+press Right Shift again to finish", in Hold to talk "release Right Shift to
+finish"; with "Send automatically when I finish speaking" on, "to send" in place
+of "to finish". A thin live level bar under the input is **left to the builder**.
 
 ### 4.4 Capture
 
@@ -276,6 +293,11 @@ send". A thin live level bar under the input is **left to the builder**.
     error. A capture whose samples are all zero reports "Windows may be
     blocking the microphone: Settings > Privacy & security > Microphone"
     instead of "Didn't catch that" **(from review)**.
+- **Microphone gain** is a software stage **(maintainer, 2026-11-24)**: each
+  captured block is scaled by `voice_mic_gain_db` (-12 to +30 dB, default 0)
+  with saturating 16-bit maths, before the silence gate, the WAV encode and the
+  level meter, so the meter shows what is sent. It is not the Windows endpoint
+  volume, which would change the level for every app.
 - The COM work is in `src/ui`, written in C with `COBJMACROS` against
   MinGW's `mmdeviceapi.h` / `audioclient.h`. **One audio thread**, initialised
   for the MTA, owns every audio COM object, including enumeration for
@@ -359,6 +381,26 @@ providers as presets **(call)**:
     /chat/completions to derive from".
 - This resolution is one pure function in `src/core`, with tests.
 
+**Language fields per provider** **(maintainer, 2026-11-24)**: the language
+goes out as the ISO code. OpenAI-format endpoints get `language`; a
+`gpt-transcribe` model gets one `languages[]` part instead (OpenAI documents
+`languages` as an array for that model only). Nothing is sent for Auto-detect.
+English (UK) also sends a `prompt` of sample British text ("Colour, organise,
+centre, travelled, favourite.") to OpenAI, Groq and custom servers. It is
+sample text, not an instruction, because Whisper-family models read `prompt` as
+the preceding transcript and can echo an instruction **(final review,
+2026-11-24)**. The Gemini request, an LLM, instead gets an instruction appended
+("Use British English spelling, for example colour, organise and centre.") and
+names the language in words ("The language is English."). Mistral
+gets no prompt: its `context_bias` is vocabulary biasing, not a spelling
+switch.
+
+**One retry** **(final review, 2026-11-24)**: a transcription request that
+carried a language or a prompt and got HTTP 400 is sent once more without them
+(Gemini: without the language and spelling sentences), then the result or the
+error is delivered as usual. No other status retries, nor a cancelled job.
+The `languages[]` form follows OpenAI's reference (read 2026-11-24).
+
 Notes:
 - Model names and voices are **editable combos** seeded with defaults, never
   hard-coded only. Several audio models change or retire within months (some
@@ -423,13 +465,59 @@ The page then has two titled sections.
   URL (Custom only, with the existing clear-text warning), Model (editable
   combo).
 - Microphone: Input device (combo: "Windows default" plus each active capture
-  endpoint by its full friendly name), a **Test** button that records 3 s and shows the live level on a
-  meter (`ns_draw_meter`), Push-to-talk key (combo: Right Shift, Right Ctrl, F8, F9; Right
+  endpoint by its full friendly name), a **Test** button (a toggle, below) and, on the next row, the zoned
+  level meter with its verdict label (below), Push-to-talk key (combo: Right Shift, Right Ctrl, F8, F9; Right
   Shift is first and the default), Mode (Toggle / Hold to talk; Toggle is first
-  and the default), Mic start delay (0-400 ms, default 150; greyed while Toggle
-  is selected, since it applies to Hold to talk only), Review
-  before sending (tick, off).
-- Language (edit, blank = auto-detect, e.g. `en`) **(call)**.
+  and the default), Microphone gain (slider, -12 to +30 dB in 1 dB steps,
+  default 0 dB, shown as "+12 dB" beside it; software gain in Nutshell only,
+  set while watching the Test meter; it takes effect live during a Test, and is
+  enabled by the same rule as the device combo) **(maintainer, 2026-11-24)**.
+  Mic start delay (0-400 ms, default 150; greyed while Toggle
+  is selected, since it applies to Hold to talk only), Send
+  automatically when I finish speaking (tick, off) **(maintainer, 2026-11-23:
+  review by default, auto-send opt-in)**.
+- **The gain slider** is a custom-drawn control (`ns_slider`, `Nutshell_Slider`), not the
+  stock trackbar, because the stock trackbar ignores the theme tokens: the track
+  is a `raised.base` pill, the filled part `accent.base`, the thumb takes the
+  hover surface from `ns_hover`, the focus ring is `tokens->focus`, and it is a
+  tab stop that reads Left/Right/Up/Down, PageUp/PageDown, Home and End **(maintainer, 2026-11-24)**.
+- **Test is a toggle** **(maintainer, 2026-11-24)**: "Test" starts the
+  capture and the live meter, "Stop test" stops it (rules in
+  `src/core/voice_test.c`). It also stops when Settings closes, when the page
+  is left, when voice is unticked or when the capture fails; changing the input
+  device while it runs restarts it on the new microphone, so the maintainer can
+  compare microphones. It never uploads anything.
+- **The meter row** **(maintainer, 2026-11-24)**: the zoned bar on the left
+  (`ns_draw_level_meter`: bands for quiet, good, hot and loud under the bar, the
+  fill in the colour of the zone it sits in, a peak-hold tick) and the verdict
+  label on the right, coloured dim, amber, green or red by class; the label's
+  width is reserved from the widest text, so the bar does not jump. Before a
+  Test it is empty and reads "Press Test to check the level".
+- **The meter** shows dBFS of the gained signal (`src/core/voice_level.c`):
+  fast attack, 20 dB/s release, a peak-hold tick held 1 s, floor -60 dBFS. A
+  label classifies the peak of the last 1 s: below -45 "Speak to see the
+  level", -45 to -18 "Too quiet — raise the gain", -18 to -6 "Good", -6 to -3
+  "Good" (hot, drawn amber), -3 and above "Too loud — lower the gain" (the exact
+  texts of `voice_level.c`, with an em dash). The -45 figure is the silence gate's
+  speech threshold (RMS 250, about -42 dBFS) with margin: a peak below -45
+  cannot pass the gate, so nobody is speaking **(maintainer, 2026-11-24)**.
+- **Language** **(maintainer, 2026-11-24)**: a drop-down of the table in 4.1
+  (Auto-detect first), then **Other…** (the item reads "Other" followed by an
+  ellipsis character; the help text spells it "Other..." in ASCII).
+  Picking Other… shows a text box beside the drop-down (31 characters) and
+  moves focus to it. The box carries the cue "2-letter code or name, e.g. cy or
+  Welsh" (kept visible while the empty box has focus) and a hint row under the Language row says, on every edit, what the
+  entry means or which format is wanted ("Welsh (cy)" in the neutral dim colour,
+  a format complaint in the warning colour; while the box still holds an
+  unrecognised value loaded from the config, a neutral "Saved as pt-BR. ..."
+  line instead of the complaint, since Save keeps it). The box and hint are hidden while
+  another item is picked. Save writes the list item's id; for Other, the code
+  the entry parsed to; an unrecognised entry keeps the language saved before,
+  so an untouched legacy value such as `pt-BR` is written back unchanged. A saved
+  code that is not in the list reloads as Other… with the box filled. Both the
+  drop-down and the box have the page's hover tooltip (`SH_VOICE_LANGUAGE`,
+  `SH_VOICE_LANGUAGE_OTHER`). The mapping is `voice_lang_combo_index` and
+  `voice_lang_save_value` in `src/core/voice_lang.c`.
 
 **Text to Speech**
 - `Use current AI assistant to read replies aloud` (tick box), with the same
@@ -446,7 +534,7 @@ key twice. That is accepted for simplicity.
 **Other new settings fields** (in `Settings`, loaded and saved in `loader.c`):
 the voice enable flag (default off); STT use-chat flag, provider, base URL,
 model, language, input device endpoint ID and display name, key choice, mode,
-mic start delay, review flag; TTS use-chat flag, provider, base URL, model,
+mic start delay, auto-send flag; TTS use-chat flag, provider, base URL, model,
 voice; the speaker on/off state. If the stored endpoint ID has gone, Windows
 default is used.
 
@@ -463,8 +551,19 @@ Every control gets a `settings_help` entry, label and help text.
   the defaults and list the chords that keep working. Regenerate README's
   block.
 - Help > Keyboard Shortcuts and the AI panel's empty-state hint mention it.
+- The Listening and Transcribing cue is also shown in the panel header's status
+  slot, besides the input placeholder, because a draft in the box hides the
+  placeholder **(maintainer, 2026-11-24)**.
+- `--ui-demo=header-status` **(maintainer, 2026-11-24)** shows a long status
+  note in the header beside the Executing dot, and is added to `ui_gallery`.
 - `--ui-demo` states: `voice-recording`, `voice-transcribing`,
   `voice-speaking`, and the Voice settings page. All are added to `ui_gallery`.
+- `--ui-demo=settings-voice` **(maintainer, 2026-11-24)** opens Settings on the
+  Voice page with AI and voice ticked in memory, no device list and no capture.
+  It shows the gain slider at +6 dB and the meter in a fixed Good state (a level
+  in the good zone, a hold tick, the label "Good") through a demo-only fill, and
+  the Language row on English (UK), so the gallery captures the page without a
+  microphone.
 
 ## 9. Delivery
 

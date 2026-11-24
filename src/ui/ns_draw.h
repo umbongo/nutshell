@@ -138,6 +138,19 @@ void ns_draw_auto_button(HDC hdc, const NsRect *r, CmdPolicy policy,
 void ns_draw_meter(HDC hdc, const NsRect *bar, double fraction,
                    const ThemeTokens *tokens);
 
+/* The microphone level meter: a `raised.base` pill track filling `bar`, zone
+ * bands over it tinted (rgb_alpha) from `warning` below the good zone,
+ * `success` for good, `warning` for hot and `danger` for loud, then the
+ * level as a solid fill (to `level_frac`, 0..1) in the intent of the zone it
+ * sits in, inset a quarter of the bar's height top and bottom so the bands
+ * stay visible, and a peak-hold tick STROKE_RULE wide in `text_main` at
+ * `hold_frac` (not drawn at 0). zone_frac[0..3] are the 0..1 positions of the
+ * silent/good-low/good-high/loud boundaries (voice_meter_frac of the dBFS
+ * constants); [0] is not painted, the band below good starts at the left. */
+void ns_draw_level_meter(HDC hdc, const RECT *bar, double level_frac,
+                         double hold_frac, const double zone_frac[4],
+                         const ThemeTokens *tokens);
+
 /* A keyboard-focus ring: STROKE_RULE wide, radius ns_scale(R_CTRL, dpi),
  * inset 1 px inside `rc`. */
 void ns_draw_focus_ring(HDC hdc, const RECT *rc, COLORREF colour, int dpi);

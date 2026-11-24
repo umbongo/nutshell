@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.93"
-#define APP_VERSION_BINARY  1,2,93,0
+#define APP_VERSION        "1.2.94"
+#define APP_VERSION_BINARY  1,2,94,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -125,13 +125,16 @@
 #define IDC_VOICE_KEY            3102 /* speech-to-text API key edit */
 #define IDC_VOICE_URL            3103 /* custom speech-to-text base URL edit */
 #define IDC_VOICE_MODEL          3104 /* speech-to-text model (editable combo) */
-#define IDC_VOICE_LANG           3105 /* language code edit */
+#define IDC_VOICE_LANG           3105 /* language drop-down (speech-to-text) */
 #define IDC_VOICE_DEVICE         3106 /* input device combo */
 #define IDC_VOICE_TEST           3107 /* "Test" button beside the device combo */
 #define IDC_VOICE_METER          3108 /* the owner-drawn level meter row */
 #define IDC_VOICE_PTT_KEY        3109 /* push-to-talk key combo */
 #define IDC_VOICE_PTT_MODE       3110 /* Toggle / Hold to talk combo */
 #define IDC_VOICE_MIC_DELAY      3111 /* mic start delay (ms) edit */
-#define IDC_VOICE_REVIEW         3112 /* "Review before sending" tickbox */
+#define IDC_VOICE_AUTO_SEND      3112 /* "Send automatically when I finish speaking" tickbox */
+#define IDC_VOICE_GAIN           3113 /* Settings > Voice: microphone gain slider (ns_slider) */
+#define IDC_VOICE_GAIN_VALUE     3114 /* its value label ("+12 dB") */
+#define IDC_VOICE_LANG_OTHER     3115 /* the Other language box, shown while "Other..." is picked */
 
 #endif

@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "config.h"
 #include "voice_config.h"
+#include "voice_lang.h"
 #include "voice_gate.h"
 #include "ai_gate.h"
 #include "opt_feature.h"
@@ -15,11 +16,11 @@
 
 #define VCFG TEST_TMP_DIR "/nutshell_voice_test.config"
 
-static const char *const k_voice_keys[13] = {
+static const char *const k_voice_keys[14] = {
     "voice_enabled", "voice_stt_use_ai", "voice_stt_provider", "voice_stt_url",
     "voice_stt_model", "voice_stt_language", "stt_api_key", "voice_input_device",
-    "voice_input_device_name", "voice_ptt_key", "voice_ptt_mode",
-    "voice_mic_delay_ms", "voice_review",
+    "voice_input_device_name", "voice_mic_gain_db", "voice_ptt_key", "voice_ptt_mode",
+    "voice_mic_delay_ms", "voice_auto_send",
 };
 
 static int vcfg_write(const char *text)
@@ -53,7 +54,7 @@ int test_voice_config_defaults(void)
     ASSERT_STR_EQ(s.voice_stt_provider, "openai");
     ASSERT_STR_EQ(s.voice_stt_url, "");
     ASSERT_STR_EQ(s.voice_stt_model, "");
-    ASSERT_STR_EQ(s.voice_stt_language, "");
+    ASSERT_STR_EQ(s.voice_stt_language, "en-GB");
     ASSERT_STR_EQ(s.stt_api_key, "");
     ASSERT_STR_EQ(s.stt_api_key_enc_preserved, "");
     ASSERT_STR_EQ(s.voice_input_device, "");
@@ -61,7 +62,7 @@ int test_voice_config_defaults(void)
     ASSERT_EQ(s.voice_mic_delay_ms, 150);
     ASSERT_EQ(s.voice_ptt_key, (int)VOICE_PTT_RIGHT_SHIFT);
     ASSERT_EQ(s.voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
-    ASSERT_EQ(s.voice_review, 0);
+    ASSERT_EQ(s.voice_auto_send, 0);
     /* the defaults are the first entries, so a zeroed field is the default too */
     ASSERT_EQ((int)VOICE_PTT_RIGHT_SHIFT, 0);
     ASSERT_EQ((int)VOICE_MODE_TOGGLE, 0);
@@ -195,7 +196,8 @@ int test_voice_config_roundtrip(void)
     s->voice_ptt_key = VOICE_PTT_F9;
     s->voice_ptt_mode = VOICE_MODE_TOGGLE;
     s->voice_mic_delay_ms = 400;
-    s->voice_review = 1;
+    s->voice_mic_gain_db = 12;
+    s->voice_auto_send = 1;
     ASSERT_EQ(config_save(cfg, VCFG), 0);
     config_free(cfg);
 
@@ -223,7 +225,8 @@ int test_voice_config_roundtrip(void)
         ASSERT_EQ(t->voice_ptt_key, (int)VOICE_PTT_F9);
         ASSERT_EQ(t->voice_ptt_mode, (int)VOICE_MODE_TOGGLE);
         ASSERT_EQ(t->voice_mic_delay_ms, 400);
-        ASSERT_EQ(t->voice_review, 1);
+        ASSERT_EQ(t->voice_mic_gain_db, 12);
+        ASSERT_EQ(t->voice_auto_send, 1);
         config_free(l);
     }
     remove(VCFG);
@@ -253,10 +256,10 @@ int test_voice_config_first_load_voice_off(void)
     const ConfigSettingKey *keys = config_setting_keys(&nk);
     size_t found = 0;
     for (size_t i = 0; i < rep.missing_count; i++) {
-        if (found < 13u && strcmp(keys[rep.missing[i]].key, k_voice_keys[found]) == 0)
+        if (found < 14u && strcmp(keys[rep.missing[i]].key, k_voice_keys[found]) == 0)
             found++;
     }
-    ASSERT_EQ(found, (size_t)13);
+    ASSERT_EQ(found, (size_t)14);
     remove(VCFG);
     TEST_END();
 }
@@ -350,6 +353,15 @@ int test_voice_config_validate_clamps(void)
     snprintf(s.voice_stt_provider, sizeof(s.voice_stt_provider), "custom");
     settings_validate(&s);
     ASSERT_STR_EQ(s.voice_stt_provider, "custom");
+    s.voice_auto_send = 7;
+    settings_validate(&s);
+    ASSERT_EQ(s.voice_auto_send, 1);
+    s.voice_auto_send = -3;
+    settings_validate(&s);
+    ASSERT_EQ(s.voice_auto_send, 1);
+    s.voice_auto_send = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.voice_auto_send, 0);
     TEST_END();
 }
 
@@ -425,7 +437,7 @@ int test_notice_upgrade_folds_voice_keys(void)
     config_default_settings(&s);
     memset(&r, 0, sizeof(r));
     r.status = CONFIG_LOAD_OK;
-    for (int i = 0; i < 13; i++) r.missing[r.missing_count++] = vkey_index(k_voice_keys[i]);
+    for (int i = 0; i < 14; i++) r.missing[r.missing_count++] = vkey_index(k_voice_keys[i]);
     ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
     ASSERT_EQ(n.item_count, 1);
     ASSERT_STR_EQ(n.items[0].label, "Voice");
@@ -442,10 +454,100 @@ int test_notice_upgrade_lists_voice_subkey_when_switch_present(void)
     config_default_settings(&s);
     memset(&r, 0, sizeof(r));
     r.status = CONFIG_LOAD_OK;
-    r.missing[r.missing_count++] = vkey_index("voice_review");
+    r.missing[r.missing_count++] = vkey_index("voice_auto_send");
     ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
     ASSERT_EQ(n.item_count, 1);
-    ASSERT_TRUE(strcmp(n.items[0].label, "Voice") != 0);
+    ASSERT_STR_EQ(n.items[0].label, "Voice: send automatically");
+    ASSERT_STR_EQ(n.items[0].value, "off, so your words wait in the box for you to review");
+    char txt[1024];
+    notice_plain_text(&n, txt, sizeof txt);
+    ASSERT_TRUE(strstr(txt, "- Voice: send automatically: off, so your words wait in the box for you to review") != NULL);
+    /* With the voice switch missing too, the sub-key folds into "Voice". */
+    r.missing[r.missing_count++] = vkey_index("voice_enabled");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.90", &r, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice");
+    TEST_END();
+}
+
+/* ---- voice_auto_send replaces voice_review: an old key is ignored ---- */
+
+/* Saves a default config with voice on, then swaps the voice_auto_send line for
+ * the old voice_review one, so every other key is present. */
+static int vcfg_write_with_old_review(int old_value)
+{
+    Config *c = config_new_default();
+    if (!c) return 0;
+    c->settings.voice_enabled = 1;
+    int rc = config_save(c, VCFG);
+    config_free(c);
+    if (rc != 0) return 0;
+    char *t = vcfg_read();
+    if (!t) return 0;
+    char *m = strstr(t, "\"voice_auto_send\": false");
+    if (!m) { free(t); return 0; }
+    size_t len = strlen("\"voice_auto_send\": false");
+    char *tail = strdup(m + len);
+    if (!tail) { free(t); return 0; }
+    snprintf(m, 65536u - (size_t)(m - t), "\"voice_review\": %s%s", old_value ? "true" : "false", tail);
+    free(tail);
+    int ok = vcfg_write(t);
+    free(t);
+    return ok;
+}
+
+static int old_review_case(int old_value)
+{
+    int bad = 0;
+    if (!vcfg_write_with_old_review(old_value)) return 1;
+    ConfigLoadReport rep;
+    Config *cfg = config_load_report(VCFG, &rep);
+    if (!cfg) return 1;
+    if (cfg->settings.voice_auto_send != 0) bad++;
+    if (cfg->settings.voice_enabled != 1) bad++;
+    unsigned char want = vkey_index("voice_auto_send");
+    int listed = 0;
+    for (size_t i = 0; i < rep.missing_count; i++)
+        if (rep.missing[i] == want) listed = 1;
+    if (!listed || rep.missing_count != 1) bad++;
+    if (config_save(cfg, VCFG) != 0) bad++;
+    config_free(cfg);
+    char *raw = vcfg_read();
+    if (!raw) return bad + 1;
+    if (!strstr(raw, "\"voice_auto_send\": false")) bad++;
+    if (strstr(raw, "voice_review")) bad++;
+    free(raw);
+    remove(VCFG);
+    return bad;
+}
+
+int test_voice_config_old_voice_review_ignored(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(old_review_case(1), 0);
+    ASSERT_EQ(old_review_case(0), 0);
+    TEST_END();
+}
+
+int test_voice_config_auto_send_true_loads(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_enabled\": true, \"voice_auto_send\": true}, "
+                           "\"profiles\": []}"));
+    Config *c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(c->settings.voice_auto_send, 1);
+        config_free(c);
+    }
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_auto_send\": false}, \"profiles\": []}"));
+    c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(c->settings.voice_auto_send, 0);
+        config_free(c);
+    }
+    remove(VCFG);
     TEST_END();
 }
 
@@ -597,7 +699,7 @@ int test_voice_config_new_config_writes_marker(void)
     char *t = vcfg_read();
     ASSERT_NOT_NULL(t);
     if (t) {
-        ASSERT_TRUE(strstr(t, VMARK ": 2") != NULL);
+        ASSERT_TRUE(strstr(t, VMARK ": 3") != NULL);
         free(t);
     }
     remove(VCFG);
@@ -626,6 +728,251 @@ int test_voice_config_marker_is_not_a_notice_key(void)
         ASSERT_EQ(notice_upgrade(&nt, "1.2.93", &rep, &c->settings), 0);
         config_free(c);
     }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_gain_default_and_clamp(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(s.voice_mic_gain_db, 0);
+    ASSERT_EQ(voice_gain_clamp(99), 30);
+    ASSERT_EQ(voice_gain_clamp(-50), -12);
+    ASSERT_EQ(voice_gain_clamp(7), 7);
+    s.voice_mic_gain_db = 99;
+    voice_settings_validate(&s);
+    ASSERT_EQ(s.voice_mic_gain_db, 30);
+    s.voice_mic_gain_db = -50;
+    voice_settings_validate(&s);
+    ASSERT_EQ(s.voice_mic_gain_db, -12);
+    TEST_END();
+}
+
+int test_voice_gain_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    cfg->settings.voice_mic_gain_db = 12;
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_EQ(l->settings.voice_mic_gain_db, 12);
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_gain_label(void)
+{
+    TEST_BEGIN();
+    char b[16];
+    voice_gain_label(12, b, sizeof b);  ASSERT_STR_EQ(b, "+12 dB");
+    voice_gain_label(0, b, sizeof b);   ASSERT_STR_EQ(b, "0 dB");
+    voice_gain_label(-12, b, sizeof b); ASSERT_STR_EQ(b, "-12 dB");
+    voice_gain_label(30, b, sizeof b);  ASSERT_STR_EQ(b, "+30 dB");
+    TEST_END();
+}
+
+/* ---- Language: custom code round trip and the one-time English (UK) migration ---- */
+
+int test_voice_config_custom_language_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *c = config_new_default();
+    ASSERT_NOT_NULL(c);
+    if (!c) return 1;
+    ASSERT_STR_EQ(c->settings.voice_stt_language, VOICE_LANG_DEFAULT);
+    snprintf(c->settings.voice_stt_language, sizeof(c->settings.voice_stt_language), "cy");
+    ASSERT_EQ(config_save(c, VCFG), 0);
+    config_free(c);
+    char *t = vcfg_read();
+    ASSERT_NOT_NULL(t);
+    if (t) {
+        ASSERT_TRUE(strstr(t, VMARK ": 3") != NULL);
+        free(t);
+    }
+    ConfigLoadReport rep;
+    Config *l = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_STR_EQ(l->settings.voice_stt_language, "cy");
+        ASSERT_EQ(rep.voice_migrated, 0);
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+/* Loads {"settings": {rev?, language, key, mode}}; returns the report's
+ * voice_migrated and copies the loaded language. */
+static int lang_fixture(const char *rev, const char *lang, const char *key,
+                        const char *mode, char *lang_out, size_t cap, int *key_out)
+{
+    char json[512];
+    snprintf(json, sizeof json,
+             "{\"settings\": {%s\"voice_stt_language\": \"%s\", "
+             "\"voice_ptt_key\": \"%s\", \"voice_ptt_mode\": \"%s\"}, \"profiles\": []}",
+             rev, lang, key, mode);
+    if (!vcfg_write(json)) return -1;
+    ConfigLoadReport rep;
+    Config *c = config_load_report(VCFG, &rep);
+    if (!c) return -1;
+    snprintf(lang_out, cap, "%s", c->settings.voice_stt_language);
+    if (key_out) *key_out = c->settings.voice_ptt_key;
+    config_free(c);
+    return rep.voice_migrated;
+}
+
+int test_voice_config_language_migration(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    /* marker absent, empty: becomes English (UK) and is reported */
+    ASSERT_EQ(lang_fixture("", "", "right_shift", "toggle", lang, sizeof lang, NULL), 1);
+    ASSERT_STR_EQ(lang, "en-GB");
+    /* rev 2, empty: the same (the Right Shift migration does not apply) */
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 2, ", "", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 1);
+    ASSERT_STR_EQ(lang, "en-GB");
+    /* rev 3, empty: a deliberate Auto-detect, kept */
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 3, ", "", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "");
+    /* a chosen language is never touched */
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 2, ", "fr", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "fr");
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 2, ", "en", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "en");
+    ASSERT_EQ(lang_fixture("", "fr", "right_shift", "toggle", lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "fr");
+    /* a migrated config saved once is not migrated again */
+    Config *c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) { ASSERT_EQ(config_save(c, VCFG), 0); config_free(c); }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_config_rshift_migration_rev2_skips(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    int key = -1;
+    /* rev 2: Right Ctrl + Hold is a deliberate choice and stays */
+    lang_fixture("\"voice_defaults_rev\": 2, ", "fr", "right_ctrl", "hold", lang, sizeof lang, &key);
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_CTRL);
+    /* rev 3 too */
+    lang_fixture("\"voice_defaults_rev\": 3, ", "fr", "right_ctrl", "hold", lang, sizeof lang, &key);
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_CTRL);
+    /* absent: the old pair still migrates to Right Shift */
+    lang_fixture("", "fr", "right_ctrl", "hold", lang, sizeof lang, &key);
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_SHIFT);
+    remove(VCFG);
+    TEST_END();
+}
+
+/* A marker that is not a small integer must not be cast to int (UB for NaN or
+ * 1e30): huge counts as current (no migration), negative as before rev 2. */
+int test_voice_config_marker_extremes(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    int key = -1;
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 1e30, ", "", "right_ctrl", "hold",
+                           lang, sizeof lang, &key), 0);
+    ASSERT_STR_EQ(lang, "");
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_CTRL);
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": -5, ", "", "right_ctrl", "hold",
+                           lang, sizeof lang, &key), 1);
+    ASSERT_STR_EQ(lang, "en-GB");
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_SHIFT);
+    remove(VCFG);
+    TEST_END();
+}
+
+/* ---- the English (UK) migration is told to the user, in plain words ---- */
+
+#define LANG_LABEL "Voice: language"
+#define LANG_VALUE "English (UK) (choose Auto-detect in Settings > Voice if you speak another language)"
+
+int test_voice_config_language_migration_notice(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    ConfigLoadReport rep;
+    /* fires: report flag set, one notice item in plain words */
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_stt_language\": \"\"}, \"profiles\": []}"));
+    Config *c = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(c);
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 1);
+    Settings st;
+    config_default_settings(&st);
+    Notice n;
+    ConfigLoadReport only;
+    memset(&only, 0, sizeof only);
+    only.status = CONFIG_LOAD_OK;
+    only.voice_lang_migrated = 1;
+    ASSERT_EQ(only.missing_count, 0);
+    ASSERT_EQ(notice_upgrade(&n, "1.2.94", &only, &st), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, LANG_LABEL);
+    ASSERT_STR_EQ(n.items[0].value, LANG_VALUE);
+    char txt[1024];
+    notice_plain_text(&n, txt, sizeof txt);
+    ASSERT_TRUE(strstr(txt, "- " LANG_LABEL ": " LANG_VALUE) != NULL);
+    ASSERT_TRUE(strstr(txt, "defaults_rev") == NULL);
+    /* alongside another missing key: both lines */
+    only.missing[only.missing_count++] = vkey_index("voice_mic_gain_db");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.94", &only, &st), 1);
+    ASSERT_EQ(n.item_count, 2);
+    /* a launch that saved queues the notice although no key is missing */
+    memset(&only, 0, sizeof only);
+    only.status = CONFIG_LOAD_OK;
+    only.voice_lang_migrated = 1;
+    NoticeQueue q;
+    notice_queue_init(&q);
+    NoticeLaunch nl;
+    memset(&nl, 0, sizeof nl);
+    nl.status = CONFIG_LOAD_OK;
+    nl.rep = &only;
+    nl.saved = 1;
+    nl.save_ok = 1;
+    nl.version = "1.2.94";
+    nl.s = &st;
+    notice_launch_plan(&q, &nl);
+    ASSERT_EQ(q.count, 1);
+    /* with the voice switch missing (a pre-voice config) it folds into "Voice" */
+    only.missing[only.missing_count++] = vkey_index("voice_enabled");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.94", &only, &st), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice");
+
+    /* does not fire: rev 3, or a chosen language (the helper reports the flag
+     * through voice_migrated, which also covers the Right Shift move: use
+     * keys that rule that one out) */
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_defaults_rev\": 3, \"voice_stt_language\": \"\"}, \"profiles\": []}"));
+    c = config_load_report(VCFG, &rep);
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 0);
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_defaults_rev\": 2, \"voice_stt_language\": \"fr\"}, \"profiles\": []}"));
+    c = config_load_report(VCFG, &rep);
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 0);
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}"));
+    c = config_load_report(VCFG, &rep);   /* no language key: the default is already en-GB */
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 0);
+    (void)lang;
     remove(VCFG);
     TEST_END();
 }

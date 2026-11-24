@@ -126,6 +126,7 @@ void ai_chat_voice_attach(HWND panel, int on)
     d->hMicBtn = NULL;
     d->voice_ui = AIV_IDLE;
     d->voice_cue[0] = '\0';
+    ai_chat_header_invalidate(d);   /* the cue was shown in the header */
     d->anim.count = 0;   /* drop the pulse */
     if (d->hInput) InvalidateRect(d->hInput, NULL, TRUE);
     ai_chat_relayout(d);
@@ -149,6 +150,7 @@ void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8)
         InvalidateRect(d->hMicBtn, NULL, FALSE);
     }
     if (d->hInput) InvalidateRect(d->hInput, NULL, TRUE);
+    ai_chat_header_invalidate(d);   /* the cue shows in the header too */
 }
 
 void ai_chat_voice_status(HWND panel, const char *text, int is_error)
@@ -165,11 +167,11 @@ void ai_chat_voice_status(HWND panel, const char *text, int is_error)
     }
     snprintf(d->context_label, sizeof(d->context_label), "%s", text);
     snprintf(d->voice_status, sizeof(d->voice_status), "%s", d->context_label);
-    ai_chat_invalidate_status_line(d);
+    ai_chat_header_invalidate(d);
     SetTimer(panel, TIMER_VOICE_STATUS, VOICE_STATUS_MS, NULL);
 }
 
-void ai_chat_voice_deliver(HWND panel, const char *transcript, int review)
+void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send)
 {
     AiChatData *d = panel_data(panel);
     if (!d || !d->hInput || !transcript) return;
@@ -180,7 +182,7 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript, int review)
     char *out = (char *)malloc(cap);
     if (!out) { secure_zero(cur, cur_len); free(cur); return; }
 
-    VoiceDelivery dv = voice_deliver(cur, transcript, review, out, cap);
+    VoiceDelivery dv = voice_deliver(cur, transcript, auto_send, out, cap);
     const char *busy_note = NULL;
     if (dv == VD_SEND && busy_of(d)) {
         dv = VD_FILL;

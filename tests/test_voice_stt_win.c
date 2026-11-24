@@ -300,6 +300,171 @@ int test_voice_stt_gate_off_before_send_sends_nothing(void)
     TEST_END();
 }
 
+/* ---- the one retry without the language hint, against a local server ---- */
+
+#define VS_REQ_MAX 16384
+
+static const char *vs_find(const char *h, size_t hl, const char *n)
+{
+    size_t nl = strlen(n);
+    if (hl < nl) return NULL;
+    for (size_t i = 0; i + nl <= hl; i++)
+        if (memcmp(h + i, n, nl) == 0) return h + i;
+    return NULL;
+}
+
+/* Accepts one connection, reads the whole request (headers and the
+ * Content-Length body) into req, answers `status` with `body`, closes.
+ * Returns the request length, or -1 when nobody connected. */
+static int vs_serve_one(SOCKET ls, int status, const char *body, char *req, size_t cap)
+{
+    SOCKET c = vs_accept(ls, 5000);
+    if (c == INVALID_SOCKET) return -1;
+    size_t have = 0;
+    size_t want = 0;
+    for (;;) {
+        fd_set fs;
+        FD_ZERO(&fs);
+        FD_SET(c, &fs);
+        struct timeval tv;
+        tv.tv_sec = 3;
+        tv.tv_usec = 0;
+        if (select(0, &fs, NULL, NULL, &tv) <= 0) break;
+        int n = recv(c, req + have, (int)(cap - have), 0);
+        if (n <= 0) break;
+        have += (size_t)n;
+        if (!want) {
+            const char *he = vs_find(req, have, "\r\n\r\n");
+            const char *cl = vs_find(req, have, "Content-Length: ");
+            if (he && cl) want = (size_t)(he - req) + 4 + (size_t)atol(cl + 16);
+        }
+        if (want && have >= want) break;
+        if (have >= cap) break;
+    }
+    char resp[512];
+    int rl = snprintf(resp, sizeof(resp),
+                      "HTTP/1.1 %d X\r\nContent-Type: application/json\r\n"
+                      "Content-Length: %d\r\nConnection: close\r\n\r\n%s",
+                      status, (int)strlen(body), body);
+    send(c, resp, rl, 0);
+    shutdown(c, SD_SEND);
+    closesocket(c);
+    return (int)have;
+}
+
+static int vs_has_lang_or_prompt(const char *r, size_t n)
+{
+    return vs_find(r, n, "name=\"language\"") || vs_find(r, n, "languages[]") ||
+           vs_find(r, n, "name=\"prompt\"");
+}
+
+/* Runs one submit against a server that answers statuses[0..count); returns
+ * the result (caller frees) and fills reqlen/lang flags per request. */
+static VoiceSttResult *vs_retry_run(const char *language, const int *statuses, int count,
+                                    int *served, int *lang_seen, int *extra_conn)
+{
+    HWND w = vs_window();
+    int port = 0;
+    SOCKET ls = vs_listen(&port);
+    if (!w || ls == INVALID_SOCKET) return NULL;
+    ai_gate_set_enabled(1);
+    voice_gate_set_enabled(1);
+    Settings s;
+    vs_settings(&s);
+    vs_point_at(&s, port);
+    snprintf(s.voice_stt_language, sizeof(s.voice_stt_language), "%s", language);
+    size_t n;
+    unsigned char *wav = vs_wav(&n);
+    char err[200] = "";
+    VoiceSttResult *r = NULL;
+    if (wav && voice_stt_submit(w, &s, wav, n, 21u, err, sizeof(err)) == 1) {
+        static char req[VS_REQ_MAX];
+        *served = 0;
+        for (int i = 0; i < count; i++) {
+            int st = statuses[i];
+            int len = vs_serve_one(ls, st, st == 200 ? "{\"text\":\"hello there\"}"
+                                                     : "{\"error\":{\"message\":\"bad\"}}",
+                                   req, sizeof(req));
+            if (len < 0) break;
+            lang_seen[i] = vs_has_lang_or_prompt(req, (size_t)len);
+            (*served)++;
+            if (st == 200) break;
+            if (!(st == 400 && i + 1 < count)) break;
+        }
+        r = vs_wait(8000);
+        SOCKET c = vs_accept(ls, 700);   /* a third request would connect here */
+        *extra_conn = c != INVALID_SOCKET;
+        if (c != INVALID_SOCKET) closesocket(c);
+    }
+    closesocket(ls);
+    voice_stt_cancel_all();
+    voice_gate_set_enabled(0);
+    ai_gate_set_enabled(0);
+    DestroyWindow(w);
+    return r;
+}
+
+int test_voice_stt_retry_after_400_drops_language(void)
+{
+    TEST_BEGIN();
+    const int seq[2] = { 400, 200 };
+    int served = 0, lang[2] = { -1, -1 }, extra = 0;
+    VoiceSttResult *r = vs_retry_run("en-GB", seq, 2, &served, lang, &extra);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(served, 2);
+    ASSERT_EQ(lang[0], 1);   /* the first carried language and prompt */
+    ASSERT_EQ(lang[1], 0);   /* the retry carries neither */
+    ASSERT_EQ(extra, 0);
+    if (r) {
+        ASSERT_EQ(r->ok, 1);
+        ASSERT_STR_EQ(r->text, "hello there");
+        free(r);
+    }
+    TEST_END();
+}
+
+int test_voice_stt_retry_twice_400_delivers_the_error(void)
+{
+    TEST_BEGIN();
+    const int seq[2] = { 400, 400 };
+    int served = 0, lang[2] = { -1, -1 }, extra = 0;
+    VoiceSttResult *r = vs_retry_run("en-GB", seq, 2, &served, lang, &extra);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(served, 2);
+    ASSERT_EQ(lang[1], 0);
+    ASSERT_EQ(extra, 0);   /* exactly two requests, never a third */
+    if (r) {
+        ASSERT_EQ(r->ok, 0);
+        ASSERT_TRUE(r->err[0] != '\0');
+        ASSERT_TRUE(strstr(r->err, "Cancelled") == NULL);
+        free(r);
+    }
+    TEST_END();
+}
+
+int test_voice_stt_no_retry_without_language_or_other_status(void)
+{
+    TEST_BEGIN();
+    /* Auto-detect and no prompt carried nothing to drop: one request */
+    const int s400[1] = { 400 };
+    int served = 0, lang[2] = { -1, -1 }, extra = 0;
+    VoiceSttResult *r = vs_retry_run("", s400, 1, &served, lang, &extra);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(served, 1);
+    ASSERT_EQ(lang[0], 0);
+    ASSERT_EQ(extra, 0);
+    if (r) { ASSERT_EQ(r->ok, 0); free(r); }
+    /* a language was carried but the status is not 400: one request */
+    const int s500[1] = { 500 };
+    served = 0; extra = 0;
+    r = vs_retry_run("en-GB", s500, 1, &served, lang, &extra);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(served, 1);
+    ASSERT_EQ(extra, 0);
+    if (r) { ASSERT_EQ(r->ok, 0); free(r); }
+    TEST_END();
+}
+
 /* cancel_all with nothing running returns at once, twice. */
 int test_voice_stt_cancel_all_idle(void)
 {

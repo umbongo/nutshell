@@ -11,6 +11,7 @@
 #include "settings_entry.h"
 #include "settings_help.h"
 #include "voice_config.h"
+#include "voice_lang.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -534,10 +535,11 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("stt_api_key",                   NULL, NULL, SH_VOICE_STT_KEY, "Voice: speech-to-text API key"),
     CK("voice_input_device",            NULL, NULL, SH_VOICE_DEVICE, "Voice: microphone"),
     CK("voice_input_device_name",       NULL, NULL, SH_VOICE_DEVICE, "Voice: microphone name"),
+    CK("voice_mic_gain_db",             NULL, NULL, SH_VOICE_MIC_GAIN, "Voice: microphone gain"),
     CK("voice_ptt_key",                 NULL, NULL, SH_VOICE_PTT_KEY, "Voice: push-to-talk key"),
     CK("voice_ptt_mode",                NULL, NULL, SH_VOICE_PTT_MODE, "Voice: push-to-talk mode"),
     CK("voice_mic_delay_ms",            NULL, NULL, SH_VOICE_MIC_DELAY, "Voice: mic start delay"),
-    CK("voice_review",                  NULL, NULL, SH_VOICE_REVIEW, "Voice: review before sending"),
+    CK("voice_auto_send",               NULL, NULL, SH_VOICE_AUTO_SEND, "Voice: send automatically"),
 };
 #undef CK
 
@@ -970,26 +972,36 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         if ((sv = json_obj_str(jset, "voice_input_device_name"))) {
             field_copy(s->voice_input_device_name, sizeof(s->voice_input_device_name), sv);
         }
+        s->voice_mic_gain_db = voice_gain_clamp((int)json_obj_num(jset, "voice_mic_gain_db",
+                                                                  (double)s->voice_mic_gain_db));
         s->voice_ptt_key = voice_ptt_key_from_json(json_obj_str(jset, "voice_ptt_key"));
         s->voice_ptt_mode = voice_ptt_mode_from_json(json_obj_str(jset, "voice_ptt_mode"));
         s->voice_mic_delay_ms = (int)json_obj_num(jset, "voice_mic_delay_ms",
                                                   (double)s->voice_mic_delay_ms);
-        s->voice_review = json_obj_bool(jset, "voice_review", s->voice_review);
-        /* One-time migration of untouched voice defaults. 1.2.92 always wrote
-         * Right Ctrl + Hold (its defaults) and re-saved every config it opened,
-         * so those values say nothing about a choice. The internal marker
-         * "voice_defaults_rev" (written by every save, not an upgrade-notice
-         * key) is absent in such a file: voice off and the old pair means
-         * untouched, so move to the new defaults. Nothing is saved here (the
-         * demo and read-only callers load the real config): the report says
-         * so, the launch path saves, and until a save writes the marker the
-         * migration simply applies again on every load. */
-        if (!json_obj_get(jset, "voice_defaults_rev") && !s->voice_enabled
+        s->voice_auto_send = json_obj_bool(jset, "voice_auto_send", s->voice_auto_send);
+        /* One-time migrations of untouched voice defaults, keyed on the internal
+         * marker "voice_defaults_rev" (written by every save, not an upgrade-notice
+         * key). Nothing is saved here (the demo and read-only callers load the
+         * real config): the report says so, the launch path saves, and until a
+         * save writes the marker a migration simply applies again on every load.
+         * rev < 2 (1.2.92 and before): that build always wrote Right Ctrl + Hold
+         * and re-saved every config it opened, so with voice off the old pair
+         * says nothing about a choice: move to Right Shift + Toggle.
+         * rev < 3: the language had no default (empty); an empty one becomes
+         * English (UK). A chosen language is never touched, and rev 3 keeps a
+         * deliberate Auto-detect. */
+        double voice_rev = json_obj_num(jset, "voice_defaults_rev", 0.0);   /* a double: no int cast of NaN or 1e30 */
+        if (voice_rev < 2 && !s->voice_enabled
             && s->voice_ptt_key == (int)VOICE_PTT_RIGHT_CTRL
             && s->voice_ptt_mode == (int)VOICE_MODE_HOLD) {
             s->voice_ptt_key = (int)VOICE_PTT_RIGHT_SHIFT;
             s->voice_ptt_mode = (int)VOICE_MODE_TOGGLE;
             rep->voice_migrated = 1;
+        }
+        if (voice_rev < 3 && s->voice_stt_language[0] == '\0') {
+            field_copy(s->voice_stt_language, sizeof(s->voice_stt_language), VOICE_LANG_DEFAULT);
+            rep->voice_migrated = 1;
+            rep->voice_lang_migrated = 1;
         }
         settings_validate(s);
     }
@@ -1311,6 +1323,7 @@ int config_save(const Config *cfg, const char *path)
     fputs("    \"voice_input_device_name\": ", f);
     fprint_json_str(f, s->voice_input_device_name);
     fputs(",\n", f);
+    fprintf(f, "    \"voice_mic_gain_db\": %d,\n", s->voice_mic_gain_db);
     fputs("    \"voice_ptt_key\": ", f);
     fprint_json_str(f, voice_ptt_key_json(s->voice_ptt_key));
     fputs(",\n", f);
@@ -1318,9 +1331,9 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, voice_ptt_mode_json(s->voice_ptt_mode));
     fputs(",\n", f);
     fprintf(f, "    \"voice_mic_delay_ms\": %d,\n", s->voice_mic_delay_ms);
-    fprintf(f, "    \"voice_review\": %s,\n", s->voice_review ? "true" : "false");
+    fprintf(f, "    \"voice_auto_send\": %s,\n", s->voice_auto_send ? "true" : "false");
     /* Internal marker, last and not in k_setting_keys: see config_load_report. */
-    fputs("    \"voice_defaults_rev\": 2\n", f);
+    fputs("    \"voice_defaults_rev\": 3\n", f);
     fputs("  },\n  \"profiles\": [\n", f);
 
     for (size_t i = 0u; i < n; i++) {

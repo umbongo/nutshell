@@ -9,6 +9,8 @@
 #define VAL_AI_ON   "on, as your API key is already set up"
 #define VAL_OFF     "off until you choose to turn it on"
 #define VAL_DEFAULT "the standard setting"
+#define VAL_VOICE_LANGUAGE_UK "English (UK) (choose Auto-detect in Settings > Voice if you speak another language)"
+#define VAL_VOICE_AUTO_SEND_OFF "off, so your words wait in the box for you to review"
 
 static void blank(Notice *n, NoticeTone tone)
 {
@@ -209,7 +211,7 @@ int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
                    const Settings *s)
 {
     blank(n, NOTICE_INFO);
-    if (!rep || rep->missing_count == 0) return 0;
+    if (!rep || (rep->missing_count == 0 && !rep->voice_lang_migrated)) return 0;
 
     size_t nkeys = 0;
     const ConfigSettingKey *keys = config_setting_keys(&nkeys);
@@ -223,6 +225,10 @@ int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
         if (rep->missing[i] < nkeys &&
             !(voice_switch_missing && is_voice_subkey(keys[rep->missing[i]].key)))
             total++;
+    /* The one-time English (UK) language default says so, in plain words; like
+     * the other voice sub-keys it folds into "Voice" when the switch is new. */
+    const int lang_line = rep->voice_lang_migrated && !voice_switch_missing;
+    if (lang_line) total++;
     if (total == 0) return 0;
 
     welcome_title(n, version);
@@ -233,6 +239,11 @@ int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
     set(n->action, sizeof(n->action), "Review in Settings");
 
     size_t shown = 0;
+    if (lang_line) {
+        n->action_page = sh_page((int)SH_VOICE_LANGUAGE);
+        add_item(n, "Voice: language", VAL_VOICE_LANGUAGE_UK);
+        shown++;
+    }
     for (size_t i = 0; i < rep->missing_count; i++) {
         if (rep->missing[i] >= nkeys) continue;
         const ConfigSettingKey *k = &keys[rep->missing[i]];
@@ -246,6 +257,9 @@ int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,
         } else if (strcmp(k->key, "voice_enabled") == 0) {
             set(label, sizeof(label), "Voice");
             value = VAL_OFF;
+        } else if (strcmp(k->key, "voice_auto_send") == 0) {
+            key_label(k, label, sizeof(label));
+            value = VAL_VOICE_AUTO_SEND_OFF;
         } else {
             key_label(k, label, sizeof(label));
             const SettingsHelp *h = k->sh_id >= 0 ? settings_help_get(k->sh_id) : NULL;
@@ -354,7 +368,8 @@ void notice_launch_plan(NoticeQueue *q, const NoticeLaunch *in)
         break;
     case CONFIG_LOAD_OK:
     default:
-        if (wrote && in->rep && in->rep->missing_count > 0 &&
+        if (wrote && in->rep &&
+            (in->rep->missing_count > 0 || in->rep->voice_lang_migrated) &&
             notice_upgrade(&n, in->version, in->rep, in->s))
             (void)notice_queue_push(q, &n);
         break;

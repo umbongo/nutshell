@@ -1,5 +1,6 @@
 /* src/core/voice_config.c -- see voice_config.h */
 #include "voice_config.h"
+#include "voice_lang.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -51,6 +52,19 @@ int voice_ptt_mode_from_json(const char *s)
     return (int)VOICE_MODE_TOGGLE;
 }
 
+int voice_gain_clamp(int db)
+{
+    if (db < VOICE_GAIN_MIN_DB) return VOICE_GAIN_MIN_DB;
+    if (db > VOICE_GAIN_MAX_DB) return VOICE_GAIN_MAX_DB;
+    return db;
+}
+
+void voice_gain_label(int db, char *out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    (void)snprintf(out, cap, db > 0 ? "+%d dB" : "%d dB", db);
+}
+
 void voice_settings_default(Settings *s)
 {
     if (!s) return;
@@ -59,15 +73,16 @@ void voice_settings_default(Settings *s)
     (void)snprintf(s->voice_stt_provider, sizeof(s->voice_stt_provider), "openai");
     s->voice_stt_url[0] = '\0';
     s->voice_stt_model[0] = '\0';
-    s->voice_stt_language[0] = '\0';
+    (void)snprintf(s->voice_stt_language, sizeof(s->voice_stt_language), "%s", VOICE_LANG_DEFAULT);
     s->stt_api_key[0] = '\0';
     s->stt_api_key_enc_preserved[0] = '\0';
     s->voice_input_device[0] = '\0';
     s->voice_input_device_name[0] = '\0';
+    s->voice_mic_gain_db = VOICE_GAIN_DEFAULT_DB;
     s->voice_ptt_key = (int)VOICE_PTT_RIGHT_SHIFT;
     s->voice_ptt_mode = (int)VOICE_MODE_TOGGLE;
     s->voice_mic_delay_ms = VOICE_MIC_DELAY_DEFAULT;
-    s->voice_review = 0;
+    s->voice_auto_send = 0;
 }
 
 void voice_settings_validate(Settings *s)
@@ -75,9 +90,10 @@ void voice_settings_validate(Settings *s)
     if (!s) return;
     s->voice_enabled = s->voice_enabled ? 1 : 0;
     s->voice_stt_use_ai = s->voice_stt_use_ai ? 1 : 0;
-    s->voice_review = s->voice_review ? 1 : 0;
+    s->voice_auto_send = s->voice_auto_send ? 1 : 0;
     if (s->voice_mic_delay_ms < VOICE_MIC_DELAY_MIN) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MIN;
     if (s->voice_mic_delay_ms > VOICE_MIC_DELAY_MAX) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MAX;
+    s->voice_mic_gain_db = voice_gain_clamp(s->voice_mic_gain_db);
     if (s->voice_ptt_key < 0 || s->voice_ptt_key >= (int)VOICE_PTT_COUNT)
         s->voice_ptt_key = (int)VOICE_PTT_RIGHT_SHIFT;
     if (s->voice_ptt_mode < 0 || s->voice_ptt_mode >= (int)VOICE_MODE_COUNT)

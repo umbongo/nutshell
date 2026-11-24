@@ -461,6 +461,29 @@ Done, in order (details in the commit messages and the specs named):
   (`shortcuts_filtered_ex`, `SC_VOICE`); the empty state gains a voice hint line; the demo
   gains `voice-recording`, `voice-transcribing` and `settings-voice`. Its Windows checks are
   in Open.
+- Voice review by default (be421b1, kept on branch feat/voice-improvements, which began as feat/voice-review-default; maintainer, 2026-11-23: "for the
+  default, i just want you to write down what im saying for me to review before i send it"): a
+  transcript is written into the AI input (appended after a space to a draft), caret at the end
+  and focus in the box, and never sent; the new tick box "Send automatically when I finish
+  speaking" (`voice_auto_send`, default off) restores the old sending. `voice_review` is no
+  longer read, so every existing config gets auto-send off, and the upgrade notice names it.
+  Voice stays unavailable while the assistant is busy in both modes. Its Windows checks are in
+  Open (voice item, (ae) to (ai)).
+- Voice improvements (branch feat/voice-improvements; maintainer, 2026-11-24; spec sections
+  tagged so): review by default stays (be421b1). A software microphone gain
+  (`voice_mic_gain_db`, -12 to +30 dB) is applied on the audio thread before the silence gate,
+  so the WAV, the gate and the meter all see it; it is not the Windows endpoint volume. A
+  zoned dBFS level meter with a label: silent below -45, quiet below -18, good -18 to -6, hot
+  -6 to -3, loud from -3; release 20 dB/s after a 1 s hold. Test is a toggle: no time limit,
+  keeps no samples, never uploads, and stops on the Stop test button, a page change, Save,
+  Cancel, unticking Enable voice or the AI assistant, or the mic going away. The panel status
+  moved to the header after the title, with a tooltip for the full text; the model chip is
+  gone and the strip keeps the context meter. A Language dropdown (Auto-detect, English (UK)
+  by default, English (US), common languages, and Other... taking an ISO 639-1 code or an
+  English name, with a format cue, hint and tooltips): gpt-transcribe gets `languages[]`,
+  OpenAI, Groq and custom get a British-spelling `prompt`, Gemini an instruction, Mistral
+  neither. Migration marker `voice_defaults_rev` 3 turns an empty language into en-GB once.
+  Its Windows checks are in Open (voice item, (aj) onwards).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -550,7 +573,45 @@ Open, in priority order:
       then released in either order, then a clean Right Shift press works; a capital typed
       with Right Shift during a Toggle recording keeps it recording. Item (u), Win+L during a
       Toggle recording, matters more now that Toggle is the default; the follow-up is not
-      built.
+      built (with auto-send off, the default since feat/voice-review-default, such a
+      recording now only fills the box).
+      Review by default (feat/voice-review-default) adds: (ae) with "Send automatically when I
+      finish speaking" unticked (the default), speak into an empty box: the words appear in
+      it, nothing is sent, the caret is at the end and focus is in the box; the cue reads
+      "press Right Shift again to finish" and the empty-state hint ends "Your words appear in
+      the box for you to review." (af) The same with a typed draft in the box: the words are
+      appended after one space, nothing is sent. (ag) With the box ticked: an empty box sends
+      as before (approvals unchanged), a draft is appended and not sent, and the cue says "to
+      send". (ah) The maintainer's 1.2.93 config (with `voice_review`) opens at 1.2.94 with an
+      upgrade notice listing "Voice: send automatically: off, so your words wait in the box
+      for you to review", "Voice: microphone gain: 0 dB", and, if its language was empty,
+      "Voice: language: English (UK) (choose Auto-detect in Settings > Voice if you speak
+      another language)"; the next save drops `voice_review`. (ai) The tick box label fits on the
+      Voice page at 100 %, 125 % and 200 %.
+      Voice improvements (feat/voice-improvements) adds: (aj) the Microphone gain slider and
+      meter with the real mic (HD Pro Webcam C920): the Good zone is reachable by gain alone,
+      clipping shows "Too loud — lower the gain", silence shows "Speak to see the level".
+      (ak) Test stays on until stopped, and stops on each trigger: the Stop test button, a
+      page change, Save, Cancel, unticking Enable voice, unticking the AI assistant, and
+      unplugging the mic; a device change restarts it. (al) The slider by keyboard (arrows,
+      PgUp/PgDn, Home/End) and mouse, and the gain is live while testing. (am) The header
+      status docked and undocked with a long note (for example "Still transcribing the last
+      recording"), and its tooltip shows the full text. (an) The model chip is gone and the
+      session name is vertically centred (SS_CENTERIMAGE) on Windows 11. (ao) English (UK) on
+      OpenAI gpt-transcribe spells "colour" and "organise" and the request is accepted
+      (`languages[]` is unverified on the wire). (ap) The Language tooltip shows on hover over
+      the dropdown and over the Other box. (aq) The Other flow: pick Other..., the cue
+      "2-letter code or name, e.g. cy or Welsh" shows in the empty focused box; type "Welsh"
+      to get "Welsh (cy)", Save, reopen shows Other... with cy; type "xx" and the
+      not-recognised hint shows and the old language is kept. (ar) The Voice page at 125 %
+      and 200 %: every row reachable by scrolling, nothing overlapping. (as) The harness
+      `ui_gallery` case (30-ui-demo.ps1, with the new header-status state) has not been run.
+- [ ] Voice follow-up (final review, 2026-11-24, M3): after a device-change restart of
+      Test, a stale VAE_DEVICE_LOST or level from the old capture can stop or blip the new
+      one; fix: a capture generation in VaCmd echoed in VAM_LEVEL and VAM_ERROR.
+- [ ] Voice follow-up (final review, 2026-11-24, M5): a 1.2.93 exe reading a 1.2.94 config
+      sends en-GB raw as `language`, which OpenAI-format providers reject; an accepted
+      older-exe case, noted so it is not rediscovered.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text

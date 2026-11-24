@@ -88,13 +88,14 @@ const char *const *ai_panel_suggestions(int *count)
     return g_suggestions;
 }
 
-const char *ai_panel_voice_hint(int mode, int ptt_key, char *out, size_t cap)
+const char *ai_panel_voice_hint(int mode, int ptt_key, int auto_send, char *out, size_t cap)
 {
     if (!out || cap == 0) return "";
     const char *key = voice_ptt_key_label(ptt_key);
+    const char *tail = auto_send ? "" : " Your words appear in the box for you to review.";
     if (mode != VOICE_MODE_HOLD)
-        snprintf(out, cap, "Or press %s, say what you need, and press it again.", key);
+        snprintf(out, cap, "Or press %s, say what you need, and press it again.%s", key, tail);
     else
-        snprintf(out, cap, "Or hold %s and say what you need.", key);
+        snprintf(out, cap, "Or hold %s and say what you need.%s", key, tail);
     return out;
 }

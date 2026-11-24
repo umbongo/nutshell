@@ -118,7 +118,7 @@ typedef struct {
     int state_context_lines;
     /* One extra body line under AI_STATE_EMPTY's text (the voice hint,
      * ai_panel_voice_hint()); "" = none. Set by chat_listview_set_state_hint(). */
-    char state_hint[96];
+    char state_hint[160];
 
     /* y coordinate at which on_paint() last placed the inline activity
      * indicator -- computed from the actually-painted bottom of the item

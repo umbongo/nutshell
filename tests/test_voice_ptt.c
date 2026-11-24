@@ -412,22 +412,34 @@ int test_voice_deliver(void)
 {
     TEST_BEGIN();
     char out[64];
+    /* auto_send is the third argument: 0 = review (fill), 1 = send. */
     ASSERT_EQ(voice_deliver("", "  \n", 0, out, sizeof out), VD_NOTHING);
+    ASSERT_EQ(voice_deliver("", "  \n", 1, out, sizeof out), VD_NOTHING);
     ASSERT_EQ(voice_deliver("draft", "", 0, out, sizeof out), VD_NOTHING);
-    ASSERT_EQ(voice_deliver("", "hi", 0, out, sizeof out), VD_SEND);
+    ASSERT_EQ(voice_deliver("draft", " ", 1, out, sizeof out), VD_NOTHING);
+    ASSERT_EQ(voice_deliver("", "hi", 0, out, sizeof out), VD_FILL);
     ASSERT_STR_EQ(out, "hi");
-    ASSERT_EQ(voice_deliver("", "hi", 1, out, sizeof out), VD_FILL);
+    ASSERT_EQ(voice_deliver("", "hi", 1, out, sizeof out), VD_SEND);
     ASSERT_STR_EQ(out, "hi");
     ASSERT_EQ(voice_deliver("draft", "hi", 0, out, sizeof out), VD_APPEND);
+    ASSERT_STR_EQ(out, "draft hi");
+    ASSERT_EQ(voice_deliver("draft", "hi", 1, out, sizeof out), VD_APPEND);
     ASSERT_STR_EQ(out, "draft hi");
     ASSERT_EQ(voice_deliver("draft ", "hi", 1, out, sizeof out), VD_APPEND);
     ASSERT_STR_EQ(out, "draft hi");
     ASSERT_EQ(voice_deliver("draft\n", "hi", 0, out, sizeof out), VD_APPEND);
     ASSERT_STR_EQ(out, "draft\nhi");
+    /* Any trailing whitespace of the draft is the separator: no second space. */
+    ASSERT_EQ(voice_deliver("draft\t", "hi", 0, out, sizeof out), VD_APPEND);
+    ASSERT_STR_EQ(out, "draft\thi");
+    ASSERT_EQ(voice_deliver("draft\r", "hi", 0, out, sizeof out), VD_APPEND);
+    ASSERT_STR_EQ(out, "draft\rhi");
     char small[6];
     ASSERT_EQ(voice_deliver("draft", "hi", 0, small, sizeof small), VD_APPEND);
     ASSERT_STR_EQ(small, "draft");
-    ASSERT_EQ(voice_deliver("", "hello world", 0, small, sizeof small), VD_SEND);
+    ASSERT_EQ(voice_deliver("", "hello world", 1, small, sizeof small), VD_SEND);
+    ASSERT_STR_EQ(small, "hello");
+    ASSERT_EQ(voice_deliver("", "hello world", 0, small, sizeof small), VD_FILL);
     ASSERT_STR_EQ(small, "hello");
     TEST_END();
 }
@@ -528,22 +540,26 @@ int test_voice_cue_text(void)
 {
     TEST_BEGIN();
     char o[128];
-    voice_cue_text(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, 0, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press Right Shift again to send");
-    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 0, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 release Right Shift to send");
-    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 1, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press Right Shift again to send");
-    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_CTRL, 0, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 release Right Ctrl to send");
-    voice_cue_text(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, 0, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press Right Ctrl again to send");
-    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_CTRL, 1, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press Right Ctrl again to send");
-    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_F9, 0, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 release F9 to send");
-    voice_cue_text(VOICE_MODE_TOGGLE, VOICE_PTT_F9, 0, o, sizeof o);
-    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 press F9 again to send");
+    static const struct { int key; const char *label; } keys[] = {
+        { VOICE_PTT_RIGHT_SHIFT, "Right Shift" }, { VOICE_PTT_RIGHT_CTRL, "Right Ctrl" },
+        { VOICE_PTT_F8, "F8" }, { VOICE_PTT_F9, "F9" } };
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        char want[128];
+        for (int as = 0; as <= 1; as++) {
+            const char *verb = as ? "send" : "finish";
+            /* Toggle, and a latched hold (mic-button start): press again. */
+            snprintf(want, sizeof want, "Listening\xE2\x80\xA6 press %s again to %s", keys[i].label, verb);
+            voice_cue_text(VOICE_MODE_TOGGLE, keys[i].key, 0, as, o, sizeof o);
+            ASSERT_STR_EQ(o, want);
+            voice_cue_text(VOICE_MODE_HOLD, keys[i].key, 1, as, o, sizeof o);
+            ASSERT_STR_EQ(o, want);
+            snprintf(want, sizeof want, "Listening\xE2\x80\xA6 release %s to %s", keys[i].label, verb);
+            voice_cue_text(VOICE_MODE_HOLD, keys[i].key, 0, as, o, sizeof o);
+            ASSERT_STR_EQ(o, want);
+        }
+    }
+    voice_cue_text(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 0, 0, o, sizeof o);
+    ASSERT_STR_EQ(o, "Listening\xE2\x80\xA6 release Right Shift to finish");
     TEST_END();
 }
 

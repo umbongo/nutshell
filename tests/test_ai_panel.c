@@ -241,8 +241,6 @@ int test_ai_status_layout_tier1_geometry_96(void)
     ASSERT_EQ(l.policy_clip, 510);
     ASSERT_EQ(l.meter_text.x, 442);    /* 514 - 8 - 64 */
     ASSERT_EQ(l.meter_bar.x, 374);     /* 442 - 8 - 60 */
-    ASSERT_EQ(l.label.x, 222);         /* 10 + 200 + 12 */
-    ASSERT_EQ(l.label.w, 284);         /* to 514 - 8 */
     ASSERT_EQ(l.policy.x, 10);
     ASSERT_EQ(l.policy.h, 20);         /* SZ_CTRL_H - 2 * SP_XS */
     ASSERT_EQ(l.policy.y, 8);
@@ -311,7 +309,7 @@ int test_ai_status_layout_thresholds_120_and_144(void)
 }
 
 /* Review Focus 2: no context meter (no key, unknown model) -- tiers 1 and 2
- * cannot exist, and the busy label still ends before the button. */
+ * cannot exist. */
 int test_ai_status_layout_no_meter_goes_straight_to_tier3(void)
 {
     TEST_BEGIN();
@@ -322,8 +320,6 @@ int test_ai_status_layout_no_meter_goes_straight_to_tier3(void)
     ASSERT_EQ(l.compact, 0);
     ASSERT_EQ(l.meter_bar.w, 0);
     ASSERT_EQ(l.meter_text.w, 0);
-    ASSERT_TRUE(l.label.w > 0);
-    ASSERT_EQ(l.label.x + l.label.w, l.auto_btn.x - 8);
     ASSERT_EQ(status_at(308, 96, &m).tier, AI_STATUS_TIER_NO_METER);
     ASSERT_EQ(status_at(307, 96, &m).tier, AI_STATUS_TIER_COMPACT);
     TEST_END();
@@ -331,8 +327,8 @@ int test_ai_status_layout_no_meter_goes_straight_to_tier3(void)
 
 /* Review Focus 3: every width from 0 to 1400 at 96 and 192 DPI -- the
  * button keeps its rect at the right edge, the clip sits SP_XS left of
- * it, the pill (as seen), the button, the meter and the label never
- * overlap one another (label and meter are alternatives and may), and
+ * it, the pill (as seen), the button and the meter never
+ * overlap one another, and
  * widening the row never moves to a narrower tier. */
 int test_ai_status_layout_width_sweep_invariants(void)
 {
@@ -355,21 +351,16 @@ int test_ai_status_layout_width_sweep_invariants(void)
             if (l.auto_btn.w != bw) bad = 1;
             if (l.auto_btn.x + l.auto_btn.w != status.x + w - sm) bad = 1;
             if (l.policy_clip != l.auto_btn.x - xs) bad = 1;
-            if (l.label.w < 0) bad = 1;
-            if (l.label.w > 0 && l.label.x + l.label.w != l.auto_btn.x - sm) bad = 1;
             if (rects_overlap(pill, l.auto_btn) || rects_overlap(pill, l.meter_bar) ||
-                rects_overlap(pill, l.meter_text) || rects_overlap(pill, l.label) ||
+                rects_overlap(pill, l.meter_text) ||
                 rects_overlap(l.auto_btn, l.meter_bar) ||
                 rects_overlap(l.auto_btn, l.meter_text) ||
-                rects_overlap(l.auto_btn, l.label) ||
                 rects_overlap(l.meter_bar, l.meter_text)) bad = 1;
-            if (!rect_inside(l.meter_bar, status) || !rect_inside(l.meter_text, status) ||
-                !rect_inside(l.label, status)) bad = 1;
+            if (!rect_inside(l.meter_bar, status) || !rect_inside(l.meter_text, status)) bad = 1;
             if (bad) {
                 printf("  dpi %d w %d: tier %d compact %d btn {%d,%d} clip %d "
-                       "pill {%d,%d} label {%d,%d}\n", dpi, w, l.tier, l.compact,
-                       l.auto_btn.x, l.auto_btn.w, l.policy_clip, pill.x, pill.w,
-                       l.label.x, l.label.w);
+                       "pill {%d,%d}\n", dpi, w, l.tier, l.compact,
+                       l.auto_btn.x, l.auto_btn.w, l.policy_clip, pill.x, pill.w);
                 _tf_local_fail = 1;
                 break;
             }
@@ -396,7 +387,6 @@ int test_ai_status_layout_negative_and_null_inputs(void)
     NsRect neg = { 0, 0, -50, 28 };
     ai_status_layout(neg, 96, &STATUS_M96, &out);
     ASSERT_EQ(out.tier, AI_STATUS_TIER_CLIPPED);
-    ASSERT_EQ(out.label.w, 0);
     TEST_END();
 }
 
@@ -946,32 +936,52 @@ int test_ai_panel_suggestions_exactly_three_nonempty(void)
     TEST_END();
 }
 
-/* The empty state's voice line: one wording per mode, the key label
- * substituted, truncation safe. */
+/* The empty state's voice line: one wording per mode and auto-send state, the
+ * key label substituted, truncation safe. */
 int test_ai_panel_voice_hint_wordings(void)
 {
     TEST_BEGIN();
     char b[160];
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+    /* Auto-send on: the original wordings. */
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 1, b, sizeof b),
                   "Or hold Right Shift and say what you need.");
     ASSERT_STR_EQ(b, "Or hold Right Shift and say what you need.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, 1, b, sizeof b),
                   "Or press Right Shift, say what you need, and press it again.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, 1, b, sizeof b),
                   "Or press Right Ctrl, say what you need, and press it again.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, 1, b, sizeof b),
                   "Or hold F8 and say what you need.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F9, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F9, 1, b, sizeof b),
                   "Or press F9, say what you need, and press it again.");
+    /* Auto-send off (the default): the words wait for review. */
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_SHIFT, 0, b, sizeof b),
+                  "Or press Right Shift, say what you need, and press it again. "
+                  "Your words appear in the box for you to review.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_RIGHT_SHIFT, 0, b, sizeof b),
+                  "Or hold Right Shift and say what you need. "
+                  "Your words appear in the box for you to review.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F9, 0, b, sizeof b),
+                  "Or hold F9 and say what you need. "
+                  "Your words appear in the box for you to review.");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_F8, 0, b, sizeof b),
+                  "Or press F8, say what you need, and press it again. "
+                  "Your words appear in the box for you to review.");
     /* An out-of-range mode falls back to the toggle wording. */
-    ASSERT_STR_EQ(ai_panel_voice_hint(7, VOICE_PTT_F8, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(7, VOICE_PTT_F8, 1, b, sizeof b),
                   "Or press F8, say what you need, and press it again.");
-    ASSERT_STR_EQ(ai_panel_voice_hint(-1, VOICE_PTT_F8, b, sizeof b),
+    ASSERT_STR_EQ(ai_panel_voice_hint(-1, VOICE_PTT_F8, 1, b, sizeof b),
                   "Or press F8, say what you need, and press it again.");
     /* A small buffer truncates and still terminates; no buffer is a no-op. */
     char tiny[8];
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, tiny, sizeof tiny),
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, 0, tiny, sizeof tiny),
                   "Or hold");
-    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, NULL, 0), "");
+    ASSERT_STR_EQ(ai_panel_voice_hint(VOICE_MODE_HOLD, VOICE_PTT_F8, 1, NULL, 0), "");
+    /* The longest hint fits chat_listview's 160-byte state_hint, and with the
+     * empty-state body still fits its 384-byte body buffer. */
+    ASSERT_TRUE(strlen(ai_panel_voice_hint(VOICE_MODE_TOGGLE, VOICE_PTT_RIGHT_CTRL, 0, b, sizeof b)) < 160);
+    char body[384];
+    int blen = ai_panel_state_body(AI_STATE_EMPTY, 50000, body, sizeof body);
+    ASSERT_TRUE(blen > 0 && (size_t)blen + 1 + strlen(b) < sizeof body);
     TEST_END();
 }

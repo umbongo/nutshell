@@ -4642,7 +4642,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
                 /* Untouched 1.2.92 voice defaults were migrated in memory: the
                  * save writes the marker (notice_launch_save_wanted still
-                 * refuses it in demo mode; no notice, missing_count is 0). */
+                 * refuses it in demo mode). The Right Shift move shows no notice;
+                 * an empty language that became English (UK) does: notice_upgrade
+                 * adds that one line from load_rep.voice_lang_migrated. */
                 if (load_rep.voice_migrated) launch_need_save = 1;
 
                 /* Default log_dir to the exe directory when not set */
