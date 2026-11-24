@@ -3788,6 +3788,12 @@ int test_voice_config_language_migration_notice(void);
 int test_voice_live_model_default_and_roundtrip(void);
 int test_voice_live_model_missing_key_reported(void);
 int test_voice_settings_digest(void);
+int test_voice_conv_settings_defaults(void);
+int test_voice_conv_settings_roundtrip(void);
+int test_voice_conv_settings_clamp(void);
+int test_voice_conv_settings_notice_lines(void);
+int test_voice_conv_settings_digest(void);
+int test_voice_conv_auto_send_unchanged(void);
 int test_selftest_configs_complete(void);
 int test_voice_config_load_defaults_and_saved_choices(void);
 /* test_voice_lang.c */
@@ -3887,6 +3893,7 @@ int test_shortcuts_filtered_on_keeps_all(void);
 int test_shortcuts_filtered_counts_without_a_buffer(void);
 int test_shortcuts_readme_block_unchanged_by_filter(void);
 int test_shortcuts_voice_rows_need_both_switches(void);
+int test_shortcuts_voice_rows_pr2(void);
 /* test_cheatsheet_layout.c */
 int test_cheatsheet_layout_capacity_holds_the_table(void);
 int test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96(void);
@@ -8346,6 +8353,12 @@ int main(void) {
     failed += test_voice_live_model_default_and_roundtrip();
     failed += test_voice_live_model_missing_key_reported();
     failed += test_voice_settings_digest();
+    failed += test_voice_conv_settings_defaults();
+    failed += test_voice_conv_settings_roundtrip();
+    failed += test_voice_conv_settings_clamp();
+    failed += test_voice_conv_settings_notice_lines();
+    failed += test_voice_conv_settings_digest();
+    failed += test_voice_conv_auto_send_unchanged();
     failed += test_selftest_configs_complete();
     failed += test_voice_lang_table_order();
     failed += test_voice_lang_find();
@@ -8439,6 +8452,7 @@ int main(void) {
     failed += test_shortcuts_filtered_counts_without_a_buffer();
     failed += test_shortcuts_readme_block_unchanged_by_filter();
     failed += test_shortcuts_voice_rows_need_both_switches();
+    failed += test_shortcuts_voice_rows_pr2();
     failed += test_cheatsheet_layout_capacity_holds_the_table();
     failed += test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96();
     failed += test_cheatsheet_layout_no_scrollbar_when_the_page_fits();

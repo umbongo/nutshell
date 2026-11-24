@@ -24,6 +24,15 @@ typedef enum {
     VOICE_MODE_COUNT
 } VoicePttMode;
 
+/* Settings.voice_mode: where a transcript goes. Distinct from VoicePttMode
+ * (VOICE_MODE_TOGGLE/HOLD), which is the key's behaviour. */
+#define VOICE_MODE_DICTATION 0
+#define VOICE_MODE_CONVERSATION 1
+
+#define VOICE_PAUSE_MIN_MS 500
+#define VOICE_PAUSE_MAX_MS 3000
+#define VOICE_PAUSE_DEFAULT_MS 1200
+
 #define VOICE_MIC_DELAY_DEFAULT 150
 #define VOICE_MIC_DELAY_MIN 0
 #define VOICE_MIC_DELAY_MAX 400
@@ -41,6 +50,10 @@ int voice_ptt_key_is_modifier(int key);         /* Right Shift, Right Ctrl: a pr
 const char *voice_ptt_mode_json(int mode);      /* "toggle" "hold"; default for out of range */
 int voice_ptt_mode_from_json(const char *s);    /* unknown/NULL -> VOICE_MODE_TOGGLE */
 const char *voice_ptt_mode_label(int mode);     /* "Toggle" "Hold to talk"; default for out of range */
+const char *voice_mode_json(int mode);          /* "dictation" "conversation"; Dictation for out of range */
+int voice_mode_from_json(const char *s);        /* unknown/NULL -> VOICE_MODE_DICTATION */
+int voice_pause_clamp(int ms);                  /* into VOICE_PAUSE_MIN_MS..VOICE_PAUSE_MAX_MS */
+int voice_pause_round(int ms);                  /* clamped, then to the nearest 100 (halves up) */
 int voice_gain_clamp(int db);                   /* into VOICE_GAIN_MIN_DB..VOICE_GAIN_MAX_DB */
 void voice_gain_label(int db, char *out, size_t cap); /* "+12 dB" "0 dB" "-12 dB" */
 void voice_settings_default(Settings *s);       /* called by config_default_settings */

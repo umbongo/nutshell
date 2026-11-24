@@ -480,8 +480,8 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **Ctrl+C** | Copy the selected text | conversation list focused |
 | **Ctrl+A** | Select all messages | list focused |
 | **Esc** | Clear the selection | list focused |
-| **Right Shift** | Talk to the assistant: press, speak, press again | Voice on; key and mode in Settings > Voice |
-| **Esc** | Cancel a voice recording | While recording, AI panel focused |
+| **Right Shift** | Talk to the assistant: press, speak, press again (in Conversation mode, press to start and end a conversation, or to stop a spoken reply) | Voice on; key and mode in Settings > Voice |
+| **Esc** | Cancel a voice recording, stop a spoken reply or end a conversation | AI panel focused |
 | **PgUp, PgDn, Home, End, Up, Down** | Scroll the conversation | list focused |
 
 #### Window and help

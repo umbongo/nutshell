@@ -1116,3 +1116,263 @@ int test_voice_settings_digest(void)
     ASSERT_TRUE(voice_settings_digest(&b) == base);
     TEST_END();
 }
+
+/* ---- PR 2: conversation mode settings ---------------------------------- */
+
+static void conv_drop_line(char *txt, const char *key)
+{
+    char pat[64];
+    snprintf(pat, sizeof pat, "    \"%s\":", key);
+    char *p = strstr(txt, pat);
+    if (p) {
+        char *e = strchr(p, '\n');
+        memmove(p, e + 1, strlen(e + 1) + 1);
+    }
+}
+
+int test_voice_conv_settings_defaults(void)
+{
+    TEST_BEGIN();
+    Settings d;
+    config_default_settings(&d);
+    ASSERT_EQ(d.voice_mode, VOICE_MODE_DICTATION);
+    ASSERT_EQ(d.voice_pause_ms, 1200);
+    ASSERT_STR_EQ(d.voice_windows_voice, "");
+    ASSERT_STR_EQ(d.voice_windows_voice_name, "");
+    /* a file without the four keys loads with the same values */
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (!txt) { TEST_END(); }
+    conv_drop_line(txt, "voice_mode");
+    conv_drop_line(txt, "voice_pause_ms");
+    conv_drop_line(txt, "voice_windows_voice");
+    conv_drop_line(txt, "voice_windows_voice_name");
+    ASSERT_TRUE(strstr(txt, "voice_pause_ms") == NULL);
+    ASSERT_TRUE(vcfg_write(txt));
+    free(txt);
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_EQ(l->settings.voice_mode, VOICE_MODE_DICTATION);
+        ASSERT_EQ(l->settings.voice_pause_ms, 1200);
+        ASSERT_STR_EQ(l->settings.voice_windows_voice, "");
+        ASSERT_STR_EQ(l->settings.voice_windows_voice_name, "");
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_conv_settings_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    cfg->settings.voice_mode = VOICE_MODE_CONVERSATION;
+    cfg->settings.voice_pause_ms = 2300;
+    snprintf(cfg->settings.voice_windows_voice, sizeof cfg->settings.voice_windows_voice,
+             "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Speech\\Voices\\Tokens\\TTS_MS_EN-GB_HAZEL_11.0");
+    snprintf(cfg->settings.voice_windows_voice_name, sizeof cfg->settings.voice_windows_voice_name,
+             "Microsoft Hazel Desktop - English (Great Britain)");
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (txt) {
+        ASSERT_TRUE(strstr(txt, "\"voice_mode\": \"conversation\"") != NULL);
+        free(txt);
+    }
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_EQ(l->settings.voice_mode, VOICE_MODE_CONVERSATION);
+        ASSERT_EQ(l->settings.voice_pause_ms, 2300);
+        ASSERT_TRUE(strstr(l->settings.voice_windows_voice, "TTS_MS_EN-GB_HAZEL_11.0") != NULL);
+        ASSERT_STR_EQ(l->settings.voice_windows_voice_name,
+                      "Microsoft Hazel Desktop - English (Great Britain)");
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+/* Saves a default config, replaces the first occurrence of `from` with `to`,
+ * loads the result. */
+static Config *conv_load_edited(const char *from, const char *to)
+{
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    config_save(cfg, VCFG);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    if (!txt) return NULL;
+    char *p = strstr(txt, from);
+    char *out = (char *)malloc(70000);
+    if (!p || !out) { free(txt); free(out); return NULL; }
+    snprintf(out, 70000, "%.*s%s%s", (int)(p - txt), txt, to, p + strlen(from));
+    int ok = vcfg_write(out);
+    free(txt);
+    free(out);
+    return ok ? config_load(VCFG) : NULL;
+}
+
+int test_voice_conv_settings_clamp(void)
+{
+    TEST_BEGIN();
+    Config *l = conv_load_edited("\"voice_pause_ms\": 1200", "\"voice_pause_ms\": 100");
+    ASSERT_NOT_NULL(l);
+    if (l) { ASSERT_EQ(l->settings.voice_pause_ms, 500); config_free(l); }
+    l = conv_load_edited("\"voice_pause_ms\": 1200", "\"voice_pause_ms\": 9000");
+    ASSERT_NOT_NULL(l);
+    if (l) { ASSERT_EQ(l->settings.voice_pause_ms, 3000); config_free(l); }
+    l = conv_load_edited("\"voice_mode\": \"dictation\"", "\"voice_mode\": \"shouting\"");
+    ASSERT_NOT_NULL(l);
+    if (l) { ASSERT_EQ(l->settings.voice_mode, VOICE_MODE_DICTATION); config_free(l); }
+    l = conv_load_edited("\"voice_mode\": \"dictation\"", "\"voice_mode\": \"conversation\"");
+    ASSERT_NOT_NULL(l);
+    if (l) { ASSERT_EQ(l->settings.voice_mode, VOICE_MODE_CONVERSATION); config_free(l); }
+
+    /* saved rounded to the nearest 100: 1249 -> 1200, 1250 -> 1300 */
+    static const int in[] = { 1249, 1250, 500, 3000 };
+    static const int want[] = { 1200, 1300, 500, 3000 };
+    for (int i = 0; i < 4; i++) {
+        remove(VCFG);
+        Config *cfg = config_new_default();
+        cfg->settings.voice_pause_ms = in[i];
+        ASSERT_EQ(config_save(cfg, VCFG), 0);
+        config_free(cfg);
+        char *txt = vcfg_read();
+        ASSERT_NOT_NULL(txt);
+        if (txt) {
+            char pat[48];
+            snprintf(pat, sizeof pat, "\"voice_pause_ms\": %d,", want[i]);
+            ASSERT_TRUE(strstr(txt, pat) != NULL);
+            free(txt);
+        }
+    }
+    /* validate clamps an in-memory value too */
+    Settings s;
+    config_default_settings(&s);
+    s.voice_pause_ms = 7;
+    s.voice_mode = 9;
+    settings_validate(&s);
+    ASSERT_EQ(s.voice_pause_ms, VOICE_PAUSE_MIN_MS);
+    ASSERT_EQ(s.voice_mode, VOICE_MODE_DICTATION);
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_conv_settings_notice_lines(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (!txt) { TEST_END(); }
+    conv_drop_line(txt, "voice_mode");
+    conv_drop_line(txt, "voice_pause_ms");
+    conv_drop_line(txt, "voice_windows_voice");
+    conv_drop_line(txt, "voice_windows_voice_name");
+    ASSERT_TRUE(vcfg_write(txt));
+    free(txt);
+    ConfigLoadReport rep;
+    Config *l = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(l);
+    if (l) config_free(l);
+    ASSERT_EQ(rep.missing_count, (size_t)4);
+    Notice n;
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(notice_upgrade(&n, "1.2.96", &rep, &s), 1);
+    ASSERT_EQ(n.item_count, 4);
+    if (n.item_count == 4) {
+        ASSERT_STR_EQ(n.items[0].label, "Voice: mode");
+        ASSERT_STR_EQ(n.items[0].value,
+                      "Dictation, so your words wait in the box for you to press Send");
+        ASSERT_STR_EQ(n.items[1].label, "Voice: pause before sending");
+        ASSERT_STR_EQ(n.items[1].value, "1.2 seconds");
+        ASSERT_STR_EQ(n.items[2].label, "Voice: Windows voice");
+        ASSERT_STR_EQ(n.items[2].value,
+                      "Automatic (an English (UK) woman's voice if one is installed)");
+        ASSERT_STR_EQ(n.items[3].label, "Voice: Windows voice name");
+        ASSERT_STR_EQ(n.items[3].value, "none, as Automatic is used");
+    }
+    /* with the voice switch missing too they fold into the one "Voice" line */
+    rep.missing[rep.missing_count++] = vkey_index("voice_enabled");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.96", &rep, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice");
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_conv_settings_digest(void)
+{
+    TEST_BEGIN();
+    Settings a, b;
+    config_default_settings(&a);
+    const uint64_t base = voice_settings_digest(&a);
+    config_default_settings(&b);
+    b.voice_mode = VOICE_MODE_CONVERSATION;
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    b.voice_pause_ms = 1300;
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_windows_voice, sizeof b.voice_windows_voice, "tok");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_windows_voice_name, sizeof b.voice_windows_voice_name, "nm");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    TEST_END();
+}
+
+int test_voice_conv_auto_send_unchanged(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    cfg->settings.voice_auto_send = 1;
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (txt) {
+        ASSERT_TRUE(strstr(txt, "\"voice_auto_send\": true,") != NULL);
+        ASSERT_TRUE(strstr(txt, "\"voice_defaults_rev\": 3\n") != NULL);
+        free(txt);
+    }
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) { ASSERT_EQ(l->settings.voice_auto_send, 1); config_free(l); }
+    /* the missing-key notice for voice_auto_send is still its own wording */
+    Config *c2 = config_new_default();
+    ASSERT_EQ(config_save(c2, VCFG), 0);
+    config_free(c2);
+    txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (!txt) { TEST_END(); }
+    conv_drop_line(txt, "voice_auto_send");
+    ASSERT_TRUE(vcfg_write(txt));
+    free(txt);
+    ConfigLoadReport rep;
+    Config *l2 = config_load_report(VCFG, &rep);
+    if (l2) config_free(l2);
+    ASSERT_EQ(rep.missing_count, (size_t)1);
+    Notice n;
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(notice_upgrade(&n, "1.2.96", &rep, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice: send automatically");
+    ASSERT_STR_EQ(n.items[0].value, "off, so your words wait in the box for you to review");
+    remove(VCFG);
+    TEST_END();
+}

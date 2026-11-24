@@ -52,6 +52,28 @@ int voice_ptt_mode_from_json(const char *s)
     return (int)VOICE_MODE_TOGGLE;
 }
 
+const char *voice_mode_json(int mode)
+{
+    return mode == VOICE_MODE_CONVERSATION ? "conversation" : "dictation";
+}
+
+int voice_mode_from_json(const char *s)
+{
+    return (s && strcmp(s, "conversation") == 0) ? VOICE_MODE_CONVERSATION : VOICE_MODE_DICTATION;
+}
+
+int voice_pause_clamp(int ms)
+{
+    if (ms < VOICE_PAUSE_MIN_MS) return VOICE_PAUSE_MIN_MS;
+    if (ms > VOICE_PAUSE_MAX_MS) return VOICE_PAUSE_MAX_MS;
+    return ms;
+}
+
+int voice_pause_round(int ms)
+{
+    return (voice_pause_clamp(ms) + 50) / 100 * 100;
+}
+
 int voice_gain_clamp(int db)
 {
     if (db < VOICE_GAIN_MIN_DB) return VOICE_GAIN_MIN_DB;
@@ -84,6 +106,10 @@ void voice_settings_default(Settings *s)
     s->voice_ptt_mode = (int)VOICE_MODE_TOGGLE;
     s->voice_mic_delay_ms = VOICE_MIC_DELAY_DEFAULT;
     s->voice_auto_send = 0;
+    s->voice_mode = VOICE_MODE_DICTATION;
+    s->voice_pause_ms = VOICE_PAUSE_DEFAULT_MS;
+    s->voice_windows_voice[0] = '\0';
+    s->voice_windows_voice_name[0] = '\0';
 }
 
 void voice_settings_validate(Settings *s)
@@ -95,6 +121,8 @@ void voice_settings_validate(Settings *s)
     if (s->voice_mic_delay_ms < VOICE_MIC_DELAY_MIN) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MIN;
     if (s->voice_mic_delay_ms > VOICE_MIC_DELAY_MAX) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MAX;
     s->voice_mic_gain_db = voice_gain_clamp(s->voice_mic_gain_db);
+    if (s->voice_mode != VOICE_MODE_CONVERSATION) s->voice_mode = VOICE_MODE_DICTATION;
+    s->voice_pause_ms = voice_pause_clamp(s->voice_pause_ms);
     if (s->voice_ptt_key < 0 || s->voice_ptt_key >= (int)VOICE_PTT_COUNT)
         s->voice_ptt_key = (int)VOICE_PTT_RIGHT_SHIFT;
     if (s->voice_ptt_mode < 0 || s->voice_ptt_mode >= (int)VOICE_MODE_COUNT)
@@ -108,6 +136,13 @@ void voice_settings_validate(Settings *s)
     /* a model id never holds a line break: it goes into a URL and a JSON body */
     if (strchr(s->voice_stt_live_model, '\r') || strchr(s->voice_stt_live_model, '\n'))
         s->voice_stt_live_model[0] = '\0';
+    /* the voice token id and name are shown and handed to SAPI as text */
+    if (strchr(s->voice_windows_voice, '\r') || strchr(s->voice_windows_voice, '\n')) {
+        s->voice_windows_voice[0] = '\0';
+        s->voice_windows_voice_name[0] = '\0';
+    }
+    if (strchr(s->voice_windows_voice_name, '\r') || strchr(s->voice_windows_voice_name, '\n'))
+        s->voice_windows_voice_name[0] = '\0';
 }
 
 #define FNV64_OFFSET 0xcbf29ce484222325ULL
@@ -152,6 +187,10 @@ uint64_t voice_settings_digest(const Settings *s)
     h = fnv_int(h, s->voice_ptt_mode);
     h = fnv_int(h, s->voice_mic_delay_ms);
     h = fnv_int(h, s->voice_auto_send);
+    h = fnv_int(h, s->voice_mode);
+    h = fnv_int(h, s->voice_pause_ms);
+    h = fnv_str(h, s->voice_windows_voice);
+    h = fnv_str(h, s->voice_windows_voice_name);
     h = fnv_str(h, s->ai_provider);
     h = fnv_str(h, s->ai_api_key);
     h = fnv_str(h, s->ai_custom_url);

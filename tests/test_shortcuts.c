@@ -538,13 +538,13 @@ int test_shortcuts_voice_rows_need_both_switches(void)
     int hold = 0, esc = 0;
     for (size_t i = 0; i < n; i++) {
         if (strcmp(out[i].chord, "Right Shift") == 0 &&
-            strcmp(out[i].action, "Talk to the assistant: press, speak, press again") == 0 &&
+            strcmp(out[i].action, "Talk to the assistant: press, speak, press again (in Conversation mode, press to start and end a conversation, or to stop a spoken reply)") == 0 &&
             strcmp(out[i].condition,
                    "Voice on; key and mode in Settings > Voice") == 0)
             hold++;
         if (strcmp(out[i].chord, "Esc") == 0 &&
-            strcmp(out[i].action, "Cancel a voice recording") == 0 &&
-            strcmp(out[i].condition, "While recording, AI panel focused") == 0)
+            strcmp(out[i].action, "Cancel a voice recording, stop a spoken reply or end a conversation") == 0 &&
+            strcmp(out[i].condition, "AI panel focused") == 0)
             esc++;
     }
     ASSERT_EQ(hold, 1);
@@ -552,5 +552,32 @@ int test_shortcuts_voice_rows_need_both_switches(void)
     n = shortcuts_filtered_ex(out, 128, 1, 0);
     for (size_t i = 0; i < n; i++) ASSERT_TRUE((out[i].flags & SC_VOICE) == 0);
     ASSERT_TRUE(full_n <= 96);   /* CS_MAX_ROWS */
+    TEST_END();
+}
+
+/* PR 2: the voice rows name Conversation mode; exact text. */
+int test_shortcuts_voice_rows_pr2(void)
+{
+    TEST_BEGIN();
+    Shortcut out[128];
+    size_t n = shortcuts_filtered_ex(out, 128, 1, 1);
+    int key = 0, esc = 0;
+    for (size_t i = 0; i < n; i++) {
+        if ((out[i].flags & SC_VOICE) == 0) continue;
+        if (strcmp(out[i].chord, "Right Shift") == 0) {
+            ASSERT_STR_EQ(out[i].action,
+                "Talk to the assistant: press, speak, press again (in Conversation mode, "
+                "press to start and end a conversation, or to stop a spoken reply)");
+            ASSERT_STR_EQ(out[i].condition, "Voice on; key and mode in Settings > Voice");
+            key++;
+        } else if (strcmp(out[i].chord, "Esc") == 0) {
+            ASSERT_STR_EQ(out[i].action,
+                "Cancel a voice recording, stop a spoken reply or end a conversation");
+            ASSERT_STR_EQ(out[i].condition, "AI panel focused");
+            esc++;
+        }
+    }
+    ASSERT_EQ(key, 1);
+    ASSERT_EQ(esc, 1);
     TEST_END();
 }

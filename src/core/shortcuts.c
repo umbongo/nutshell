@@ -68,9 +68,11 @@ static const Shortcut TABLE[] = {
     { S5, "Ctrl+C",      "Copy the selected text", "conversation list focused", SC_AI, 0 },
     { S5, "Ctrl+A",      "Select all messages", "list focused", SC_AI, 0 },
     { S5, "Esc",         "Clear the selection", "list focused", SC_AI, 0 },
-    { S5, "Right Shift", "Talk to the assistant: press, speak, press again",
+    { S5, "Right Shift", "Talk to the assistant: press, speak, press again (in Conversation mode, "
+      "press to start and end a conversation, or to stop a spoken reply)",
       "Voice on; key and mode in Settings > Voice", SC_AI | SC_VOICE, 0 },
-    { S5, "Esc",         "Cancel a voice recording", "While recording, AI panel focused",
+    { S5, "Esc",         "Cancel a voice recording, stop a spoken reply or end a conversation",
+      "AI panel focused",
       SC_AI | SC_VOICE, 0 },
     { S5, "PgUp, PgDn, Home, End, Up, Down", "Scroll the conversation",
       "list focused", SC_AI, 0 },
