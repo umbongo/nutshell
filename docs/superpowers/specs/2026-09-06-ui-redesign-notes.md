@@ -461,7 +461,7 @@ Done, in order (details in the commit messages and the specs named):
   (`shortcuts_filtered_ex`, `SC_VOICE`); the empty state gains a voice hint line; the demo
   gains `voice-recording`, `voice-transcribing` and `settings-voice`. Its Windows checks are
   in Open.
-- Voice review by default (branch feat/voice-review-default; maintainer, 2026-11-23: "for the
+- Voice review by default (be421b1, kept on branch feat/voice-improvements, which began as feat/voice-review-default; maintainer, 2026-11-23: "for the
   default, i just want you to write down what im saying for me to review before i send it"): a
   transcript is written into the AI input (appended after a space to a draft), caret at the end
   and focus in the box, and never sent; the new tick box "Send automatically when I finish
@@ -469,6 +469,21 @@ Done, in order (details in the commit messages and the specs named):
   longer read, so every existing config gets auto-send off, and the upgrade notice names it.
   Voice stays unavailable while the assistant is busy in both modes. Its Windows checks are in
   Open (voice item, (ae) to (ai)).
+- Voice improvements (branch feat/voice-improvements; maintainer, 2026-11-24; spec sections
+  tagged so): review by default stays (be421b1). A software microphone gain
+  (`voice_mic_gain_db`, -12 to +30 dB) is applied on the audio thread before the silence gate,
+  so the WAV, the gate and the meter all see it; it is not the Windows endpoint volume. A
+  zoned dBFS level meter with a label: silent below -45, quiet below -18, good -18 to -6, hot
+  -6 to -3, loud from -3; release 20 dB/s after a 1 s hold. Test is a toggle: no time limit,
+  keeps no samples, never uploads, and stops on the Stop test button, a page change, Save,
+  Cancel, unticking Enable voice or the AI assistant, or the mic going away. The panel status
+  moved to the header after the title, with a tooltip for the full text; the model chip is
+  gone and the strip keeps the context meter. A Language dropdown (Auto-detect, English (UK)
+  by default, English (US), common languages, and Other... taking an ISO 639-1 code or an
+  English name, with a format cue, hint and tooltips): gpt-transcribe gets `languages[]`,
+  OpenAI, Groq and custom get a British-spelling `prompt`, Gemini an instruction, Mistral
+  neither. Migration marker `voice_defaults_rev` 3 turns an empty language into en-GB once.
+  Its Windows checks are in Open (voice item, (aj) onwards).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -571,6 +586,24 @@ Open, in priority order:
       notice line, "Voice: send automatically: off, so your words wait in the box for you to
       review", and the next save drops `voice_review`. (ai) The tick box label fits on the
       Voice page at 100 %, 125 % and 200 %.
+      Voice improvements (feat/voice-improvements) adds: (aj) the Microphone gain slider and
+      meter with the real mic (HD Pro Webcam C920): the Good zone is reachable by gain alone,
+      clipping shows "Too loud - lower the gain", silence shows "Speak to see the level".
+      (ak) Test stays on until stopped, and stops on each trigger: the Stop test button, a
+      page change, Save, Cancel, unticking Enable voice, unticking the AI assistant, and
+      unplugging the mic; a device change restarts it. (al) The slider by keyboard (arrows,
+      PgUp/PgDn, Home/End) and mouse, and the gain is live while testing. (am) The header
+      status docked and undocked with a long note (for example "Still transcribing the last
+      recording"), and its tooltip shows the full text. (an) The model chip is gone and the
+      session name is vertically centred (SS_CENTERIMAGE) on Windows 11. (ao) English (UK) on
+      OpenAI gpt-transcribe spells "colour" and "organise" and the request is accepted
+      (`languages[]` is unverified on the wire). (ap) The Language tooltip shows on hover over
+      the dropdown and over the Other box. (aq) The Other flow: pick Other..., the cue
+      "2-letter code or name, e.g. cy or Welsh" shows in the empty focused box; type "Welsh"
+      to get "Welsh (cy)", Save, reopen shows Other... with cy; type "xx" and the
+      not-recognised hint shows and the old language is kept. (ar) The Voice page at 125 %
+      and 200 %: every row reachable by scrolling, nothing overlapping. (as) The harness
+      `ui_gallery` case (30-ui-demo.ps1, with the new header-status state) has not been run.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
