@@ -3729,6 +3729,17 @@ int test_vvad_long_decaying_sound_is_not_impulse(void);
 int test_vvad_abrupt_word_is_turn(void);
 int test_vvad_250ms_word_is_below_minimum(void);
 int test_vvad_smooth_falling_word_is_turn(void);
+/* test_voice_listen.c */
+int test_vlisten_turn_with_preroll(void);
+int test_vlisten_hold_emits_nothing(void);
+int test_vlisten_cough_abandoned(void);
+int test_vlisten_cutin_aec_duck_then_cut(void);
+int test_vlisten_cutin_cough_unducks(void);
+int test_vlisten_cutin_hd_no_audio_before_cut(void);
+int test_vlisten_hd_cough_unducks_without_abandon(void);
+int test_vlisten_hd_echo_alone_never_cuts(void);
+int test_vlisten_set_mode_drops_turn(void);
+int test_vlisten_partial_windows_and_wipe(void);
 /* test_voice_transcript.c */
 int test_vt_draft_sep(void);
 int test_vt_rendered_full_text(void);
@@ -8317,6 +8328,16 @@ int main(void) {
     failed += test_vvad_abrupt_word_is_turn();
     failed += test_vvad_250ms_word_is_below_minimum();
     failed += test_vvad_smooth_falling_word_is_turn();
+    failed += test_vlisten_turn_with_preroll();
+    failed += test_vlisten_hold_emits_nothing();
+    failed += test_vlisten_cough_abandoned();
+    failed += test_vlisten_cutin_aec_duck_then_cut();
+    failed += test_vlisten_cutin_cough_unducks();
+    failed += test_vlisten_cutin_hd_no_audio_before_cut();
+    failed += test_vlisten_hd_cough_unducks_without_abandon();
+    failed += test_vlisten_hd_echo_alone_never_cuts();
+    failed += test_vlisten_set_mode_drops_turn();
+    failed += test_vlisten_partial_windows_and_wipe();
     failed += test_vt_draft_sep();
     failed += test_vt_rendered_full_text();
     failed += test_vt_openai_revision();
