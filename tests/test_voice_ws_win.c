@@ -247,7 +247,9 @@ int test_voice_ws_shutdown_wakes_receiver(void)
                 TEST_END();
             }
         } else {
-            ASSERT_TRUE(a->done_tick - f0 < 3000);
+            /* f0 is taken before voice_ws_shutdown, which may itself block up to its
+             * 2 s close timeout before the 3 s wait starts. */
+            ASSERT_TRUE(a->done_tick - f0 < 5000);
         }
         ASSERT_EQ(a->rc, -1);
         CloseHandle(t);
