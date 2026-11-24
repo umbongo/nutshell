@@ -3717,6 +3717,8 @@ int test_vt_newlines(void);
 int test_vt_join_rules(void);
 int test_vt_seg_overflow(void);
 int test_vt_free_wipes(void);
+int test_vt_invalid_utf8(void);
+int test_vt_finished_ids_ignored(void);
 /* test_voice_config.c */
 int test_voice_config_defaults(void);
 int test_voice_config_json_names(void);
@@ -8252,6 +8254,8 @@ int main(void) {
     failed += test_vt_join_rules();
     failed += test_vt_seg_overflow();
     failed += test_vt_free_wipes();
+    failed += test_vt_invalid_utf8();
+    failed += test_vt_finished_ids_ignored();
     failed += test_voice_config_defaults();
     failed += test_voice_config_json_names();
     failed += test_voice_config_roundtrip();

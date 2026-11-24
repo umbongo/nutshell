@@ -97,7 +97,7 @@ int test_vt_openai_revision(void)
     vt_complete(&t, "i1", "I see the boat.");
     size_t from = step(&t, &x);
     ASSERT_STR_EQ(tail(&x, "hi"), " I see the boat.");
-    ASSERT_TRUE(from <= 2U + strlen(" I see"));   /* "sea"/"see" differ at the 'a' */
+    ASSERT_EQ(from, 7U);   /* " I se" is shared; 'a' vs 'e' is at 2 + 5 */
     size_t from2 = step(&t, &x);
     ASSERT_EQ(from2, 2U + strlen(" I see the boat."));
     ASSERT_EQ(t.stable_u16, strlen(" I see the boat."));
@@ -273,5 +273,103 @@ int test_vt_free_wipes(void)
     int bad = 0;
     for (int i = 0; i < VT_SEG_MAX; i++) if (t.seg[i].text || t.seg[i].tlen) bad++;
     ASSERT_EQ(bad, 0);
+    TEST_END();
+}
+
+int test_vt_invalid_utf8(void)
+{
+    TEST_BEGIN();
+    static const char *bad[] = {
+        "\xF0\x9F\x98",        /* truncated 4-byte sequence: 3 bytes */
+        "\x80",                  /* stray continuation */
+        "\xC0\xAF",             /* overlong '/' */
+        "\xED\xA0\x80",        /* CESU surrogate D800 */
+        "\xF4\x90\x80\x80",   /* above U+10FFFF */
+    };
+    static const int nrep[] = { 3, 1, 2, 3, 4 };
+    for (size_t k = 0; k < sizeof bad / sizeof *bad; k++) {
+        Box x; x.b[0] = 0;
+        VoiceTranscript t; vt_init(&t, 0, 0);
+        char in[32];
+        snprintf(in, sizeof in, "a%sb", bad[k]);
+        ASSERT_EQ(vt_delta(&t, "i1", in, 0), 0);
+        step(&t, &x);
+        char want[64] = "a";
+        for (int j = 0; j < nrep[k]; j++) strcat(want, "\xEF\xBF\xBD");
+        strcat(want, "b");
+        ASSERT_STR_EQ(x.b, want);
+        /* every UTF-16 offset is exact: a revision after it lands right */
+        vt_delta(&t, "i1", " \xF0\x9F\x98\x80 z", 0);
+        step(&t, &x);
+        vt_complete(&t, "i1", "A\xEF\xBF\xBD");   /* differs at the first unit */
+        size_t from = step(&t, &x);
+        ASSERT_EQ(from, 0U);
+        ASSERT_STR_EQ(x.b, "A\xEF\xBF\xBD");
+        ASSERT_EQ(vt_utf16_len(want, strlen(want)), 2U + (size_t)nrep[k]);
+        vt_free(&t);
+    }
+    /* offsets after sanitised text: the change sits after the U+FFFD run */
+    Box y; y.b[0] = 0;
+    VoiceTranscript u; vt_init(&u, 0, 0);
+    vt_delta(&u, "i1", "\x80\xC0\xAF q", 0);
+    step(&u, &y);
+    vt_complete(&u, "i1", "\x80\xC0\xAF r");
+    size_t from = step(&u, &y);
+    ASSERT_EQ(from, 4U);   /* three U+FFFD + space */
+    ASSERT_STR_EQ(y.b, "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD r");
+    vt_free(&u);
+    /* replace_all sanitises too */
+    VoiceTranscript w; vt_init(&w, 0, 0);
+    vt_replace_all(&w, "x\x80");
+    char *s = vt_text(&w);
+    ASSERT_STR_EQ(s, "x\xEF\xBF\xBD");
+    free(s);
+    vt_free(&w);
+    TEST_END();
+}
+
+int test_vt_finished_ids_ignored(void)
+{
+    TEST_BEGIN();
+    Box x; x.b[0] = 0;
+    VoiceTranscript t; vt_init(&t, 0, 0);
+    vt_delta(&t, "i1", "one", 0);
+    vt_complete(&t, "i1", "One.");
+    step(&t, &x);
+    ASSERT_EQ(vt_complete(&t, "i1", "Again"), 0);
+    ASSERT_EQ(vt_delta(&t, "i1", " late", 0), 0);
+    ASSERT_EQ(step(&t, &x), 4U);
+    ASSERT_STR_EQ(x.b, "One.");
+    ASSERT_EQ(t.nseg, 0);
+    ASSERT_EQ(vt_all_done(&t), 1);
+    /* done but not yet folded (i2 open in front of it) */
+    vt_delta(&t, "i2", "two", 0);
+    vt_delta(&t, "i3", "three", 0);
+    vt_complete(&t, "i3", "Three.");
+    vt_delta(&t, "i3", " late", 0);
+    vt_complete(&t, "i3", "Other");
+    step(&t, &x);
+    ASSERT_STR_EQ(x.b, "One. two Three.");
+    vt_complete(&t, "i2", "Two.");
+    step(&t, &x);
+    ASSERT_STR_EQ(x.b, "One. Two. Three.");
+    ASSERT_EQ(vt_all_done(&t), 1);
+    vt_free(&t);
+
+    /* an id folded by table overflow is ignored afterwards */
+    VoiceTranscript o; vt_init(&o, 0, 0);
+    for (int i = 0; i < 33; i++) {
+        char id[16], txt[16];
+        snprintf(id, sizeof id, "item%d", i);
+        snprintf(txt, sizeof txt, "w%d", i);
+        vt_delta(&o, id, txt, 0);
+    }
+    ASSERT_EQ(vt_delta(&o, "item0", "dup", 0), 0);
+    ASSERT_EQ(vt_complete(&o, "item0", "dup"), 0);
+    ASSERT_EQ(o.nseg, VT_SEG_MAX);
+    char *s = vt_text(&o);
+    ASSERT_NULL(strstr(s, "dup"));
+    free(s);
+    vt_free(&o);
     TEST_END();
 }

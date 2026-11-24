@@ -19,6 +19,7 @@
 
 #define VT_SEG_MAX 32
 #define VT_ID_MAX 64
+#define VT_FIN_MAX 64   /* finished ids remembered; later events for them are ignored */
 
 typedef struct {
     char   id[VT_ID_MAX];
@@ -33,6 +34,8 @@ typedef struct {
     char  *committed;  size_t clen, ccap;   /* final text of finished segments, in order */
     VtSeg  seg[VT_SEG_MAX];
     int    nseg;
+    char   fin[VT_FIN_MAX][VT_ID_MAX];   /* ring of finished ids */
+    int    nfin, fin_next;
     char  *shown;      size_t slen, scap;   /* what the box holds after draft_u16 */
     size_t shown_u16;         /* UTF-16 length, after draft_u16, of what the box holds now */
     size_t stable_u16;        /* UTF-16 length, after draft_u16, left unchanged by the last render */
