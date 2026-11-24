@@ -144,8 +144,8 @@ long voice_ptt_next_deadline(const VoicePtt *p, unsigned long now_ms);
 
 typedef enum { VD_NOTHING = 0, VD_SEND, VD_FILL, VD_APPEND } VoiceDelivery;
 /* Whitespace-only transcript -> VD_NOTHING. Empty input: auto_send ? VD_SEND : VD_FILL,
- * out = transcript. Non-empty input -> VD_APPEND, out = input + (input ends in a space
- * or newline ? "" : " ") + transcript. Truncates to cap. */
+ * out = transcript. Non-empty input -> VD_APPEND, out = input + (input ends in whitespace
+ * ? "" : " ") + transcript. Truncates to cap. */
 VoiceDelivery voice_deliver(const char *input, const char *transcript, int auto_send,
                             char *out, size_t cap);
 

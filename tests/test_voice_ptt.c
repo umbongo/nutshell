@@ -429,6 +429,11 @@ int test_voice_deliver(void)
     ASSERT_STR_EQ(out, "draft hi");
     ASSERT_EQ(voice_deliver("draft\n", "hi", 0, out, sizeof out), VD_APPEND);
     ASSERT_STR_EQ(out, "draft\nhi");
+    /* Any trailing whitespace of the draft is the separator: no second space. */
+    ASSERT_EQ(voice_deliver("draft\t", "hi", 0, out, sizeof out), VD_APPEND);
+    ASSERT_STR_EQ(out, "draft\thi");
+    ASSERT_EQ(voice_deliver("draft\r", "hi", 0, out, sizeof out), VD_APPEND);
+    ASSERT_STR_EQ(out, "draft\rhi");
     char small[6];
     ASSERT_EQ(voice_deliver("draft", "hi", 0, small, sizeof small), VD_APPEND);
     ASSERT_STR_EQ(small, "draft");

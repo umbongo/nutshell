@@ -215,7 +215,7 @@ VoiceDelivery voice_deliver(const char *input, const char *transcript, int auto_
         snprintf(out, cap, "%s", transcript);
         return auto_send ? VD_SEND : VD_FILL;
     }
-    int sep = !(input[il - 1] == ' ' || input[il - 1] == '\n');
+    int sep = !is_space(input[il - 1]);
     snprintf(out, cap, "%s%s%s", input, sep ? " " : "", transcript);
     return VD_APPEND;
 }
