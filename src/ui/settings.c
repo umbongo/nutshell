@@ -1125,6 +1125,7 @@ static void voice_test_apply(SettingsDlgData *d, VoiceTestEvent ev)
     case VT_ACT_STOP:
         voice_audio_capture_end(0);   /* the test is over, nothing is kept */
         voice_meter_reset(&d->vmeter);
+        voice_test_note(d, "");
         break;
     case VT_ACT_RESTART:
         voice_audio_capture_end(0);

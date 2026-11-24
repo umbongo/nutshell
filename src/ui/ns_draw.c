@@ -515,8 +515,6 @@ void ns_draw_level_meter(HDC hdc, const RECT *bar, double level_frac,
     int h = bar->bottom - bar->top;
     if (w <= 0 || h <= 0) return;
 
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
-    if (dpi <= 0) dpi = 96;
     level_frac = clamp01(level_frac);
     hold_frac = clamp01(hold_frac);
 
@@ -527,7 +525,7 @@ void ns_draw_level_meter(HDC hdc, const RECT *bar, double level_frac,
     /* Everything below is square GDI, clipped to the pill. */
     int saved = SaveDC(hdc);
     HRGN clip = CreateRoundRectRgn(bar->left, bar->top, bar->right + 1,
-                                   bar->bottom + 1, radius, radius);
+                                   bar->bottom + 1, 2 * radius, 2 * radius);
     SelectClipRgn(hdc, clip);
 
     int x1 = bar->left + (int)(w * clamp01(zone_frac[1]) + 0.5);
@@ -557,7 +555,7 @@ void ns_draw_level_meter(HDC hdc, const RECT *bar, double level_frac,
     }
 
     if (hold_frac > 0.0) {
-        int tw = ns_scale(STROKE_RULE, dpi);
+        int tw = STROKE_RULE;   /* strokes are not DPI-scaled (ns_type.h) */
         int tx = bar->left + (int)(w * hold_frac + 0.5) - tw / 2;
         if (tx < bar->left) tx = bar->left;
         if (tx + tw > bar->right) tx = bar->right - tw;

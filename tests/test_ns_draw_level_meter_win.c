@@ -48,7 +48,10 @@ int test_ns_draw_level_meter_win_zones_fill_and_hold(void)
     ASSERT_EQ((int)GetPixel(dc, 110, mid), (int)band(tk->warning.base, tk));
     ASSERT_EQ((int)GetPixel(dc, 160, mid), (int)band(tk->success.base, tk));
     ASSERT_EQ((int)GetPixel(dc, 195, top), (int)band(tk->warning.base, tk));
-    ASSERT_EQ((int)GetPixel(dc, 207, top), (int)band(tk->danger.base, tk));
+    ASSERT_EQ((int)GetPixel(dc, 200, top), (int)band(tk->danger.base, tk));   /* 0.95 and up, inside the pill */
+    /* The square bands must not poke past the pill's rounded ends. */
+    ASSERT_EQ((int)GetPixel(dc, 10, 10), (int)RGB(1, 2, 3));
+    ASSERT_EQ((int)GetPixel(dc, 209, 29), (int)RGB(1, 2, 3));
     ASSERT_TRUE((int)band(tk->success.base, tk) != (int)band(tk->warning.base, tk));
 
     /* A good level (0.8) with the tick at 0.9: success fill, tick on top. */
