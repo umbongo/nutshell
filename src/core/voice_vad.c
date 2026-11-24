@@ -15,7 +15,7 @@
 #define VVAD_IMPULSE_PEAK_WINDOWS 2
 #define VVAD_IMPULSE_RISE_DB 3.0
 #define VVAD_IMPULSE_TOP_DB 1.0   /* a flat top: the peak moves only on a rise this big */
-#define VVAD_IMPULSE_DECAY_DB 6.0
+#define VVAD_IMPULSE_DECAY_DB 15.0
 #define VVAD_IMPULSE_MAX_CANDS 40   /* a longer sound is never an impulse */
 
 double voice_window_db(const int16_t *s, size_t n)

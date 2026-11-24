@@ -419,14 +419,15 @@ int test_vvad_250ms_word_is_below_minimum(void)
     TEST_END();
 }
 
-/* Documents a known limit, not a wish: with a +3 dB bump the 400 ms word
- * peaks first, never rises 3 dB over the window before, falls 8 dB and has
- * under 40 windows, so the impulse rule drops it. */
-int test_vvad_smooth_falling_word_is_impulse_known_limit(void)
+/* A 400 ms word with an 8 dB falling contour and a +3 dB bump never rises
+ * 3 dB over the window before, but it falls only 8 dB: under the 15 dB decay
+ * requirement, so it is a turn, not an impulse. */
+int test_vvad_smooth_falling_word_is_turn(void)
 {
     TEST_BEGIN();
     Sim s;
     word_case(&s, 20, 3.0);
-    ASSERT_EQ(s.ends, 0);
+    ASSERT_EQ(s.starts, 1);
+    ASSERT_EQ(s.ends, 1);
     TEST_END();
 }

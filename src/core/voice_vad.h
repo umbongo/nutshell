@@ -27,8 +27,11 @@
  *  - impulse: a burst whose peak (a flat top counts as its first window; a later
  *    window must top it by more than 1 dB to move it) is in its first 2 windows
  *    (counted from its first candidate window), in which no window rises 3 dB or more over the
- *    window before it, and whose last candidate window is at least 6 dB below
- *    the peak (a monotonic decay: a door slam with its tail) is an impulse. Only candidate
+ *    window before it, and whose last candidate window is at least 15 dB below
+ *    the peak (a monotonic decay: a door slam with its tail) is an impulse. The 15 dB
+ *    (it was 6) is a ruling (review round 3) that dropping a real word costs
+ *    more than letting a slam through: a slam decays 30 dB or more, a falling
+ *    word about 8. Only candidate
  *    windows are judged (quiet tail windows are ignored), and a burst of more
  *    than 40 candidate windows is never an impulse. At
  *    the burst's end the detector returns VV_IMPULSE instead of VV_SILENCE and
