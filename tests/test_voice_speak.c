@@ -1,0 +1,213 @@
+#include "test_framework.h"
+#include "voice_speak.h"
+#include <stdlib.h>
+#include <string.h>
+
+/* Speak text and compare with `want`; frees the result. */
+static int speak_eq(const char *md, const char *want)
+{
+    char *t = voice_speak_text(md);
+    int ok = t && strcmp(t, want) == 0;
+    free(t);
+    return ok;
+}
+
+int test_vspeak_strips_markdown(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("# Title\n\nSome **bold** and *italic* and `code` text.\n",
+                         "Title. Some bold and italic and code text."));
+    ASSERT_TRUE(speak_eq("- one\n- two.\n1. three\n> quoted words\n",
+                         "one. two. three. quoted words"));
+    ASSERT_TRUE(speak_eq("snake_case stays", "snake_case stays"));
+    TEST_END();
+}
+
+int test_vspeak_code_block_once(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("Before.\n```c\nint x;\nint y;\n```\nBetween.\n```\nls\n```\nAfter.",
+                         "Before. The code is on screen. Between. The code is on screen. After."));
+    /* unterminated fence runs to the end */
+    ASSERT_TRUE(speak_eq("Run:\n```\nls\nstill code", "Run: The code is on screen."));
+    /* indented block, once */
+    ASSERT_TRUE(speak_eq("Try this:\n\n    ls -l\n    pwd\n\nDone.",
+                         "Try this: The code is on screen. Done."));
+    TEST_END();
+}
+
+int test_vspeak_table_once(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("Disks:\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\nEnd.",
+                         "Disks: The table is on screen. End."));
+    TEST_END();
+}
+
+int test_vspeak_link_text_no_url(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("See [the docs](https://x) now.", "See the docs now."));
+    ASSERT_TRUE(speak_eq("Go to https://example.com/a?b=1 today.", "Go to today."));
+    ASSERT_TRUE(speak_eq("Or http://x.org.", "Or"));
+    TEST_END();
+}
+
+int test_vspeak_thinking_and_exec_removed(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("<think>hmm\nsecret</think>Hello there.", "Hello there."));
+    ASSERT_TRUE(speak_eq("Running [EXEC]ls -l[/EXEC] now.", "Running now."));
+    ASSERT_TRUE(speak_eq("Unclosed <think> stays", "Unclosed <think> stays"));
+    TEST_END();
+}
+
+int test_vspeak_only_code(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("```\nrm -rf x\n```", "The code is on screen."));
+    TEST_END();
+}
+
+int test_vspeak_empty(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("", ""));
+    ASSERT_TRUE(speak_eq("  \n\t \r\n ", ""));
+    ASSERT_TRUE(speak_eq("<think>x</think>", ""));
+    TEST_END();
+}
+
+int test_vspeak_chunks_first_200(void)
+{
+    TEST_BEGIN();
+    char text[4000];
+    text[0] = '\0';
+    for (int i = 0; i < 60; i++) strcat(text, "This is a sentence of moderate length. ");
+    size_t st[64], ln[64];
+    size_t n = voice_speak_chunks(text, 0, st, ln, 64);
+    ASSERT_TRUE(n >= 3);
+    ASSERT_TRUE(ln[0] <= VOICE_SPEAK_FIRST_CHUNK);
+    ASSERT_TRUE(ln[0] > 150);
+    ASSERT_EQ(text[st[0] + ln[0] - 1], '.');
+    for (size_t i = 1; i < n; i++) {
+        ASSERT_TRUE(ln[i] <= VOICE_SPEAK_CHUNK_MAX);
+        ASSERT_EQ(text[st[i] + ln[i] - 1], '.');
+    }
+    ASSERT_TRUE(ln[1] > 900);
+    TEST_END();
+}
+
+int test_vspeak_chunk_from_offset(void)
+{
+    TEST_BEGIN();
+    const char *text = "One. Two. Three. Four.";
+    size_t st[8], ln[8];
+    size_t n = voice_speak_chunks(text, 5, st, ln, 8);
+    ASSERT_EQ(n, 1u);
+    ASSERT_EQ(st[0], 5u);
+    ASSERT_EQ(ln[0], strlen(text) - 5);
+    ASSERT_EQ(voice_speak_chunks(text, strlen(text), st, ln, 8), 0u);
+    /* a leading space at from is skipped */
+    n = voice_speak_chunks(text, 4, st, ln, 8);
+    ASSERT_EQ(st[0], 5u);
+    TEST_END();
+}
+
+int test_vspeak_decimal_not_sentence_end(void)
+{
+    TEST_BEGIN();
+    const char *text = "It is 1.5 GB free. Next.";
+    size_t st[4], ln[4];
+    /* a limit smaller than the text would split at sentence ends only */
+    size_t n = voice_speak_chunks(text, 0, st, ln, 4);
+    ASSERT_EQ(n, 1u);
+    char long_text[1400];
+    strcpy(long_text, "Version 2.5 is out and it is fine.");
+    while (strlen(long_text) < 260) strcat(long_text, " Version 2.5 is out and it is fine.");
+    n = voice_speak_chunks(long_text, 0, st, ln, 4);
+    ASSERT_TRUE(n >= 2);
+    ASSERT_TRUE(memcmp(long_text + st[0] + ln[0] - 8, "is fine.", 8) == 0);
+    TEST_END();
+}
+
+int test_vspeak_question(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(voice_speak_ends_with_question("Shall I delete them?"), 1);
+    ASSERT_EQ(voice_speak_ends_with_question("Shall I delete them?  \n"), 1);
+    ASSERT_EQ(voice_speak_ends_with_question("Done."), 0);
+    ASSERT_EQ(voice_speak_ends_with_question(""), 0);
+    ASSERT_EQ(voice_speak_ends_with_question(NULL), 0);
+    TEST_END();
+}
+
+static int on_boundary(const char *t, size_t i)
+{
+    return ((unsigned char)t[i] & 0xC0) != 0x80;
+}
+
+int test_vspeak_utf8_boundaries(void)
+{
+    TEST_BEGIN();
+    /* no spaces: forces the split-at-limit path through multibyte chars */
+    char text[3000];
+    text[0] = '\0';
+    const char *units[] = { "\xC3\xA9", "\xE2\x80\x9C", "\xF0\x9F\x98\x80", "\xC2\xA0", "a" };
+    size_t o = 0;
+    for (int i = 0; i < 700; i++) {
+        const char *u = units[i % 5];
+        size_t l = strlen(u);
+        memcpy(text + o, u, l);
+        o += l;
+    }
+    text[o] = '\0';
+    size_t st[16], ln[16];
+    size_t n = voice_speak_chunks(text, 0, st, ln, 16);
+    ASSERT_TRUE(n >= 2);
+    size_t covered = 0;
+    for (size_t i = 0; i < n; i++) {
+        ASSERT_TRUE(on_boundary(text, st[i]));
+        ASSERT_TRUE(on_boundary(text, st[i] + ln[i]));
+        ASSERT_TRUE(ln[i] <= (i == 0 ? VOICE_SPEAK_FIRST_CHUNK : VOICE_SPEAK_CHUNK_MAX));
+        covered += ln[i];
+    }
+    ASSERT_EQ(covered, o);
+    /* the speakable text keeps the characters whole; NBSP becomes a space */
+    char *t = voice_speak_text("caf\xC3\xA9 \xE2\x80\x9Cquoted\xE2\x80\x9D\xC2\xA0ok \xF0\x9F\x98\x80");
+    ASSERT_NOT_NULL(t);
+    ASSERT_STR_EQ(t, "caf\xC3\xA9 \xE2\x80\x9Cquoted\xE2\x80\x9D ok \xF0\x9F\x98\x80");
+    free(t);
+    TEST_END();
+}
+
+int test_vspeak_long_reply(void)
+{
+    TEST_BEGIN();
+    size_t cap = 70000;
+    char *md = (char *)malloc(cap);
+    ASSERT_NOT_NULL(md);
+    size_t o = 0;
+    while (o < 60000) {
+        o += (size_t)snprintf(md + o, cap - o,
+            "Here is **some** prose with a [link](http://a.b/c) and `code`. It goes on [[[ and on.\n"
+            "- an item without a stop\n```\nint main(void) { return 0; }\n```\n"
+            "| a | b |\n|---|---|\n| 1 | 2 |\n\n    indented code\n\n");
+    }
+    char *t = voice_speak_text(md);
+    ASSERT_NOT_NULL(t);
+    size_t tl = strlen(t);
+    ASSERT_TRUE(tl > 1000);
+    size_t *st = (size_t *)malloc(sizeof(size_t) * 4096);
+    size_t *ln = (size_t *)malloc(sizeof(size_t) * 4096);
+    size_t n = voice_speak_chunks(t, 0, st, ln, 4096);
+    ASSERT_TRUE(n > 10);
+    size_t covered = 0;
+    for (size_t i = 0; i < n; i++) {
+        ASSERT_TRUE(ln[i] <= VOICE_SPEAK_CHUNK_MAX);
+        covered += ln[i];
+    }
+    ASSERT_TRUE(covered <= tl);
+    free(st); free(ln); free(t); free(md);
+    TEST_END();
+}
