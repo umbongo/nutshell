@@ -3724,6 +3724,11 @@ int test_vep_pause_clamp_and_reset(void);
 int test_vvad_door_slam_with_tail_never_turn(void);
 int test_vvad_single_syllable_is_turn(void);
 int test_vvad_digital_silence_does_not_sink_floor(void);
+int test_vvad_door_slam_tail_jitter_never_turn(void);
+int test_vvad_long_decaying_sound_is_not_impulse(void);
+int test_vvad_abrupt_word_is_turn(void);
+int test_vvad_250ms_word_is_below_minimum(void);
+int test_vvad_smooth_falling_word_is_impulse_known_limit(void);
 /* test_voice_transcript.c */
 int test_vt_draft_sep(void);
 int test_vt_rendered_full_text(void);
@@ -8307,6 +8312,11 @@ int main(void) {
     failed += test_vvad_door_slam_with_tail_never_turn();
     failed += test_vvad_single_syllable_is_turn();
     failed += test_vvad_digital_silence_does_not_sink_floor();
+    failed += test_vvad_door_slam_tail_jitter_never_turn();
+    failed += test_vvad_long_decaying_sound_is_not_impulse();
+    failed += test_vvad_abrupt_word_is_turn();
+    failed += test_vvad_250ms_word_is_below_minimum();
+    failed += test_vvad_smooth_falling_word_is_impulse_known_limit();
     failed += test_vt_draft_sep();
     failed += test_vt_rendered_full_text();
     failed += test_vt_openai_revision();

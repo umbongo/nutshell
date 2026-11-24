@@ -28,7 +28,9 @@
  *    window must top it by more than 1 dB to move it) is in its first 2 windows
  *    (counted from its first candidate window), in which no window rises 3 dB or more over the
  *    window before it, and whose last candidate window is at least 6 dB below
- *    the peak (a monotonic decay: a door slam with its tail) is an impulse. At
+ *    the peak (a monotonic decay: a door slam with its tail) is an impulse. Only candidate
+ *    windows are judged (quiet tail windows are ignored), and a burst of more
+ *    than 40 candidate windows is never an impulse. At
  *    the burst's end the detector returns VV_IMPULSE instead of VV_SILENCE and
  *    the endpointer takes that burst's windows back out of the turn's speech.
  *  - digital silence: windows at or below -85 dBFS never change the floor (and
@@ -69,6 +71,7 @@ typedef struct {
     double lev[8];          /* last 8 window levels, lev[7] newest */
     /* impulse tracking, from the first candidate window of the burst */
     int imp_pos;
+    int imp_cands;
     int imp_peak_pos;
     int imp_rose;
     double imp_peak, imp_prev, imp_last_cand;

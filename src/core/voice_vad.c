@@ -16,6 +16,7 @@
 #define VVAD_IMPULSE_RISE_DB 3.0
 #define VVAD_IMPULSE_TOP_DB 1.0   /* a flat top: the peak moves only on a rise this big */
 #define VVAD_IMPULSE_DECAY_DB 6.0
+#define VVAD_IMPULSE_MAX_CANDS 40   /* a longer sound is never an impulse */
 
 double voice_window_db(const int16_t *s, size_t n)
 {
@@ -42,6 +43,7 @@ void voice_vad_init(VoiceVad *v)
     v->started = 0;
     for (int i = 0; i < 8; i++) v->lev[i] = -90.0;
     v->imp_pos = 0;
+    v->imp_cands = 0;
     v->imp_peak_pos = 0;
     v->imp_rose = 0;
     v->imp_peak = v->imp_prev = v->imp_last_cand = -90.0;
@@ -63,23 +65,29 @@ static double clamp_floor(double db) { return db < VVAD_FLOOR_MIN_DB ? VVAD_FLOO
 
 static void imp_feed(VoiceVad *v, double level, int cand)
 {
-    if (v->imp_pos == 0) {
-        v->imp_peak = level;
-        v->imp_peak_pos = 0;
-        v->imp_rose = 0;
+    /* Only candidate windows count: the quiet windows after a burst, with
+     * their jitter, must not look like a rise or a new peak. The rise is
+     * measured against the window just before, quiet or not. */
+    if (cand) {
+        if (v->imp_cands == 0) {
+            v->imp_peak = level;
+            v->imp_peak_pos = v->imp_pos;
+            v->imp_rose = 0;
+        } else {
+            if (level > v->imp_peak + VVAD_IMPULSE_TOP_DB) { v->imp_peak = level; v->imp_peak_pos = v->imp_pos; }
+            if (level >= v->imp_prev + VVAD_IMPULSE_RISE_DB) v->imp_rose = 1;
+        }
+        v->imp_cands++;
         v->imp_last_cand = level;
-    } else {
-        if (level > v->imp_peak + VVAD_IMPULSE_TOP_DB) { v->imp_peak = level; v->imp_peak_pos = v->imp_pos; }
-        if (level >= v->imp_prev + VVAD_IMPULSE_RISE_DB) v->imp_rose = 1;
     }
-    if (cand) v->imp_last_cand = level;
     v->imp_prev = level;
     v->imp_pos++;
 }
 
 static int imp_is_impulse(const VoiceVad *v)
 {
-    return v->imp_peak_pos < VVAD_IMPULSE_PEAK_WINDOWS && !v->imp_rose
+    return v->imp_cands <= VVAD_IMPULSE_MAX_CANDS
+        && v->imp_peak_pos < VVAD_IMPULSE_PEAK_WINDOWS && !v->imp_rose
         && v->imp_peak - v->imp_last_cand >= VVAD_IMPULSE_DECAY_DB;
 }
 
@@ -114,6 +122,7 @@ VoiceVadOut voice_vad_window(VoiceVad *v, double level_db)
             v->nc_run = 0;
             v->ring_pos = 0;
             v->imp_pos = 0;
+            v->imp_cands = 0;
             {
                 int f = 0;   /* oldest candidate among the last 8 windows */
                 while (f < 7 && !((v->hist >> (7 - f)) & 1u)) f++;

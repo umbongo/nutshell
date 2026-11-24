@@ -346,3 +346,87 @@ int test_vvad_digital_silence_does_not_sink_floor(void)
     ASSERT_TRUE(voice_vad_floor_db(&q.v) == f);
     TEST_END();
 }
+
+int test_vvad_door_slam_tail_jitter_never_turn(void)
+{
+    TEST_BEGIN();
+    Sim s;
+    sim_init(&s, 500);
+    sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
+    for (int i = 0; i < W(200); i++) sim_win(&s, -10.0, 0.0, -60.0, 0.0);
+    for (int i = 0; i < W(500); i++) sim_win(&s, -10.0, 0.0, -60.0, 1.2 * (i + 1));
+    for (int i = 0; i < W(3000); i++) sim_win(&s, NONE_DB, 0.0, -60.0 + 3.0 * lcg_unit(&s), 0.0);   /* +-3 dB jitter */
+    ASSERT_EQ(s.ends, 0);
+    ASSERT_FALSE(voice_ep_in_turn(&s.e));
+    TEST_END();
+}
+
+int test_vvad_long_decaying_sound_is_not_impulse(void)
+{
+    TEST_BEGIN();
+    Sim s;
+    sim_init(&s, 500);
+    sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
+    /* 45 candidate windows: 15 flat, then 30 decaying 1 dB each */
+    for (int i = 0; i < 15; i++) sim_win(&s, -10.0, 0.0, -60.0, 0.0);
+    for (int i = 0; i < 30; i++) sim_win(&s, -10.0, 0.0, -60.0, 1.0 * (i + 1));
+    sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
+    ASSERT_EQ(s.ends, 1);
+    TEST_END();
+}
+
+/* "No!": onset to -12 dBFS in one window, an 8 dB falling contour over n
+ * windows, a one-window bump in the middle, then silence. A +3 dB bump over a
+ * falling contour is under a 3 dB rise on the window before it. */
+static void abrupt_word(Sim *s, int n, double bump_db)
+{
+    for (int i = 0; i < n; i++) {
+        double lvl = -12.0 - 8.0 * (double)i / (double)(n - 1);
+        if (i == n / 2) lvl += bump_db;
+        sim_win(s, lvl, 0.0, -60.0, 0.0);
+    }
+}
+
+static void word_case(Sim *s, int n, double bump_db)
+{
+    sim_init(s, 500);
+    sim_run(s, W(3000), NONE_DB, 0.0, -60.0);
+    abrupt_word(s, n, bump_db);
+    sim_run(s, W(3000), NONE_DB, 0.0, -60.0);
+}
+
+int test_vvad_abrupt_word_is_turn(void)
+{
+    TEST_BEGIN();
+    Sim s;
+    word_case(&s, 20, 4.0);          /* 400 ms, a 3.4 dB bump rise */
+    ASSERT_EQ(s.starts, 1);
+    ASSERT_EQ(s.ends, 1);
+    TEST_END();
+}
+
+/* The review's "No!" is 250 ms: under the 300 ms minimum speech, so it is
+ * abandoned whatever the impulse rule says (a short word needs a longer
+ * vowel than that to count as a turn). */
+int test_vvad_250ms_word_is_below_minimum(void)
+{
+    TEST_BEGIN();
+    Sim s;
+    word_case(&s, 13, 4.0);
+    ASSERT_EQ(s.starts, 1);
+    ASSERT_EQ(s.ends, 0);
+    ASSERT_EQ(s.abandons, 1);
+    TEST_END();
+}
+
+/* Documents a known limit, not a wish: with a +3 dB bump the 400 ms word
+ * peaks first, never rises 3 dB over the window before, falls 8 dB and has
+ * under 40 windows, so the impulse rule drops it. */
+int test_vvad_smooth_falling_word_is_impulse_known_limit(void)
+{
+    TEST_BEGIN();
+    Sim s;
+    word_case(&s, 20, 3.0);
+    ASSERT_EQ(s.ends, 0);
+    TEST_END();
+}
