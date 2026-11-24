@@ -74,17 +74,37 @@ static VoiceConvOut go_idle(VoiceConv *c, VoiceConvNote note, int cancel_work)
     c->speaking_reply = 0;
     c->held = 0;
     c->held_continue = 0;
+    c->held_phrase = 0;
     o = out(a, VCH_NONE);
     o.note = note;
     return o;
 }
 
+static VoiceConvHeader pause_header(const VoiceConv *c)
+{
+    return c->pause == VCP_DIALOG ? VCH_PAUSED_DIALOG : VCH_PAUSED_BG;
+}
+
+/* While paused the capture stays closed and the header says why. */
 static VoiceConvOut enter_listening(VoiceConv *c, unsigned extra, VoiceConvHeader h)
 {
     c->state = VCS_LISTENING;
     c->turn = 0;
     c->sending = 0;
+    if (c->pause != VCP_NONE) {
+        unsigned x = extra;
+        if (c->capture) { c->capture = 0; x |= VCA_CLOSE_CAPTURE; }
+        return out(x, pause_header(c));
+    }
     return out(extra | open_capture(c) | VCA_MODE_LISTEN, h);
+}
+
+static void hold(VoiceConv *c, int continue_from, int phrase, unsigned long now)
+{
+    c->held = 1;
+    c->held_continue = continue_from;
+    c->held_phrase = phrase;
+    c->held_at = now;
 }
 
 static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase ph, int reply)
@@ -92,6 +112,7 @@ static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase
     VoiceConvOut o;
     unsigned a = speak | open_capture(c) | VCA_MODE_SPEAK;
     c->state = VCS_SPEAKING;
+    c->turn = 0;   /* the turn that led here is over; a cut-in sets it again */
     c->speaking_reply = reply;
     c->idle_seen = 0;
     if (!c->stopcap) { c->stopcap = 1; a |= VCA_STOP_CAPTION; }
@@ -105,6 +126,13 @@ static VoiceConvOut work_finished(VoiceConv *c, int prose, int err, unsigned lon
 {
     c->idle_at = now;
     c->idle_seen = 0;
+    if (c->pause != VCP_NONE) {
+        /* replies are not spoken while paused: held (a phrase like a reply) */
+        VoiceConvOut o;
+        if (err) hold(c, 0, 1, now); else if (prose) hold(c, 0, 0, now);
+        o = enter_listening(c, (err || prose) ? VCA_HOLD_REPLY : 0, VCH_NONE);
+        return o;
+    }
     if (err) return enter_speaking(c, VCA_SPEAK_PHRASE, VCPH_WENT_WRONG, 0);
     if (prose) return enter_speaking(c, VCA_SPEAK_REPLY, VCPH_NONE, 1);
     return enter_listening(c, 0, VCH_LISTENING);
@@ -131,7 +159,20 @@ static VoiceConvOut on_transcript(VoiceConv *c, int cls)
     if (c->state != VCS_ENDING || c->sending || c->batch) return out(0, VCH_NONE);
     if (cls == VTC_EMPTY)
         return ending_to_listening(c, VCA_DROP_TURN, VCH_DIDNT_CATCH);
-    /* ECHO, REPEAT and CONTINUE are TEXT until the pause/cut-in work. */
+    if (cls == VTC_ECHO)
+        return ending_to_listening(c, VCA_DROP_TURN, VCH_IGNORED_ECHO);
+    if (cls == VTC_REPEAT || cls == VTC_CONTINUE) {
+        unsigned x = VCA_DROP_TURN | release_typing(c) | release_link(c) | release_batch(c);
+        VoiceConvOut o;
+        if (c->pause != VCP_NONE) return ending_to_listening(c, x, VCH_NONE);
+        o = enter_speaking(c, cls == VTC_REPEAT ? VCA_SPEAK_REPEAT : VCA_SPEAK_CONTINUE,
+                           VCPH_NONE, 1);
+        o.actions |= x;
+        o.header = cls == VTC_REPEAT ? VCH_REPEATING : VCH_CARRYING_ON;
+        c->turn = 0;
+        c->sending = 0;
+        return o;
+    }
     c->sending = 1;
     return out(VCA_SEND_TURN, VCH_NONE);
 }
@@ -147,13 +188,20 @@ static VoiceConvOut on_sent(VoiceConv *c, int status, unsigned long now)
         a = release_link(c) | release_batch(c) | release_typing(c);
         if (c->capture) { a |= VCA_CLOSE_CAPTURE; c->capture = 0; }
         c->state = VCS_WORKING;
+        c->turn = 0;
         c->sent_at = now;
         c->idle_seen = 0;
-        return out(a, VCH_WORKING);
+        return out(a, c->pause != VCP_NONE ? pause_header(c) : VCH_WORKING);
     case VSS_EMPTY:
         return ending_to_listening(c, 0, VCH_DIDNT_CATCH);
     case VSS_BUSY: case VSS_NO_SESSION: case VSS_FULL: case VSS_LAUNCH_FAILED:
         a = release_link(c) | release_batch(c) | release_typing(c);
+        if (c->pause != VCP_NONE) {   /* nothing is spoken while paused: the note shows */
+            o = enter_listening(c, a, VCH_NONE);
+            o.note = status == VSS_BUSY ? VCN_BUSY : status == VSS_NO_SESSION ? VCN_NO_SESSION
+                   : status == VSS_FULL ? VCN_FULL : VCN_LAUNCH;
+            return o;
+        }
         o = enter_speaking(c, VCA_SPEAK_PHRASE, VCPH_NOT_SENT, 0);
         o.actions |= a;
         /* a refusal's phrase is not a Stop-caption moment */
@@ -170,11 +218,77 @@ static VoiceConvOut speaking_stopped(VoiceConv *c, unsigned extra, VoiceConvNote
                                      unsigned long now)
 {
     VoiceConvOut o;
-    c->state = VCS_LISTENING;
+    /* a cut-in turn already open (AEC) carries on as the turn being heard */
+    c->state = c->turn ? VCS_HEARING : VCS_LISTENING;
     c->idle_at = now;   /* the silence clock restarts when listening resumes */
-    o = out(extra | VCA_MODE_LISTEN | release_caption(c), VCH_LISTENING);
+    o = out(extra | VCA_MODE_LISTEN | release_caption(c),
+            c->turn ? VCH_HEARING : VCH_LISTENING);
     o.note = note;
     return o;
+}
+
+
+static VoiceConvOut on_pause(VoiceConv *c, int reason, unsigned long now)
+{
+    VoiceConvOut none = out(0, VCH_NONE);
+    unsigned x = 0;
+    if (reason != VCP_BACKGROUND && reason != VCP_DIALOG) return none;
+    if (c->pause != VCP_NONE) {          /* already paused: only the reason */
+        c->pause = (VoiceConvPause)reason;
+        return out(0, pause_header(c));
+    }
+    switch (c->state) {
+    case VCS_LISTENING:
+        break;
+    case VCS_HEARING:
+    case VCS_ENDING:
+        if (c->state == VCS_ENDING && c->sending) {   /* already handed over: pause on arrival */
+            c->pause = (VoiceConvPause)reason;
+            return out(0, pause_header(c));
+        }
+        x |= VCA_DROP_TURN | release_link(c) | release_batch(c) | release_typing(c);
+        c->turn = 0;
+        break;
+    case VCS_SPEAKING:
+        x |= VCA_STOP_SPEECH | release_caption(c);
+        if (c->speaking_reply) {         /* held from its cut-off */
+            hold(c, 1, 0, now);
+            x |= VCA_HOLD_REPLY;
+        }
+        if (c->turn) {
+            x |= VCA_DROP_TURN | release_link(c) | release_typing(c);
+            c->turn = 0;
+        }
+        break;
+    case VCS_WORKING:
+        c->pause = (VoiceConvPause)reason;
+        return out(0, pause_header(c));
+    default:
+        return none;
+    }
+    c->pause = (VoiceConvPause)reason;
+    c->state = VCS_LISTENING;
+    if (c->capture) { c->capture = 0; x |= VCA_CLOSE_CAPTURE; }
+    return out(x, pause_header(c));
+}
+
+static VoiceConvOut on_resume(VoiceConv *c, unsigned long now)
+{
+    if (c->pause == VCP_NONE) return out(0, VCH_NONE);
+    c->pause = VCP_NONE;
+    if (c->state == VCS_WORKING) return out(0, VCH_WORKING);
+    if (c->state != VCS_LISTENING) return out(0, VCH_NONE);
+    if (c->held) {
+        int fresh = now - c->held_at < VOICE_CONV_HELD_MAX_MS;
+        int cont = c->held_continue, ph = c->held_phrase;
+        c->held = c->held_continue = c->held_phrase = 0;
+        if (fresh) {
+            if (ph) return enter_speaking(c, VCA_SPEAK_PHRASE, VCPH_WENT_WRONG, 0);
+            return enter_speaking(c, cont ? VCA_SPEAK_CONTINUE : VCA_SPEAK_REPLY, VCPH_NONE, 1);
+        }
+        return enter_listening(c, VCA_DROP_HELD, VCH_LISTENING);
+    }
+    return enter_listening(c, 0, VCH_LISTENING);
 }
 
 VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsigned long now)
@@ -212,7 +326,7 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
                         : a == VCX_CHAT_CHANGED ? VCN_END_CHAT : VCN_NONE, 0);
 
     case VCE_SEND:
-        if (st == VCS_LISTENING) {
+        if (st == VCS_LISTENING && c->pause == VCP_NONE) {
             c->state = VCS_ENDING;
             c->sending = 1;
             return out(VCA_SEND_TYPED, VCH_SENDING);
@@ -220,19 +334,26 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
         if (st == VCS_HEARING) goto turn_end;
         return none;
 
-    case VCE_TURN_START:
-        if (st != VCS_LISTENING) return none;   /* cut-in while Speaking: later */
-        {
-            unsigned x = VCA_LOCK_TYPING;
-            c->state = VCS_HEARING;
-            c->turn = 1;
-            c->typing = 1;
-            c->link_ready = 0;
-            if (c->live) { c->link = 1; x |= VCA_OPEN_LINK; }
-            return out(x, VCH_HEARING);
-        }
+    case VCE_TURN_START: {
+        unsigned x = VCA_LOCK_TYPING;
+        int ok = (st == VCS_LISTENING && c->pause == VCP_NONE)
+              || ((st == VCS_HEARING || st == VCS_SPEAKING) && !c->turn);
+        if (!ok) return none;
+        /* Speaking: an AEC cut-in candidate, the state stays until CUT */
+        if (st != VCS_SPEAKING) c->state = VCS_HEARING;
+        c->turn = 1;
+        c->typing = 1;
+        c->link_ready = 0;
+        if (c->live) { c->link = 1; x |= VCA_OPEN_LINK; }
+        return out(x, st == VCS_SPEAKING ? VCH_SPEAKING : VCH_HEARING);
+    }
 
     case VCE_TURN_ABANDON:
+        if (st == VCS_SPEAKING) {   /* a cough: the reply carries on */
+            if (!c->turn) return none;
+            c->turn = 0;
+            return out(VCA_DROP_TURN | release_link(c) | release_typing(c), VCH_SPEAKING);
+        }
         if (st != VCS_HEARING) return none;
         c->state = VCS_LISTENING;
         c->turn = 0;
@@ -286,7 +407,7 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
         return on_sent(c, a, now);
 
     case VCE_CARD:
-        if (st != VCS_WORKING) return none;
+        if (st != VCS_WORKING || c->pause != VCP_NONE) return none;
         {
             VoiceConvOut o = out(VCA_SPEAK_PHRASE, VCH_APPROVAL);
             o.phrase = a == VCARD_COMMAND ? VCPH_APPROVE_COMMAND
@@ -324,9 +445,16 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
         }
         return none;
 
-    /* Task 8: pausing, held replies and cut-in. */
-    case VCE_PAUSE: case VCE_RESUME:
-    case VCE_DUCK: case VCE_UNDUCK: case VCE_CUT:
+    case VCE_PAUSE: return on_pause(c, a, now);
+    case VCE_RESUME: return on_resume(c, now);
+
+    case VCE_DUCK:   return st == VCS_SPEAKING ? out(VCA_DUCK, VCH_NONE) : none;
+    case VCE_UNDUCK: return st == VCS_SPEAKING ? out(VCA_UNDUCK, VCH_NONE) : none;
+    case VCE_CUT:
+        if (st != VCS_SPEAKING) return none;
+        c->state = VCS_HEARING;   /* the turn opens now (AEC) or at TURN_START (half-duplex) */
+        return out(VCA_STOP_SPEECH | VCA_MODE_LISTEN | release_caption(c), VCH_HEARING);
+
     default:
         return none;
     }

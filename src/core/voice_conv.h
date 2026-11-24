@@ -90,7 +90,8 @@ typedef struct {
     int sending;                  /* a turn or typed message was handed to the glue */
     int idle_seen;                /* IDLE_POLL has seen the chat idle since idle_since */
     int speaking_reply;           /* SPEAKING a reply (1) or a phrase (0) */
-    int held, held_continue;      /* Task 8 */
+    int held, held_continue;      /* a held reply (held_phrase: the WENT_WRONG phrase) */
+    int held_phrase;
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
 } VoiceConv;
 #define VOICE_CONV_FINAL_WAIT_MS   3000
