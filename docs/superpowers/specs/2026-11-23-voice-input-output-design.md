@@ -207,9 +207,17 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
     the main window.
 - **The microphone is opened at recording start and closed at its end.**
   Nothing captures between recordings.
-- **Language:** optional, in Settings (blank = provider auto-detect), passed as
-  the provider's `language` field **(call, from review)**. Auto-detect is
-  weakest on one- or two-second commands.
+- **Language:** a dropdown in Settings, **English (UK) by default**: Auto-detect,
+  English (UK), English (US), then Arabic, Chinese, Dutch, French, German,
+  Hindi, Italian, Japanese, Korean, Polish, Portuguese, Russian, Spanish,
+  Swedish, Turkish, Ukrainian, and **Other...**, which shows a text box for a
+  two-letter ISO 639-1 code or the language's English name (`cy` or Welsh),
+  with an inline hint that says which format is wanted and what it recognised
+  ("Welsh (cy)"). An unrecognised entry is not saved. Auto-detect is weakest on
+  one- or two-second commands. The provider gets the ISO code, never the
+  region **(maintainer, 2026-11-24)**. A config saved before this (no
+  `voice_defaults_rev` of 3) with an empty language becomes English (UK) once;
+  a chosen language, and a later deliberate Auto-detect, are never touched.
 
 ### 4.2 What happens after you stop
 
@@ -371,6 +379,17 @@ providers as presets **(call)**:
     /chat/completions to derive from".
 - This resolution is one pure function in `src/core`, with tests.
 
+**Language fields per provider** **(maintainer, 2026-11-24)**: the language
+goes out as the ISO code. OpenAI-format endpoints get `language`; a
+`gpt-transcribe` model gets one `languages[]` part instead (OpenAI documents
+`languages` as an array for that model only). Nothing is sent for Auto-detect.
+English (UK) also sends a `prompt` asking for British spelling ("Use British
+English spelling, for example colour, organise, centre and travelled.") to
+OpenAI, Groq and custom servers, and appends it to the Gemini instruction
+(which also names the language in words: "The language is English."). Mistral
+gets no prompt: its `context_bias` is vocabulary biasing, not a spelling
+switch.
+
 Notes:
 - Model names and voices are **editable combos** seeded with defaults, never
   hard-coded only. Several audio models change or retire within months (some
@@ -457,7 +476,8 @@ The page then has two titled sections.
   drawn amber), -3 and above "Too loud". The -45 figure is the silence gate's
   speech threshold (RMS 250, about -42 dBFS) with margin: a peak below -45
   cannot pass the gate, so nobody is speaking **(maintainer, 2026-11-24)**.
-- Language (edit, blank = auto-detect, e.g. `en`) **(call)**.
+- Language (dropdown, English (UK) by default, with Other... and its text box
+  and format hint; see 4.1) **(maintainer, 2026-11-24)**.
 
 **Text to Speech**
 - `Use current AI assistant to read replies aloud` (tick box), with the same

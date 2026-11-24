@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "settings_help.h"
+#include "voice_lang.h"
 #include "settings_layout.h"
 #include "settings_debug.h"
 #include "settings_entry.h"
@@ -91,7 +92,7 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_AI_CONTEXT_LINES), N(SH_AI_SYSTEM_NOTES), N(SH_AI_MARKDOWN), N(SH_AI_THINKING_MODE),
     N(SH_AI_POLICY_ALLOWED), N(SH_AI_POLICY_AUTO), N(SH_AI_TOOL_TIMEOUT), N(SH_AI_TOOL_ROUNDS),
     N(SH_VOICE_ENABLE), N(SH_VOICE_STT_USE_AI), N(SH_VOICE_STT_PROVIDER), N(SH_VOICE_STT_KEY),
-    N(SH_VOICE_STT_URL), N(SH_VOICE_STT_MODEL), N(SH_VOICE_LANGUAGE), N(SH_VOICE_DEVICE),
+    N(SH_VOICE_STT_URL), N(SH_VOICE_STT_MODEL), N(SH_VOICE_LANGUAGE), N(SH_VOICE_LANGUAGE_OTHER), N(SH_VOICE_DEVICE),
     N(SH_VOICE_TEST), N(SH_VOICE_MIC_GAIN), N(SH_VOICE_PTT_KEY), N(SH_VOICE_PTT_MODE), N(SH_VOICE_MIC_DELAY),
     N(SH_VOICE_AUTO_SEND),
     N(SH_AI_WEB_FETCH), N(SH_AI_SEARCH), N(SH_AI_SEARCH_URL), N(SH_AI_MAX_RESULTS),
@@ -109,7 +110,7 @@ int test_settings_help_table_matches_enum(void) {
     const SettingsHelp *t = settings_help_table(&n);
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(n, (size_t)SH_COUNT);
-    ASSERT_EQ(SH_COUNT, 63);
+    ASSERT_EQ(SH_COUNT, 64);
     ASSERT_EQ(sizeof(k_names) / sizeof(k_names[0]), (size_t)SH_COUNT);
     ASSERT_NOT_NULL(settings_help_table(NULL));
     if (t != NULL && n == (size_t)SH_COUNT) {
@@ -238,7 +239,6 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     case SH_VOICE_STT_KEY:        str = s->stt_api_key; break;
     case SH_VOICE_STT_URL:        str = s->voice_stt_url; break;
     case SH_VOICE_STT_MODEL:      str = s->voice_stt_model; break;
-    case SH_VOICE_LANGUAGE:       str = s->voice_stt_language; break;
     case SH_DBG_FOLDER:           str = s->debug_log_dir; break;
     default: break;
     }
@@ -291,6 +291,13 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
         int on = id == SH_VOICE_ENABLE ? s->voice_enabled
                : id == SH_VOICE_AUTO_SEND ? s->voice_auto_send : s->voice_stt_use_ai;
         (void)snprintf(out, n, "%s", on ? "On" : "Off");
+        return 1;
+    }
+    if (id == SH_VOICE_LANGUAGE || id == SH_VOICE_LANGUAGE_OTHER) {
+        int idx = voice_lang_find(s->voice_stt_language);
+        const char *v = idx >= 0 ? (id == SH_VOICE_LANGUAGE ? voice_lang_table(NULL)[idx].label : "empty")
+                                 : (id == SH_VOICE_LANGUAGE ? "Other" : s->voice_stt_language);
+        (void)snprintf(out, n, "%s", v);
         return 1;
     }
     if (id == SH_VOICE_DEVICE) {
@@ -659,7 +666,7 @@ int test_settings_help_voice_entries(void) {
         ASSERT_EQ(e->page, SETTINGS_PAGE_VOICE);
         ASSERT_EQ(e->kind, id == (int)SH_VOICE_TEST ? SH_KIND_ACTION : SH_KIND_SETTING);
     }
-    ASSERT_EQ((int)SH_VOICE_AUTO_SEND - (int)SH_VOICE_ENABLE + 1, 14);
+    ASSERT_EQ((int)SH_VOICE_AUTO_SEND - (int)SH_VOICE_ENABLE + 1, 15);
     /* between the AI Behaviour and the AI Web entries */
     ASSERT_EQ(settings_help_get((int)SH_VOICE_ENABLE - 1)->page, SETTINGS_PAGE_AI_BEHAVIOUR);
     ASSERT_EQ(settings_help_get((int)SH_VOICE_AUTO_SEND + 1)->page, SETTINGS_PAGE_AI_WEB);
@@ -680,6 +687,14 @@ int test_settings_help_voice_entries(void) {
     ASSERT_EQ(e->min, VOICE_GAIN_MIN_DB);
     ASSERT_EQ(e->max, VOICE_GAIN_MAX_DB);
     ASSERT_EQ((int)SH_VOICE_MIC_GAIN, (int)SH_VOICE_TEST + 1);
+    e = settings_help_get((int)SH_VOICE_LANGUAGE);
+    ASSERT_STR_EQ(e->default_text, "English (UK)");
+    ASSERT_TRUE(strstr(e->text, "Other") != NULL);
+    ASSERT_EQ((int)SH_VOICE_LANGUAGE_OTHER, (int)SH_VOICE_LANGUAGE + 1);
+    e = settings_help_get((int)SH_VOICE_LANGUAGE_OTHER);
+    ASSERT_STR_EQ(e->label, "Other language:");
+    ASSERT_STR_EQ(e->default_text, "empty");
+    ASSERT_TRUE(strstr(e->text, "cy for Welsh") != NULL);
     e = settings_help_get((int)SH_VOICE_TEST);
     ASSERT_STR_EQ(e->label, "Test");
     ASSERT_NULL(e->default_text);

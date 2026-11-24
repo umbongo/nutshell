@@ -336,7 +336,7 @@ int test_voice_stt_gemini_body(void)
             JsonNode *txt = c && c->as.arr.size ? (JsonNode *)c->as.arr.data[0] : NULL;
             const char *tx = txt ? json_obj_str(txt, "text") : NULL;
             ASSERT_NOT_NULL(tx);
-            if (tx) ASSERT_NOT_NULL(strstr(tx, " The language is en."));
+            if (tx) ASSERT_NOT_NULL(strstr(tx, " The language is English."));
             json_free(root);
         }
         free(b);
@@ -390,5 +390,212 @@ int test_voice_stt_http_error(void)
     ASSERT_STR_EQ(o, "Speech-to-text failed (HTTP 500).");
     voice_stt_http_error(0, "timed out", o, sizeof o);
     ASSERT_STR_EQ(o, "Speech-to-text could not connect: timed out");
+    TEST_END();
+}
+
+/* ---- language, languages[] and the spelling prompt ---- */
+
+#define HINT_BRIT "Use British English spelling, for example colour, organise, centre and travelled."
+
+static char *mp(const char *model, const char *lang, const char *prompt, size_t *len)
+{
+    const unsigned char wav[4] = {0, 1, 2, 0};
+    return voice_stt_multipart_ex("b0", wav, sizeof wav, model, lang, prompt, len);
+}
+
+int test_voice_stt_multipart_language_gpt_transcribe(void)
+{
+    TEST_BEGIN();
+    size_t len = 0;
+    char *b = mp("gpt-transcribe", "en-GB", HINT_BRIT, &len);
+    ASSERT_NOT_NULL(b);
+    if (b) {
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"languages[]\"\r\n\r\nen\r\n"));
+        ASSERT_NULL(find_str(b, len, "name=\"language\""));
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"prompt\"\r\n\r\n" HINT_BRIT "\r\n"));
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"model\"\r\n\r\ngpt-transcribe\r\n"));
+        free(b);
+    }
+    /* gpt-4o-transcribe is not gpt-transcribe: it takes the plain field */
+    b = mp("gpt-4o-transcribe", "en-GB", NULL, &len);
+    ASSERT_NOT_NULL(b);
+    if (b) {
+        ASSERT_NULL(find_str(b, len, "languages[]"));
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\nen\r\n"));
+        free(b);
+    }
+    TEST_END();
+}
+
+int test_voice_stt_multipart_language_whisper(void)
+{
+    TEST_BEGIN();
+    size_t len = 0;
+    char *b = mp("whisper-1", "en-GB", HINT_BRIT, &len);
+    ASSERT_NOT_NULL(b);
+    if (b) {
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\nen\r\n"));
+        ASSERT_NULL(find_str(b, len, "languages[]"));
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"prompt\"\r\n\r\n" HINT_BRIT "\r\n"));
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"response_format\""));
+        free(b);
+    }
+    /* a custom code goes out as its iso part */
+    b = mp("whisper-1", "pt-BR", NULL, &len);
+    ASSERT_NOT_NULL(b);
+    if (b) {
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\npt\r\n"));
+        free(b);
+    }
+    TEST_END();
+}
+
+/* Resolve a target for one provider with the given language. */
+static int target_for(const char *prov, const char *lang, SttTarget *t)
+{
+    Settings s;
+    memset(&s, 0, sizeof s);
+    s.voice_stt_use_ai = 0;
+    strcpy(s.voice_stt_provider, prov);
+    strcpy(s.voice_stt_url, "https://h/v1");
+    strcpy(s.voice_stt_language, lang);
+    char err[128];
+    return voice_stt_resolve(&s, t, err, sizeof err);
+}
+
+int test_voice_stt_prompt_per_provider(void)
+{
+    TEST_BEGIN();
+    SttTarget t;
+    const char *yes[] = { "openai", "groq", "custom" };
+    for (size_t i = 0; i < 3; i++) {
+        ASSERT_EQ(target_for(yes[i], "en-GB", &t), 1);
+        ASSERT_STR_EQ(t.provider, yes[i]);
+        ASSERT_STR_EQ(voice_stt_prompt(&t), HINT_BRIT);
+        ASSERT_EQ(target_for(yes[i], "en-US", &t), 1);
+        ASSERT_NULL(voice_stt_prompt(&t));
+        ASSERT_EQ(target_for(yes[i], "", &t), 1);
+        ASSERT_NULL(voice_stt_prompt(&t));
+    }
+    ASSERT_EQ(target_for("mistral", "en-GB", &t), 1);
+    ASSERT_NULL(voice_stt_prompt(&t));
+    ASSERT_EQ(target_for("gemini", "en-GB", &t), 1);
+    ASSERT_NULL(voice_stt_prompt(&t));
+    ASSERT_NULL(voice_stt_prompt(NULL));
+    /* the use-AI path: openai and custom accept it, gemini does not */
+    Settings s;
+    memset(&s, 0, sizeof s);
+    s.voice_stt_use_ai = 1;
+    strcpy(s.voice_stt_language, "en-GB");
+    strcpy(s.ai_provider, "openai");
+    char err[128];
+    ASSERT_EQ(voice_stt_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(voice_stt_prompt(&t), HINT_BRIT);
+    strcpy(s.ai_provider, "custom");
+    strcpy(s.ai_custom_url, "https://h/v1/chat/completions");
+    ASSERT_EQ(voice_stt_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(voice_stt_prompt(&t), HINT_BRIT);
+    strcpy(s.ai_provider, "gemini");
+    ASSERT_EQ(voice_stt_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_NULL(voice_stt_prompt(&t));
+    TEST_END();
+}
+
+int test_voice_stt_multipart_mistral_no_prompt(void)
+{
+    TEST_BEGIN();
+    SttTarget t;
+    ASSERT_EQ(target_for("mistral", "en-GB", &t), 1);
+    size_t len = 0;
+    char *b = mp(t.model, t.language, voice_stt_prompt(&t), &len);
+    ASSERT_NOT_NULL(b);
+    if (b) {
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\nen\r\n"));
+        ASSERT_NULL(find_str(b, len, "name=\"prompt\""));
+        free(b);
+    }
+    TEST_END();
+}
+
+int test_voice_stt_multipart_en_us_no_prompt(void)
+{
+    TEST_BEGIN();
+    SttTarget t;
+    ASSERT_EQ(target_for("openai", "en-US", &t), 1);
+    size_t len = 0;
+    char *b = mp("whisper-1", t.language, voice_stt_prompt(&t), &len);
+    ASSERT_NOT_NULL(b);
+    if (b) {
+        ASSERT_NOT_NULL(find_str(b, len, "name=\"language\"\r\n\r\nen\r\n"));
+        ASSERT_NULL(find_str(b, len, "name=\"prompt\""));
+        free(b);
+    }
+    TEST_END();
+}
+
+int test_voice_stt_multipart_auto_detect(void)
+{
+    TEST_BEGIN();
+    SttTarget t;
+    ASSERT_EQ(target_for("openai", "", &t), 1);
+    size_t len = 0;
+    const char *models[] = { "whisper-1", "gpt-transcribe" };
+    for (int i = 0; i < 2; i++) {
+        char *b = mp(models[i], t.language, voice_stt_prompt(&t), &len);
+        ASSERT_NOT_NULL(b);
+        if (b) {
+            ASSERT_NULL(find_str(b, len, "language"));
+            ASSERT_NULL(find_str(b, len, "name=\"prompt\""));
+            free(b);
+        }
+    }
+    /* CR/LF in the prompt is refused */
+    ASSERT_NULL(mp("whisper-1", "en", "a\r\nb", &len));
+    TEST_END();
+}
+
+static char *gemini_text(const char *lang, char *out, size_t cap)
+{
+    const unsigned char wav[5] = {'R', 'I', 'F', 0, 255};
+    size_t len = 0;
+    char *b = voice_stt_gemini_body(wav, sizeof wav, "m", lang, &len);
+    out[0] = '\0';
+    if (!b) return NULL;
+    JsonNode *root = json_parse(b);
+    if (root) {
+        JsonNode *msgs = json_obj_get(root, "messages");
+        JsonNode *m0 = msgs && msgs->as.arr.size ? (JsonNode *)msgs->as.arr.data[0] : NULL;
+        JsonNode *c = m0 ? json_obj_get(m0, "content") : NULL;
+        JsonNode *txt = c && c->as.arr.size ? (JsonNode *)c->as.arr.data[0] : NULL;
+        const char *tx = txt ? json_obj_str(txt, "text") : NULL;
+        if (tx) snprintf(out, cap, "%s", tx);
+        json_free(root);
+    }
+    return b;
+}
+
+int test_voice_stt_gemini_language_words(void)
+{
+    TEST_BEGIN();
+    char tx[512];
+    char *b = gemini_text("en-GB", tx, sizeof tx);
+    ASSERT_NOT_NULL(b);
+    free(b);
+    ASSERT_NOT_NULL(strstr(tx, " The language is English."));
+    ASSERT_NOT_NULL(strstr(tx, HINT_BRIT));
+    ASSERT_NULL(strstr(tx, "en-GB"));
+    b = gemini_text("en-US", tx, sizeof tx);
+    free(b);
+    ASSERT_NOT_NULL(strstr(tx, " The language is English."));
+    ASSERT_NULL(strstr(tx, "British"));
+    b = gemini_text("fr", tx, sizeof tx);
+    free(b);
+    ASSERT_NOT_NULL(strstr(tx, " The language is French."));
+    b = gemini_text("cy", tx, sizeof tx);
+    free(b);
+    ASSERT_NOT_NULL(strstr(tx, " The language is Welsh."));
+    b = gemini_text("", tx, sizeof tx);
+    free(b);
+    ASSERT_NULL(strstr(tx, "language"));
     TEST_END();
 }

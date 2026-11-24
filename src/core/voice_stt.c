@@ -128,7 +128,18 @@ static void fill_common(const Settings *s, SttTarget *t, const SttProvider *p,
     snprintf(t->model, sizeof t->model, "%s",
              s->voice_stt_model[0] ? s->voice_stt_model : fallback_model);
     snprintf(t->language, sizeof t->language, "%s", s->voice_stt_language);
+    snprintf(t->provider, sizeof t->provider, "%s", p->id);
+    /* Mistral's context_bias is vocabulary biasing, not a spelling switch, and the
+     * Gemini route is a chat body: neither gets `prompt`. */
+    t->accepts_prompt = strcmp(p->id, "openai") == 0 || strcmp(p->id, "groq") == 0 ||
+                        strcmp(p->id, "custom") == 0;
     t->shape = p->shape;
+}
+
+const char *voice_stt_prompt(const SttTarget *t)
+{
+    if (!t || !t->accepts_prompt) return NULL;
+    return voice_lang_spelling_hint(t->language);
 }
 
 int voice_stt_resolve(const Settings *s, SttTarget *t, char *err, size_t cap)
@@ -227,8 +238,20 @@ static int text_part(char **b, size_t *l, size_t *c, const char *boundary,
            buf_str(b, l, c, value) && buf_str(b, l, c, "\r\n");
 }
 
+static int is_gpt_transcribe_model(const char *m)
+{
+    return m && strncmp(m, "gpt-transcribe", 14) == 0;
+}
+
 char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t wav_len,
                           const char *model, const char *language, size_t *out_len)
+{
+    return voice_stt_multipart_ex(boundary, wav, wav_len, model, language, NULL, out_len);
+}
+
+char *voice_stt_multipart_ex(const char *boundary, const unsigned char *wav, size_t wav_len,
+                             const char *model, const char *language, const char *prompt,
+                             size_t *out_len)
 {
     if (!boundary || !wav || !model) return NULL;
     size_t bl = strlen(boundary);
@@ -239,16 +262,22 @@ char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t
                   (ch >= '0' && ch <= '9') || (ch != '\0' && strchr("'()+_,-./:=?", ch));
         if (!okc) return NULL;
     }
-    if (strpbrk(model, "\r\n") || (language && strpbrk(language, "\r\n"))) return NULL;
+    if (strpbrk(model, "\r\n") || (language && strpbrk(language, "\r\n")) ||
+        (prompt && strpbrk(prompt, "\r\n"))) return NULL;
+    char iso[64];
+    voice_lang_iso(language, iso, sizeof iso);
+    const char *lang_name = is_gpt_transcribe_model(model) ? "languages[]" : "language";
     /* The exact size is known up front, so the buffer is allocated once and
      * never grown: a realloc would leave an unwiped copy of the audio. */
     const size_t part_fixed = 2 + bl + K_LEN(k_part_hdr) + K_LEN(k_part_mid) + 2;
-    const int with_lang = language && language[0];
+    const int with_lang = iso[0] != '\0';
+    const int with_prompt = prompt && prompt[0];
     const int with_fmt = !is_gpt4o_model(model);
     size_t total = 2 + bl + K_LEN(k_file_hdr) + wav_len + 2
                  + part_fixed + K_LEN("model") + strlen(model)
                  + 2 + bl + 4;
-    if (with_lang) total += part_fixed + K_LEN("language") + strlen(language);
+    if (with_lang) total += part_fixed + strlen(lang_name) + strlen(iso);
+    if (with_prompt) total += part_fixed + K_LEN("prompt") + strlen(prompt);
     if (with_fmt) total += part_fixed + K_LEN("response_format") + K_LEN("json");
 #undef K_LEN
     char *b = (char *)malloc(total + 1);
@@ -260,7 +289,9 @@ char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t
              buf_put(&b, &l, &c, wav, wav_len) && buf_str(&b, &l, &c, "\r\n") &&
              text_part(&b, &l, &c, boundary, "model", model);
     if (ok && with_lang)
-        ok = text_part(&b, &l, &c, boundary, "language", language);
+        ok = text_part(&b, &l, &c, boundary, lang_name, iso);
+    if (ok && with_prompt)
+        ok = text_part(&b, &l, &c, boundary, "prompt", prompt);
     if (ok && with_fmt)
         ok = text_part(&b, &l, &c, boundary, "response_format", "json");
     ok = ok && buf_str(&b, &l, &c, "--") && buf_str(&b, &l, &c, boundary) &&
@@ -277,11 +308,26 @@ char *voice_stt_gemini_body(const unsigned char *wav, size_t wav_len,
     if (!wav || !model) return NULL;
     static const char prompt[] =
         "Transcribe this audio verbatim. Reply with only the words spoken, or nothing if no one speaks.";
-    char text[256];
-    snprintf(text, sizeof text, "%s%s%s%s", prompt,
-             language && language[0] ? " The language is " : "",
-             language && language[0] ? language : "",
-             language && language[0] ? "." : "");
+    char text[512];
+    char words[64] = "";
+    if (language && language[0]) {
+        int idx = voice_lang_find(language);
+        if (idx >= 0) {
+            size_t n = 0;
+            const char *lab = voice_lang_table(&n)[idx].label;
+            size_t k = strcspn(lab, " (");   /* "English (UK)" -> "English" */
+            snprintf(words, sizeof words, "%.*s", (int)k, lab);
+        } else {
+            char iso[16];
+            voice_lang_iso(language, iso, sizeof iso);
+            const char *nm = voice_lang_name(iso);
+            snprintf(words, sizeof words, "%s", nm ? nm : iso);
+        }
+    }
+    const char *hint = voice_lang_spelling_hint(language);
+    snprintf(text, sizeof text, "%s%s%s%s%s%s", prompt,
+             words[0] ? " The language is " : "", words, words[0] ? "." : "",
+             hint ? " " : "", hint ? hint : "");
     size_t b64cap = ((wav_len + 2) / 3) * 4 + 1;
     char *b64 = (char *)malloc(b64cap);
     if (!b64) return NULL;

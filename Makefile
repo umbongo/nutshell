@@ -315,7 +315,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c \
                    src/ui/voice_audio_win.c src/core/wav.c tests/test_voice_audio_win.c \
-                   src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/voice_gate.c \
+                   src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/voice_lang.c src/core/voice_gate.c \
                    src/core/voice_config.c src/core/base64.c src/core/json_validate.c src/config/json_parser.c src/config/json_tokenizer.c src/core/vector.c \
                    tests/test_voice_stt_win.c src/core/voice_ptt.c tests/test_voice_ptt_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \

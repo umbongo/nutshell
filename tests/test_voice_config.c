@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "config.h"
 #include "voice_config.h"
+#include "voice_lang.h"
 #include "voice_gate.h"
 #include "ai_gate.h"
 #include "opt_feature.h"
@@ -53,7 +54,7 @@ int test_voice_config_defaults(void)
     ASSERT_STR_EQ(s.voice_stt_provider, "openai");
     ASSERT_STR_EQ(s.voice_stt_url, "");
     ASSERT_STR_EQ(s.voice_stt_model, "");
-    ASSERT_STR_EQ(s.voice_stt_language, "");
+    ASSERT_STR_EQ(s.voice_stt_language, "en-GB");
     ASSERT_STR_EQ(s.stt_api_key, "");
     ASSERT_STR_EQ(s.stt_api_key_enc_preserved, "");
     ASSERT_STR_EQ(s.voice_input_device, "");
@@ -698,7 +699,7 @@ int test_voice_config_new_config_writes_marker(void)
     char *t = vcfg_read();
     ASSERT_NOT_NULL(t);
     if (t) {
-        ASSERT_TRUE(strstr(t, VMARK ": 2") != NULL);
+        ASSERT_TRUE(strstr(t, VMARK ": 3") != NULL);
         free(t);
     }
     remove(VCFG);
@@ -775,5 +776,106 @@ int test_voice_gain_label(void)
     voice_gain_label(0, b, sizeof b);   ASSERT_STR_EQ(b, "0 dB");
     voice_gain_label(-12, b, sizeof b); ASSERT_STR_EQ(b, "-12 dB");
     voice_gain_label(30, b, sizeof b);  ASSERT_STR_EQ(b, "+30 dB");
+    TEST_END();
+}
+
+/* ---- Language: custom code round trip and the one-time English (UK) migration ---- */
+
+int test_voice_config_custom_language_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *c = config_new_default();
+    ASSERT_NOT_NULL(c);
+    if (!c) return 1;
+    ASSERT_STR_EQ(c->settings.voice_stt_language, VOICE_LANG_DEFAULT);
+    snprintf(c->settings.voice_stt_language, sizeof(c->settings.voice_stt_language), "cy");
+    ASSERT_EQ(config_save(c, VCFG), 0);
+    config_free(c);
+    char *t = vcfg_read();
+    ASSERT_NOT_NULL(t);
+    if (t) {
+        ASSERT_TRUE(strstr(t, VMARK ": 3") != NULL);
+        free(t);
+    }
+    ConfigLoadReport rep;
+    Config *l = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_STR_EQ(l->settings.voice_stt_language, "cy");
+        ASSERT_EQ(rep.voice_migrated, 0);
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+/* Loads {"settings": {rev?, language, key, mode}}; returns the report's
+ * voice_migrated and copies the loaded language. */
+static int lang_fixture(const char *rev, const char *lang, const char *key,
+                        const char *mode, char *lang_out, size_t cap, int *key_out)
+{
+    char json[512];
+    snprintf(json, sizeof json,
+             "{\"settings\": {%s\"voice_stt_language\": \"%s\", "
+             "\"voice_ptt_key\": \"%s\", \"voice_ptt_mode\": \"%s\"}, \"profiles\": []}",
+             rev, lang, key, mode);
+    if (!vcfg_write(json)) return -1;
+    ConfigLoadReport rep;
+    Config *c = config_load_report(VCFG, &rep);
+    if (!c) return -1;
+    snprintf(lang_out, cap, "%s", c->settings.voice_stt_language);
+    if (key_out) *key_out = c->settings.voice_ptt_key;
+    config_free(c);
+    return rep.voice_migrated;
+}
+
+int test_voice_config_language_migration(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    /* marker absent, empty: becomes English (UK) and is reported */
+    ASSERT_EQ(lang_fixture("", "", "right_shift", "toggle", lang, sizeof lang, NULL), 1);
+    ASSERT_STR_EQ(lang, "en-GB");
+    /* rev 2, empty: the same (the Right Shift migration does not apply) */
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 2, ", "", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 1);
+    ASSERT_STR_EQ(lang, "en-GB");
+    /* rev 3, empty: a deliberate Auto-detect, kept */
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 3, ", "", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "");
+    /* a chosen language is never touched */
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 2, ", "fr", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "fr");
+    ASSERT_EQ(lang_fixture("\"voice_defaults_rev\": 2, ", "en", "right_shift", "toggle",
+                           lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "en");
+    ASSERT_EQ(lang_fixture("", "fr", "right_shift", "toggle", lang, sizeof lang, NULL), 0);
+    ASSERT_STR_EQ(lang, "fr");
+    /* a migrated config saved once is not migrated again */
+    Config *c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) { ASSERT_EQ(config_save(c, VCFG), 0); config_free(c); }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_config_rshift_migration_rev2_skips(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    int key = -1;
+    /* rev 2: Right Ctrl + Hold is a deliberate choice and stays */
+    lang_fixture("\"voice_defaults_rev\": 2, ", "fr", "right_ctrl", "hold", lang, sizeof lang, &key);
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_CTRL);
+    /* rev 3 too */
+    lang_fixture("\"voice_defaults_rev\": 3, ", "fr", "right_ctrl", "hold", lang, sizeof lang, &key);
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_CTRL);
+    /* absent: the old pair still migrates to Right Shift */
+    lang_fixture("", "fr", "right_ctrl", "hold", lang, sizeof lang, &key);
+    ASSERT_EQ(key, (int)VOICE_PTT_RIGHT_SHIFT);
+    remove(VCFG);
     TEST_END();
 }

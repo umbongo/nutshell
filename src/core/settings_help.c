@@ -431,11 +431,22 @@ static const SettingsHelp k_help[SH_COUNT] = {
     E(SH_VOICE_LANGUAGE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Language:",
       NULL,
-      "Language:\n\nThe language you speak. Left blank, the provider "
-      "detects it from the recording. A two-letter code such as en or de "
-      "makes recognition faster and more accurate when you always speak "
-      "one language.\nDefault: empty (the provider detects it).",
-      "empty (the provider detects it)",
+      "Language:\n\nTells the speech-to-text service which language you will "
+      "speak. Auto-detect lets it guess, which is weakest on short commands. "
+      "English (UK) also asks for British spelling where the provider allows "
+      "it (OpenAI, Groq, custom servers, Gemini). Not listed? Choose Other... "
+      "and type a two-letter ISO 639-1 language code such as cy for Welsh or "
+      "mi for Maori, or the language's English name such as Welsh; your "
+      "provider must support it.\nDefault: English (UK).",
+      "English (UK)",
+      0, 0, 0u),
+    E(SH_VOICE_LANGUAGE_OTHER, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Other language:",
+      NULL,
+      "Other language:\n\nType a two-letter ISO 639-1 language code such as "
+      "cy for Welsh or mi for Maori, or the language's English name such as "
+      "Welsh. Your speech-to-text provider must support it.\nDefault: empty.",
+      "empty",
       0, 0, 0u),
     E(SH_VOICE_DEVICE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Input device:",

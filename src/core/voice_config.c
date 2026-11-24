@@ -1,5 +1,6 @@
 /* src/core/voice_config.c -- see voice_config.h */
 #include "voice_config.h"
+#include "voice_lang.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -72,7 +73,7 @@ void voice_settings_default(Settings *s)
     (void)snprintf(s->voice_stt_provider, sizeof(s->voice_stt_provider), "openai");
     s->voice_stt_url[0] = '\0';
     s->voice_stt_model[0] = '\0';
-    s->voice_stt_language[0] = '\0';
+    (void)snprintf(s->voice_stt_language, sizeof(s->voice_stt_language), "%s", VOICE_LANG_DEFAULT);
     s->stt_api_key[0] = '\0';
     s->stt_api_key_enc_preserved[0] = '\0';
     s->voice_input_device[0] = '\0';
