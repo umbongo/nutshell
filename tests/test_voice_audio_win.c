@@ -120,7 +120,7 @@ int test_voice_audio_start_refused_when_gate_off(void)
         ASSERT_EQ(voice_audio_wait_ready(10), 0);          /* no thread was made */
         ASSERT_FALSE(dll_record_was_requested("mmdevapi.dll"));
         /* commands with no thread are dropped, never queued for a later one */
-        voice_audio_capture_begin("", 1, 0);
+        voice_audio_capture_begin("", 1, 0, 0);
         voice_audio_enumerate();
     }
     va_gates(0);
@@ -197,7 +197,7 @@ int test_voice_audio_capture_no_device_or_data(void)
     ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    voice_audio_capture_begin("", 7, 0);
+    voice_audio_capture_begin("", 7, 0, 0);
     Sleep(300);
     voice_audio_capture_end(1);
     WPARAM wp = 0; LPARAM lp = 0;
@@ -227,7 +227,7 @@ int test_voice_audio_bad_id_falls_back(void)
     ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    voice_audio_capture_begin("{bogus}", 3, 0);
+    voice_audio_capture_begin("{bogus}", 3, 0, 0);
     Sleep(300);
     voice_audio_capture_end(1);
     WPARAM wp = 0; LPARAM lp = 0;
@@ -289,7 +289,7 @@ int test_voice_audio_queue_keeps_begin_and_end(void)
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     for (int i = 0; i < 40; i++) voice_audio_enumerate();   /* coalesced to one */
-    voice_audio_capture_begin("", 7, 0);
+    voice_audio_capture_begin("", 7, 0, 0);
     voice_audio_capture_end(1);
     /* An enumeration error (token 0) may arrive first: it is not ours. */
     ASSERT_TRUE(va_wait_token(7, 5000, NULL, 0));
@@ -315,7 +315,7 @@ int test_voice_audio_queue_grows_past_initial_capacity(void)
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     voice_audio_test_hold(1);
     for (unsigned t = 1; t <= PAIRS; t++) {
-        voice_audio_capture_begin("", t, 0);
+        voice_audio_capture_begin("", t, 0, 0);
         voice_audio_capture_end(1);
     }
     int cap = voice_audio_queue_cap();
@@ -332,6 +332,116 @@ int test_voice_audio_queue_grows_past_initial_capacity(void)
     TEST_END();
 }
 
+/* The ingest path (gain, level, wipe) runs on a private state through the
+ * seam, so these assertions are real under Wine whatever endpoints exist. */
+#define VA_FEED 3200   /* ten 20 ms windows */
+static void va_fixture(int16_t *s, int16_t v)
+{
+    for (int i = 0; i < VA_FEED; i++) s[i] = (i & 1) ? (int16_t)-v : v;
+}
+
+/* A Test capture is open-ended: four seconds of audio (past the old 3 s end
+ * and the 3 s push-to-talk cap's worth) still leave it running, and still
+ * report each feed's level. The old code ended it by time, which a feed
+ * cannot show; what a feed can show is that no length ever fills it. */
+int test_voice_audio_test_capture_has_no_time_limit(void)
+{
+    TEST_BEGIN();
+    static int16_t s[VA_FEED];
+    va_fixture(s, 1000);
+    int peak[2]; size_t len = 99; int verdict = -1;
+    for (int round = 0; round < 20; round++) {   /* 20 x 2 x 0.2 s = 8 s */
+        voice_audio_test_ingest(1, 0, 0, s, VA_FEED, peak, &len, &verdict);
+        ASSERT_EQ(peak[0], 1000);
+        ASSERT_EQ(peak[1], 1000);
+    }
+    /* The product thread, with a real endpoint or none: a test-only begin
+     * must never post VAM_CAPTURED. */
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_NOT_NULL(w);
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_capture_begin("", 0, 1, 0);
+    voice_audio_capture_end(1);          /* keep is ignored for a test */
+    WPARAM wp = 0; LPARAM lp = 0;
+    ASSERT_EQ(va_wait(BIT(VAM_CAPTURED), 1500, &wp, &lp), 0);
+    va_end_test(w);
+    TEST_END();
+}
+
+/* A Test keeps no samples: the pcm length is 0 after feeding, while the same
+ * feed in a push-to-talk capture is kept (the fixture tells them apart). */
+int test_voice_audio_test_capture_keeps_no_samples(void)
+{
+    TEST_BEGIN();
+    static int16_t s[VA_FEED];
+    va_fixture(s, 1000);
+    int peak[2]; size_t len = 99; int verdict = -1;
+    voice_audio_test_ingest(1, 0, 0, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_EQ((int)len, 0);
+    ASSERT_EQ(verdict, (int)PCM_EMPTY);
+    ASSERT_EQ(peak[0], 1000);
+    voice_audio_test_ingest(0, 0, 0, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_EQ((int)len, 2 * VA_FEED);
+    ASSERT_EQ(verdict, (int)PCM_SPEECH);
+    TEST_END();
+}
+
+/* The gain applies to the new samples only: the level and the classifier see
+ * the gained signal, and a gain change between feeds takes effect at once. */
+int test_voice_audio_ingest_applies_gain_live(void)
+{
+    TEST_BEGIN();
+    static int16_t s[VA_FEED];
+    int peak[2]; size_t len = 0; int verdict = -1;
+    va_fixture(s, 1000);
+    voice_audio_test_ingest(1, 0, 6, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_EQ(peak[0], 1000);                        /* 0 dB: untouched */
+    ASSERT_TRUE(peak[1] >= 1950 && peak[1] <= 2050); /* +6 dB, about x2 */
+    voice_audio_test_ingest(1, 6, 0, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_TRUE(peak[0] >= 1950 && peak[0] <= 2050);
+    ASSERT_EQ(peak[1], 1000);                        /* live change back */
+    /* Saturation: a loud signal at the top gain stays inside int16. */
+    va_fixture(s, 30000);
+    voice_audio_test_ingest(1, 12, 12, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_TRUE(peak[0] >= 32767);
+    ASSERT_TRUE(peak[1] <= 32768);
+    /* Quiet speech below the speech threshold becomes speech with gain, and
+     * a push-to-talk capture classifies the gained samples. */
+    va_fixture(s, 100);
+    voice_audio_test_ingest(0, 0, 0, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_EQ(verdict, (int)PCM_SILENT);
+    voice_audio_test_ingest(0, 12, 12, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_EQ(verdict, (int)PCM_SPEECH);
+    TEST_END();
+}
+
+/* Gain commands coalesce like the others: held, many pushes leave one queued
+ * command carrying the last value. Real under Wine (the thread needs no
+ * endpoint). */
+int test_voice_audio_set_gain_coalesces(void)
+{
+    TEST_BEGIN();
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_NOT_NULL(w);
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_test_hold(1);
+    for (int i = 0; i < 50; i++) voice_audio_set_gain(i - 10);
+    voice_audio_set_gain(7);
+    int last = -999;
+    int n = voice_audio_test_pending_gain(&last);
+    voice_audio_test_hold(0);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(last, 7);
+    Sleep(100);
+    ASSERT_EQ(voice_audio_test_pending_gain(&last), 0);   /* applied and popped */
+    va_end_test(w);
+    TEST_END();
+}
+
 int test_voice_audio_never_started(void)
 {
     TEST_BEGIN();
@@ -340,7 +450,7 @@ int test_voice_audio_never_started(void)
     ASSERT_NOT_NULL(w);
     voice_audio_stop();
     voice_audio_enumerate();
-    voice_audio_capture_begin("", 1, 0);
+    voice_audio_capture_begin("", 1, 0, 0);
     voice_audio_capture_end(1);
     voice_audio_watch_devices(1);
     voice_audio_watch_devices(0);

@@ -1089,7 +1089,7 @@ static void voice_test_start(SettingsDlgData *d)
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
     if (test) SetWindowText(test, "Testing...");
     SetTimer(d->hDlg, IDT_VOICE_TEST, 3000, NULL);
-    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1);
+    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, 0);
     voice_enable_sync(d);
     if (test) InvalidateRect(test, NULL, TRUE);
 }
@@ -1157,7 +1157,10 @@ int settings_voice_on_audio(WPARAM wp, LPARAM lp)
         return 1;
     case VAM_LEVEL:
         if (d->voice_testing) {
-            d->voice_level = (int)lp < 0 ? 0 : ((int)lp > 1000 ? 1000 : (int)lp);
+            {   /* raw peak 0..32768 -> the meter's 0..1000 */
+                int pk = (int)lp < 0 ? 0 : ((int)lp > 32768 ? 32768 : (int)lp);
+                d->voice_level = pk * 1000 / 32768;
+            }
             voice_meter_redraw(d);
         }
         return 1;
