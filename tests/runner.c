@@ -3707,6 +3707,16 @@ int test_voice_sgate_cough(void);
 int test_voice_sgate_flush(void);
 int test_voice_sgate_two_utterances(void);
 int test_voice_sgate_reset_wipes(void);
+/* test_voice_transcript.c */
+int test_vt_draft_sep(void);
+int test_vt_openai_revision(void);
+int test_vt_openai_interleaved(void);
+int test_vt_mistral_append(void);
+int test_vt_utf16_offsets(void);
+int test_vt_newlines(void);
+int test_vt_join_rules(void);
+int test_vt_seg_overflow(void);
+int test_vt_free_wipes(void);
 /* test_voice_config.c */
 int test_voice_config_defaults(void);
 int test_voice_config_json_names(void);
@@ -8217,6 +8227,15 @@ int main(void) {
     failed += test_voice_sgate_flush();
     failed += test_voice_sgate_two_utterances();
     failed += test_voice_sgate_reset_wipes();
+    failed += test_vt_draft_sep();
+    failed += test_vt_openai_revision();
+    failed += test_vt_openai_interleaved();
+    failed += test_vt_mistral_append();
+    failed += test_vt_utf16_offsets();
+    failed += test_vt_newlines();
+    failed += test_vt_join_rules();
+    failed += test_vt_seg_overflow();
+    failed += test_vt_free_wipes();
     failed += test_voice_config_defaults();
     failed += test_voice_config_json_names();
     failed += test_voice_config_roundtrip();
