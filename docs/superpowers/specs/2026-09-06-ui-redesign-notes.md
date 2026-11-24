@@ -635,6 +635,38 @@ Open, in priority order:
       frame of the native box flashing on click, focus change or Space; the keyboard focus
       ring on a checked box; no label ellipsised (Debugging's "Keep recent detail for issue
       marks, at" row was widened to 300 px on an estimate).
+- [ ] **Live dictation (PR 1 of live voice, feat/voice-live-dictation): nothing run on
+      Windows.** Built and tested here under Wine and the native suite with no microphone and
+      no live provider. (a) Live text with OpenAI `gpt-live-transcribe` (the maintainer's
+      provider): words appear while speaking, provisional words settle when each segment
+      completes, English (UK) spelling ("colour", "organise") with the British prompt, and
+      the 24 kHz audio sounds right to the model (no garbled words). (b) The same with Mistral
+      `voxtral-mini-transcribe-realtime-3`. (c) Typing paused while recording and until the
+      last words arrive (typed keys, paste, cut, Backspace, Delete, undo, an IME); Ctrl+C
+      still copies; clicks in the box do not move where words go. (d) Send or Enter while
+      recording: the mic stops, the final words arrive, then it sends; a slow final gives
+      "The last words did not arrive..." and nothing is sent. (e) Escape with the AI panel
+      focused removes the recording's words and keeps the draft; Escape in the terminal goes
+      to the terminal (vi, `less`) and the recording carries on. (f) Alt+Tab and a modal
+      mid-recording keep the words and send nothing, even with auto-send on. (g) A tab
+      change and New chat mid-recording: words kept, nothing sent. (h) Saving Settings with a
+      voice setting changed ends the recording at once. (i) The connection pulled
+      mid-recording (Wi-Fi off): "Live text stopped...", then the batch fallback replaces the
+      live text when the mic stops; the fallback failing too keeps the live text with its
+      chat note. (j) A live key rejected (HTTP 401/403) and a wrong model (Mistral 403): the
+      chat note, and the batch fallback at stop. (k) A 5-minute recording with long pauses:
+      the session survives the idle gaps (neither provider documents an idle limit). (l) A
+      10-minute recording reaching the cap, with the fallback forced: OpenAI's 25 MB limit is
+      documented, Mistral's batch size limit is not. (m) `mingw32-make wintest` on Windows:
+      `test_voice_ws_shutdown_wakes_receiver`, `test_voice_ws_cancel_during_handshake` and
+      `test_voice_live_close_mid_handshake` take Wine skips, so a WebSocket close waking a
+      blocked receive and a handle close aborting a blocked handshake are unproven until they
+      run there. (n) `mingw32-make test` and `mingw32-make clean && mingw32-make release` on
+      the Windows box (newer gcc and MSYS2 headers, live spec §7.5). (o) The Live model row
+      and the "Live text as you speak needs OpenAI or Mistral" note on the Voice page for each
+      provider and with "Use current AI assistant". (p) The upgrade notice line "Voice: live
+      speech-to-text model". (q) The integration harness has no live-dictation case yet: the
+      WAV-injection seam is left to PR 2 (live spec §16 item 28).
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a

@@ -1539,6 +1539,153 @@ key, and revisiting the header status design.
 28. The WAV-injection seam for the harness, kept out of the exe's normal
     paths (§14).
 
+### Found at build time (PR 1, 2026-11-24)
+
+Checked against the providers' live documentation and Microsoft's WinHTTP
+reference on 2026-11-24, and against the Mistral Python client's source
+(`github.com/mistralai/client-python`, `src/mistralai/extra/realtime/`) where
+the prose docs are silent. Sources:
+`developers.openai.com/api/docs/guides/realtime-transcription.md`,
+`developers.openai.com/api/reference/resources/realtime/client-events.md` and
+`server-events.md`, `developers.openai.com/api/docs/pricing.md`,
+`docs.mistral.ai/studio/audio/speech-to-text/transcribe-in-realtime`,
+`learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpwebsocketreceive`
+(and its sibling pages) and `learn.microsoft.com/en-us/windows/win32/winhttp/option-flags`.
+
+**Corrections to §6.2 and §6.3:**
+- OpenAI's session is configured with `session.update` carrying
+  `session.type: "transcription"` and a nested
+  `audio.input.{format, transcription, turn_detection}`; there is no
+  `transcription_session.update`. The URL carries no model. The
+  `OpenAI-Beta: realtime=v1` header is not sent (the GA interface drops it).
+- `gpt-live-transcribe` takes only 24 kHz PCM (`audio/pcm`, `rate: 24000`), so
+  the 16-to-24 kHz resampler is required, not a choice.
+- It takes `languages` (an array of ISO 639-1 codes), never `language`, and
+  it **does take a `prompt`**: the British-spelling sample is sent for English
+  (UK), as §4.6 hoped.
+- `turn_detection` must be `null` or absent: the model supports no server VAD.
+  Nutshell commits (`input_audio_buffer.commit`) as §6.2 planned; an empty
+  commit is an error, so a commit is sent only after audio.
+- **Revisions**: there is no revision field or event. Deltas are "newly
+  available transcript text" per `item_id`, and the production checklist says
+  later deltas may correct earlier text. So the tail is per item: its deltas
+  are provisional, and `...transcription.completed`'s `transcript` replaces
+  them. Completions of different items may arrive out of order; everything is
+  keyed by `item_id` and shown in first-seen order.
+- `delay` (`minimal` to `xhigh`): the guide shows it with
+  `gpt-live-transcribe`, the reference says only `gpt-realtime-whisper` takes
+  it, and no default is documented. **Not sent** (builder's call): a rejected
+  `session.update` would cost the live text for the whole recording.
+- Prices: `gpt-live-transcribe` $0.017 a minute (as reported); batch
+  `gpt-transcribe` $0.0045. `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` and
+  `whisper-1` are now marked deprecated for batch.
+- Mistral: model `voxtral-mini-transcribe-realtime-3` (alias of `-3-0`, Public
+  Preview), about $0.008 a minute. Configuration is a message: after
+  `session.created`, `session.update` with
+  `audio_format {encoding: pcm_s16le, sample_rate: 16000}`,
+  `target_streaming_delay_ms` 480 and `language`; nothing may change once
+  audio has started. A wrong model fails the handshake with HTTP 403.
+- §16 item 17 answered: Mistral audio is **base64 JSON text frames**
+  (`input_audio.append`, at most 262,144 decoded bytes each), never binary.
+  `transcription.text.delta` only appends and is final on arrival;
+  `transcription.done` carries the transcript of record and ends the session
+  (one session per recording). `input_audio.flush` forces pending text out
+  (from the client's source, not the prose docs); Nutshell sends it when the
+  speech gate closes and before `input_audio.end` at stop, so the "only
+  speech" rule holds without continuous audio. Verified on Windows by hand.
+
+**The must-verify items PR 1 needs:**
+1. *WebSocket timeouts and idle gaps.* Whether WinHTTP's receive timeout
+   applies to `WinHttpWebSocketReceive` is not documented. Nutshell sets the
+   WebSocket handle's receive timeout to 0 (none) and ignores a refusal;
+   cancellation never relies on a timeout. WinHTTP sends keepalive pings every
+   30 s by default (minimum 15 s), which covers the TCP side of an idle gap.
+   Whether the providers drop a session during long pauses is item 3.
+2. *Waking a blocked receive.* Microsoft documents `WinHttpWebSocketClose` as
+   what cancels a pending receive (`ERROR_WINHTTP_OPERATION_CANCELLED`);
+   `WinHttpCloseHandle` waking it is undocumented (Wine does it). The two-worker
+   cancel is therefore: the UI asks the session to end, the sender thread
+   calls `WinHttpWebSocketClose` (close timeout 2 s), which ends the
+   receiver's wait; the UI joins both threads later, without blocking; at voice
+   off and shutdown the join is bounded at 3 s, then `WinHttpCloseHandle` is
+   the last resort and a thread still stuck is detached, as the STT workers
+   are. Send and receive run on two threads at once, which the API allows
+   (one pending of each). Measured under Wine 9 (`wintest`): neither
+   `WinHttpWebSocketClose` nor closing the handle wakes a blocked synchronous
+   receive, and closing the request handle does not abort a blocked
+   handshake, so those tests take a defined skip there. A Windows hand check
+   confirms the wake-up.
+3. *Provider idle limits.* Not documented by either provider. OpenAI's
+   Realtime sessions last at most 60 minutes. No keep-alive audio is sent; a
+   dropped session falls back to the batch transcription (§4.5). The 5-minute
+   recording with pauses is a Windows hand check.
+4. *Mistral after `transcription.done`*: the session is over (the client
+   closes it). One session per recording, as §6.6 planned.
+5. *Mistral's batch size limit*: not documented (the limits page lists no
+   size the docs render; an older page says recordings up to 3 hours). The
+   live recording keeps its 10-minute cap; a 10-minute fallback to Mistral is a
+   Windows hand check.
+14. *The §3 counts* at build time: recorded in the PR body by the settings
+    task (`k_setting_keys` 57 before `voice_stt_live_model`, 58 after;
+    `CFG_KEYS_MAX` 96; `NOTICE_ITEMS_MAX` 24; `winhttp.def` 13 entries before,
+    17 after the four WebSocket ones).
+16. Answered above (event names, revisions, text before commit: yes, deltas
+    arrive as audio is appended; the prompt: yes; `delay`: not sent).
+24. `ai_http_post_ct_ex` takes the caller's WinHTTP session (from
+    `voice_net_open`) and the send and receive timeouts. The module list is
+    the existing Toolhelp snapshot in the self-report.
+26. Upload timeouts scale with length: send 30 s plus 1 s per 64 KB, receive
+    60 s plus 1 s per 10 s of audio, each capped at 10 minutes.
+27. Typing is locked by the input's subclass (`WM_CHAR` but Ctrl+C, paste,
+    cut, clear, undo, IME characters, Delete and Backspace), which keeps the
+    theme's colours; it stays locked until the recording's final text (or the
+    fallback's) is in the box, so a late replacement can never land on top of
+    an edit.
+28. The WAV-injection seam and the harness's live-dictation case are left to
+    PR 2, where the conversation cases need the same seam; PR 1's live path is
+    covered by native tests, `wintest` against a loopback WebSocket server that
+    speaks both providers' protocols, and the Windows hand checks.
+
+**Also found at build time:** the JSON tokenizer caps a string at 8,191
+bytes, so a long transcript (a 10-minute recording's `transcription.done`, or
+a long batch result) would be rejected. A shared scanner
+(`src/core/json_scan.c`) reads one large string field when the full parse
+fails, for the batch result and the two live final events. The WebSocket
+upgrade never follows a redirect, so the bearer key cannot be re-sent to
+another host.
+
+**Builder's calls made in PR 1:**
+- Ends of a dictation recording (§4.4) fall in two kinds. *Soft*: losing
+  activation, a modal dialog, a chat change, the panel closing and a lost
+  device stop the mic and let the last words arrive (or the fallback run), and
+  never send. *Hard*: voice or AI off and a voice settings change close
+  everything at once. A batch recording that loses activation is still
+  discarded, as before.
+- Send pressed while a fallback transcription runs waits for it (bounded by
+  the upload's timeouts, not by 3 s), then sends; if the fallback fails nothing
+  is sent.
+- Send pressed while a **batch** recording runs stops it and sends once the
+  transcript is in the box.
+- The speech gate opens after 40 ms of speech over the fixed threshold, with
+  300 ms of pre-roll; its hangover is 500 ms for OpenAI and 800 ms for Mistral
+  (480 ms streaming delay plus a margin). Audio is sent in 100 ms messages.
+- The 16-to-24 kHz resampler is a 48-tap polyphase windowed-sinc filter.
+- "A voice setting changed" is a digest of every voice field, the speech key
+  and the AI provider fields "Use current AI assistant" reads.
+- The input box is a plain (ANSI) `EDIT`, so the controller measures every
+  position in the control's own units and replaces the whole recording's text
+  on each update; characters outside the ANSI code page show as "?", as typed
+  ones do today. If something else changes the box during a recording, it ends
+  softly with "Live text stopped: the box was changed".
+- Before any send, the chat binding is checked again; a changed chat gets
+  "Voice message not sent: the chat changed" and nothing is sent. A Send that a
+  soft end then cancels gets "Not sent: check the text and press Send".
+- While a live recording waits for its last words after the mic stops, the
+  header shows "Transcribing…" rather than "Listening…".
+- A batch recording keeps today's rules: auto-send is decided when the
+  transcript arrives (empty box), and losing activation while recording still
+  discards it.
+
 ## 17. Critique (2026-11-24, claude-fable-5-2 high)
 
 Each finding in one line, then the main session's disposition.
