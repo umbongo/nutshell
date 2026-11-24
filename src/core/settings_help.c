@@ -461,10 +461,9 @@ static const SettingsHelp k_help[SH_COUNT] = {
     E(SH_VOICE_TEST, SETTINGS_PAGE_VOICE, SH_KIND_ACTION,
       "Test",
       NULL,
-      "Test\n\nRecords three seconds from the chosen microphone and shows "
-      "its level in the meter beside it, so you can see the microphone "
-      "works. Nothing is sent anywhere and nothing is kept. The button is "
-      "disabled until voice is saved on.",
+      "Test\n\nListens to the microphone and shows the level on the meter until "
+      "you press Stop test, change page or close Settings. Nothing is "
+      "recorded or sent.",
       NULL,
       0, 0, 0u),
     E(SH_VOICE_MIC_GAIN, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,

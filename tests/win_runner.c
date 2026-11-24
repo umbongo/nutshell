@@ -38,6 +38,9 @@ int test_chat_select_win_short_list(void);
 /* test_ns_slider_win.c */
 int test_ns_slider_win_keys_and_notify(void);
 
+/* test_ns_draw_level_meter_win.c */
+int test_ns_draw_level_meter_win_zones_fill_and_hold(void);
+
 /* test_ns_check_win.c */
 int test_ns_check_win_check_state_round_trips(void);
 int test_ns_check_win_click_toggles_and_paints(void);
@@ -439,6 +442,7 @@ int main(int argc, char **argv)
     failed += test_thread_join_full_list_closes_handle();
     failed += test_ai_nc_fire_wakes_blocked_winhttp_call();
     failed += test_ns_slider_win_keys_and_notify();
+    failed += test_ns_draw_level_meter_win_zones_fill_and_hold();
     failed += run_ns_tip_tests();
 
     printf("\n[pty] re-executing with a console of our own "

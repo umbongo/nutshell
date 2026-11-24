@@ -38,6 +38,8 @@
 #include "voice_audio_win.h"
 #include "voice_config.h"
 #include "voice_gate.h"
+#include "voice_level.h"
+#include "voice_test.h"
 #include "voice_stt.h"
 #include "voice_win.h"
 #include <stdio.h>
@@ -69,7 +71,6 @@
 #define IDC_SSH_IDLE_EDIT   1030
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
-#define IDT_VOICE_TEST      52  /* the 3 s microphone test */
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 static const char *PAGE_CLASS     = "Nutshell_SettingsPage";
@@ -226,8 +227,9 @@ typedef struct {
     HWND     hDlg;                /* the dialog window (timers, relayout) */
     HWND     hVoiceTestNote;      /* dim "No microphone was found." under the meter */
     SettingsCtrl *ctrl_voice_test_note;
-    int      voice_testing;       /* the 3 s test is running */
-    int      voice_level;         /* the meter, 0..1000 */
+    int      voice_testing;       /* the Test runs until a stop trigger (voice_test_next owns it) */
+    VoiceMeter vmeter;            /* the meter's ballistics, hold tick and 1 s window */
+    ULONGLONG vmeter_tick;        /* GetTickCount64 of the last VAM_LEVEL (or the start) */
     int      voice_dev_touched;   /* the user changed the device combo */
     int      voice_dev_missing;   /* the saved microphone is not in the list */
     int      voice_dev_n;         /* microphones listed (entry i is combo item i + 1) */
@@ -251,6 +253,7 @@ static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
 static void ai_enable_sync(SettingsDlgData *d);
 static void voice_enable_sync(SettingsDlgData *d);
+static void voice_test_apply(SettingsDlgData *d, VoiceTestEvent ev);
 
 /* The open Settings dialog that listens for WM_VOICE_AUDIO (UI thread only). */
 static SettingsDlgData *g_voice_dlg;
@@ -973,6 +976,7 @@ static void voice_enable_sync(SettingsDlgData *d)
     if (!d || !d->hPage) return;
     int ai_on = voice_ai_ticked(d);
     int on = ai_on && voice_ticked(d);
+    if (!on) voice_test_apply(d, VT_EV_VOICE_OFF);   /* a ticked-off feature ends the Test */
     HWND box = GetDlgItem(d->hPage, IDC_VOICE_ENABLE);
     for (int i = 0; i < d->n_ctrls; i++) {
         const SettingsCtrl *c = &d->ctrls[i];
@@ -990,10 +994,11 @@ static void voice_enable_sync(SettingsDlgData *d)
     if (dev) EnableWindow(dev, (on && d->voice_dev_listed) ? TRUE : FALSE);
     HWND gain = GetDlgItem(d->hPage, IDC_VOICE_GAIN);
     if (gain) EnableWindow(gain, (on && d->voice_dev_listed) ? TRUE : FALSE);
-    /* Test needs the listed microphones (voice saved on) and runs once at a time. */
+    /* Test needs the listed microphones (voice saved on); while it runs the
+     * button is the Stop control, so it stays enabled. */
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
     if (test)
-        EnableWindow(test, (on && d->voice_dev_listed && !d->voice_testing) ? TRUE : FALSE);
+        EnableWindow(test, (on && d->voice_dev_listed) ? TRUE : FALSE);
     /* The Mic start delay applies to Hold to talk only. */
     HWND delay = GetDlgItem(d->hPage, IDC_VOICE_MIC_DELAY);
     if (delay) {
@@ -1073,20 +1078,6 @@ static void voice_gain_changed(SettingsDlgData *d)
     if (d->voice_testing) voice_audio_set_gain(voice_gain_now(d));
 }
 
-static void voice_test_end(SettingsDlgData *d)
-{
-    if (!d->voice_testing) return;
-    voice_audio_capture_end(0);   /* explicit: the test is over, discard */
-    KillTimer(d->hDlg, IDT_VOICE_TEST);
-    d->voice_testing = 0;
-    d->voice_level = 0;
-    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
-    if (test) SetWindowText(test, settings_help_get((int)SH_VOICE_TEST)->label);
-    voice_meter_redraw(d);
-    voice_enable_sync(d);
-    if (test) InvalidateRect(test, NULL, TRUE);
-}
-
 /* The endpoint ID the device combo currently stands for ("" = Windows default). */
 static const char *voice_dev_selected_id(const SettingsDlgData *d)
 {
@@ -1096,23 +1087,55 @@ static const char *voice_dev_selected_id(const SettingsDlgData *d)
     return "";
 }
 
-static void voice_test_start(SettingsDlgData *d)
+static void voice_test_button_sync(SettingsDlgData *d)
 {
-    if (d->voice_testing || !d->voice_dev_listed) return;
+    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
+    if (!test) return;
+    SetWindowText(test, voice_test_button_label(d->voice_testing));
+    InvalidateRect(test, NULL, TRUE);
+}
+
+/* Begins a capture on the selected microphone at the slider's gain with a
+ * fresh meter. Returns 0 (and leaves nothing running) when voice is off. */
+static int voice_test_begin(SettingsDlgData *d)
+{
     /* The page was built with voice on; it may have gone off since. */
     if (!voice_gate_on() || !voice_feature_running()) {
         voice_test_note(d, "Voice is not running.");
-        return;
+        return 0;
     }
     voice_test_note(d, "");
-    d->voice_testing = 1;
-    d->voice_level = 0;
-    HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
-    if (test) SetWindowText(test, "Testing...");
-    SetTimer(d->hDlg, IDT_VOICE_TEST, 3000, NULL);
+    voice_meter_reset(&d->vmeter);
+    d->vmeter_tick = GetTickCount64();
     voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, voice_gain_now(d));
-    voice_enable_sync(d);
-    if (test) InvalidateRect(test, NULL, TRUE);
+    return 1;
+}
+
+/* The one place a Test starts, stops or restarts: every trigger names its
+ * event and voice_test_next (the tested state machine) decides. */
+static void voice_test_apply(SettingsDlgData *d, VoiceTestEvent ev)
+{
+    if (!d || !d->hPage) return;
+    int can_start = voice_ai_ticked(d) && voice_ticked(d) && d->voice_dev_listed;
+    VoiceTestAction act = voice_test_next(&d->voice_testing, ev, can_start);
+    switch (act) {
+    case VT_ACT_START:
+        if (!voice_test_begin(d)) d->voice_testing = 0;
+        break;
+    case VT_ACT_STOP:
+        voice_audio_capture_end(0);   /* the test is over, nothing is kept */
+        voice_meter_reset(&d->vmeter);
+        break;
+    case VT_ACT_RESTART:
+        voice_audio_capture_end(0);
+        if (!voice_test_begin(d)) d->voice_testing = 0;
+        break;
+    case VT_ACT_NONE:
+    default:
+        return;
+    }
+    voice_test_button_sync(d);
+    voice_meter_redraw(d);
 }
 
 /* Adds a UTF-8 name to a combo as wide text, so a non-Latin microphone name
@@ -1178,9 +1201,12 @@ int settings_voice_on_audio(WPARAM wp, LPARAM lp)
         return 1;
     case VAM_LEVEL:
         if (d->voice_testing) {
-            {   /* raw peak 0..32768 -> the meter's 0..1000 */
+            {   /* raw window peak 0..32768 into the meter, with the time since the last one */
                 int pk = (int)lp < 0 ? 0 : ((int)lp > 32768 ? 32768 : (int)lp);
-                d->voice_level = pk * 1000 / 32768;
+                ULONGLONG now = GetTickCount64();
+                ULONGLONG dt = now - d->vmeter_tick;
+                d->vmeter_tick = now;
+                voice_meter_feed(&d->vmeter, pk, dt > 1000u ? 1000u : (uint32_t)dt);
             }
             voice_meter_redraw(d);
         }
@@ -1189,7 +1215,7 @@ int settings_voice_on_audio(WPARAM wp, LPARAM lp)
         /* Only a capture error is the Test's result; an enumeration failure
          * (VAE_COM_FAILED) arriving meanwhile is not. */
         if (d->voice_testing && (VoiceAudioErr)lp != VAE_COM_FAILED) {
-            voice_test_end(d);
+            voice_test_apply(d, VT_EV_CAPTURE_FAILED);
             switch ((VoiceAudioErr)lp) {
             case VAE_NO_DEVICE:    voice_test_note(d, "No microphone was found."); break;
             case VAE_DEVICE_LOST:  voice_test_note(d, "The microphone stopped responding."); break;
@@ -1205,6 +1231,77 @@ int settings_voice_on_audio(WPARAM wp, LPARAM lp)
     default:
         return 0;
     }
+}
+
+/* The meter row: the zoned bar on the left, the verdict on the right. The
+ * label's width is reserved from the widest text it can show, measured in
+ * the caption font, so the bar does not jump as the verdict changes. */
+static void voice_meter_paint(const SettingsDlgData *d, const DRAWITEMSTRUCT *dis)
+{
+    static const char k_idle[] = "Press Test to check the level";
+    const ThemeTokens *tk = ns_tokens();
+    HDC hdc = dis->hDC;
+    const RECT *rc = &dis->rcItem;
+    FillRect(hdc, rc, d->hBrBgPrimary);
+
+    const char *text = k_idle;
+    unsigned int text_rgb = tk->text_dim;
+    double level = 0.0, hold = 0.0;
+    if (d->voice_testing) {
+        level = voice_meter_frac(d->vmeter.level_db);
+        hold = voice_meter_frac(d->vmeter.hold_db);
+        VoiceLevelClass c = voice_level_classify(voice_meter_window_peak_db(&d->vmeter));
+        text = voice_level_label(c);
+        switch (c) {
+        case VLEVEL_SILENT: text_rgb = tk->text_dim; break;
+        case VLEVEL_QUIET:  text_rgb = tk->warning.base; break;
+        case VLEVEL_LOUD:   text_rgb = tk->danger.base; break;
+        default:            text_rgb = tk->success.base; break;
+        }
+    }
+
+    HFONT old_font = (HFONT)SelectObject(hdc, ns_font(FONT_CAPTION, d->dpi));
+    int label_w = 0;
+    {
+        const char *all[] = { k_idle, voice_level_label(VLEVEL_SILENT), voice_level_label(VLEVEL_QUIET),
+                              voice_level_label(VLEVEL_GOOD), voice_level_label(VLEVEL_HOT),
+                              voice_level_label(VLEVEL_LOUD) };
+        for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+            wchar_t w[128];
+            if (MultiByteToWideChar(CP_UTF8, 0, all[i], -1, w, 128) <= 0) continue;
+            SIZE sz;
+            if (GetTextExtentPoint32W(hdc, w, (int)wcslen(w), &sz) && sz.cx > label_w)
+                label_w = sz.cx;
+        }
+    }
+    int total_w = rc->right - rc->left;
+    int gap = ns_scale(SP_MD, d->dpi);
+    if (label_w > total_w / 2) label_w = total_w / 2;
+    int bar_w = total_w - label_w - gap;
+
+    int row_h = rc->bottom - rc->top;
+    int bar_h = ns_scale(SP_MD, d->dpi);
+    if (bar_h > row_h) bar_h = row_h;
+    if (bar_w > 0) {
+        RECT bar = { rc->left, rc->top + (row_h - bar_h) / 2, rc->left + bar_w,
+                     rc->top + (row_h - bar_h) / 2 + bar_h };
+        const double zf[4] = { voice_meter_frac(VOICE_LEVEL_SILENT_DB),
+                               voice_meter_frac(VOICE_LEVEL_GOOD_LO_DB),
+                               voice_meter_frac(VOICE_LEVEL_GOOD_HI_DB),
+                               voice_meter_frac(VOICE_LEVEL_LOUD_DB) };
+        ns_draw_level_meter(hdc, &bar, level, hold, zf, tk);
+    }
+
+    wchar_t wt[128];
+    if (MultiByteToWideChar(CP_UTF8, 0, text, -1, wt, 128) > 0) {
+        RECT tr = { rc->right - label_w, rc->top, rc->right, rc->bottom };
+        int old_bk = SetBkMode(hdc, TRANSPARENT);
+        COLORREF old_tc = SetTextColor(hdc, theme_cr(text_rgb));
+        DrawTextW(hdc, wt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        SetTextColor(hdc, old_tc);
+        SetBkMode(hdc, old_bk);
+    }
+    SelectObject(hdc, old_font);
 }
 
 static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
@@ -1279,16 +1376,7 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                 return TRUE;
             }
             if ((int)dis->CtlID == IDC_VOICE_METER) {
-                /* The microphone level: the page background behind the track,
-                 * and the fill from the Test's levels (0 otherwise). */
-                FillRect(dis->hDC, &dis->rcItem, d->hBrBgPrimary);
-                NsRect bar;
-                bar.x = dis->rcItem.left;
-                bar.y = dis->rcItem.top + (dis->rcItem.bottom - dis->rcItem.top) / 4;
-                bar.w = dis->rcItem.right - dis->rcItem.left;
-                bar.h = (dis->rcItem.bottom - dis->rcItem.top) / 2;
-                if (bar.w > 0 && bar.h > 0)
-                    ns_draw_meter(dis->hDC, &bar, d->voice_level / 1000.0, ns_tokens());
+                voice_meter_paint(d, dis);
                 return TRUE;
             }
         }
@@ -2468,10 +2556,6 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
     }
 
     case WM_TIMER:
-        if (wParam == IDT_VOICE_TEST && d) {
-            voice_test_end(d);
-            return 0;
-        }
         if (wParam == IDT_SYSNOTES_SCROLL && d) {
             sys_notes_sync_scroll(d);
             return 0;
@@ -2545,6 +2629,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 if (e) {
                     d->cur_page = e->page_id;
                     d->scroll = 0;
+                    if (d->cur_page != SETTINGS_PAGE_VOICE)
+                        voice_test_apply(d, VT_EV_PAGE_AWAY);
                     SetWindowText(d->hPageTitle, settings_page_title(d->cur_page));
                     relayout(hwnd, d);
                     InvalidateRect(d->hPage, NULL, TRUE);
@@ -2620,11 +2706,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             break;
 
         case IDC_VOICE_DEVICE:
-            if (d && HIWORD(wParam) == CBN_SELCHANGE) d->voice_dev_touched = 1;
+            if (d && HIWORD(wParam) == CBN_SELCHANGE) {
+                d->voice_dev_touched = 1;
+                voice_test_apply(d, VT_EV_DEVICE_CHANGED);   /* a running Test follows the new microphone */
+            }
             break;
 
         case IDC_VOICE_TEST:
-            if (d && HIWORD(wParam) == BN_CLICKED) voice_test_start(d);
+            if (d && HIWORD(wParam) == BN_CLICKED) voice_test_apply(d, VT_EV_PRESS);
             break;
 
         case IDC_VOICE_GAIN:
@@ -3147,7 +3236,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             thread_join_detach_all(&d->models_thread);   /* whatever is left, finished or not */
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
             if (g_voice_dlg == d) {
-                if (d->voice_testing) { KillTimer(hwnd, IDT_VOICE_TEST); voice_audio_capture_end(0); }
+                voice_test_apply(d, VT_EV_CLOSE);
+                if (d->voice_testing) { voice_audio_capture_end(0); d->voice_testing = 0; }
                 if (d->voice_dev_listed) voice_audio_watch_devices(0);
                 g_voice_dlg = NULL;
             }

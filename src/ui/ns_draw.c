@@ -499,6 +499,78 @@ void ns_draw_meter(HDC hdc, const NsRect *bar, double fraction,
     }
 }
 
+/* ── Level meter ────────────────────────────────────────────────────── */
+
+static double clamp01(double v)
+{
+    return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+}
+
+void ns_draw_level_meter(HDC hdc, const RECT *bar, double level_frac,
+                         double hold_frac, const double zone_frac[4],
+                         const ThemeTokens *tokens)
+{
+    if (!hdc || !bar || !zone_frac || !tokens) return;
+    int w = bar->right - bar->left;
+    int h = bar->bottom - bar->top;
+    if (w <= 0 || h <= 0) return;
+
+    int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+    if (dpi <= 0) dpi = 96;
+    level_frac = clamp01(level_frac);
+    hold_frac = clamp01(hold_frac);
+
+    COLORREF track_cr = NS_CR(tokens->raised.base);
+    int radius = ns_type_pill(h);
+    ns_draw_round_fill(hdc, bar, radius, track_cr, 255);
+
+    /* Everything below is square GDI, clipped to the pill. */
+    int saved = SaveDC(hdc);
+    HRGN clip = CreateRoundRectRgn(bar->left, bar->top, bar->right + 1,
+                                   bar->bottom + 1, radius, radius);
+    SelectClipRgn(hdc, clip);
+
+    int x1 = bar->left + (int)(w * clamp01(zone_frac[1]) + 0.5);
+    int x2 = bar->left + (int)(w * clamp01(zone_frac[2]) + 0.5);
+    int x3 = bar->left + (int)(w * clamp01(zone_frac[3]) + 0.5);
+    const unsigned int band_rgb[4] = { tokens->warning.base, tokens->success.base,
+                                       tokens->warning.base, tokens->danger.base };
+    const int edge[5] = { bar->left, x1, x2, x3, bar->right };
+    for (int i = 0; i < 4; i++) {
+        if (edge[i + 1] <= edge[i]) continue;
+        RECT br = { edge[i], bar->top, edge[i + 1], bar->bottom };
+        HBRUSH b = CreateSolidBrush(rgb_alpha(NS_CR(band_rgb[i]), track_cr, 0.35f));
+        FillRect(hdc, &br, b);
+        DeleteObject(b);
+    }
+
+    int fill_w = (int)(w * level_frac + 0.5);
+    if (fill_w > 0) {
+        int zone = level_frac < clamp01(zone_frac[1]) ? 0
+                 : level_frac < clamp01(zone_frac[2]) ? 1
+                 : level_frac < clamp01(zone_frac[3]) ? 2 : 3;
+        int inset = h / 4;
+        RECT fr = { bar->left, bar->top + inset, bar->left + fill_w, bar->bottom - inset };
+        HBRUSH b = CreateSolidBrush(NS_CR(band_rgb[zone]));
+        FillRect(hdc, &fr, b);
+        DeleteObject(b);
+    }
+
+    if (hold_frac > 0.0) {
+        int tw = ns_scale(STROKE_RULE, dpi);
+        int tx = bar->left + (int)(w * hold_frac + 0.5) - tw / 2;
+        if (tx < bar->left) tx = bar->left;
+        if (tx + tw > bar->right) tx = bar->right - tw;
+        RECT tr = { tx, bar->top, tx + tw, bar->bottom };
+        HBRUSH b = CreateSolidBrush(NS_CR(tokens->text_main));
+        FillRect(hdc, &tr, b);
+        DeleteObject(b);
+    }
+
+    RestoreDC(hdc, saved);
+    DeleteObject(clip);
+}
+
 /* ── Status pulse ───────────────────────────────────────────────────── */
 
 void ns_draw_pulse(HDC hdc, const RECT *rc, COLORREF colour, float phase)
