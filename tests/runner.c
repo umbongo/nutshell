@@ -3709,6 +3709,7 @@ int test_voice_sgate_two_utterances(void);
 int test_voice_sgate_reset_wipes(void);
 /* test_voice_transcript.c */
 int test_vt_draft_sep(void);
+int test_vt_rendered_full_text(void);
 int test_vt_openai_revision(void);
 int test_vt_openai_interleaved(void);
 int test_vt_mistral_append(void);
@@ -8261,6 +8262,7 @@ int main(void) {
     failed += test_voice_sgate_two_utterances();
     failed += test_voice_sgate_reset_wipes();
     failed += test_vt_draft_sep();
+    failed += test_vt_rendered_full_text();
     failed += test_vt_openai_revision();
     failed += test_vt_openai_interleaved();
     failed += test_vt_mistral_append();

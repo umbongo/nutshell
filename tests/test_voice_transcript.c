@@ -373,3 +373,27 @@ int test_vt_finished_ids_ignored(void)
     vt_free(&o);
     TEST_END();
 }
+
+/* vt_rendered: the whole text the last render left after the draft (separator,
+ * committed, open segments), whatever `from` the render reported. */
+int test_vt_rendered_full_text(void)
+{
+    TEST_BEGIN();
+    VoiceTranscript t; vt_init(&t, 4, 1);
+    ASSERT_STR_EQ(vt_rendered(&t), "");
+    vt_delta(&t, "i1", "hello", 0);
+    free(vt_render(&t, NULL));
+    ASSERT_STR_EQ(vt_rendered(&t), " hello");
+    vt_delta(&t, "i1", " world", 0);
+    size_t from = 0;
+    char *r = vt_render(&t, &from);
+    ASSERT_STR_EQ(r, " world");               /* only the changed tail ... */
+    ASSERT_STR_EQ(vt_rendered(&t), " hello world");   /* ... but the whole text here */
+    free(r);
+    vt_complete(&t, "i1", "Hello world.");
+    free(vt_render(&t, NULL));
+    ASSERT_STR_EQ(vt_rendered(&t), " Hello world.");
+    ASSERT_STR_EQ(vt_rendered(NULL), "");
+    vt_free(&t);
+    TEST_END();
+}

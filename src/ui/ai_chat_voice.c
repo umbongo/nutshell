@@ -222,6 +222,16 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send, in
     free(out);
 }
 
+/* The end of the text in the control's own units: the caret goes to the end and
+ * EM_GETSEL reports it (never GetWindowTextLength, whose count can differ). */
+static size_t box_end_pos(HWND edit)
+{
+    DWORD s = 0, e = 0;
+    SendMessageW(edit, EM_SETSEL, (WPARAM)0x7FFFFFFF, (LPARAM)0x7FFFFFFF);
+    SendMessageW(edit, EM_GETSEL, (WPARAM)&s, (LPARAM)&e);
+    return (size_t)e;
+}
+
 size_t ai_chat_voice_live_begin(HWND panel, int *need_sep)
 {
     if (need_sep) *need_sep = 0;
@@ -241,20 +251,21 @@ size_t ai_chat_voice_live_begin(HWND panel, int *need_sep)
             free(w);
         }
     }
-    return (size_t)len;
+    return box_end_pos(d->hInput);
 }
 
-void ai_chat_voice_live_replace(HWND panel, size_t from_u16, const char *text_utf8)
+size_t ai_chat_voice_live_replace(HWND panel, size_t from, const char *text_utf8)
 {
     AiChatData *d = panel_data(panel);
-    if (!d || !d->hInput || !text_utf8) return;
+    if (!d || !d->hInput || !text_utf8) return 0;
     wchar_t *w = utf8_to_wide(text_utf8);
-    if (!w) return;
-    SendMessageW(d->hInput, EM_SETSEL, (WPARAM)from_u16, (LPARAM)-1);
+    if (!w) return box_end_pos(d->hInput);
+    SendMessageW(d->hInput, EM_SETSEL, (WPARAM)from, (LPARAM)-1);
     SendMessageW(d->hInput, EM_REPLACESEL, FALSE, (LPARAM)w);   /* no undo entry */
     wipe_free_wide(w);
     /* The caret is at the end after the replace; keep the newest words in view. */
     SendMessageW(d->hInput, EM_SCROLLCARET, 0, 0);
+    return box_end_pos(d->hInput);
 }
 
 void ai_chat_voice_lock_typing(HWND panel, int on)

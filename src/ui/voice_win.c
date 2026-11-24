@@ -42,6 +42,9 @@ static int g_live;                 /* this recording is live */
 static VoiceLiveTarget g_live_t;
 static VoiceTranscript g_vt;       /* valid while g_vt_on */
 static int g_vt_on;
+static size_t g_draft_end;         /* box end at START, in the control's own units (not UTF-16) */
+static size_t g_box_end;           /* box end after our last write, same units */
+static int g_send_pressed;         /* Send/Enter was pressed during this recording */
 static uint64_t g_digest;          /* voice_settings_digest at START */
 
 static int g_capturing;            /* between capture_begin and VAM_CAPTURED / VAM_ERROR / discard */
@@ -67,7 +70,6 @@ int (*g_voice_filter)(const MSG *m);
     "Windows may be blocking the microphone: Settings > Privacy & security > Microphone"
 #define CUE_TRANSCRIBING "Transcribing\xE2\x80\xA6"
 #define LIVE_ERR_PREFIX "Live transcription error: "
-#define WS_REFUSED_PREFIX "websocket upgrade refused, HTTP status: "
 
 static unsigned long now_ms(void)
 {
@@ -174,25 +176,28 @@ static int shown_has_words(void)
     return 0;
 }
 
-/* Write what the transcript added or changed into the box. */
+/* Write the transcript into the box. Positions are measured on the control in its
+ * own units (the box is an ANSI EDIT: UTF-16 offsets from the transcript do not
+ * match it), so each update replaces [draft end, end) with the WHOLE rendered live
+ * text and records where the box then ends. */
 static void live_flush(void)
 {
-    size_t from = 0;
-    char *txt = g_vt_on ? vt_render(&g_vt, &from) : NULL;
+    if (!g_vt_on) return;
+    char *txt = vt_render(&g_vt, NULL);   /* brings the transcript's own state up to date */
     if (!txt) return;
-    ai_chat_voice_live_replace(ui_ai_panel(), from, txt);
     secure_zero(txt, strlen(txt) + 1);
     free(txt);
+    g_box_end = ai_chat_voice_live_replace(ui_ai_panel(), g_draft_end, vt_rendered(&g_vt));
 }
 
-/* The box must still hold what this recording last wrote: something else
- * changed it otherwise, and the recording ends (never sends) rather than
- * overwrite it. */
+/* The box must still end where this recording's last write left it: anything else
+ * (typing that got through, a drop, a chip, a set-text) ends the recording, never
+ * sending, rather than overwrite it. */
 static int box_intact(void)
 {
     if (!g_vt_on) return 0;
-    const size_t len = ai_chat_voice_live_begin(ui_ai_panel(), NULL);
-    if (len < g_vt.draft_u16 + g_vt.shown_u16) {
+    if (ai_chat_voice_live_begin(ui_ai_panel(), NULL) != g_box_end) {
+        ai_chat_voice_status(ui_ai_panel(), "Live text stopped: the box was changed", 0);
         dict_event(VDE_END_SOFT, 0, 0);
         return 0;
     }
@@ -234,7 +239,7 @@ static void open_link(const Settings *s)
 static void remove_words(void)
 {
     if (g_live && g_vt_on)
-        ai_chat_voice_live_replace(ui_ai_panel(), g_vt.draft_u16, "");
+        (void)ai_chat_voice_live_replace(ui_ai_panel(), g_draft_end, "");
     free_transcript();
 }
 
@@ -261,6 +266,7 @@ static void submit_batch(const Settings *s)
         voice_ledger_acquire(VRES_STT_UPLOAD);
         g_upload_open = 1;
         g_upload_token = g_token;
+        set_ui(AIV_TRANSCRIBING, CUE_TRANSCRIBING);   /* the upload really runs */
         return;
     } else if (!err[0]) {
         snprintf(err, sizeof(err), "The recording could not be sent");
@@ -277,6 +283,12 @@ static void send_box(void)
         if (!g_suppress_dc) ai_chat_voice_status(ui_ai_panel(), MSG_DIDNT_CATCH, 0);
         return;
     }
+    VoiceBinding now;
+    ai_chat_voice_binding(ui_ai_panel(), &now);
+    if (!voice_binding_same(&g_bind, &now)) {
+        ai_chat_voice_status(ui_ai_panel(), "Voice message not sent: the chat changed", 0);
+        return;
+    }
     (void)ai_chat_voice_send_box(ui_ai_panel());
 }
 
@@ -286,7 +298,11 @@ static void deliver_batch(int send)
 {
     if (!g_result_text) return;
     if (!g_live) {
-        ai_chat_voice_deliver(ui_ai_panel(), g_result_text, 0, send);
+        /* As before: auto-send is decided now (voice_deliver sends only into an empty
+         * box); only Send pressed during the recording forces it. */
+        const Settings *s = ui_current_settings();
+        ai_chat_voice_deliver(ui_ai_panel(), g_result_text, s ? s->voice_auto_send : 0,
+                              g_send_pressed);
         return;
     }
     if (g_vt_on && vt_replace_all(&g_vt, g_result_text) == 0) live_flush();
@@ -336,7 +352,7 @@ static void run_out(VoiceDictOut o)
     if (a & VDA_SUBMIT_BATCH) submit_batch(s);
     if (a & VDA_DROP_AUDIO) free_kept();
     /* Deliver first, then send: DELIVER_BATCH never sends on its own. */
-    if (a & VDA_DELIVER_BATCH) deliver_batch((a & VDA_SEND_BOX) != 0);
+    if (a & VDA_DELIVER_BATCH) deliver_batch((a & VDA_SEND_BOX) != 0);   /* live fallback only: batch ignores it */
     else if (a & VDA_SEND_BOX) send_box();
     show_text(o.text);
     if (a & VDA_UNLOCK_TYPING) ai_chat_voice_lock_typing(ui_ai_panel(), 0);
@@ -344,16 +360,24 @@ static void run_out(VoiceDictOut o)
 
 /* A recording the dict stopped without the key machine's say (Send, the cap, a
  * chat change, the final) takes the key machine out of recording too. */
-static void ptt_sync(void)
+static void ptt_end_capture(void)
 {
-    if (voice_ptt_recording(&g_ptt) && g_dict.state != VDS_RECORDING) {
+    if (voice_ptt_recording(&g_ptt)) {
         voice_ptt_capture_ended(&g_ptt, g_ptt.state == VS_REC_HOLD || g_ptt.state == VS_STOP_PRESS
                                        || g_ptt.state == VS_LATCHED_SPENT);
     }
 }
 
+static void ptt_sync(void)
+{
+    if (g_dict.state != VDS_RECORDING) ptt_end_capture();
+}
+
 static void post_step(void)
 {
+    /* A live recording the dict stopped itself (Send, chat change, the final) takes
+     * the key machine out of recording at once; a batch one does at VAM_CAPTURED. */
+    if (g_live) ptt_sync();
     if (g_dict.state == VDS_IDLE) {
         /* The recording is over: nothing it held stays open. */
         free_kept();
@@ -362,16 +386,19 @@ static void post_step(void)
         g_token = 0;
         g_live = 0;
         if (g_ui != AIV_IDLE) set_ui(AIV_IDLE, NULL);
-    } else if (g_dict.state == VDS_FINISHING && g_ui != AIV_TRANSCRIBING) {
-        set_ui(AIV_TRANSCRIBING, CUE_TRANSCRIBING);
     }
-    ptt_sync();
     arm_timer();
 }
 
 static void dict_event(VoiceDictEvent ev, int a, int b)
 {
-    run_out(voice_dict_step(&g_dict, ev, a, b, now_ms()));
+    /* A soft end that swallowed a pending Send says so when the recording finishes. */
+    const int swallowed = g_dict.send_after && g_dict.no_send
+                          && ev != VDE_END_HARD && ev != VDE_ESCAPE;
+    const VoiceDictOut o = voice_dict_step(&g_dict, ev, a, b, now_ms());
+    run_out(o);
+    if (swallowed && (o.actions & VDA_UNLOCK_TYPING))
+        ai_chat_voice_status(ui_ai_panel(), "Not sent: check the text and press Send", 0);
     post_step();
 }
 
@@ -389,9 +416,11 @@ static void start_recording(void)
     g_result_text = NULL;
     g_digest = s ? voice_settings_digest(s) : 0;
     const size_t draft = ai_chat_voice_live_begin(panel, &need_sep);
+    g_draft_end = g_box_end = draft;
+    g_send_pressed = 0;
     free_transcript();
     if (g_live) {
-        vt_init(&g_vt, draft, need_sep);
+        vt_init(&g_vt, draft, need_sep);   /* draft only says whether the box was empty */
         g_vt_on = 1;
     }
     voice_ptt_set_cap(&g_ptt, g_live ? VOICE_LIVE_CAP_MS : 0);
@@ -502,6 +531,7 @@ void voice_mic_clicked(void)
 int voice_send_pressed(void)
 {
     if (!g_audio_up || g_dict.state == VDS_IDLE) return 0;
+    g_send_pressed = 1;
     dict_event(VDE_SEND, 0, 0);
     return 1;
 }
@@ -597,10 +627,12 @@ static void on_captured(VoiceCapture *c)
         return;
     }
     release_capture();
+    /* The thread may have ended the capture at the cap before the machine's own
+     * finish: take the key machine out of recording (no action). */
+    ptt_end_capture();
+    arm_timer();
     if (!g_token || c->token != g_token || g_dict.state == VDS_IDLE) {
         voice_audio_free_capture(c);   /* the recording already ended (the live final came first) */
-        ptt_sync();
-        arm_timer();
         return;
     }
     int has_audio = 0;
@@ -715,21 +747,20 @@ void voice_on_stt(LPARAM lp)
     voice_stt_result_free(r);
 }
 
-/* A failed link's reason for the chat, once. */
-static void report_link_failure(const VoiceLiveEvent *ev)
+/* A failed link's reason for the chat, once. A handshake failure (an HTTP status, or
+ * a close before READY) gets the connect-style text; a drop after READY only the
+ * header (LIVE_STOPPED), plus the provider's own error text if a VLE_ERROR carried one. */
+static void report_link_failure(const VoiceLiveMsg *m)
 {
     if (g_fail_reported) return;
     g_fail_reported = 1;
+    const VoiceLiveEvent *ev = &m->ev;
     char text[400] = "";
     if (ev->kind == VLE_ERROR) {
         snprintf(text, sizeof(text), LIVE_ERR_PREFIX "%s",
                  ev->text && ev->text[0] ? ev->text : "unknown error");
-    } else if (ev->text && ev->text[0]) {
-        const size_t pl = strlen(WS_REFUSED_PREFIX);
-        if (strncmp(ev->text, WS_REFUSED_PREFIX, pl) == 0)
-            voice_stt_http_error(atoi(ev->text + pl), "", text, sizeof(text));
-        else
-            voice_stt_http_error(0, ev->text, text, sizeof(text));
+    } else if (m->http_status != 0 || g_dict.link == VDL_CONNECTING) {
+        voice_stt_http_error(m->http_status, ev->text ? ev->text : "", text, sizeof(text));
     }
     if (text[0]) chat_error(text);
 }
@@ -771,7 +802,7 @@ void voice_on_live(LPARAM lp)
     case VLE_ERROR:
     case VLE_CLOSED: {
         const int never_opened = g_dict.link == VDL_CONNECTING;
-        report_link_failure(ev);
+        report_link_failure(m);
         dict_event(VDE_LINK_FAILED, never_opened, 0);   /* an ERROR then CLOSED is one failure */
         close_link();
         break;

@@ -231,15 +231,18 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int auto_sen
 
 /* ---- Live dictation: the controller writes the words into the box as they arrive ---- */
 
-/* The box length in UTF-16 units (what EM_SETSEL counts) and whether a space must
- * separate a new word from the draft: *need_sep is 1 when the box is non-empty and
- * does not end in whitespace. 0 and *need_sep 0 for a missing panel. */
+/* The box's end position in the control's OWN units (what EM_SETSEL/EM_GETSEL count:
+ * the box is an ANSI EDIT, so these are not UTF-16 units) and whether a space must
+ * separate a new word from the draft: *need_sep (may be NULL) is 1 when the box is
+ * non-empty and does not end in whitespace. 0 and *need_sep 0 for a missing panel. */
 size_t ai_chat_voice_live_begin(HWND panel, int *need_sep);
 
-/* Replace [from_u16, end) of the box with the UTF-8 text: EM_SETSEL(from, -1) then
- * EM_REPLACESEL(FALSE) (no undo entry), the caret ends at the end. Not blocked by the
- * typing lock. */
-void ai_chat_voice_live_replace(HWND panel, size_t from_u16, const char *text_utf8);
+/* Replace [from, end) of the box (control units, from ai_chat_voice_live_begin or a
+ * previous replace) with the UTF-8 text: EM_SETSEL(from, -1) then EM_REPLACESEL(FALSE)
+ * (no undo entry), the caret ends at the end. Returns the box's new end in control
+ * units. Characters outside the ANSI code page become '?' in this box, as typing does.
+ * Not blocked by the typing lock. */
+size_t ai_chat_voice_live_replace(HWND panel, size_t from, const char *text_utf8);
 
 /* While on, the input swallows typing, paste, cut, clear and undo (see
  * voice_typing_swallows); Ctrl+C, arrows and Enter (which sends) still work. */

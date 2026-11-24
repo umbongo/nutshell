@@ -48,6 +48,10 @@ int    vt_complete(VoiceTranscript *t, const char *seg, const char *final_text);
 int    vt_replace_all(VoiceTranscript *t, const char *text);  /* Mistral done, batch fallback */
 /* Heap UTF-8 for [from, end); caller frees (secure_zero then free). NULL on OOM. */
 char  *vt_render(VoiceTranscript *t, size_t *from_u16);
+/* The whole text the last vt_render left after the draft (separator, committed text,
+ * open segments); "" before any render or for NULL. Valid until the next render. A caller
+ * that cannot trust UTF-16 offsets on its control replaces its own tail with this. */
+const char *vt_rendered(const VoiceTranscript *t);
 /* Heap: the recording's whole text, joined, no separator. */
 char  *vt_text(const VoiceTranscript *t);
 int    vt_all_done(const VoiceTranscript *t);

@@ -302,6 +302,11 @@ char *vt_render(VoiceTranscript *t, size_t *from_u16)
     return out;
 }
 
+const char *vt_rendered(const VoiceTranscript *t)
+{
+    return (t && t->shown) ? t->shown : "";
+}
+
 void vt_free(VoiceTranscript *t)
 {
     if (!t) return;
