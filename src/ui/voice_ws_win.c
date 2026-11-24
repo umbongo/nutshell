@@ -20,6 +20,14 @@
 #define WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT 115
 #endif
 
+/* The documented values; MinGW's winhttp.h may lack them. */
+#ifndef WINHTTP_OPTION_REDIRECT_POLICY
+#define WINHTTP_OPTION_REDIRECT_POLICY 88
+#endif
+#ifndef WINHTTP_OPTION_REDIRECT_POLICY_NEVER
+#define WINHTTP_OPTION_REDIRECT_POLICY_NEVER 0
+#endif
+
 #define VWS_MAX_MSG   (1024u * 1024u)
 #define VWS_CLOSE_MS  2000u
 
@@ -29,7 +37,8 @@ struct VoiceWs {
     HINTERNET     ws;          /* the WebSocket handle; armed on *nc */
     AiNetCancel  *nc;          /* the caller's token, or &own */
     AiNetCancel   own;
-    volatile LONG shut;        /* shutdown or abort was requested */
+    volatile LONG shut;        /* shutdown or abort was requested: recv fails */
+    volatile LONG closed;      /* WinHttpWebSocketClose succeeded */
 };
 
 static void ws_close_cb(uintptr_t h)
@@ -138,8 +147,13 @@ VoiceWs *voice_ws_connect(const char *host, int port, int secure, const char *pa
     HINTERNET wsh = NULL;
     DWORD code = 0;
     const char *what = NULL;
+    DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
     if (!WinHttpSetOption(req, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0)) {
         what = "WebSocket upgrade option refused";
+        code = GetLastError();
+    } else if (!WinHttpSetOption(req, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy))) {
+        /* Never follow a redirect: the bearer header must not be re-sent. */
+        what = "WinHTTP redirect policy refused";
         code = GetLastError();
     } else {
         size_t wn = 0;
@@ -148,8 +162,8 @@ VoiceWs *voice_ws_connect(const char *host, int port, int secure, const char *pa
         DWORD serr = sent ? 0 : GetLastError();
         wide_free(wh, wn);                         /* the bearer key is wiped */
         if (!sent) {
-            what = wh ? "WinHttpSendRequest failed" : "out of memory";
-            code = serr;
+            what = wh ? "WinHttpSendRequest failed" : "websocket headers unavailable";
+            code = wh ? serr : 0;
         } else if (!WinHttpReceiveResponse(req, NULL)) {
             what = "WinHttpReceiveResponse failed";
             code = GetLastError();
@@ -273,12 +287,15 @@ int voice_ws_recv(VoiceWs *ws, char **msg, size_t *len, int *is_close)
     return -1;
 }
 
-void voice_ws_shutdown(VoiceWs *ws)
+DWORD voice_ws_shutdown(VoiceWs *ws)
 {
-    if (!ws || !ws->ws) return;
-    if (InterlockedExchange(&ws->shut, 1)) return;      /* once */
-    if (ai_nc_cancelled(ws->nc)) return;                /* the handle is already closed */
-    (void)WinHttpWebSocketClose(ws->ws, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, NULL, 0);
+    if (!ws || !ws->ws) return ERROR_INVALID_HANDLE;
+    InterlockedExchange(&ws->shut, 1);                  /* a later receive fails */
+    if (ws->closed) return NO_ERROR;
+    if (ai_nc_cancelled(ws->nc)) return NO_ERROR;       /* the handle is already closed */
+    DWORD r = WinHttpWebSocketClose(ws->ws, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, NULL, 0);
+    if (r == NO_ERROR) InterlockedExchange(&ws->closed, 1);   /* latched on success only */
+    return r;
 }
 
 void voice_ws_abort(VoiceWs *ws)

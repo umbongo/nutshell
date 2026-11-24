@@ -18,7 +18,9 @@ enum {
     WSL_ECHO = 0,       /* sends every text message it receives back */
     WSL_SILENT,         /* upgrades, then never sends (answers a close) */
     WSL_NO_UPGRADE,     /* accepts TCP, never answers the request */
-    WSL_REJECT_403      /* answers the request with 403 and closes */
+    WSL_REJECT_403,     /* answers the request with 403 and closes */
+    WSL_REDIRECT_302    /* answers every request with a 302 to itself; serves
+                         * connections until stopped, counting the requests */
 };
 
 /* Binds 127.0.0.1 port 0 and starts the server thread. NULL on failure. */
@@ -42,6 +44,8 @@ int ws_loop_send_fragmented(WsLoop *w, const char *s, size_t n, int parts);
 /* The raw request head (up to the blank line) of the accepted connection;
  * valid until ws_loop_stop. Empty until a request has arrived. */
 const char *ws_loop_request(WsLoop *w);
+/* How many requests a WSL_REDIRECT_302 server has answered. */
+int ws_loop_requests(WsLoop *w);
 /* 1 once a client close frame has been answered. */
 int ws_loop_close_seen(WsLoop *w);
 

@@ -2,6 +2,8 @@
 #define NUTSHELL_VOICE_WS_WIN_H
 
 #include <stddef.h>
+#include <winsock2.h>
+#include <windows.h>
 #include "ai_netcancel.h"
 
 /*
@@ -24,8 +26,11 @@ typedef struct VoiceWs VoiceWs;
 /* Blocks: session from voice_net_open(VNK_LIVE_WS), connect, GET with the
  * upgrade option and the extra headers ("Name: value" lines, NULL-terminated
  * array), 101 check, CompleteUpgrade. ai_nc_fire from another thread aborts
- * it. NULL with err (and *http_status when the server answered something other
- * than 101; 0 otherwise). `nc` may be NULL (not cancellable). */
+ * it. A redirect is never followed: a 3xx comes back as *http_status with NULL.
+ * NULL with err (and *http_status when the server answered something other
+ * than 101; 0 otherwise). `nc` may be NULL: the connect itself is then not
+ * cancellable by the caller, but voice_ws_abort still works (through an
+ * internal token). */
 VoiceWs *voice_ws_connect(const char *host, int port, int secure, const char *path,
                           const char *const *headers, AiNetCancel *nc,
                           int *http_status, char *err, size_t errcap);
@@ -37,10 +42,16 @@ int  voice_ws_send_text(VoiceWs *ws, const char *s, size_t n);          /* 0 ok 
  * (a receive ended by voice_ws_shutdown or voice_ws_abort is always -1). */
 int  voice_ws_recv(VoiceWs *ws, char **msg, size_t *len, int *is_close);
 
-/* Cancel from any thread: WinHttpWebSocketClose with
+/* The polite cancel: WinHttpWebSocketClose with
  * WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS (close timeout 2000 ms, set at
- * connect), which ends a pending receive. Idempotent. */
-void voice_ws_shutdown(VoiceWs *ws);
+ * connect), which ends a pending receive. Returns the Close result: NO_ERROR
+ * on success, or when an earlier call already closed it. Close fails (for
+ * example ERROR_INVALID_OPERATION while a send is pending on another thread)
+ * without waking the receiver; the caller then escalates to voice_ws_abort. A
+ * later voice_ws_recv fails either way, and a failed call may be retried.
+ * It can block up to the 2 s close timeout: call it from a worker (the
+ * sender), never the UI thread. */
+DWORD voice_ws_shutdown(VoiceWs *ws);
 
 /* Last resort: WinHttpCloseHandle on the WebSocket handle (through the
  * AiNetCancel token it is armed on), waking a send or receive the close did

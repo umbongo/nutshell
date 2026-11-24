@@ -131,6 +131,7 @@ int test_voice_ws_echo(void);
 int test_voice_ws_fragmented(void);
 int test_voice_ws_reject(void);
 int test_voice_ws_shutdown_wakes_receiver(void);
+int test_voice_ws_redirect_refused(void);
 int test_voice_ws_cancel_during_handshake(void);
 int test_voice_ws_send_and_receive_concurrently(void);
 int test_ai_http_post_ct_rejects_bad_content_type(void);
@@ -462,6 +463,7 @@ int main(int argc, char **argv)
     failed += test_voice_ws_fragmented();
     failed += test_voice_ws_reject();
     failed += test_voice_ws_shutdown_wakes_receiver();
+    failed += test_voice_ws_redirect_refused();
     failed += test_voice_ws_cancel_during_handshake();
     failed += test_voice_ws_send_and_receive_concurrently();
     failed += test_ai_http_post_ct_rejects_bad_content_type();

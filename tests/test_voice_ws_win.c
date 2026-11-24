@@ -84,8 +84,10 @@ int test_voice_ws_echo(void)
         ASSERT_EQ((int)n, 7);
         if (m) ASSERT_STR_EQ(m, "{\"a\":1}");
         free(m);
-        voice_ws_shutdown(ws);
-        voice_ws_shutdown(ws);                 /* idempotent */
+        ASSERT_EQ((int)voice_ws_shutdown(ws), (int)NO_ERROR);
+        ASSERT_EQ((int)voice_ws_shutdown(ws), (int)NO_ERROR);   /* idempotent */
+        for (int i = 0; i < 100 && !ws_loop_close_seen(l); i++) Sleep(20);
+        ASSERT_EQ(ws_loop_close_seen(l), 1);
         voice_ws_free(ws);
     }
     ws_loop_stop(l);
@@ -149,6 +151,26 @@ int test_voice_ws_reject(void)
     TEST_END();
 }
 
+int test_voice_ws_redirect_refused(void)
+{
+    TEST_BEGIN();
+    gates(1);
+    WsLoop *l = ws_loop_start(WSL_REDIRECT_302);
+    ASSERT_NOT_NULL(l);
+    char err[128] = "";
+    int st = 0;
+    VoiceWs *ws = connect_to(l, NULL, &st, err, sizeof(err));
+    ASSERT_NULL(ws);
+    ASSERT_EQ(st, 302);
+    ASSERT_TRUE(err[0] != '\0');
+    Sleep(300);                                /* a follower would have knocked again */
+    ASSERT_EQ(ws_loop_requests(l), 1);
+    voice_ws_free(ws);
+    ws_loop_stop(l);
+    gates(0);
+    TEST_END();
+}
+
 typedef struct {
     VoiceWs *ws;
     int      rc;
@@ -182,37 +204,57 @@ int test_voice_ws_shutdown_wakes_receiver(void)
     VoiceWs *ws = connect_to(l, &nc, &st, err, sizeof(err));
     ASSERT_NOT_NULL(ws);
     if (ws) {
-        RecvArg a;
-        memset(&a, 0, sizeof(a));
-        a.ws = ws;
-        a.rc = 99;
-        HANDLE t = CreateThread(NULL, 0, recv_thread, &a, 0, NULL);
+        /* Heap, so a receiver that never ends cannot write into a dead stack frame. */
+        RecvArg *a = (RecvArg *)calloc(1, sizeof(*a));
+        ASSERT_NOT_NULL(a);
+        if (!a) {
+            voice_ws_free(ws);
+            ws_loop_stop(l);
+            gates(0);
+            TEST_END();
+        }
+        a->ws = ws;
+        a->rc = 99;
+        HANDLE t = CreateThread(NULL, 0, recv_thread, a, 0, NULL);
         ASSERT_NOT_NULL(t);
-        for (int i = 0; i < 200 && !a.started; i++) Sleep(10);
+        for (int i = 0; i < 200 && !a->started; i++) Sleep(10);
         Sleep(300);                            /* let it block in WebSocketReceive */
         DWORD f0 = GetTickCount();
-        voice_ws_shutdown(ws);
+        DWORD sr = voice_ws_shutdown(ws);
         DWORD w = WaitForSingleObject(t, 3000);
         if (w != WAIT_OBJECT_0) {
-            printf("  [INFO] shutdown did not wake the receiver; trying voice_ws_abort\n");
+            printf("  [INFO] shutdown (result %lu) did not wake the receiver; trying voice_ws_abort\n",
+                   (unsigned long)sr);
             voice_ws_abort(ws);
             w = WaitForSingleObject(t, 3000);
             if (w != WAIT_OBJECT_0) {
                 printf("  SKIP: wine does not wake a blocked WebSocket receive\n");
-                /* The thread is left blocked on a handle we cannot free safely; the
-                 * test process exits soon after. */
+                /* Stopping the fixture closes the server side, which ends the receive. */
                 ws_loop_stop(l);
+                l = NULL;
+                w = WaitForSingleObject(t, 5000);
+                if (w != WAIT_OBJECT_0) {
+                    /* Still blocked: `a` stays allocated on purpose (a late write is then
+                     * harmless), and so does the connection it is blocked on. The test
+                     * process exits soon after. */
+                    gates(0);
+                    TEST_END();
+                }
+                CloseHandle(t);
+                voice_ws_free(ws);
+                free(a);
                 gates(0);
                 TEST_END();
             }
         } else {
-            ASSERT_TRUE(a.done_tick - f0 < 3000);
+            ASSERT_TRUE(a->done_tick - f0 < 3000);
         }
-        ASSERT_EQ(a.rc, -1);
+        ASSERT_EQ(a->rc, -1);
         CloseHandle(t);
         voice_ws_free(ws);
+        free(a);
     }
-    ws_loop_stop(l);
+    if (l) ws_loop_stop(l);
     gates(0);
     TEST_END();
 }

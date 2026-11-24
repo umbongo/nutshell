@@ -22,6 +22,7 @@ struct WsLoop {
     volatile LONG    stop;
     volatile LONG    upgraded;
     volatile LONG    close_seen;
+    volatile LONG    requests;
     CRITICAL_SECTION send_lock;
     char             request[4096];
     int (*on_msg)(WsLoop *, const char *, size_t, void *);
@@ -140,6 +141,16 @@ static void serve(WsLoop *w, SOCKET s)
         while (!w->stop) Sleep(20);
         return;
     }
+    if (w->mode == WSL_REDIRECT_302) {
+        char r[256];
+        int rn = snprintf(r, sizeof(r),
+                          "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:%d/v1/realtime\r\n"
+                          "Content-Length: 0\r\nConnection: close\r\n\r\n", w->port);
+        InterlockedIncrement(&w->requests);
+        send_all(s, r, (size_t)rn);
+        Sleep(100);
+        return;
+    }
     if (w->mode == WSL_REJECT_403) {
         static const char r[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n"
                                 "Connection: close\r\n\r\n";
@@ -221,6 +232,13 @@ static DWORD WINAPI loop_thread(LPVOID arg)
         w->cs = c;
         LeaveCriticalSection(&w->send_lock);
         serve(w, c);
+        if (w->mode == WSL_REDIRECT_302) {      /* a follower would connect again */
+            EnterCriticalSection(&w->send_lock);
+            w->cs = INVALID_SOCKET;
+            LeaveCriticalSection(&w->send_lock);
+            closesocket(c);
+            continue;
+        }
         break;                         /* one connection only */
     }
     return 0;
@@ -309,6 +327,8 @@ int ws_loop_send_fragmented(WsLoop *w, const char *s, size_t n, int parts)
 }
 
 const char *ws_loop_request(WsLoop *w) { return w->request; }
+
+int ws_loop_requests(WsLoop *w) { return (int)w->requests; }
 
 int ws_loop_close_seen(WsLoop *w) { return w->close_seen ? 1 : 0; }
 
