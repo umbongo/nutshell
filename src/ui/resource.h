@@ -133,5 +133,7 @@
 #define IDC_VOICE_PTT_MODE       3110 /* Toggle / Hold to talk combo */
 #define IDC_VOICE_MIC_DELAY      3111 /* mic start delay (ms) edit */
 #define IDC_VOICE_AUTO_SEND      3112 /* "Send automatically when I finish speaking" tickbox */
+#define IDC_VOICE_GAIN           3113 /* Settings > Voice: microphone gain slider (ns_slider) */
+#define IDC_VOICE_GAIN_VALUE     3114 /* its value label ("+12 dB") */
 
 #endif

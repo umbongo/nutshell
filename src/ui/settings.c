@@ -29,6 +29,7 @@
 #include "ns_tokens.h"
 #include "ns_draw.h"
 #include "ns_check.h"
+#include "ns_slider.h"
 #include "ns_tip.h"
 #include "settings_help.h"
 #include "search_providers.h"
@@ -987,6 +988,8 @@ static void voice_enable_sync(SettingsDlgData *d)
         EnableWindow(use_ai, (on && voice_use_ai_reason(d) == NULL) ? TRUE : FALSE);
     HWND dev = GetDlgItem(d->hPage, IDC_VOICE_DEVICE);
     if (dev) EnableWindow(dev, (on && d->voice_dev_listed) ? TRUE : FALSE);
+    HWND gain = GetDlgItem(d->hPage, IDC_VOICE_GAIN);
+    if (gain) EnableWindow(gain, (on && d->voice_dev_listed) ? TRUE : FALSE);
     /* Test needs the listed microphones (voice saved on) and runs once at a time. */
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
     if (test)
@@ -1052,6 +1055,24 @@ static void voice_test_note(SettingsDlgData *d, const char *text)
     }
 }
 
+/* The slider's gain in dB (the saved value until the slider exists). */
+static int voice_gain_now(const SettingsDlgData *d)
+{
+    HWND sl = GetDlgItem(d->hPage, IDC_VOICE_GAIN);
+    return sl ? voice_gain_clamp(ns_slider_get(sl))
+              : voice_gain_clamp(d->cfg->settings.voice_mic_gain_db);
+}
+
+/* The slider moved: refresh the "+12 dB" label and, while a Test runs, retune
+ * the live capture. */
+static void voice_gain_changed(SettingsDlgData *d)
+{
+    char txt[16];
+    voice_gain_label(voice_gain_now(d), txt, sizeof(txt));
+    SetDlgItemText(d->hPage, IDC_VOICE_GAIN_VALUE, txt);
+    if (d->voice_testing) voice_audio_set_gain(voice_gain_now(d));
+}
+
 static void voice_test_end(SettingsDlgData *d)
 {
     if (!d->voice_testing) return;
@@ -1089,7 +1110,7 @@ static void voice_test_start(SettingsDlgData *d)
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
     if (test) SetWindowText(test, "Testing...");
     SetTimer(d->hDlg, IDT_VOICE_TEST, 3000, NULL);
-    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, 0);
+    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, voice_gain_now(d));
     voice_enable_sync(d);
     if (test) InvalidateRect(test, NULL, TRUE);
 }
@@ -2145,6 +2166,19 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 0, 1);
             }
             {
+                /* Microphone gain: the themed slider, its "+12 dB" value beside it. */
+                HWND lbl = make_label2(nd, SH_VOICE_MIC_GAIN);
+                int g0 = voice_gain_clamp(vs->voice_mic_gain_db);
+                HWND sl = ns_slider_create(nd->hPage, IDC_VOICE_GAIN,
+                                           VOICE_GAIN_MIN_DB, VOICE_GAIN_MAX_DB, g0);
+                page_track(nd, sl, SH_VOICE_MIC_GAIN);
+                char gtxt[16];
+                voice_gain_label(g0, gtxt, sizeof(gtxt));
+                HWND val = page_ctrl(nd, "STATIC", gtxt, SS_LEFT,
+                                     IDC_VOICE_GAIN_VALUE, SH_VOICE_MIC_GAIN);
+                add_ctrl(nd, lbl, sl, val, SETTINGS_PAGE_VOICE, 0, 60, 1, 0, 1, 0);
+            }
+            {
                 HWND lbl = make_label2(nd, SH_VOICE_PTT_KEY);
                 HWND cmb = make_combo2(nd, IDC_VOICE_PTT_KEY, CBS_DROPDOWNLIST,
                                        SH_VOICE_PTT_KEY);
@@ -2593,6 +2627,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             if (d && HIWORD(wParam) == BN_CLICKED) voice_test_start(d);
             break;
 
+        case IDC_VOICE_GAIN:
+            if (d && HIWORD(wParam) == NSS_CHANGED) voice_gain_changed(d);
+            break;
+
         case IDC_VOICE_PROVIDER:
             if (d && HIWORD(wParam) == CBN_SELCHANGE) {
                 /* A model that is empty or one of the old provider's seeds
@@ -2997,6 +3035,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             v = GetDlgItemInt(d->hPage, IDC_VOICE_MIC_DELAY, &ok, FALSE);
             s->voice_mic_delay_ms =
                 keep_entry(SH_VOICE_MIC_DELAY, ok, v, s->voice_mic_delay_ms);
+            s->voice_mic_gain_db = voice_gain_now(d);
             s->voice_auto_send = (IsDlgButtonChecked(d->hPage, IDC_VOICE_AUTO_SEND)
                                   == BST_CHECKED) ? 1 : 0;
 

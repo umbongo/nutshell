@@ -4171,6 +4171,11 @@ int test_ai_panel_voice_hint_wordings(void);
 int test_ai_panel_state_body_other_states_ignore_context_lines(void);
 int test_ai_panel_suggestions_exactly_three_nonempty(void);
 
+/* test_ns_slider_math.c */
+int test_ns_slider_value_at(void);
+int test_ns_slider_x_of(void);
+int test_ns_slider_key(void);
+
 /* test_ns_hover.c */
 int test_ns_hover_init_sets_both_ids_to_minus_one(void);
 int test_ns_hover_enter_reports_change_from_none(void);
@@ -8603,6 +8608,9 @@ int main(void) {
     failed += test_ns_hover_state_for_rest_hover_pressed();
     failed += test_ns_hover_state_for_negative_id_always_rest();
     failed += test_ns_hover_state_for_null_hover_is_rest();
+    failed += test_ns_slider_value_at();
+    failed += test_ns_slider_x_of();
+    failed += test_ns_slider_key();
 
     printf("\n--- Design System: motion ---\n");
     failed += test_ns_ease_endpoints();
