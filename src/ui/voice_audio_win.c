@@ -14,6 +14,7 @@
 #include "secure_zero.h"
 #include "voice_config.h"
 #include "voice_gate.h"
+#include "voice_live_win.h"
 
 /* The GUIDs and the property key are defined here, as copies: linking
  * libuuid/mmdevapi for them would add an import the exe must not have. */
@@ -34,6 +35,11 @@ static const PROPERTYKEY VA_PKEY_FriendlyName =
     {{0xA45C254E, 0xDF1C, 0x4EFD, {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
 
 #define VA_CAP_SAMPLES  ((size_t)VOICE_CAP_MS * WAV_RATE / 1000u)
+/* cap_ms in 16 kHz samples; <= 0 is the default cap. */
+static size_t va_cap_samples(int cap_ms)
+{
+    return cap_ms > 0 ? (size_t)cap_ms * WAV_RATE / 1000u : VA_CAP_SAMPLES;
+}
 #define VA_STALL_MS     2000u
 #define VA_LEVEL_MS     50u
 
@@ -44,6 +50,8 @@ typedef struct {
     unsigned  token;
     int       flag;      /* test_only / keep / on */
     int       gain_db;   /* VC_BEGIN, VC_SET_GAIN */
+    int       cap_ms;    /* VC_BEGIN: this capture's length cap, <= 0 = VOICE_CAP_MS */
+    int       live;      /* VC_BEGIN: feed the live session */
 } VaCmd;
 
 /* Everything one audio thread uses lives in its own context, so a thread
@@ -140,6 +148,7 @@ typedef struct {
     PcmBuf               pcm;
     unsigned             token;
     int                  test_only;
+    int                  live;         /* feed voice_live_feed (never with test_only) */
     int                  used_default;
     ULONGLONG            t_start, t_last_ev, t_last_level;
     uint32_t             gain_q16;     /* applied to every new sample */
@@ -156,6 +165,22 @@ static void va_close_client(VaState *st)
     if (st->buf_ev) { CloseHandle(st->buf_ev); st->buf_ev = NULL; }
 }
 
+/* The live feed, or the test seam's stand-in (NULL in product code). */
+static void (*g_test_feed)(unsigned, const int16_t *, size_t);
+static void (*g_test_feed_end)(unsigned);
+
+static void va_live_feed(unsigned token, const int16_t *s, size_t n)
+{
+    if (g_test_feed) g_test_feed(token, s, n);
+    else voice_live_feed(token, s, n);
+}
+
+static void va_live_end(unsigned token)
+{
+    if (g_test_feed_end) g_test_feed_end(token);
+    else voice_live_feed_end(token);
+}
+
 /* Ends the capture: the client is stopped and released first (so the
  * device is closed between recordings), then the result is posted. */
 static void va_finish(VaState *st, int keep)
@@ -163,6 +188,9 @@ static void va_finish(VaState *st, int keep)
     if (!st->active) return;
     va_close_client(st);
     st->active = 0;
+    /* After the last samples, before the result: the session flushes its gate and queues
+     * the end (a discard too: the UI closes the session itself). */
+    if (st->live) { va_live_end(st->token); st->live = 0; }
     if (keep && !st->test_only) {
         VoiceCapture *c = (VoiceCapture *)calloc(1, sizeof(*c));
         if (!c) {
@@ -280,9 +308,10 @@ static void va_begin(VaState *st, const VaCmd *c)
     st->client = cl;
     st->cap = cap;
     st->buf_ev = ev;
-    pcm_init(&st->pcm, VA_CAP_SAMPLES);
+    pcm_init(&st->pcm, va_cap_samples(c->cap_ms));
     st->token = c->token;
     st->test_only = c->flag;
+    st->live = c->live && !c->flag;
     st->active = 1;
     st->t_start = st->t_last_ev = st->t_last_level = GetTickCount64();
     st->level_peak = 0;
@@ -309,6 +338,7 @@ static void va_ingest(VaState *st, const int16_t *src, size_t frames)
     /* Decided on the raw samples: at -12 dB a quiet mic's +-1 noise becomes 0. */
     if (!st->raw_nonzero && pcm_any_nonzero(fresh, take)) st->raw_nonzero = 1;
     pcm_apply_gain_q16(fresh, take, st->gain_q16);
+    if (st->live) va_live_feed(st->token, fresh, take);
     if (st->test_only) {
         int pk = (int)(pcm_peak(fresh, take) * 32768.0 + 0.5);
         if (pk > st->level_peak) st->level_peak = pk;
@@ -552,7 +582,8 @@ int voice_audio_wait_ready(DWORD ms)
     return WaitForSingleObject(g_ctx->ready, ms) == WAIT_OBJECT_0;
 }
 
-static void va_push(VaCmdKind k, const char *id, unsigned token, int flag, int gain_db)
+static void va_push(VaCmdKind k, const char *id, unsigned token, int flag, int gain_db,
+                    int cap_ms, int live)
 {
     VaCtx *cx = g_ctx;
     if (!cx) return;
@@ -589,6 +620,8 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag, int g
         c->token = token;
         c->flag = flag;
         c->gain_db = gain_db;
+        c->cap_ms = cap_ms;
+        c->live = live;
     }
     LeaveCriticalSection(&cx->qcs);
     SetEvent(cx->wake);
@@ -617,12 +650,13 @@ int voice_audio_queue_cap(void)
     return n;
 }
 
-void voice_audio_enumerate(void) { va_push(VC_ENUM, NULL, 0, 0, 0); }
-void voice_audio_capture_begin(const char *id, unsigned token, int test_only, int gain_db)
-{ va_push(VC_BEGIN, id ? id : "", token, test_only ? 1 : 0, gain_db); }
-void voice_audio_capture_end(int keep) { va_push(VC_END, NULL, 0, keep ? 1 : 0, 0); }
-void voice_audio_watch_devices(int on) { va_push(VC_WATCH, NULL, 0, on ? 1 : 0, 0); }
-void voice_audio_set_gain(int gain_db) { va_push(VC_SET_GAIN, NULL, 0, 0, gain_db); }
+void voice_audio_enumerate(void) { va_push(VC_ENUM, NULL, 0, 0, 0, 0, 0); }
+void voice_audio_capture_begin(const char *id, unsigned token, int test_only, int gain_db,
+                               int cap_ms, int live)
+{ va_push(VC_BEGIN, id ? id : "", token, test_only ? 1 : 0, gain_db, cap_ms, live ? 1 : 0); }
+void voice_audio_capture_end(int keep) { va_push(VC_END, NULL, 0, keep ? 1 : 0, 0, 0, 0); }
+void voice_audio_watch_devices(int on) { va_push(VC_WATCH, NULL, 0, on ? 1 : 0, 0, 0, 0); }
+void voice_audio_set_gain(int gain_db) { va_push(VC_SET_GAIN, NULL, 0, 0, gain_db, 0, 0); }
 
 /* TEST-ONLY seam (wintest), never called by product code: how many gain
  * commands are queued (coalescing keeps it at most 1) and the last value. */
@@ -662,6 +696,30 @@ void voice_audio_test_ingest(int test_only, int gain_db, int gain2_db,
     *pcm_len = st.pcm.n;
     *verdict = (int)pcm_classify_raw(st.pcm.s, st.pcm.n, st.raw_nonzero);
     pcm_free(&st.pcm);
+}
+
+/* TEST-ONLY seam (wintest), never called by product code. */
+void voice_audio_test_live_hooks(void (*feed)(unsigned, const int16_t *, size_t),
+                                 void (*end)(unsigned))
+{
+    g_test_feed = feed;
+    g_test_feed_end = end;
+}
+
+/* TEST-ONLY seam (wintest), never called by product code: one capture's ingest and
+ * finish on a private state, no device or thread. */
+void voice_audio_test_ingest_live(int live, unsigned token, int gain_db, int cap_ms,
+                                  const int16_t *s, size_t n)
+{
+    VaState st;
+    memset(&st, 0, sizeof(st));
+    pcm_init(&st.pcm, va_cap_samples(cap_ms));
+    st.token = token;
+    st.live = live ? 1 : 0;
+    st.gain_q16 = pcm_gain_q16(gain_db);
+    st.active = 1;
+    va_ingest(&st, s, n);
+    va_finish(&st, 0);          /* discards the samples; the live end still fires */
 }
 
 void voice_audio_free_devices(VoiceDeviceList *l) { free(l); }

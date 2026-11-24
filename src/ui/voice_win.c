@@ -72,7 +72,7 @@ static void act(VoiceStep st, VoiceEvent ev)
         ai_chat_voice_binding(panel, &g_bind);
         g_capturing = 1;
         voice_audio_capture_begin(s ? s->voice_input_device : "", g_token, 0,
-                                   s ? s->voice_mic_gain_db : 0);
+                                   s ? s->voice_mic_gain_db : 0, VOICE_CAP_MS, 0);
         voice_cue_text(s ? s->voice_ptt_mode : VOICE_MODE_TOGGLE,
                        s ? s->voice_ptt_key : VOICE_PTT_RIGHT_SHIFT,
                        ev == VE_MIC_CLICK, s ? s->voice_auto_send : 0,

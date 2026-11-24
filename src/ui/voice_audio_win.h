@@ -48,7 +48,11 @@ int  voice_audio_start(HWND notify);          /* creates the MTA thread; 0 on fa
 void voice_audio_stop(void);                  /* stop event, join (bounded 3 s), release all */
 int  voice_audio_wait_ready(DWORD ms);        /* 1 once VAM_READY was reached */
 void voice_audio_enumerate(void);             /* -> VAM_DEVICES */
-void voice_audio_capture_begin(const char *device_id_utf8, unsigned token, int test_only, int gain_db);
+/* cap_ms: this capture's own length cap (<= 0: VOICE_CAP_MS); live: 1 feeds every kept
+ * sample to voice_live_feed(token, ...) and ends it with voice_live_feed_end at the
+ * finish (ignored for a test_only capture). */
+void voice_audio_capture_begin(const char *device_id_utf8, unsigned token, int test_only, int gain_db,
+                               int cap_ms, int live);
 void voice_audio_set_gain(int gain_db);       /* software gain in dB for the running capture; coalesced, applied on the audio thread */
 void voice_audio_capture_end(int keep);       /* keep=1 -> VAM_CAPTURED; 0 -> discard (wiped) */
 void voice_audio_watch_devices(int on);       /* register/unregister the notification client */
@@ -57,6 +61,13 @@ int  voice_audio_queue_cap(void);             /* TEST-ONLY seam, not for product
 int  voice_audio_test_pending_gain(int *last_db); /* TEST-ONLY seam: queued gain commands (<=1) and the last value */
 void voice_audio_test_ingest(int test_only, int gain_db, int gain2_db, const int16_t *s, size_t n,
                              int peak[2], size_t *pcm_len, int *verdict); /* TEST-ONLY seam: the ingest path, no device */
+/* TEST-ONLY seam: replaces voice_live_feed / voice_live_feed_end (both NULL in product code). */
+void voice_audio_test_live_hooks(void (*feed)(unsigned token, const int16_t *s, size_t n),
+                                 void (*end)(unsigned token));
+/* TEST-ONLY seam: the ingest path of one capture (cap_ms, live, token, gain) on a private state
+ * (no device), then its finish. */
+void voice_audio_test_ingest_live(int live, unsigned token, int gain_db, int cap_ms,
+                                  const int16_t *s, size_t n);
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
 

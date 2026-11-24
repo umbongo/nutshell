@@ -1156,7 +1156,7 @@ static int voice_test_begin(SettingsDlgData *d)
     voice_test_note(d, "");
     voice_meter_reset(&d->vmeter);
     d->vmeter_tick = GetTickCount64();
-    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, voice_gain_now(d));
+    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, voice_gain_now(d), VOICE_CAP_MS, 0);
     return 1;
 }
 

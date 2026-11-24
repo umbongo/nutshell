@@ -11,6 +11,7 @@
 #include <string.h>
 #include "test_framework.h"
 #include "voice_audio_win.h"
+#include "voice_config.h"
 #include "voice_gate.h"
 #include "ai_gate.h"
 #include "dll_record.h"
@@ -120,7 +121,7 @@ int test_voice_audio_start_refused_when_gate_off(void)
         ASSERT_EQ(voice_audio_wait_ready(10), 0);          /* no thread was made */
         ASSERT_FALSE(dll_record_was_requested("mmdevapi.dll"));
         /* commands with no thread are dropped, never queued for a later one */
-        voice_audio_capture_begin("", 1, 0, 0);
+        voice_audio_capture_begin("", 1, 0, 0, VOICE_CAP_MS, 0);
         voice_audio_enumerate();
     }
     va_gates(0);
@@ -197,7 +198,7 @@ int test_voice_audio_capture_no_device_or_data(void)
     ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    voice_audio_capture_begin("", 7, 0, 0);
+    voice_audio_capture_begin("", 7, 0, 0, VOICE_CAP_MS, 0);
     Sleep(300);
     voice_audio_capture_end(1);
     WPARAM wp = 0; LPARAM lp = 0;
@@ -227,7 +228,7 @@ int test_voice_audio_bad_id_falls_back(void)
     ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    voice_audio_capture_begin("{bogus}", 3, 0, 0);
+    voice_audio_capture_begin("{bogus}", 3, 0, 0, VOICE_CAP_MS, 0);
     Sleep(300);
     voice_audio_capture_end(1);
     WPARAM wp = 0; LPARAM lp = 0;
@@ -289,7 +290,7 @@ int test_voice_audio_queue_keeps_begin_and_end(void)
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     for (int i = 0; i < 40; i++) voice_audio_enumerate();   /* coalesced to one */
-    voice_audio_capture_begin("", 7, 0, 0);
+    voice_audio_capture_begin("", 7, 0, 0, VOICE_CAP_MS, 0);
     voice_audio_capture_end(1);
     /* An enumeration error (token 0) may arrive first: it is not ours. */
     ASSERT_TRUE(va_wait_token(7, 5000, NULL, 0));
@@ -315,7 +316,7 @@ int test_voice_audio_queue_grows_past_initial_capacity(void)
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     voice_audio_test_hold(1);
     for (unsigned t = 1; t <= PAIRS; t++) {
-        voice_audio_capture_begin("", t, 0, 0);
+        voice_audio_capture_begin("", t, 0, 0, VOICE_CAP_MS, 0);
         voice_audio_capture_end(1);
     }
     int cap = voice_audio_queue_cap();
@@ -364,7 +365,7 @@ int test_voice_audio_test_capture_has_no_time_limit(void)
     ASSERT_NOT_NULL(w);
     ASSERT_EQ(voice_audio_start(w), 1);
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
-    voice_audio_capture_begin("", 0, 1, 0);
+    voice_audio_capture_begin("", 0, 1, 0, VOICE_CAP_MS, 0);
     voice_audio_capture_end(1);          /* keep is ignored for a test */
     WPARAM wp = 0; LPARAM lp = 0;
     ASSERT_EQ(va_wait(BIT(VAM_CAPTURED), 1500, &wp, &lp), 0);
@@ -449,7 +450,7 @@ int test_voice_audio_set_gain_after_begin_is_kept(void)
     ASSERT_EQ(voice_audio_wait_ready(5000), 1);
     voice_audio_test_hold(1);
     voice_audio_set_gain(3);
-    voice_audio_capture_begin("", 0, 1, 5);
+    voice_audio_capture_begin("", 0, 1, 5, VOICE_CAP_MS, 0);
     voice_audio_set_gain(9);
     voice_audio_set_gain(11);      /* folds into the one after the begin */
     int last = -999;
@@ -494,7 +495,7 @@ int test_voice_audio_never_started(void)
     ASSERT_NOT_NULL(w);
     voice_audio_stop();
     voice_audio_enumerate();
-    voice_audio_capture_begin("", 1, 0, 0);
+    voice_audio_capture_begin("", 1, 0, 0, VOICE_CAP_MS, 0);
     voice_audio_capture_end(1);
     voice_audio_watch_devices(1);
     voice_audio_watch_devices(0);
@@ -502,6 +503,52 @@ int test_voice_audio_never_started(void)
     WPARAM wp = 0; LPARAM lp = 0;
     ASSERT_EQ(va_wait(0xFFFFFFFFu, 300, &wp, &lp), 0);
     DestroyWindow(w);
+    TEST_END();
+}
+
+/* A live capture hands every kept (gained, capped) sample to the live feed and
+ * ends it once at the finish; a non-live capture never touches the feed. */
+typedef struct { size_t samples; int peak; int ends; unsigned feed_token, end_token; int feeds; } LiveRec;
+static LiveRec g_rec;
+static void rec_feed(unsigned token, const int16_t *s, size_t n)
+{
+    g_rec.feeds++;
+    g_rec.feed_token = token;
+    g_rec.samples += n;
+    for (size_t i = 0; i < n; i++) {
+        int a = s[i] < 0 ? -s[i] : s[i];
+        if (a > g_rec.peak) g_rec.peak = a;
+    }
+}
+static void rec_end(unsigned token) { g_rec.ends++; g_rec.end_token = token; }
+
+int test_voice_audio_live_ingest_feeds_gained_samples(void)
+{
+    TEST_BEGIN();
+    static int16_t s[VA_FEED];
+    va_fixture(s, 1000);
+    voice_audio_test_live_hooks(rec_feed, rec_end);
+
+    memset(&g_rec, 0, sizeof g_rec);
+    voice_audio_test_ingest_live(1, 9, 6, 60000, s, VA_FEED);   /* live, +6 dB */
+    ASSERT_EQ((int)g_rec.samples, VA_FEED);
+    ASSERT_TRUE(g_rec.peak >= 1950 && g_rec.peak <= 2050);      /* the gained samples */
+    ASSERT_EQ(g_rec.ends, 1);
+    ASSERT_EQ((int)g_rec.feed_token, 9);
+    ASSERT_EQ((int)g_rec.end_token, 9);
+
+    memset(&g_rec, 0, sizeof g_rec);
+    voice_audio_test_ingest_live(0, 9, 6, 60000, s, VA_FEED);   /* not live: no feed, no end */
+    ASSERT_EQ(g_rec.feeds, 0);
+    ASSERT_EQ(g_rec.ends, 0);
+
+    /* the capture's own cap: 100 ms of 16 kHz (1600 samples) is all the feed ever sees */
+    memset(&g_rec, 0, sizeof g_rec);
+    voice_audio_test_ingest_live(1, 3, 0, 100, s, VA_FEED);
+    ASSERT_EQ((int)g_rec.samples, 1600);
+    ASSERT_EQ(g_rec.ends, 1);
+
+    voice_audio_test_live_hooks(NULL, NULL);
     TEST_END();
 }
 
