@@ -390,6 +390,24 @@ int test_voice_audio_test_capture_keeps_no_samples(void)
     TEST_END();
 }
 
+/* Raw +-1 noise at -12 dB rounds to 0 after the gain: the push-to-talk verdict
+ * must not be ALL_ZERO (the privacy-switch text) while the mic is delivering. */
+int test_voice_audio_ingest_quiet_mic_not_all_zero(void)
+{
+    TEST_BEGIN();
+    static int16_t s[VA_FEED];
+    int peak[2]; size_t len = 0; int verdict = -1;
+    va_fixture(s, 1);   /* alternates +1, -1 */
+    voice_audio_test_ingest(0, -12, -12, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_TRUE(verdict != (int)PCM_ALL_ZERO);
+    ASSERT_EQ(verdict, (int)PCM_SILENT);
+    /* a truly dead feed (all zero before the gain) still is */
+    memset(s, 0, sizeof s);
+    voice_audio_test_ingest(0, -12, -12, s, VA_FEED, peak, &len, &verdict);
+    ASSERT_EQ(verdict, (int)PCM_ALL_ZERO);
+    TEST_END();
+}
+
 /* The gain applies to the new samples only: the level and the classifier see
  * the gained signal, and a gain change between feeds takes effect at once. */
 int test_voice_audio_ingest_applies_gain_live(void)

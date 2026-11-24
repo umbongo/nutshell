@@ -3683,6 +3683,7 @@ int test_voice_test_button_label(void);
 int test_pcm_to_wav_layout(void);
 int test_pcm_levels(void);
 int test_pcm_classify(void);
+int test_pcm_classify_raw(void);
 int test_pcm_gain_q16_values(void);
 int test_pcm_apply_gain_identity(void);
 int test_pcm_apply_gain_saturates(void);
@@ -3750,6 +3751,8 @@ int test_voice_config_custom_language_roundtrip(void);
 int test_voice_config_language_migration(void);
 int test_voice_config_rshift_migration_rev2_skips(void);
 int test_voice_config_marker_extremes(void);
+int test_voice_config_language_migration_notice(void);
+int test_selftest_configs_complete(void);
 int test_voice_config_load_defaults_and_saved_choices(void);
 /* test_voice_lang.c */
 int test_voice_lang_table_order(void);
@@ -8163,6 +8166,7 @@ int main(void) {
     failed += test_pcm_to_wav_layout();
     failed += test_pcm_levels();
     failed += test_pcm_classify();
+    failed += test_pcm_classify_raw();
     failed += test_pcm_gain_q16_values();
     failed += test_pcm_apply_gain_identity();
     failed += test_pcm_apply_gain_saturates();
@@ -8229,6 +8233,8 @@ int main(void) {
     failed += test_voice_config_language_migration();
     failed += test_voice_config_rshift_migration_rev2_skips();
     failed += test_voice_config_marker_extremes();
+    failed += test_voice_config_language_migration_notice();
+    failed += test_selftest_configs_complete();
     failed += test_voice_lang_table_order();
     failed += test_voice_lang_find();
     failed += test_voice_lang_parse_other();

@@ -741,8 +741,10 @@ function New-NutshellTestEnv {
         voice_stt_provider = "openai"; voice_stt_url = ""; voice_stt_model = ""
         voice_stt_language = ""; stt_api_key = ""
         voice_input_device = ""; voice_input_device_name = ""
+        voice_mic_gain_db = 0
         voice_ptt_key = "right_shift"; voice_ptt_mode = "toggle"
         voice_mic_delay_ms = 150; voice_auto_send = $false
+        voice_defaults_rev = 3   # internal marker, last in config_save() (not in the known-key table)
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }
 

@@ -898,3 +898,81 @@ int test_voice_config_marker_extremes(void)
     remove(VCFG);
     TEST_END();
 }
+
+/* ---- the English (UK) migration is told to the user, in plain words ---- */
+
+#define LANG_LABEL "Voice: language"
+#define LANG_VALUE "English (UK) (choose Auto-detect in Settings > Voice if you speak another language)"
+
+int test_voice_config_language_migration_notice(void)
+{
+    TEST_BEGIN();
+    char lang[32];
+    ConfigLoadReport rep;
+    /* fires: report flag set, one notice item in plain words */
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_stt_language\": \"\"}, \"profiles\": []}"));
+    Config *c = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(c);
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 1);
+    Settings st;
+    config_default_settings(&st);
+    Notice n;
+    ConfigLoadReport only;
+    memset(&only, 0, sizeof only);
+    only.status = CONFIG_LOAD_OK;
+    only.voice_lang_migrated = 1;
+    ASSERT_EQ(only.missing_count, 0);
+    ASSERT_EQ(notice_upgrade(&n, "1.2.94", &only, &st), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, LANG_LABEL);
+    ASSERT_STR_EQ(n.items[0].value, LANG_VALUE);
+    char txt[1024];
+    notice_plain_text(&n, txt, sizeof txt);
+    ASSERT_TRUE(strstr(txt, "- " LANG_LABEL ": " LANG_VALUE) != NULL);
+    ASSERT_TRUE(strstr(txt, "defaults_rev") == NULL);
+    /* alongside another missing key: both lines */
+    only.missing[only.missing_count++] = vkey_index("voice_mic_gain_db");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.94", &only, &st), 1);
+    ASSERT_EQ(n.item_count, 2);
+    /* a launch that saved queues the notice although no key is missing */
+    memset(&only, 0, sizeof only);
+    only.status = CONFIG_LOAD_OK;
+    only.voice_lang_migrated = 1;
+    NoticeQueue q;
+    notice_queue_init(&q);
+    NoticeLaunch nl;
+    memset(&nl, 0, sizeof nl);
+    nl.status = CONFIG_LOAD_OK;
+    nl.rep = &only;
+    nl.saved = 1;
+    nl.save_ok = 1;
+    nl.version = "1.2.94";
+    nl.s = &st;
+    notice_launch_plan(&q, &nl);
+    ASSERT_EQ(q.count, 1);
+    /* with the voice switch missing (a pre-voice config) it folds into "Voice" */
+    only.missing[only.missing_count++] = vkey_index("voice_enabled");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.94", &only, &st), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice");
+
+    /* does not fire: rev 3, or a chosen language (the helper reports the flag
+     * through voice_migrated, which also covers the Right Shift move: use
+     * keys that rule that one out) */
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_defaults_rev\": 3, \"voice_stt_language\": \"\"}, \"profiles\": []}"));
+    c = config_load_report(VCFG, &rep);
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 0);
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"voice_defaults_rev\": 2, \"voice_stt_language\": \"fr\"}, \"profiles\": []}"));
+    c = config_load_report(VCFG, &rep);
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 0);
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}"));
+    c = config_load_report(VCFG, &rep);   /* no language key: the default is already en-GB */
+    if (c) config_free(c);
+    ASSERT_EQ(rep.voice_lang_migrated, 0);
+    (void)lang;
+    remove(VCFG);
+    TEST_END();
+}

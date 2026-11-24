@@ -415,7 +415,8 @@ int test_voice_stt_http_error(void)
 
 /* ---- language, languages[] and the spelling prompt ---- */
 
-#define HINT_BRIT "Use British English spelling, for example colour, organise, centre and travelled."
+#define HINT_BRIT "Colour, organise, centre, travelled, favourite."
+#define INSTR_BRIT "Use British English spelling, for example colour, organise and centre."
 
 static char *mp(const char *model, const char *lang, int accepts, size_t *len)
 {
@@ -604,7 +605,7 @@ int test_voice_stt_gemini_language_words(void)
     ASSERT_NOT_NULL(b);
     free(b);
     ASSERT_NOT_NULL(strstr(tx, " The language is English."));
-    ASSERT_NOT_NULL(strstr(tx, HINT_BRIT));
+    ASSERT_NOT_NULL(strstr(tx, INSTR_BRIT));   /* Gemini is an LLM: an instruction */
     ASSERT_NULL(strstr(tx, "en-GB"));
     b = gemini_text("en-US", tx, sizeof tx);
     free(b);

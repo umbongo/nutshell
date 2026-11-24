@@ -588,7 +588,7 @@ Open, in priority order:
       Voice page at 100 %, 125 % and 200 %.
       Voice improvements (feat/voice-improvements) adds: (aj) the Microphone gain slider and
       meter with the real mic (HD Pro Webcam C920): the Good zone is reachable by gain alone,
-      clipping shows "Too loud - lower the gain", silence shows "Speak to see the level".
+      clipping shows "Too loud — lower the gain", silence shows "Speak to see the level".
       (ak) Test stays on until stopped, and stops on each trigger: the Stop test button, a
       page change, Save, Cancel, unticking Enable voice, unticking the AI assistant, and
       unplugging the mic; a device change restarts it. (al) The slider by keyboard (arrows,
@@ -604,6 +604,11 @@ Open, in priority order:
       not-recognised hint shows and the old language is kept. (ar) The Voice page at 125 %
       and 200 %: every row reachable by scrolling, nothing overlapping. (as) The harness
       `ui_gallery` case (30-ui-demo.ps1, with the new header-status state) has not been run.
+      Follow-ups (final review, 2026-11-24): (M3) after a device-change restart of Test, a
+      stale VAE_DEVICE_LOST or level from the old capture can stop or blip the new one; fix:
+      a capture generation in VaCmd echoed in VAM_LEVEL and VAM_ERROR. (M5) a 1.2.93 exe
+      reading a 1.2.94 config sends en-GB raw as `language`, which OpenAI-format providers
+      reject; an accepted older-exe case.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text

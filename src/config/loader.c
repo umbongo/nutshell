@@ -1001,6 +1001,7 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         if (voice_rev < 3 && s->voice_stt_language[0] == '\0') {
             field_copy(s->voice_stt_language, sizeof(s->voice_stt_language), VOICE_LANG_DEFAULT);
             rep->voice_migrated = 1;
+            rep->voice_lang_migrated = 1;
         }
         settings_validate(s);
     }

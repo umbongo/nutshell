@@ -143,6 +143,20 @@ double pcm_rms(const int16_t *s, size_t n)
     return sqrt(sumsq(s, n) / (double)n) / 32768.0;
 }
 
+int pcm_any_nonzero(const int16_t *s, size_t n)
+{
+    if (!s) return 0;
+    for (size_t i = 0; i < n; i++)
+        if (s[i] != 0) return 1;
+    return 0;
+}
+
+PcmVerdict pcm_classify_raw(const int16_t *s, size_t n, int raw_nonzero)
+{
+    PcmVerdict v = pcm_classify(s, n);
+    return (v == PCM_ALL_ZERO && raw_nonzero) ? PCM_SILENT : v;
+}
+
 PcmVerdict pcm_classify(const int16_t *s, size_t n)
 {
     if (!s || n == 0) return PCM_EMPTY;

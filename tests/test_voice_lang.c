@@ -143,8 +143,14 @@ int test_voice_lang_iso(void)
 int test_voice_lang_hint(void)
 {
     TEST_BEGIN();
-    ASSERT_STR_EQ(voice_lang_spelling_hint("en-GB"),
-                  "Use British English spelling, for example colour, organise, centre and travelled.");
+    /* sample British text, not an instruction: Whisper-family models read
+     * `prompt` as preceding transcript and can echo an instruction */
+    ASSERT_STR_EQ(voice_lang_spelling_hint("en-GB"), "Colour, organise, centre, travelled, favourite.");
+    ASSERT_STR_EQ(voice_lang_spelling_instruction("en-GB"),
+                  "Use British English spelling, for example colour, organise and centre.");
+    ASSERT_NULL(voice_lang_spelling_instruction("en-US"));
+    ASSERT_NULL(voice_lang_spelling_instruction(""));
+    ASSERT_NULL(voice_lang_spelling_instruction(NULL));
     ASSERT_NULL(voice_lang_spelling_hint("en-US"));
     ASSERT_NULL(voice_lang_spelling_hint("en"));
     ASSERT_NULL(voice_lang_spelling_hint(""));

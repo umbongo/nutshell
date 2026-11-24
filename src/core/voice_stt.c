@@ -312,7 +312,7 @@ char *voice_stt_gemini_body(const unsigned char *wav, size_t wav_len,
         const char *nm = voice_lang_name(iso);
         snprintf(words, sizeof words, "%s", nm ? nm : iso);
     }
-    const char *hint = voice_lang_spelling_hint(language);
+    const char *hint = voice_lang_spelling_instruction(language);
     snprintf(text, sizeof text, "%s%s%s%s%s%s", prompt,
              words[0] ? " The language is " : "", words, words[0] ? "." : "",
              hint ? " " : "", hint ? hint : "");

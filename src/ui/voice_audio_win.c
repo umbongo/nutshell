@@ -144,6 +144,7 @@ typedef struct {
     ULONGLONG            t_start, t_last_ev, t_last_level;
     uint32_t             gain_q16;     /* applied to every new sample */
     int                  level_peak;   /* raw 0..32768, max since the last post */
+    int                  raw_nonzero;  /* any non-zero sample seen before the gain */
     int                  active;
 } VaState;
 
@@ -171,7 +172,7 @@ static void va_finish(VaState *st, int keep)
         }
         c->pcm = st->pcm;                    /* ownership moves */
         memset(&st->pcm, 0, sizeof(st->pcm));
-        c->verdict = pcm_classify(c->pcm.s, c->pcm.n);
+        c->verdict = pcm_classify_raw(c->pcm.s, c->pcm.n, st->raw_nonzero);
         c->used_default = st->used_default;
         c->token = st->token;
         va_post(st->ctx, VAM_CAPTURED, (LPARAM)c);
@@ -285,6 +286,7 @@ static void va_begin(VaState *st, const VaCmd *c)
     st->active = 1;
     st->t_start = st->t_last_ev = st->t_last_level = GetTickCount64();
     st->level_peak = 0;
+    st->raw_nonzero = 0;
     st->gain_q16 = pcm_gain_q16(c->gain_db);
 }
 
@@ -304,6 +306,8 @@ static void va_ingest(VaState *st, const int16_t *src, size_t frames)
     size_t take = pcm_append(&st->pcm, src, frames);
     if (take == 0) return;
     int16_t *fresh = st->pcm.s + before;
+    /* Decided on the raw samples: at -12 dB a quiet mic's +-1 noise becomes 0. */
+    if (!st->raw_nonzero && pcm_any_nonzero(fresh, take)) st->raw_nonzero = 1;
     pcm_apply_gain_q16(fresh, take, st->gain_q16);
     if (st->test_only) {
         int pk = (int)(pcm_peak(fresh, take) * 32768.0 + 0.5);
@@ -656,7 +660,7 @@ void voice_audio_test_ingest(int test_only, int gain_db, int gain2_db,
     va_ingest(&st, s, n);
     peak[1] = st.level_peak;
     *pcm_len = st.pcm.n;
-    *verdict = (int)pcm_classify(st.pcm.s, st.pcm.n);
+    *verdict = (int)pcm_classify_raw(st.pcm.s, st.pcm.n, st.raw_nonzero);
     pcm_free(&st.pcm);
 }
 

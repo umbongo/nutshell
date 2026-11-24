@@ -41,8 +41,12 @@ int voice_lang_other_hint_loaded(const char *text, const char *loaded,
  * part before the first '-' or '_', lower-cased. */
 void voice_lang_iso(const char *id, char *out, size_t cap);
 
-/* A prompt asking for the variant's spelling, or NULL ("en-GB" only). */
+/* Text for a transcription `prompt` part, or NULL ("en-GB" only). Sample text in
+ * the variant's spelling, not an instruction: Whisper-family models treat the
+ * prompt as preceding transcript and can echo an instruction. */
 const char *voice_lang_spelling_hint(const char *id);
+/* The same wish as an instruction, for an LLM (the Gemini request), or NULL. */
+const char *voice_lang_spelling_instruction(const char *id);
 
 /* The dropdown index for a stored id: its table index, or the table size (the
  * "Other..." item, which Settings fills with the stored value) when unlisted.

@@ -98,6 +98,26 @@ static void fill_noise(int16_t *s, size_t n, int amp)
     }
 }
 
+/* A quiet working mic: +-1 samples are real audio that rounds to 0 after a
+ * -12 dB gain, which must not read as a dead (all-zero, privacy-switch) device. */
+int test_pcm_classify_raw(void)
+{
+    TEST_BEGIN();
+    static int16_t z[1600];
+    memset(z, 0, sizeof z);
+    ASSERT_EQ(pcm_classify_raw(z, 1600, 0), PCM_ALL_ZERO);
+    ASSERT_EQ(pcm_classify_raw(z, 1600, 1), PCM_SILENT);
+    ASSERT_EQ(pcm_any_nonzero(z, 1600), 0);
+    z[7] = -1;
+    ASSERT_EQ(pcm_any_nonzero(z, 1600), 1);
+    ASSERT_EQ(pcm_any_nonzero(NULL, 0), 0);
+    ASSERT_EQ(pcm_classify_raw(z, 0, 1), PCM_EMPTY);
+    ASSERT_EQ(pcm_classify_raw(NULL, 0, 1), PCM_EMPTY);
+    /* what is not all zero is never changed by the flag */
+    ASSERT_EQ(pcm_classify_raw(z, 1600, 1), PCM_SILENT);
+    TEST_END();
+}
+
 int test_pcm_classify(void)
 {
     TEST_BEGIN();

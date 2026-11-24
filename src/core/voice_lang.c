@@ -191,7 +191,14 @@ void voice_lang_iso(const char *id, char *out, size_t cap)
 const char *voice_lang_spelling_hint(const char *id)
 {
     if (id && strcmp(id, "en-GB") == 0)
-        return "Use British English spelling, for example colour, organise, centre and travelled.";
+        return "Colour, organise, centre, travelled, favourite.";
+    return NULL;
+}
+
+const char *voice_lang_spelling_instruction(const char *id)
+{
+    if (id && strcmp(id, "en-GB") == 0)
+        return "Use British English spelling, for example colour, organise and centre.";
     return NULL;
 }
 

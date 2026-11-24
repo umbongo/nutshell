@@ -385,10 +385,13 @@ providers as presets **(call)**:
 goes out as the ISO code. OpenAI-format endpoints get `language`; a
 `gpt-transcribe` model gets one `languages[]` part instead (OpenAI documents
 `languages` as an array for that model only). Nothing is sent for Auto-detect.
-English (UK) also sends a `prompt` asking for British spelling ("Use British
-English spelling, for example colour, organise, centre and travelled.") to
-OpenAI, Groq and custom servers, and appends it to the Gemini instruction
-(which also names the language in words: "The language is English."). Mistral
+English (UK) also sends a `prompt` of sample British text ("Colour, organise,
+centre, travelled, favourite.") to OpenAI, Groq and custom servers. It is
+sample text, not an instruction, because Whisper-family models read `prompt` as
+the preceding transcript and can echo an instruction **(final review,
+2026-11-24)**. The Gemini request, an LLM, instead gets an instruction appended
+("Use British English spelling, for example colour, organise and centre.") and
+names the language in words ("The language is English."). Mistral
 gets no prompt: its `context_bias` is vocabulary biasing, not a spelling
 switch.
 
@@ -487,8 +490,9 @@ The page then has two titled sections.
 - **The meter** shows dBFS of the gained signal (`src/core/voice_level.c`):
   fast attack, 20 dB/s release, a peak-hold tick held 1 s, floor -60 dBFS. A
   label classifies the peak of the last 1 s: below -45 "Speak to see the
-  level", -45 to -18 "Too quiet", -18 to -6 "Good", -6 to -3 "Good" (hot,
-  drawn amber), -3 and above "Too loud". The -45 figure is the silence gate's
+  level", -45 to -18 "Too quiet — raise the gain", -18 to -6 "Good", -6 to -3
+  "Good" (hot, drawn amber), -3 and above "Too loud — lower the gain" (the exact
+  texts of `voice_level.c`, with an em dash). The -45 figure is the silence gate's
   speech threshold (RMS 250, about -42 dBFS) with margin: a peak below -45
   cannot pass the gate, so nobody is speaking **(maintainer, 2026-11-24)**.
 - **Language** **(maintainer, 2026-11-24)**: a drop-down of the table in 4.1
