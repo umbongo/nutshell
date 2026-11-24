@@ -91,6 +91,10 @@ int test_vvoices_none(void)
 int test_vvoices_dedupe_desktop_wins(void)
 {
     TEST_BEGIN();
+    char lc[64];
+    VoiceInfo lo = mk("Microsoft Hazel DESKTOP", "809", 1, 0);
+    voice_display_name(&lo, lc, sizeof lc);
+    ASSERT_STR_EQ(lc, "Microsoft Hazel");
     VoiceInfo v[] = {
         mk("Microsoft Hazel", "809;9", 1, 1),          /* OneCore twin comes first */
         mk("Microsoft Zira Desktop", "409;9", 1, 0),

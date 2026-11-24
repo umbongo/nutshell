@@ -177,3 +177,11 @@ int test_vclass_empty(void)
     ASSERT_EQ(voice_turn_classify("hello there", NULL, 0), VTC_TEXT);
     TEST_END();
 }
+
+int test_vecho_curly_apostrophe_nbsp_emdash(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(voice_echo_match("Well I don\xE2\x80\x99" "t think the disk is full.", "i don't think the disk is full"), 1);
+    ASSERT_EQ(voice_echo_match("the disk\xC2\xA0" "is\xE2\x80\x94" "full and healthy now", "the disk is full and healthy now"), 1);
+    TEST_END();
+}

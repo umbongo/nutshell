@@ -58,7 +58,6 @@ int test_vspeak_thinking_and_exec_removed(void)
     TEST_BEGIN();
     ASSERT_TRUE(speak_eq("<think>hmm\nsecret</think>Hello there.", "Hello there."));
     ASSERT_TRUE(speak_eq("Running [EXEC]ls -l[/EXEC] now.", "Running now."));
-    ASSERT_TRUE(speak_eq("Unclosed <think> stays", "Unclosed <think> stays"));
     TEST_END();
 }
 
@@ -209,5 +208,71 @@ int test_vspeak_long_reply(void)
     }
     ASSERT_TRUE(covered <= tl);
     free(st); free(ln); free(t); free(md);
+    TEST_END();
+}
+
+int test_vspeak_indented_fence(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("Run:\n  ```bash\n  ls\n    deeper\n  ```\nDone.",
+                         "Run: The code is on screen. Done."));
+    TEST_END();
+}
+
+int test_vspeak_tilde_fence(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("A.\n~~~\nrm -rf x\n```\n~~~\nB.", "A. The code is on screen. B."));
+    /* a shorter or different-char fence does not close */
+    ASSERT_TRUE(speak_eq("````\nx\n```\ny\n````\nok.", "The code is on screen. ok."));
+    TEST_END();
+}
+
+int test_vspeak_unclosed_fence(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("Look:\n```sh\nls\nmore\n\nstill code", "Look: The code is on screen."));
+    TEST_END();
+}
+
+int test_vspeak_pipeless_table(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("Data:\na | b\n--|--\n1 | 2\n3 | 4\nEnd.", "Data: The table is on screen. End."));
+    ASSERT_TRUE(speak_eq("a | b\n---\n1 | 2\n", "The table is on screen."));
+    /* a rule under plain prose is not a table */
+    ASSERT_TRUE(speak_eq("Just text\n---\nmore", "Just text more"));
+    TEST_END();
+}
+
+int test_vspeak_fence_in_quote(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("> ```\n> ls\n> ```\nAfter.", "The code is on screen. After."));
+    ASSERT_TRUE(speak_eq("> | a | b |\n> |---|---|\n> | 1 | 2 |\nEnd.", "The table is on screen. End."));
+    TEST_END();
+}
+
+int test_vspeak_unterminated_think(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("Hello. <think>secret plan", "Hello."));
+    TEST_END();
+}
+
+int test_vspeak_unterminated_exec(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("Running. [EXEC]rm -rf /", "Running."));
+    TEST_END();
+}
+
+int test_vspeak_minor_links_and_questions(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("See [x](https://en.wikipedia.org/wiki/X_(y)) now.", "See x now."));
+    ASSERT_TRUE(speak_eq("Visit www.example.com today.", "Visit today."));
+    ASSERT_EQ(voice_speak_ends_with_question("Really?\xE2\x80\x9D"), 1);
+    ASSERT_EQ(voice_speak_ends_with_question("Really?\xE2\x80\x99" " "), 1);
     TEST_END();
 }

@@ -23,17 +23,44 @@ static void words_free(Words *w)
     memset(w, 0, sizeof *w);
 }
 
+/* Copy of s with U+2019, U+00A0 and U+2014 turned into spaces, so a curly
+ * apostrophe, a non-breaking space and an em dash separate words like their
+ * ASCII forms. NULL on out of memory. */
+static char *normalise(const char *s)
+{
+    size_t n = strlen(s), o = 0;
+    char *r = (char *)malloc(n + 1);
+    if (!r) return NULL;
+    for (size_t i = 0; i < n;) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == 0xE2 && i + 2 < n && (unsigned char)s[i + 1] == 0x80
+            && ((unsigned char)s[i + 2] == 0x99 || (unsigned char)s[i + 2] == 0x94)) {
+            r[o++] = ' '; i += 3;
+        } else if (c == 0xC2 && i + 1 < n && (unsigned char)s[i + 1] == 0xA0) {
+            r[o++] = ' '; i += 2;
+        } else {
+            r[o++] = s[i++];
+        }
+    }
+    r[o] = '\0';
+    return r;
+}
+
 /* 0 on out of memory. */
-static int words_split(const char *s, Words *w)
+static int words_split(const char *orig, Words *w)
 {
     memset(w, 0, sizeof *w);
+    char *norm = normalise(orig);
+    if (!norm) return 0;
+    const char *s = norm;
+    int ok = 0;
     size_t n = strlen(s), cnt = 0;
     for (size_t i = 0; i < n; i++)
         if (word_byte((unsigned char)s[i]) && (i == 0 || !word_byte((unsigned char)s[i - 1]))) cnt++;
     w->text = (char *)malloc(n + 1);
     w->off = (size_t *)malloc((cnt + 1) * sizeof(size_t));
     w->len = (size_t *)malloc((cnt + 1) * sizeof(size_t));
-    if (!w->text || !w->off || !w->len) { words_free(w); return 0; }
+    if (!w->text || !w->off || !w->len) { words_free(w); free(norm); return 0; }
     size_t o = 0;
     for (size_t i = 0; i < n;) {
         if (!word_byte((unsigned char)s[i])) { i++; continue; }
@@ -48,7 +75,9 @@ static int words_split(const char *s, Words *w)
         w->n++;
     }
     w->text[o] = '\0';
-    return 1;
+    ok = 1;
+    free(norm);
+    return ok;
 }
 
 static int word_eq(const Words *a, size_t i, const Words *b, size_t j)

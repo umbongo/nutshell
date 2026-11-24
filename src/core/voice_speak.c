@@ -44,28 +44,27 @@ static int is_alnum(char c)
 }
 
 /* Remove <think>...</think> and [EXEC]...[/EXEC] spans. An unterminated opener
- * is left alone. Linear: a closer that is not found is never searched for
- * again. */
+ * drops everything to the end of the text (so the closer search runs at most
+ * once without a hit: linear). */
 static char *strip_spans(const char *s, size_t n)
 {
     char *out = (char *)malloc(n + 1);
     if (!out) return NULL;
     size_t o = 0, i = 0;
-    int think_ok = 1, exec_ok = 1;
     while (i < n) {
-        if (think_ok && s[i] == '<' && n - i >= 7 && memcmp(s + i, "<think>", 7) == 0) {
+        if (s[i] == '<' && n - i >= 7 && memcmp(s + i, "<think>", 7) == 0) {
             const char *e = NULL;
             for (size_t j = i + 7; j + 8 <= n; j++)
                 if (s[j] == '<' && memcmp(s + j, "</think>", 8) == 0) { e = s + j; break; }
             if (e) { i = (size_t)(e - s) + 8; out[o++] = ' '; continue; }
-            think_ok = 0;
+            break; /* unterminated: reasoning must never be read aloud */
         }
-        if (exec_ok && s[i] == '[' && n - i >= 6 && memcmp(s + i, "[EXEC]", 6) == 0) {
+        if (s[i] == '[' && n - i >= 6 && memcmp(s + i, "[EXEC]", 6) == 0) {
             const char *e = NULL;
             for (size_t j = i + 6; j + 7 <= n; j++)
                 if (s[j] == '[' && memcmp(s + j, "[/EXEC]", 7) == 0) { e = s + j; break; }
             if (e) { i = (size_t)(e - s) + 7; out[o++] = ' '; continue; }
-            exec_ok = 0;
+            break; /* unterminated: a command must never be read aloud */
         }
         out[o++] = s[i++];
     }
@@ -80,6 +79,20 @@ static long find_bounded(const char *s, size_t from, size_t n, char c, size_t li
     for (size_t i = from; i < end; i++) {
         if (s[i] == '\n') return -1;
         if (s[i] == c) return (long)i;
+    }
+    return -1;
+}
+
+/* Index of the ')' closing a '(' already consumed, counting nested pairs;
+ * -1 when not within lim bytes on this line. */
+static long find_close_paren(const char *s, size_t from, size_t n, size_t lim)
+{
+    size_t end = from + lim < n ? from + lim : n;
+    int depth = 1;
+    for (size_t i = from; i < end; i++) {
+        if (s[i] == '\n') return -1;
+        if (s[i] == '(') depth++;
+        else if (s[i] == ')' && --depth == 0) return (long)i;
     }
     return -1;
 }
@@ -101,7 +114,7 @@ static void inline_text(Buf *b, const char *s, size_t n)
         if (c == '[') {
             long close = find_bounded(s, i + 1, n, ']', 1000);
             if (close >= 0 && (size_t)close + 1 < n && s[close + 1] == '(') {
-                long pc = find_bounded(s, (size_t)close + 2, n, ')', 2000);
+                long pc = find_close_paren(s, (size_t)close + 2, n, 2000);
                 if (pc >= 0) {
                     inline_text(b, s + i + 1, (size_t)close - i - 1);
                     i = (size_t)pc + 1;
@@ -109,10 +122,11 @@ static void inline_text(Buf *b, const char *s, size_t n)
                 }
             }
         }
-        if ((c == 'h' || c == 'H') && (i == 0 || !is_alnum(s[i - 1]))) {
+        if ((c == 'h' || c == 'H' || c == 'w') && (i == 0 || !is_alnum(s[i - 1]))) {
             size_t k = 0;
             if (n - i >= 7 && strncmp(s + i, "http://", 7) == 0) k = 7;
             else if (n - i >= 8 && strncmp(s + i, "https://", 8) == 0) k = 8;
+            else if (n - i >= 4 && strncmp(s + i, "www.", 4) == 0) k = 4;
             if (k) {
                 i += k;
                 while (i < n && !is_ws(s[i])) i++;
@@ -156,6 +170,57 @@ static void put_item(Buf *b, const char *s, size_t n)
     buf_ch(b, ' ');
 }
 
+/* Strip leading blockquote marks ('>' and one optional space, up to 3 spaces
+ * of indent before each) from raw[0..len); returns the offset of the rest. */
+static size_t quote_off(const char *raw, size_t len)
+{
+    size_t o = 0;
+    for (;;) {
+        size_t k = o;
+        while (k < len && k - o < 3 && raw[k] == ' ') k++;
+        if (k < len && raw[k] == '>') {
+            k++;
+            if (k < len && raw[k] == ' ') k++;
+            o = k;
+        } else {
+            return o;
+        }
+    }
+}
+
+static int has_pipe(const char *s, size_t n)
+{
+    return n > 0 && memchr(s, '|', n) != NULL;
+}
+
+/* A table separator row: only '-', ':', '|' and blanks, with a '-', and a
+ * pipe either in it or in the row above. */
+static int is_sep_row(const char *s, size_t n, int above_has_pipe)
+{
+    int dash = 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (c == '-') dash = 1;
+        else if (c != ':' && c != '|' && c != ' ' && c != '\t') return 0;
+    }
+    return dash && (has_pipe(s, n) || above_has_pipe);
+}
+
+/* Fence run at the start of s (up to 3 spaces of indent): returns the run
+ * length (>= 3) and sets *ch, else 0. */
+static size_t fence_run(const char *s, size_t n, char *ch)
+{
+    size_t i = 0;
+    while (i < n && i < 3 && s[i] == ' ') i++;
+    if (i >= n || (s[i] != '`' && s[i] != '~')) return 0;
+    char c = s[i];
+    size_t k = i;
+    while (k < n && s[k] == c) k++;
+    if (k - i < 3) return 0;
+    *ch = c;
+    return k - i;
+}
+
 char *voice_speak_text(const char *markdown)
 {
     if (!markdown) markdown = "";
@@ -166,45 +231,85 @@ char *voice_speak_text(const char *markdown)
     Buf out = {0};
     char  *line = NULL;
     size_t linecap = 0;
-    int in_fence = 0, in_table = 0, in_icode = 0, prev_blank = 1;
+    int in_table = 0, table_rows = 0, in_icode = 0, prev_blank = 1;
+    int in_fence = 0;
+    char fch = 0;
+    size_t flen = 0;
     size_t pos = 0;
     while (pos < n) {
         size_t e = pos;
         while (e < n && src[e] != '\n') e++;
         size_t ll = e - pos;
         if (ll > 0 && src[pos + ll - 1] == '\r') ll--;
-        if (ll + 1 > linecap) {
+        size_t qo = quote_off(src + pos, ll);
+        const char *q = src + pos + qo;
+        size_t ql = ll - qo;
+        /* the next line, for table detection */
+        size_t np = e < n ? e + 1 : n, ne = np;
+        while (ne < n && src[ne] != '\n') ne++;
+        size_t nl_len = ne - np;
+        if (nl_len > 0 && src[np + nl_len - 1] == '\r') nl_len--;
+        size_t nqo = quote_off(src + np, nl_len);
+        const char *nq = src + np + nqo;
+        size_t nql = nl_len - nqo;
+
+        if (ql + 1 > linecap) {
             size_t nc = linecap ? linecap : 256;
-            while (nc < ll + 1) nc *= 2;
+            while (nc < ql + 1) nc *= 2;
             char *nl = (char *)realloc(line, nc);
             if (!nl) { free(src); free(line); free(out.p); return NULL; }
             line = nl;
             linecap = nc;
         }
-        memcpy(line, src + pos, ll);
-        line[ll] = '\0';
-        pos = e < n ? e + 1 : n;
+        memcpy(line, q, ql);
+        line[ql] = '\0';
+        pos = np;
 
-        size_t lead = 0;
-        while (lead < ll && (line[lead] == ' ' || line[lead] == '\t')) lead++;
-        int blank = (lead == ll);
-
-        MdLineInfo info = md_classify_line(line, in_fence);
-        if (info.type == MD_LINE_CODE_FENCE) {
-            if (!in_fence) { buf_put(&out, CODE_PHRASE " ", sizeof(CODE_PHRASE)); in_fence = 1; }
-            else in_fence = 0;
+        /* fences: ``` or ~~~, closed by the same char, at least as long */
+        char rc = 0;
+        size_t run = fence_run(line, ql, &rc);
+        if (in_fence) {
+            if (run >= flen && rc == fch) {
+                size_t k = 0;
+                while (k < ql && line[k] == ' ') k++;
+                k += run;
+                while (k < ql && (line[k] == ' ' || line[k] == '\t')) k++;
+                if (k == ql) in_fence = 0;
+            }
+            continue;
+        }
+        if (run) {
+            buf_put(&out, CODE_PHRASE " ", sizeof(CODE_PHRASE));
+            in_fence = 1; fch = rc; flen = run;
             in_table = in_icode = 0;
             prev_blank = 0;
             continue;
         }
-        if (in_fence) continue;
 
-        if (info.type == MD_LINE_TABLE) {
-            if (!in_table) buf_put(&out, TABLE_PHRASE " ", sizeof(TABLE_PHRASE));
-            in_table = 1; in_icode = 0; prev_blank = 0;
-            continue;
+        size_t lead = 0;
+        while (lead < ql && (line[lead] == ' ' || line[lead] == '\t')) lead++;
+        int blank = (lead == ql);
+        int pipe_here = has_pipe(line, ql);
+
+        if (in_table) {
+            if (!blank && (pipe_here || (table_rows == 1 && is_sep_row(line, ql, 1)))) {
+                table_rows++;
+                prev_blank = 0;
+                continue;
+            }
+            in_table = 0;
         }
-        in_table = 0;
+        if (!blank) {
+            MdLineInfo info = md_classify_line(line, 0);
+            int starts = info.type == MD_LINE_TABLE
+                || (nql > 0 && !is_sep_row(line, ql, 0) && is_sep_row(nq, nql, pipe_here)
+                    && (pipe_here || has_pipe(nq, nql)));
+            if (starts) {
+                buf_put(&out, TABLE_PHRASE " ", sizeof(TABLE_PHRASE));
+                in_table = 1; table_rows = 1; in_icode = 0; prev_blank = 0;
+                continue;
+            }
+        }
 
         if (!blank && lead >= 1 && (line[0] == '\t' || strncmp(line, "    ", 4) == 0)
             && (prev_blank || in_icode)) {
@@ -226,24 +331,13 @@ char *voice_speak_text(const char *markdown)
         case MD_LINE_HEADING:
         case MD_LINE_ULIST:
         case MD_LINE_OLIST:
-            put_item(&out, t + ti.content_offset, ll - lead - (size_t)ti.content_offset);
+            put_item(&out, t + ti.content_offset, ql - lead - (size_t)ti.content_offset);
             break;
         case MD_LINE_HRULE:
             buf_ch(&out, ' ');
             break;
-        case MD_LINE_BLOCKQUOTE: {
-            const char *q = t;
-            size_t ql = ll - lead;
-            while (ql > 0 && *q == '>') {
-                q++; ql--;
-                while (ql > 0 && *q == ' ') { q++; ql--; }
-            }
-            inline_text(&out, q, ql);
-            buf_ch(&out, ' ');
-            break;
-        }
         default:
-            inline_text(&out, t, ll - lead);
+            inline_text(&out, t, ql - lead);
             buf_ch(&out, ' ');
             break;
         }
@@ -336,7 +430,15 @@ int voice_speak_ends_with_question(const char *text)
 {
     if (!text) return 0;
     size_t n = strlen(text);
-    while (n > 0 && (is_ws(text[n - 1]) || text[n - 1] == '"' || text[n - 1] == '\''
-                     || text[n - 1] == ')')) n--;
+    for (;;) {
+        if (n > 0 && (is_ws(text[n - 1]) || text[n - 1] == '"' || text[n - 1] == '\''
+                      || text[n - 1] == ')')) { n--; continue; }
+        if (n >= 3 && (unsigned char)text[n - 3] == 0xE2 && (unsigned char)text[n - 2] == 0x80
+            && ((unsigned char)text[n - 1] == 0x9D || (unsigned char)text[n - 1] == 0x99)) {
+            n -= 3;
+            continue;
+        }
+        break;
+    }
     return n > 0 && text[n - 1] == '?';
 }

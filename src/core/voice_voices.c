@@ -79,7 +79,12 @@ void voice_display_name(const VoiceInfo *v, char *out, size_t cap)
     out[0] = '\0';
     if (!v) return;
     const char *n = v->name;
-    const char *d = strstr(n, " Desktop");
+    const char *d = NULL;
+    for (const char *h = n; *h && !d; h++) {
+        size_t k = 0;
+        while (k < 8 && h[k] && lower(h[k]) == lower(" Desktop"[k])) k++;
+        if (k == 8) d = h;
+    }
     size_t o = 0;
     for (size_t i = 0; n[i] && o + 1 < cap; i++) {
         if (d && n + i == d) { i += strlen(" Desktop") - 1; continue; }
