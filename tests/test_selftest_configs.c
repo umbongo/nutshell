@@ -67,16 +67,22 @@ int test_selftest_configs_complete(void)
         ASSERT_TRUE(strstr(t, "\"voice_defaults_rev\": 3") != NULL);
         free(t);
     }
-    char *ps = slurp("tests/integration/NutshellIT.psm1");
+    char *ps_all = slurp("tests/integration/NutshellIT.psm1");
+    ASSERT_NOT_NULL(ps_all);
+    /* only New-NutshellTestEnv counts: the same word elsewhere in the module
+     * must not satisfy the check */
+    char *ps = ps_all ? strstr(ps_all, "function New-NutshellTestEnv") : NULL;
     ASSERT_NOT_NULL(ps);
     if (ps) {
+        char *next = strstr(ps + 8, "\nfunction ");
+        if (next) *next = '\0';
         for (size_t i = 0; i < n; i++) {
             int has = has_ps_key(ps, keys[i].key);
             if (!has) printf("  NutshellIT.psm1 lacks %s\n", keys[i].key);
             ASSERT_TRUE(has);
         }
         ASSERT_TRUE(has_ps_key(ps, "voice_defaults_rev"));
-        free(ps);
     }
+    free(ps_all);
     TEST_END();
 }

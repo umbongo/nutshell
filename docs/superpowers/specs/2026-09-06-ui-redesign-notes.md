@@ -582,9 +582,11 @@ Open, in priority order:
       the box for you to review." (af) The same with a typed draft in the box: the words are
       appended after one space, nothing is sent. (ag) With the box ticked: an empty box sends
       as before (approvals unchanged), a draft is appended and not sent, and the cue says "to
-      send". (ah) The maintainer's 1.2.93 config (with `voice_review`) opens with one upgrade
-      notice line, "Voice: send automatically: off, so your words wait in the box for you to
-      review", and the next save drops `voice_review`. (ai) The tick box label fits on the
+      send". (ah) The maintainer's 1.2.93 config (with `voice_review`) opens at 1.2.94 with an
+      upgrade notice listing "Voice: send automatically: off, so your words wait in the box
+      for you to review", "Voice: microphone gain: 0 dB", and, if its language was empty,
+      "Voice: language: English (UK) (choose Auto-detect in Settings > Voice if you speak
+      another language)"; the next save drops `voice_review`. (ai) The tick box label fits on the
       Voice page at 100 %, 125 % and 200 %.
       Voice improvements (feat/voice-improvements) adds: (aj) the Microphone gain slider and
       meter with the real mic (HD Pro Webcam C920): the Good zone is reachable by gain alone,
@@ -604,11 +606,12 @@ Open, in priority order:
       not-recognised hint shows and the old language is kept. (ar) The Voice page at 125 %
       and 200 %: every row reachable by scrolling, nothing overlapping. (as) The harness
       `ui_gallery` case (30-ui-demo.ps1, with the new header-status state) has not been run.
-      Follow-ups (final review, 2026-11-24): (M3) after a device-change restart of Test, a
-      stale VAE_DEVICE_LOST or level from the old capture can stop or blip the new one; fix:
-      a capture generation in VaCmd echoed in VAM_LEVEL and VAM_ERROR. (M5) a 1.2.93 exe
-      reading a 1.2.94 config sends en-GB raw as `language`, which OpenAI-format providers
-      reject; an accepted older-exe case.
+- [ ] Voice follow-up (final review, 2026-11-24, M3): after a device-change restart of
+      Test, a stale VAE_DEVICE_LOST or level from the old capture can stop or blip the new
+      one; fix: a capture generation in VaCmd echoed in VAM_LEVEL and VAM_ERROR.
+- [ ] Voice follow-up (final review, 2026-11-24, M5): a 1.2.93 exe reading a 1.2.94 config
+      sends en-GB raw as `language`, which OpenAI-format providers reject; an accepted
+      older-exe case, noted so it is not rediscovered.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
