@@ -612,6 +612,19 @@ Open, in priority order:
 - [ ] Voice follow-up (final review, 2026-11-24, M5): a 1.2.93 exe reading a 1.2.94 config
       sends en-GB raw as `language`, which OpenAI-format providers reject; an accepted
       older-exe case, noted so it is not rediscovered.
+- [ ] Voice, maintainer's test of 1.2.94 (2026-11-24, *reported*, not itemised): review by
+      default works (the words wait in the box, but only once the mic is switched off, as
+      designed: transcription runs on the whole recording, and live transcription is a
+      non-goal of the spec); the gain slider and meter look good (aj); the header status
+      works (am); the Language dropdown looks good. The rest of the voice checks above stay
+      open.
+- [ ] Review the AI panel's header status (feat/voice-improvements, v1.2.94) at a later date:
+      it works, but the maintainer does not like it (2026-11-24). Design to be revisited; no
+      direction given yet.
+- [ ] Settings > Voice: the Push-to-talk key dropdown needs an "Other..." choice in the same
+      style as the Language dropdown (maintainer, 2026-11-24): pick Other..., a box with a cue
+      for the expected format, a hover tooltip saying how to use it, and a not-recognised hint
+      that keeps the old key.
 - [ ] Windows hand check: Extended thinking mode (25 lines) streams, follows the tail,
       cycles collapsed→compact→extended→open, and Settings 'Always extended' persists
       (PR #101; also: a reply completing under Automatic while scrolled up keeps the text
