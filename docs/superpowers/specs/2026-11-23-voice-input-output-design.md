@@ -11,6 +11,8 @@ raised one question for the maintainer: whether opening the microphone at
 key-down is acceptable. The answer is the Mic start delay, default 150 ms
 (§4.1). It corrected one claim about `pump_dispatch` (§3).
 
+**Superseded in part (2026-11-24)**: live dictation and conversation mode are designed in `2026-11-24-voice-live-conversation-design.md`, which replaces this spec's live-transcription, continuous-listening and open-microphone non-goals for those two modes only (its §2).
+
 ## 1. Intent
 
 The maintainer wants to speak to the AI assistant instead of typing, for
@@ -580,6 +582,11 @@ after the AI assistant switch pull request and its notice-dialog follow-up
 
 Later, outside this design: offline engines (whisper.cpp for STT, SAPI for
 TTS) as provider entries; ElevenLabs and Deepgram adapters.
+
+Status 2026-11-24: item 1 is on `main` (v1.2.94); item 2 was not built.
+Spoken replies are now designed for conversation mode, with SAPI and AI
+speech, in `2026-11-24-voice-live-conversation-design.md` (§8, delivery §15);
+the speaker toggle for dictation stays a later item there.
 
 ## 10. Testing
 

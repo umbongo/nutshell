@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <stddef.h>
 #include "../config/config.h"
+#include "voice_stt.h"
 
 /*
  * voice_stt_win -- the speech-to-text upload worker. One thread per
@@ -15,9 +16,14 @@
 typedef struct {
     unsigned token;     /* the caller's id for this recording */
     int      ok;        /* 1: text holds the transcript; 0: err says why */
-    char     text[4096];
+    char    *text;      /* heap, NUL-terminated, text_cap bytes (>= VOICE_STT_TEXT_MIN) */
+    size_t   text_cap;
     char     err[300];
 } VoiceSttResult;
+
+/* Wipes the transcript and the record, then frees both. NULL is fine. The
+ * receiver of WM_VOICE_STT calls this. */
+void voice_stt_result_free(VoiceSttResult *r);
 
 /* Takes ownership of wav (wiped and freed by the worker, or here on a
  * failure). Resolves the target with voice_stt_resolve(s, ...) on the

@@ -428,6 +428,17 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "in.\nDefault: empty (the provider's default model).",
       "empty (the provider's default model)",
       0, 0, 0u),
+    E(SH_VOICE_STT_LIVE_MODEL, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Live model:",
+      NULL,
+      "Live model:\n\nThe model used while the words appear as you speak, "
+      "with OpenAI or Mistral. Shown only for those two providers. Left "
+      "empty, OpenAI uses gpt-live-transcribe and Mistral uses "
+      "voxtral-mini-transcribe-realtime-3. A typed name must match the "
+      "provider's model id exactly."
+      "\nDefault: the provider's default.",
+      "the provider's default",
+      0, 0, 0u),
     E(SH_VOICE_LANGUAGE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Language:",
       NULL,
@@ -493,8 +504,10 @@ static const SettingsHelp k_help[SH_COUNT] = {
       NULL,
       "Mode:\n\nToggle records from one clean press of the key to the "
       "next. Hold to talk records while you hold the key and stops when "
-      "you let go. A recording stops by itself after 60 seconds, and Escape "
-      "throws it away.\nDefault: Toggle.",
+      "you let go. A recording stops by itself after 10 minutes when the "
+      "words appear as you speak (OpenAI and Mistral), and after 60 seconds "
+      "otherwise. Escape throws it away, but only while the AI panel has the "
+      "keyboard focus.\nDefault: Toggle.",
       "Toggle",
       0, 0, 0u),
     E(SH_VOICE_MIC_DELAY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,

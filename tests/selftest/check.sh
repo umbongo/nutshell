@@ -8,12 +8,21 @@
 # Voice (needs the AI assistant): the "off" run has voice ticked in its config
 # and must still never have requested mmdevapi.dll; "voiceoff" (AI on, voice
 # off) neither; "on" (both on) must have requested mmdevapi.dll.
+# Every mode: the report has a `voice-net-opens: N` line and N is 0 (all three are
+# idle launches).
 mode=$1
 report=$2
 [ -s "$report" ] || { echo "FAIL ($mode): no report at $report"; exit 1; }
 req() { grep -qixF "requested: $1" "$report"; }
 mod() { grep -qiF "module: $1" "$report"; }
 rc=0
+# the voice opener's count is printed in every mode, and an idle launch (nothing
+# recorded or sent) has opened none
+if ! grep -qx 'voice-net-opens: [0-9][0-9]*' "$report"; then
+    echo "FAIL ($mode): no 'voice-net-opens: N' line"; rc=1
+elif ! grep -qx 'voice-net-opens: 0' "$report"; then
+    echo "FAIL ($mode): an idle launch opened a voice connection: $(grep '^voice-net-opens: ' "$report")"; rc=1
+fi
 case $mode in
 off)
     for d in winhttp.dll riched20.dll msftedit.dll mmdevapi.dll; do

@@ -44,6 +44,19 @@ int ai_http_post_ct(const char *url, const char * const *headers,
                     AiHttpResponse *resp, AiNetCancel *nc);
 
 /*
+ * ai_http_post_ct on a session the caller owns (a WinHTTP HINTERNET passed as
+ * void *, so this header stays free of windows.h): the call never opens or
+ * closes it, so one session serves a first try and its retry. The timeouts are
+ * resolve 10 s, connect 10 s and the given send and receive values (ms), set
+ * on the session with WinHttpSetTimeouts; do not share the session between
+ * concurrent calls. A NULL session fails with "No session". Off Windows it
+ * behaves as the stub of ai_http_post_ct.
+ */
+int ai_http_post_ct_ex(void *session, const char *url, const char * const *headers,
+                       const char *content_type, const char *body, size_t body_len,
+                       int send_ms, int recv_ms, AiHttpResponse *resp, AiNetCancel *nc);
+
+/*
  * Synchronous HTTP GET — designed to be called from a background thread.
  * url:         full endpoint URL
  * headers:     NULL-terminated array of raw header strings

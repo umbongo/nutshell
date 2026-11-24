@@ -2,6 +2,7 @@
  * user content. */
 #include "voice_stt.h"
 #include "base64.h"
+#include "json_scan.h"
 #include "json_validate.h"
 #include "secure_zero.h"
 #include "../config/json_parser.h"
@@ -391,15 +392,46 @@ static void trim_into(const char *s, char *out, size_t cap, int *fits)
     *fits = 1;
 }
 
+void voice_stt_upload_timeouts(size_t wav_len, int *send_ms, int *recv_ms)
+{
+    const unsigned long long cap = 600000ull;
+    unsigned long long snd = 30000ull + 1000ull * ((unsigned long long)wav_len / 65536ull);
+    unsigned long long secs = wav_len > 44 ? ((unsigned long long)wav_len - 44ull) / 32000ull : 0ull;
+    unsigned long long rcv = 60000ull + 1000ull * (secs / 10ull);
+    if (snd > cap) snd = cap;
+    if (rcv > cap) rcv = cap;
+    if (send_ms) *send_ms = (int)snd;
+    if (recv_ms) *recv_ms = (int)rcv;
+}
+
 int voice_stt_parse(SttShape shape, const char *body, size_t len,
                     char *out, size_t cap, char *err, size_t errcap)
 {
-    (void)len;
     if (out && cap) out[0] = '\0';
     if (!body || !out || cap == 0) { put_err(err, errcap, "Empty speech-to-text response"); return 0; }
     JsonNode *root = json_parse(body);
     if (!root || root->type != JSON_OBJECT) {
         json_free(root);
+        if (len > 8192) {
+            /* The JSON parser holds a string of at most 8,191 bytes (TOK_VALUE_MAX), so a
+             * long transcript cannot go through it: scan for the one string the reply is
+             * about, the top-level "text" or choices[0].message.content. */
+            static const char *const p_text[] = {"text", NULL};
+            static const char *const p_chat[] = {"choices", "[0]", "message", "content", NULL};
+            char *big = NULL;
+            size_t big_len = 0;
+            if (json_scan_path_string(body, len, shape == STT_SHAPE_GEMINI_CHAT ? p_chat : p_text,
+                                      len, &big, &big_len)) {
+                int fits = 0;
+                trim_into(big, out, cap, &fits);
+                secure_zero(big, big_len);
+                free(big);
+                if (fits) return 1;
+                out[0] = '\0';
+                put_err(err, errcap, "The transcript was too long");
+                return 0;
+            }
+        }
         put_err(err, errcap, "The speech-to-text response was not valid JSON");
         return 0;
     }

@@ -544,7 +544,7 @@ int test_shortcuts_voice_rows_need_both_switches(void)
             hold++;
         if (strcmp(out[i].chord, "Esc") == 0 &&
             strcmp(out[i].action, "Cancel a voice recording") == 0 &&
-            strcmp(out[i].condition, "While recording") == 0)
+            strcmp(out[i].condition, "While recording, AI panel focused") == 0)
             esc++;
     }
     ASSERT_EQ(hold, 1);

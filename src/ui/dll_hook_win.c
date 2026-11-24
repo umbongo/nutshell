@@ -8,6 +8,7 @@
  * defines that variable as BSS; ours is an initialised definition, which
  * the linker prefers over a BSS common one. `used` keeps it through
  * -flto and --gc-sections. */
+#include <winsock2.h>
 #include <windows.h>
 #include <delayimp.h>
 #include <tlhelp32.h>
@@ -15,6 +16,7 @@
 #include <string.h>
 #include "dll_hook_win.h"
 #include "dll_record.h"
+#include "voice_net_win.h"
 
 static FARPROC WINAPI ns_dli_hook(unsigned notify, PDelayLoadInfo info)
 {
@@ -55,6 +57,10 @@ int ns_self_report_write(const char *path)
 
     static char text[(DLL_RECORD_MAX + SELF_REPORT_MAX_MODULES) * 96];
     size_t len = dll_record_format(text, sizeof(text), mods, n);
+    /* The voice opener's count, after the DLL record: an idle launch shows 0. */
+    int extra = snprintf(text + len, sizeof(text) - len, "voice-net-opens: %ld\n",
+                         voice_net_open_count());
+    if (extra > 0 && (size_t)extra < sizeof(text) - len) len += (size_t)extra;
 
     wchar_t wpath[MAX_PATH];
     if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH) <= 0)

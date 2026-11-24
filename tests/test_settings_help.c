@@ -92,7 +92,7 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_AI_CONTEXT_LINES), N(SH_AI_SYSTEM_NOTES), N(SH_AI_MARKDOWN), N(SH_AI_THINKING_MODE),
     N(SH_AI_POLICY_ALLOWED), N(SH_AI_POLICY_AUTO), N(SH_AI_TOOL_TIMEOUT), N(SH_AI_TOOL_ROUNDS),
     N(SH_VOICE_ENABLE), N(SH_VOICE_STT_USE_AI), N(SH_VOICE_STT_PROVIDER), N(SH_VOICE_STT_KEY),
-    N(SH_VOICE_STT_URL), N(SH_VOICE_STT_MODEL), N(SH_VOICE_LANGUAGE), N(SH_VOICE_LANGUAGE_OTHER), N(SH_VOICE_DEVICE),
+    N(SH_VOICE_STT_URL), N(SH_VOICE_STT_MODEL), N(SH_VOICE_STT_LIVE_MODEL), N(SH_VOICE_LANGUAGE), N(SH_VOICE_LANGUAGE_OTHER), N(SH_VOICE_DEVICE),
     N(SH_VOICE_TEST), N(SH_VOICE_MIC_GAIN), N(SH_VOICE_PTT_KEY), N(SH_VOICE_PTT_MODE), N(SH_VOICE_MIC_DELAY),
     N(SH_VOICE_AUTO_SEND),
     N(SH_AI_WEB_FETCH), N(SH_AI_SEARCH), N(SH_AI_SEARCH_URL), N(SH_AI_MAX_RESULTS),
@@ -110,7 +110,7 @@ int test_settings_help_table_matches_enum(void) {
     const SettingsHelp *t = settings_help_table(&n);
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(n, (size_t)SH_COUNT);
-    ASSERT_EQ(SH_COUNT, 64);
+    ASSERT_EQ(SH_COUNT, 65);
     ASSERT_EQ(sizeof(k_names) / sizeof(k_names[0]), (size_t)SH_COUNT);
     ASSERT_NOT_NULL(settings_help_table(NULL));
     if (t != NULL && n == (size_t)SH_COUNT) {
@@ -239,6 +239,10 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     case SH_VOICE_STT_KEY:        str = s->stt_api_key; break;
     case SH_VOICE_STT_URL:        str = s->voice_stt_url; break;
     case SH_VOICE_STT_MODEL:      str = s->voice_stt_model; break;
+    case SH_VOICE_STT_LIVE_MODEL:
+        (void)snprintf(out, n, "%s", s->voice_stt_live_model[0] != '\0'
+                                     ? s->voice_stt_live_model : "the provider's default");
+        return 1;
     case SH_DBG_FOLDER:           str = s->debug_log_dir; break;
     default: break;
     }
@@ -666,7 +670,7 @@ int test_settings_help_voice_entries(void) {
         ASSERT_EQ(e->page, SETTINGS_PAGE_VOICE);
         ASSERT_EQ(e->kind, id == (int)SH_VOICE_TEST ? SH_KIND_ACTION : SH_KIND_SETTING);
     }
-    ASSERT_EQ((int)SH_VOICE_AUTO_SEND - (int)SH_VOICE_ENABLE + 1, 15);
+    ASSERT_EQ((int)SH_VOICE_AUTO_SEND - (int)SH_VOICE_ENABLE + 1, 16);
     /* between the AI Behaviour and the AI Web entries */
     ASSERT_EQ(settings_help_get((int)SH_VOICE_ENABLE - 1)->page, SETTINGS_PAGE_AI_BEHAVIOUR);
     ASSERT_EQ(settings_help_get((int)SH_VOICE_AUTO_SEND + 1)->page, SETTINGS_PAGE_AI_WEB);

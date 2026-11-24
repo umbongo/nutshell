@@ -90,6 +90,7 @@ typedef struct Settings {
     char voice_stt_provider[32];         /* "openai" (default), "groq", "mistral", "gemini", "custom" */
     char voice_stt_url[CFG_STR_MAX];     /* base URL, Custom only */
     char voice_stt_model[CFG_STR_MAX];   /* empty = the provider's default model */
+    char voice_stt_live_model[CFG_STR_MAX]; /* live (as-you-speak) model, OpenAI/Mistral; empty = the provider's default */
     char voice_stt_language[16];         /* empty = auto-detect */
     char stt_api_key[CFG_STR_MAX];       /* the speech-to-text key, DPAPI-protected like ai_api_key */
     char stt_api_key_enc_preserved[CFG_BLOB_MAX]; /* same contract as ai_api_key_enc_preserved */

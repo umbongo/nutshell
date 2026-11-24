@@ -742,10 +742,10 @@ Invoke-Case -Name "settings_help_tool_count" -Settings @{} -ExtraArgs @("-nc") -
     # before sending) = 3; 9 labelled rows (Provider, API key, Base URL, Model,
     # Language, Input device, Push-to-talk key, Mode, Mic start delay) each with
     # a label and a control = 18; the Test button = 1; the editable Model
-    # combo's edit gets a second tool = 1. 84 + 23 = 107. The new API key box
+    # combo's edit gets a second tool = 1. 84 + 23 = 107, plus 3 for the Live model row (label, combo, the combo edit's second tool; the dim note has no tip) = 110. The new API key box
     # keeps an eye tip of its own: one more tooltip window holding 1 tool, so
-    # the windows hold [1, 1, 107]. Not run here (no pwsh); check on Windows.
-    Assert-True ($seen -eq "1, 1, 107") "the Settings dialog's tooltip windows hold tools [$seen], expected [1, 1, 107]"
+    # the windows hold [1, 1, 110]. Not run here (no pwsh); check on Windows.
+    Assert-True ($seen -eq "1, 1, 110") "the Settings dialog's tooltip windows hold tools [$seen], expected [1, 1, 110]"
 
     # A second Edit > Settings while the dialog is open opens nothing more.
     [NutshellNative]::PostMessage($s.Main, $WM_COMMAND, [IntPtr]$IDM_EDIT_SETTINGS, [IntPtr]::Zero) | Out-Null
@@ -755,7 +755,7 @@ Invoke-Case -Name "settings_help_tool_count" -Settings @{} -ExtraArgs @("-nc") -
     Assert-True ([NutshellNative]::IsWindow($dlg)) "the first Settings window is gone after a second Edit > Settings"
 
     Close-NutshellDialog -Dialog $dlg -Button Cancel
-    "tooltip windows of the Settings dialog hold [$seen] tools (107 labelled controls incl. the Enable AI assistant box and the Voice page, 2 API key eyes of 1 each); a second Edit > Settings left one Settings window"
+    "tooltip windows of the Settings dialog hold [$seen] tools (110 labelled controls incl. the Enable AI assistant box and the Voice page, 2 API key eyes of 1 each); a second Edit > Settings left one Settings window"
 }
 
 # The sheet on all four themes, for the eye: --ui-demo=shortcuts opens it over

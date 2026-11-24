@@ -15,6 +15,7 @@
 #include "voice_gate.h"
 #include "ai_gate.h"
 #include "ai_http.h"
+#include "voice_net_win.h"
 
 static LRESULT CALLBACK vs_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -133,7 +134,7 @@ int test_voice_stt_cancel_unreachable(void)
         ASSERT_EQ(r->ok, 0);
         ASSERT_TRUE(r->err[0] != '\0');
         ASSERT_TRUE(r->text[0] == '\0');
-        free(r);
+        voice_stt_result_free(r);
     }
     ASSERT_TRUE(GetTickCount64() - t0 < 3500);
     voice_gate_set_enabled(0);
@@ -246,7 +247,7 @@ int test_voice_stt_cancel_closes_a_blocked_request(void)
         ASSERT_EQ((int)r->token, 9);
         ASSERT_EQ(r->ok, 0);
         if (!wine) ASSERT_STR_EQ(r->err, "Cancelled");
-        free(r);
+        voice_stt_result_free(r);
     }
     if (c != INVALID_SOCKET) closesocket(c);
     closesocket(ls);
@@ -288,7 +289,7 @@ int test_voice_stt_gate_off_before_send_sends_nothing(void)
     if (r) {
         ASSERT_EQ(r->ok, 0);
         ASSERT_TRUE(strstr(r->err, "turned off") != NULL);
-        free(r);
+        voice_stt_result_free(r);
     }
     SOCKET c = vs_accept(ls, 500);
     ASSERT_TRUE(c == INVALID_SOCKET);              /* no connection at all */
@@ -341,12 +342,14 @@ static int vs_serve_one(SOCKET ls, int status, const char *body, char *req, size
         if (want && have >= want) break;
         if (have >= cap) break;
     }
-    char resp[512];
-    int rl = snprintf(resp, sizeof(resp),
+    size_t rcap = strlen(body) + 256;
+    char *resp = (char *)malloc(rcap);
+    int rl = resp ? snprintf(resp, rcap,
                       "HTTP/1.1 %d X\r\nContent-Type: application/json\r\n"
                       "Content-Length: %d\r\nConnection: close\r\n\r\n%s",
-                      status, (int)strlen(body), body);
-    send(c, resp, rl, 0);
+                      status, (int)strlen(body), body) : 0;
+    if (rl > 0) send(c, resp, rl, 0);
+    free(resp);
     shutdown(c, SD_SEND);
     closesocket(c);
     return (int)have;
@@ -360,6 +363,8 @@ static int vs_has_lang_or_prompt(const char *r, size_t n)
 
 /* Runs one submit against a server that answers statuses[0..count); returns
  * the result (caller frees) and fills reqlen/lang flags per request. */
+static const char *vs_ok_body = "{\"text\":\"hello there\"}";   /* a test may swap it */
+
 static VoiceSttResult *vs_retry_run(const char *language, const int *statuses, int count,
                                     int *served, int *lang_seen, int *extra_conn)
 {
@@ -382,7 +387,7 @@ static VoiceSttResult *vs_retry_run(const char *language, const int *statuses, i
         *served = 0;
         for (int i = 0; i < count; i++) {
             int st = statuses[i];
-            int len = vs_serve_one(ls, st, st == 200 ? "{\"text\":\"hello there\"}"
+            int len = vs_serve_one(ls, st, st == 200 ? vs_ok_body
                                                      : "{\"error\":{\"message\":\"bad\"}}",
                                    req, sizeof(req));
             if (len < 0) break;
@@ -418,7 +423,7 @@ int test_voice_stt_retry_after_400_drops_language(void)
     if (r) {
         ASSERT_EQ(r->ok, 1);
         ASSERT_STR_EQ(r->text, "hello there");
-        free(r);
+        voice_stt_result_free(r);
     }
     TEST_END();
 }
@@ -437,7 +442,7 @@ int test_voice_stt_retry_twice_400_delivers_the_error(void)
         ASSERT_EQ(r->ok, 0);
         ASSERT_TRUE(r->err[0] != '\0');
         ASSERT_TRUE(strstr(r->err, "Cancelled") == NULL);
-        free(r);
+        voice_stt_result_free(r);
     }
     TEST_END();
 }
@@ -453,7 +458,7 @@ int test_voice_stt_no_retry_without_language_or_other_status(void)
     ASSERT_EQ(served, 1);
     ASSERT_EQ(lang[0], 0);
     ASSERT_EQ(extra, 0);
-    if (r) { ASSERT_EQ(r->ok, 0); free(r); }
+    if (r) { ASSERT_EQ(r->ok, 0); voice_stt_result_free(r); }
     /* a language was carried but the status is not 400: one request */
     const int s500[1] = { 500 };
     served = 0; extra = 0;
@@ -461,7 +466,56 @@ int test_voice_stt_no_retry_without_language_or_other_status(void)
     ASSERT_NOT_NULL(r);
     ASSERT_EQ(served, 1);
     ASSERT_EQ(extra, 0);
-    if (r) { ASSERT_EQ(r->ok, 0); free(r); }
+    if (r) { ASSERT_EQ(r->ok, 0); voice_stt_result_free(r); }
+    TEST_END();
+}
+
+/* One upload is one counted voice open; the 400 retry reuses the session (the
+ * first try and the retry share one open, so the count is 1 either way). */
+int test_voice_stt_counts_one_open_per_upload(void)
+{
+    TEST_BEGIN();
+    const int ok1[1] = { 200 };
+    int served = 0, lang[2] = { -1, -1 }, extra = 0;
+    voice_net_test_reset_count();
+    VoiceSttResult *r = vs_retry_run("", ok1, 1, &served, lang, &extra);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(served, 1);
+    ASSERT_EQ((int)voice_net_open_count(), 1);
+    if (r) { ASSERT_EQ(r->ok, 1); voice_stt_result_free(r); }
+    const int seq[2] = { 400, 200 };
+    voice_net_test_reset_count();
+    served = 0; extra = 0;
+    r = vs_retry_run("en-GB", seq, 2, &served, lang, &extra);
+    ASSERT_NOT_NULL(r);
+    ASSERT_EQ(served, 2);
+    ASSERT_EQ((int)voice_net_open_count(), 1);
+    if (r) { ASSERT_EQ(r->ok, 1); voice_stt_result_free(r); }
+    TEST_END();
+}
+
+/* A transcript past the old 4,096-byte limit arrives whole. */
+int test_voice_stt_long_transcript_delivered_whole(void)
+{
+    TEST_BEGIN();
+    enum { N = 5000 };
+    static char body[N + 64];
+    size_t k = (size_t)snprintf(body, sizeof(body), "{\"text\":\"");
+    for (int i = 0; i < N; i++) body[k++] = (char)('a' + i % 26);
+    snprintf(body + k, sizeof(body) - k, "\"}");
+    vs_ok_body = body;
+    const int ok1[1] = { 200 };
+    int served = 0, lang[2] = { -1, -1 }, extra = 0;
+    VoiceSttResult *r = vs_retry_run("", ok1, 1, &served, lang, &extra);
+    vs_ok_body = "{\"text\":\"hello there\"}";
+    ASSERT_NOT_NULL(r);
+    if (r) {
+        ASSERT_EQ(r->ok, 1);
+        ASSERT_TRUE(r->text_cap >= (size_t)VOICE_STT_TEXT_MIN);
+        ASSERT_EQ((int)strlen(r->text), N);
+        ASSERT_EQ(r->text[N - 1], (char)('a' + (N - 1) % 26));
+        voice_stt_result_free(r);
+    }
     TEST_END();
 }
 

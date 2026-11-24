@@ -171,47 +171,51 @@ void ai_chat_voice_status(HWND panel, const char *text, int is_error)
     SetTimer(panel, TIMER_VOICE_STATUS, VOICE_STATUS_MS, NULL);
 }
 
-void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send)
+static size_t box_end_pos(HWND edit);
+
+int ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send, int force_send)
 {
+    int sent = 0;
     AiChatData *d = panel_data(panel);
-    if (!d || !d->hInput || !transcript) return;
+    if (!d || !d->hInput || !transcript) return 0;
     char *cur = ai_chat_input_text_utf8(d->hInput);
-    if (!cur) return;
+    if (!cur) return 0;
     const size_t cur_len = strlen(cur);
     const size_t cap = cur_len + strlen(transcript) + 4;
     char *out = (char *)malloc(cap);
-    if (!out) { secure_zero(cur, cur_len); free(cur); return; }
+    if (!out) { secure_zero(cur, cur_len); free(cur); return 0; }
 
     VoiceDelivery dv = voice_deliver(cur, transcript, auto_send, out, cap);
+    /* VD_SEND is the auto-send rule; force_send is the controller's "send now"
+     * (the finish rule said so): words in the box, then the box goes. */
+    const int send = (dv == VD_SEND) || (force_send && dv != VD_NOTHING);
     const char *busy_note = NULL;
-    if (dv == VD_SEND && busy_of(d)) {
-        dv = VD_FILL;
-        busy_note = "Assistant is busy: your words are in the box";
-    }
+    if (send && busy_of(d)) busy_note = "Assistant is busy: your words are in the box";
     if (dv == VD_NOTHING) {
         ai_chat_voice_status(panel, "Didn't catch that", 0);
     } else if (dv == VD_APPEND) {
         wchar_t *w = utf8_to_wide(out + cur_len);
         if (w) {
-            int len = GetWindowTextLengthW(d->hInput);
-            SendMessageW(d->hInput, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+            const size_t end = box_end_pos(d->hInput);   /* the control's own units */
+            SendMessageW(d->hInput, EM_SETSEL, (WPARAM)end, (LPARAM)end);
             SendMessageW(d->hInput, EM_REPLACESEL, TRUE, (LPARAM)w);
             wipe_free_wide(w);
         }
-        SetFocus(d->hInput);
     } else {   /* VD_SEND or VD_FILL: the box was empty */
         wchar_t *w = utf8_to_wide(out);
         if (w) {
             SetWindowTextW(d->hInput, w);
             wipe_free_wide(w);
         }
-        if (dv == VD_SEND) {
+        (void)box_end_pos(d->hInput);   /* caret to the end */
+    }
+    if (dv != VD_NOTHING) {
+        if (send && !busy_note) {
             /* Exactly the suggestion chips' path. */
             ai_chat_send_user_message(d);
-        } else {
-            int len = GetWindowTextLengthW(d->hInput);
-            SendMessageW(d->hInput, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-            if (busy_note) ai_chat_voice_status(panel, busy_note, 0);
+            sent = 1;
+        } else if (busy_note) {
+            ai_chat_voice_status(panel, busy_note, 0);
         }
         SetFocus(d->hInput);
     }
@@ -219,6 +223,104 @@ void ai_chat_voice_deliver(HWND panel, const char *transcript, int auto_send)
     free(cur);
     secure_zero(out, cap);
     free(out);
+    return sent;
+}
+
+/* The end of the text in the control's own units: the caret goes to the end and
+ * EM_GETSEL reports it (never GetWindowTextLength, whose count can differ). */
+static size_t box_end_pos(HWND edit)
+{
+    DWORD s = 0, e = 0;
+    SendMessageW(edit, EM_SETSEL, (WPARAM)0x7FFFFFFF, (LPARAM)0x7FFFFFFF);
+    SendMessageW(edit, EM_GETSEL, (WPARAM)&s, (LPARAM)&e);
+    return (size_t)e;
+}
+
+size_t ai_chat_voice_live_begin(HWND panel, int *need_sep)
+{
+    if (need_sep) *need_sep = 0;
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hInput) return 0;
+    int len = GetWindowTextLengthW(d->hInput);
+    if (len <= 0) return 0;
+    if (need_sep) {
+        wchar_t *w = (wchar_t *)malloc(((size_t)len + 1) * sizeof(wchar_t));
+        if (w) {
+            int got = GetWindowTextW(d->hInput, w, len + 1);
+            if (got > 0) {
+                const wchar_t last = w[got - 1];
+                *need_sep = !(last == L' ' || last == L'\t' || last == L'\r' || last == L'\n');
+            }
+            secure_zero(w, ((size_t)len + 1) * sizeof(wchar_t));
+            free(w);
+        }
+    }
+    /* Measure by moving the caret to the end, then put the selection back: starting a
+     * recording must not visibly change the box (the first update moves the caret to the
+     * end, as the spec says). */
+    DWORD sel_s = 0, sel_e = 0;
+    SendMessageW(d->hInput, EM_GETSEL, (WPARAM)&sel_s, (LPARAM)&sel_e);
+    const size_t end = box_end_pos(d->hInput);
+    SendMessageW(d->hInput, EM_SETSEL, (WPARAM)sel_s, (LPARAM)sel_e);
+    return end;
+}
+
+size_t ai_chat_voice_box_chars(HWND panel)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hInput) return 0;
+    int len = GetWindowTextLengthW(d->hInput);
+    return len > 0 ? (size_t)len : 0;
+}
+
+int ai_chat_voice_box_has_text(HWND panel)
+{
+    int has = 0;
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hInput) return 0;
+    char *cur = ai_chat_input_text_utf8(d->hInput);
+    if (!cur) return 0;
+    const size_t n = strlen(cur);
+    for (size_t i = 0; i < n; i++) {
+        const char c = cur[i];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') { has = 1; break; }
+    }
+    secure_zero(cur, n);
+    free(cur);
+    return has;
+}
+
+size_t ai_chat_voice_live_replace(HWND panel, size_t from, const char *text_utf8)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hInput || !text_utf8) return 0;
+    wchar_t *w = utf8_to_wide(text_utf8);
+    if (!w) return box_end_pos(d->hInput);
+    SendMessageW(d->hInput, EM_SETSEL, (WPARAM)from, (LPARAM)-1);
+    SendMessageW(d->hInput, EM_REPLACESEL, FALSE, (LPARAM)w);   /* no undo entry */
+    wipe_free_wide(w);
+    /* The caret is at the end after the replace; keep the newest words in view. */
+    SendMessageW(d->hInput, EM_SCROLLCARET, 0, 0);
+    return box_end_pos(d->hInput);
+}
+
+void ai_chat_voice_lock_typing(HWND panel, int on)
+{
+    AiChatData *d = panel_data(panel);
+    if (d) d->voice_typing_locked = on ? 1 : 0;
+}
+
+int ai_chat_voice_send_box(HWND panel)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d) return 0;
+    if (busy_of(d)) {
+        ai_chat_voice_status(panel, "Assistant is busy: your words are in the box", 0);
+        return 0;
+    }
+    ai_chat_send_user_message(d);
+    if (d->hInput && IsWindowVisible(panel)) SetFocus(d->hInput);
+    return 1;
 }
 
 void ai_chat_voice_timer(AiChatData *d, UINT_PTR id)
@@ -249,8 +351,10 @@ void ai_chat_voice_on_destroy(AiChatData *d)
     if (!d) return;
     KillTimer(d->hwnd, TIMER_MOTION);
     KillTimer(d->hwnd, TIMER_VOICE_STATUS);
-    /* A recording the panel was bound to ends with it. */
-    if (d->voice_ui == AIV_RECORDING) voice_on_deactivate();
+    /* A recording the panel was bound to ends with it (live: the final text may
+     * still land, nothing is sent). */
+    d->voice_typing_locked = 0;
+    if (d->voice_ui != AIV_IDLE) voice_on_deactivate();
 }
 
 void ai_chat_voice_busy_changed(AiChatData *d)

@@ -225,8 +225,42 @@ void ai_chat_voice_status(HWND panel, const char *text_utf8, int is_error);
  * with the caret at the end and the focus in the box; nothing is sent. With
  * auto_send on, SEND goes the chips' way (SetWindowText +
  * ai_chat_send_user_message). Nothing heard says "Didn't catch that". A busy
- * panel turns SEND into FILL, with a status note. */
-void ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int auto_send);
+ * panel turns SEND into FILL, with a status note. force_send: after the words
+ * are in (FILL or APPEND too), send the box, the same busy rule applying. */
+/* Returns 1 when the box was sent. */
+int  ai_chat_voice_deliver(HWND panel, const char *transcript_utf8, int auto_send, int force_send);
+
+/* ---- Live dictation: the controller writes the words into the box as they arrive ---- */
+
+/* The box's end position in the control's OWN units (what EM_SETSEL/EM_GETSEL count:
+ * the box is an ANSI EDIT, so these are not UTF-16 units) and whether a space must
+ * separate a new word from the draft: *need_sep (may be NULL) is 1 when the box is
+ * non-empty and does not end in whitespace. 0 and *need_sep 0 for a missing panel.
+ * The selection and caret are left as they were (saved and restored around the
+ * measurement): nothing visibly changes until the first update writes. */
+size_t ai_chat_voice_live_begin(HWND panel, int *need_sep);
+
+/* The box's length in the control's own units, without touching the caret or the
+ * selection: 0 means empty. A batch recording reads only this. */
+size_t ai_chat_voice_box_chars(HWND panel);
+
+/* 1 when the box holds anything but whitespace (what a Send would send). */
+int  ai_chat_voice_box_has_text(HWND panel);
+
+/* Replace [from, end) of the box (control units, from ai_chat_voice_live_begin or a
+ * previous replace) with the UTF-8 text: EM_SETSEL(from, -1) then EM_REPLACESEL(FALSE)
+ * (no undo entry), the caret ends at the end. Returns the box's new end in control
+ * units. Characters outside the ANSI code page become '?' in this box, as typing does.
+ * Not blocked by the typing lock. */
+size_t ai_chat_voice_live_replace(HWND panel, size_t from, const char *text_utf8);
+
+/* While on, the input swallows typing, paste, cut, clear and undo (see
+ * voice_typing_swallows); Ctrl+C, arrows and Enter (which sends) still work. */
+void ai_chat_voice_lock_typing(HWND panel, int on);
+
+/* Send the box now (ai_chat_send_user_message) unless the assistant is busy: then
+ * 0 and a status note that the words stay in the box. 1 when the send was started. */
+int  ai_chat_voice_send_box(HWND panel);
 
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */

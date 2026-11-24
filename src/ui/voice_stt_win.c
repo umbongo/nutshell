@@ -12,6 +12,7 @@
 #include "dlog.h"
 #include "secure_zero.h"
 #include "voice_gate.h"
+#include "voice_net_win.h"
 #include "voice_stt.h"
 
 #define STT_MAX_JOBS 8
@@ -69,6 +70,17 @@ static void set_fail(SttJob *j, const char *why)
 
 void (*voice_stt_test_pre_send_hook)(void) = NULL;
 
+void voice_stt_result_free(VoiceSttResult *r)
+{
+    if (!r) return;
+    if (r->text) {
+        secure_zero(r->text, r->text_cap);
+        free(r->text);
+    }
+    secure_zero(r, sizeof(*r));
+    free(r);
+}
+
 static DWORD WINAPI stt_thread(LPVOID arg)
 {
     SttJob *j = (SttJob *)arg;
@@ -84,6 +96,7 @@ static DWORD WINAPI stt_thread(LPVOID arg)
     const char *headers[2] = { NULL, NULL };
     int status = 0;
     size_t resp_len = 0;
+    HINTERNET session = NULL;
 
     if (!voice_gate_on()) {
         set_fail(j, "Voice input is turned off.");
@@ -139,8 +152,28 @@ static DWORD WINAPI stt_thread(LPVOID arg)
         goto done;
     }
 
+    /* The one counted voice opener; the first try and the retry share this
+     * session, which is closed at the end. */
+    session = voice_net_open(VNK_STT_UPLOAD);
+    if (!session) {
+        DWORD le = GetLastError();
+        if (j->secret[0]) secure_zero(auth, sizeof(auth));
+        if (le == ERROR_ACCESS_DENIED || !voice_gate_on()) {
+            set_fail(j, "Voice input is turned off.");
+        } else {
+            char why[64];
+            snprintf(why, sizeof(why), "WinHttpOpen failed: %lu", (unsigned long)le);
+            voice_stt_http_error(0, why, j->res->err, sizeof(j->res->err));
+            j->res->ok = 0;
+        }
+        goto done;
+    }
+    int send_ms = 0, recv_ms = 0;
+    voice_stt_upload_timeouts(j->wav_len, &send_ms, &recv_ms);
+
     AiHttpResponse resp;
-    int rc = ai_http_post_ct(j->target.url, headers, ctype, body, body_len, &resp, &j->nc);
+    int rc = ai_http_post_ct_ex(session, j->target.url, headers, ctype, body, body_len,
+                                send_ms, recv_ms, &resp, &j->nc);
     if (j->secret[0]) secure_zero(auth, sizeof(auth));
     /* At most one retry, and never for a cancelled job or once voice is off:
      * the first body is wiped, then the plain one goes out. */
@@ -159,7 +192,8 @@ static DWORD WINAPI stt_thread(LPVOID arg)
             snprintf(auth, sizeof(auth), "Authorization: Bearer %s", j->secret);
             headers[0] = auth;
         }
-        rc = ai_http_post_ct(j->target.url, headers, ctype, body, body_len, &resp, &j->nc);
+        rc = ai_http_post_ct_ex(session, j->target.url, headers, ctype, body, body_len,
+                                send_ms, recv_ms, &resp, &j->nc);
         if (j->secret[0]) secure_zero(auth, sizeof(auth));
     }
     status = resp.status_code;
@@ -172,7 +206,7 @@ static DWORD WINAPI stt_thread(LPVOID arg)
             voice_stt_http_error(rc != 0 ? 0 : resp.status_code, resp.error,
                                  r->err, sizeof(r->err));
     } else if (voice_stt_parse(j->target.shape, resp.body ? resp.body : "", resp.body_len,
-                               r->text, sizeof(r->text), r->err, sizeof(r->err))) {
+                               r->text, r->text_cap, r->err, sizeof(r->err))) {
         r->ok = 1;
         r->err[0] = '\0';
     }
@@ -185,15 +219,14 @@ static DWORD WINAPI stt_thread(LPVOID arg)
         DLOG_CONTENT(DLOG_AI, DLOG_INFO, 0, "stt.text", "text", r->text, strlen(r->text));
 
 done:
+    if (session) WinHttpCloseHandle(session);
     if (body) { secure_zero(body, body_len); free(body); }
     if (plain) { secure_zero(plain, plain_len); free(plain); }
     if (j->wav) { secure_zero(j->wav, j->wav_len); free(j->wav); j->wav = NULL; }
     secure_zero(j->secret, sizeof(j->secret));
     r->token = j->token;
-    if (!PostMessage(j->notify, WM_VOICE_STT, 0, (LPARAM)r)) {
-        secure_zero(r, sizeof(*r));   /* the window is gone; the transcript is wiped */
-        free(r);
-    }
+    if (!PostMessage(j->notify, WM_VOICE_STT, 0, (LPARAM)r))
+        voice_stt_result_free(r);   /* the window is gone; the transcript is wiped */
     j->res = NULL;
     /* Exactly one side frees the record: cancel_all sets `detached` when it
      * gives up on this thread; whoever sees it already set frees. */
@@ -242,9 +275,13 @@ int voice_stt_submit(HWND notify, const Settings *s, unsigned char *wav, size_t 
         if (!g_jobs[i]) { slot = i; break; }
     SttJob *j = slot >= 0 ? (SttJob *)calloc(1, sizeof(*j)) : NULL;
     VoiceSttResult *res = j ? (VoiceSttResult *)calloc(1, sizeof(*res)) : NULL;
+    if (res) {
+        res->text = (char *)calloc(1, VOICE_STT_TEXT_MIN);
+        if (res->text) res->text_cap = VOICE_STT_TEXT_MIN;
+        else { free(res); res = NULL; }
+    }
     if (!j || !res) {
         free(j);
-        free(res);
         put_text(err, errcap, slot < 0 ? "Speech-to-text is busy. Try again shortly."
                                        : "Out of memory.");
         drop_wav(wav, wav_len);
@@ -263,7 +300,7 @@ int voice_stt_submit(HWND notify, const Settings *s, unsigned char *wav, size_t 
         put_text(err, errcap, "Speech-to-text could not start a thread.");
         secure_zero(j->secret, sizeof(j->secret));
         drop_wav(wav, wav_len);
-        free(res);
+        voice_stt_result_free(res);
         free(j);
         return 0;
     }

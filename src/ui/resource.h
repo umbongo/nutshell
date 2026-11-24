@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.94"
-#define APP_VERSION_BINARY  1,2,94,0
+#define APP_VERSION        "1.2.95"
+#define APP_VERSION_BINARY  1,2,95,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -135,6 +135,7 @@
 #define IDC_VOICE_AUTO_SEND      3112 /* "Send automatically when I finish speaking" tickbox */
 #define IDC_VOICE_GAIN           3113 /* Settings > Voice: microphone gain slider (ns_slider) */
 #define IDC_VOICE_GAIN_VALUE     3114 /* its value label ("+12 dB") */
+#define IDC_VOICE_LIVE_MODEL     3116 /* Settings > Voice: live speech-to-text model (editable combo, OpenAI/Mistral) */
 #define IDC_VOICE_LANG_OTHER     3115 /* the Other language box, shown while "Other..." is picked */
 
 #endif

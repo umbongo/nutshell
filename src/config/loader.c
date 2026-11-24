@@ -531,6 +531,7 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("voice_stt_provider",            NULL, NULL, SH_VOICE_STT_PROVIDER, "Voice: speech-to-text provider"),
     CK("voice_stt_url",                 NULL, NULL, SH_VOICE_STT_URL, "Voice: speech-to-text URL"),
     CK("voice_stt_model",               NULL, NULL, SH_VOICE_STT_MODEL, "Voice: speech-to-text model"),
+    CK("voice_stt_live_model",          NULL, NULL, SH_VOICE_STT_LIVE_MODEL, "Voice: live speech-to-text model"),
     CK("voice_stt_language",            NULL, NULL, SH_VOICE_LANGUAGE, "Voice: language"),
     CK("stt_api_key",                   NULL, NULL, SH_VOICE_STT_KEY, "Voice: speech-to-text API key"),
     CK("voice_input_device",            NULL, NULL, SH_VOICE_DEVICE, "Voice: microphone"),
@@ -958,6 +959,9 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         if ((sv = json_obj_str(jset, "voice_stt_model"))) {
             field_copy(s->voice_stt_model, sizeof(s->voice_stt_model), sv);
         }
+        if ((sv = json_obj_str(jset, "voice_stt_live_model"))) {
+            field_copy(s->voice_stt_live_model, sizeof(s->voice_stt_live_model), sv);
+        }
         if ((sv = json_obj_str(jset, "voice_stt_language"))) {
             field_copy(s->voice_stt_language, sizeof(s->voice_stt_language), sv);
         }
@@ -1310,6 +1314,9 @@ int config_save(const Config *cfg, const char *path)
     fputs(",\n", f);
     fputs("    \"voice_stt_model\": ", f);
     fprint_json_str(f, s->voice_stt_model);
+    fputs(",\n", f);
+    fputs("    \"voice_stt_live_model\": ", f);
+    fprint_json_str(f, s->voice_stt_live_model);
     fputs(",\n", f);
     fputs("    \"voice_stt_language\": ", f);
     fprint_json_str(f, s->voice_stt_language);

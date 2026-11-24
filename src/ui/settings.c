@@ -42,6 +42,7 @@
 #include "voice_level.h"
 #include "voice_test.h"
 #include "voice_stt.h"
+#include "voice_live.h"
 #include "voice_win.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -232,6 +233,10 @@ typedef struct {
     HWND     hVoiceLangHint;      /* the Other language box's hint, under the Language row */
     SettingsCtrl *ctrl_voice_lang;       /* the Language row (its extra is the Other box) */
     SettingsCtrl *ctrl_voice_lang_hint;
+    HWND     hVoiceLiveNote;      /* dim "Live text as you speak needs OpenAI or Mistral" */
+    SettingsCtrl *ctrl_voice_live;       /* the Live model row (OpenAI or Mistral) */
+    SettingsCtrl *ctrl_voice_live_note;  /* the note in the same slot otherwise */
+    VoiceLiveProvider voice_live_seeded; /* the provider the Live model list was last seeded from */
     int      voice_lang_tone;     /* 0 neutral, 1 error: the hint's colour */
     char     voice_lang_prev[32]; /* the language saved when the page was built */
     char     voice_lang_loaded_other[32]; /* what the Other box was filled with at load ("" if not Other) */
@@ -924,6 +929,51 @@ static void voice_model_seed(SettingsDlgData *d)
         SetWindowText(cmb, cur);
 }
 
+/* The page's current choice, not the saved settings: the Provider combo, or the
+ * AI provider while Use current AI assistant is ticked. */
+static int voice_live_page_kind(const SettingsDlgData *d, VoiceLiveProvider *prov)
+{
+    size_t n = 0;
+    const SttProvider *tab = voice_stt_providers(&n);
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PROVIDER, CB_GETCURSEL, 0, 0);
+    const char *pid = (sel >= 0 && (size_t)sel < n) ? tab[sel].id : NULL;
+    int use_ai = IsDlgButtonChecked(d->hPage, IDC_VOICE_USE_AI) == BST_CHECKED;
+    int asel = (int)SendDlgItemMessage(d->hPage, IDC_AI_PROVIDER_COMBO, CB_GETCURSEL, 0, 0);
+    const char *aid = (asel >= 0 && asel < NUM_AI_PROVIDERS) ? k_ai_providers[asel] : NULL;
+    int kind = voice_live_row_kind(pid, use_ai, aid);
+    const char *eff = use_ai ? aid : pid;
+    if (prov)
+        *prov = !kind ? VLP_NONE : (strcmp(eff, "mistral") == 0 ? VLP_MISTRAL : VLP_OPENAI);
+    return kind;
+}
+
+/* Refill the Live model list from the effective provider. Empty means the
+ * provider's default (shown as the cue); a text that is one of the previous
+ * provider's seeds is cleared with the provider, one the user typed is kept. */
+static void voice_live_seed(SettingsDlgData *d)
+{
+    HWND cmb = GetDlgItem(d->hPage, IDC_VOICE_LIVE_MODEL);
+    if (!cmb) return;
+    VoiceLiveProvider p = VLP_NONE;
+    (void)voice_live_page_kind(d, &p);
+    if (p == VLP_NONE || (p == d->voice_live_seeded && SendMessage(cmb, CB_GETCOUNT, 0, 0) > 0))
+        return;
+    char cur[CFG_STR_MAX];
+    cur[0] = '\0';
+    GetWindowText(cmb, cur, (int)sizeof(cur));
+    if (d->voice_live_seeded != VLP_NONE && d->voice_live_seeded != p) {
+        const char *const *prev = voice_live_models(d->voice_live_seeded);
+        for (size_t k = 0; prev && prev[k]; k++)
+            if (strcmp(cur, prev[k]) == 0) cur[0] = '\0';
+    }
+    d->voice_live_seeded = p;
+    SendMessage(cmb, CB_RESETCONTENT, 0, 0);
+    const char *const *models = voice_live_models(p);
+    for (size_t i = 0; models && models[i]; i++)
+        SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)models[i]);
+    SetWindowText(cmb, cur);
+}
+
 static int voice_url_is_cleartext(const SettingsDlgData *d)
 {
     char url[512];
@@ -965,6 +1015,8 @@ static int voice_rows_apply(SettingsDlgData *d)
         { d->ctrl_voice_key,      !use_ai },
         { d->ctrl_voice_url,      !use_ai && custom },
         { d->ctrl_voice_url_warn, !use_ai && custom && voice_url_is_cleartext(d) },
+        { d->ctrl_voice_live,      voice_live_page_kind(d, NULL) },
+        { d->ctrl_voice_live_note, !voice_live_page_kind(d, NULL) },
     };
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
         if (!rows[i].c) continue;
@@ -972,6 +1024,7 @@ static int voice_rows_apply(SettingsDlgData *d)
         rows[i].c->visible = rows[i].show;
     }
     voice_model_seed(d);
+    voice_live_seed(d);
     return changed;
 }
 
@@ -1156,7 +1209,7 @@ static int voice_test_begin(SettingsDlgData *d)
     voice_test_note(d, "");
     voice_meter_reset(&d->vmeter);
     d->vmeter_tick = GetTickCount64();
-    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, voice_gain_now(d));
+    voice_audio_capture_begin(voice_dev_selected_id(d), 0, 1, voice_gain_now(d), VOICE_CAP_MS, 0);
     return 1;
 }
 
@@ -2270,6 +2323,22 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
             }
             {
+                /* Live model: OpenAI and Mistral only (voice_rows_apply shows
+                 * one of the row and the note). Editable, the list a suggestion. */
+                HWND lbl = make_label2(nd, SH_VOICE_STT_LIVE_MODEL);
+                HWND cmb = make_combo2(nd, IDC_VOICE_LIVE_MODEL, CBS_DROPDOWN,
+                                       SH_VOICE_STT_LIVE_MODEL);
+                if (vs->voice_stt_live_model[0])
+                    SetWindowText(cmb, vs->voice_stt_live_model);
+                SendMessageW(cmb, CB_SETCUEBANNER, 0,
+                             (LPARAM)L"the provider's default");   /* empty = the default */
+                nd->ctrl_voice_live = add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE,
+                                               0, 0, 1, 0, 1, 0);
+                nd->hVoiceLiveNote = make_hint(nd, "Live text as you speak needs OpenAI or Mistral");
+                nd->ctrl_voice_live_note = add_ctrl(nd, NULL, nd->hVoiceLiveNote, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0, 0, 0);   /* control column, same slot */
+            }
+            {
                 HWND lbl = make_label2(nd, SH_VOICE_LANGUAGE);
                 HWND cmb = make_combo2_wide(nd, IDC_VOICE_LANG, SH_VOICE_LANGUAGE);
                 size_t nl = 0;
@@ -2530,6 +2599,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             if (nd->hTip) {
                 HWND hModel = GetDlgItem(nd->hPage, IDC_AI_CUSTOM_MODEL);
                 HWND hVModel = GetDlgItem(nd->hPage, IDC_VOICE_MODEL);
+                HWND hVLive = GetDlgItem(nd->hPage, IDC_VOICE_LIVE_MODEL);
                 for (int i = 0; i < nd->n_tips; i++) {
                     const SettingsHelp *e = settings_help_get((int)nd->tips[i].help);
                     if (!e) continue;
@@ -2540,6 +2610,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                         (void)ns_tip_add_combo(nd->hTip, hModel, e->text);
                     if (nd->tips[i].hwnd == hVModel)
                         (void)ns_tip_add_combo(nd->hTip, hVModel, e->text);
+                    if (nd->tips[i].hwnd == hVLive)
+                        (void)ns_tip_add_combo(nd->hTip, hVLive, e->text);
                 }
                 /* A disabled child takes no mouse input; the page host sees it
                  * instead, so Session and the recorder level also get a rect
@@ -3183,6 +3255,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             GetDlgItemText(d->hPage, IDC_VOICE_MODEL,
                            s->voice_stt_model, (int)sizeof(s->voice_stt_model));
+            GetDlgItemText(d->hPage, IDC_VOICE_LIVE_MODEL,
+                           s->voice_stt_live_model, (int)sizeof(s->voice_stt_live_model));
             {
                 /* The shown default is stored as "" so a later default follows. */
                 const SttProvider *ep = voice_effective_provider(d);

@@ -123,6 +123,15 @@ LRESULT CALLBACK ai_chat_input_subclass_proc(HWND hwnd, UINT msg,
                                            UINT_PTR uIdSubclass,
                                            DWORD_PTR dwRefData)
 {
+    {
+        /* A live dictation recording is writing into this box: typing, paste,
+         * cut, clear, undo and Delete/Backspace are swallowed until it ends. */
+        HWND lp = GetParent(hwnd);
+        const AiChatData *ld = lp ? (const AiChatData *)(LONG_PTR)GetWindowLongPtr(lp, GWLP_USERDATA)
+                                  : NULL;
+        if (ld && ld->voice_typing_locked && voice_typing_swallows(msg, (uintptr_t)wParam))
+            return 0;
+    }
     if (msg == WM_KEYDOWN || msg == WM_CHAR) {
         session_mark_user_active();
     }

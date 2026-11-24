@@ -432,6 +432,7 @@ typedef struct {
     AiVoiceUi voice_ui;
     char voice_cue[128];        /* UTF-8 placeholder painted in the empty input */
     char voice_status[256];     /* the transient text last put in context_label */
+    int voice_typing_locked;    /* a live recording runs: the input swallows typing, paste, cut, undo */
     NsRect header_tip;          /* where the header status tooltip tool sits (0 = none) */
     NsHover mic_hover;
     int mic_hover_tracking;

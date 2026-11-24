@@ -70,7 +70,7 @@ static const Shortcut TABLE[] = {
     { S5, "Esc",         "Clear the selection", "list focused", SC_AI, 0 },
     { S5, "Right Shift", "Talk to the assistant: press, speak, press again",
       "Voice on; key and mode in Settings > Voice", SC_AI | SC_VOICE, 0 },
-    { S5, "Esc",         "Cancel a voice recording", "While recording",
+    { S5, "Esc",         "Cancel a voice recording", "While recording, AI panel focused",
       SC_AI | SC_VOICE, 0 },
     { S5, "PgUp, PgDn, Home, End, Up, Down", "Scroll the conversation",
       "list focused", SC_AI, 0 },

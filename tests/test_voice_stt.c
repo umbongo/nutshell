@@ -392,6 +392,96 @@ int test_voice_stt_parse(void)
     TEST_END();
 }
 
+int test_voice_stt_upload_timeouts(void)
+{
+    TEST_BEGIN();
+    int snd = 0, rcv = 0;
+    voice_stt_upload_timeouts(32044u, &snd, &rcv);          /* 1 s of 16 kHz mono */
+    ASSERT_EQ(snd, 30000);
+    ASSERT_EQ(rcv, 60000);
+    voice_stt_upload_timeouts(19200044u, &snd, &rcv);       /* 10 minutes */
+    ASSERT_EQ(snd, 30000 + 292000);
+    ASSERT_EQ(rcv, 60000 + 60000);
+    voice_stt_upload_timeouts((size_t)2147483648u, &snd, &rcv);   /* 2 GB */
+    ASSERT_EQ(snd, 600000);
+    ASSERT_EQ(rcv, 600000);
+    voice_stt_upload_timeouts(10u, &snd, &rcv);             /* shorter than a header */
+    ASSERT_EQ(snd, 30000);
+    ASSERT_EQ(rcv, 60000);
+    voice_stt_upload_timeouts(0u, NULL, NULL);              /* NULL outputs are safe */
+    TEST_END();
+}
+
+int test_voice_stt_parse_large(void)
+{
+    TEST_BEGIN();
+    enum { N = 70000 };
+    char *body = (char *)malloc((size_t)N + 64);
+    ASSERT_NOT_NULL(body);
+    if (!body) { TEST_END(); }
+    size_t off = (size_t)sprintf(body, "{\"text\":\"");
+    memset(body + off, 'a', N);
+    off += N;
+    memcpy(body + off, "\"}", 3);
+    off += 2;
+    ASSERT_TRUE(VOICE_STT_TEXT_MIN >= 65536);
+    size_t cap = (size_t)VOICE_STT_TEXT_MIN + 8192;
+    char *out = (char *)malloc(cap);
+    char err[128] = "";
+    ASSERT_NOT_NULL(out);
+    if (out) {
+        ASSERT_EQ(voice_stt_parse(STT_SHAPE_OPENAI, body, off, out, cap, err, sizeof err), 1);
+        ASSERT_EQ((int)strlen(out), N);
+        free(out);
+    }
+    /* A 4,096-byte buffer cannot hold it: refused with a message, never written past
+     * its end (the canary after the buffer stays intact). */
+    char small[4096 + 16];
+    memset(small, 0x5A, sizeof small);
+    err[0] = '\0';
+    ASSERT_EQ(voice_stt_parse(STT_SHAPE_OPENAI, body, off, small, 4096, err, sizeof err), 0);
+    ASSERT_TRUE(err[0] != '\0');
+    for (size_t i = 4096; i < sizeof small; i++) ASSERT_EQ((int)(unsigned char)small[i], 0x5A);
+    /* A chat-shaped reply with escapes, longer than the parser's string limit */
+    {
+        size_t cap2 = (size_t)VOICE_STT_TEXT_MIN + 8192;
+        char *b2 = (char *)malloc(20000);
+        char *o2 = (char *)malloc(cap2);
+        ASSERT_NOT_NULL(b2);
+        ASSERT_NOT_NULL(o2);
+        if (b2 && o2) {
+            size_t k = (size_t)sprintf(b2, "{\"choices\":[{\"message\":{\"role\":\"a\",\"content\":\"  caf\\u00e9 \\ud83d\\ude00\\n");
+            memset(b2 + k, 'b', 10000);
+            k += 10000;
+            k += (size_t)sprintf(b2 + k, "\\n\"}}]}");
+            ASSERT_EQ(voice_stt_parse(STT_SHAPE_GEMINI_CHAT, b2, k, o2, cap2, err, sizeof err), 1);
+            ASSERT_TRUE(strncmp(o2, "caf\xC3\xA9 \xF0\x9F\x98\x80\nbbb", 14) == 0);
+            ASSERT_EQ((int)strlen(o2), 11 + 10000);   /* leading spaces and the trailing newline trimmed */
+        }
+        /* a "content" under another member of the first choice must not be taken */
+        if (b2 && o2) {
+            size_t k = (size_t)sprintf(b2, "{\"choices\":[{\"logprobs\":{\"content\":\"wrong\"},\"message\":{\"role\":\"a\",\"content\":\"right ");
+            memset(b2 + k, 'c', 9000);
+            k += 9000;
+            k += (size_t)sprintf(b2 + k, "\"}}]}");
+            ASSERT_EQ(voice_stt_parse(STT_SHAPE_GEMINI_CHAT, b2, k, o2, cap2, err, sizeof err), 1);
+            ASSERT_TRUE(strncmp(o2, "right cc", 8) == 0);
+            ASSERT_EQ((int)strlen(o2), 6 + 9000);
+            /* and one with no message.content at all fails rather than taking the other */
+            k = (size_t)sprintf(b2, "{\"choices\":[{\"logprobs\":{\"content\":\"wrong\"},\"message\":{\"role\":\"a\"}}],\"pad\":\"");
+            memset(b2 + k, 'c', 9000);
+            k += 9000;
+            k += (size_t)sprintf(b2 + k, "\"}");
+            ASSERT_EQ(voice_stt_parse(STT_SHAPE_GEMINI_CHAT, b2, k, o2, cap2, err, sizeof err), 0);
+            ASSERT_EQ((int)o2[0], 0);
+        }
+        free(b2);
+        free(o2);
+    }
+    free(body);
+    TEST_END();
+}
+
 int test_voice_stt_http_error(void)
 {
     TEST_BEGIN();
