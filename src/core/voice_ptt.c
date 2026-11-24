@@ -61,6 +61,12 @@ void voice_ptt_init(VoicePtt *p, int mode, int delay_ms)
     p->state = VS_IDLE;
     p->mode = mode;
     p->delay_ms = delay_ms < 0 ? 0 : delay_ms;
+    p->cap_ms = VOICE_CAP_MS;
+}
+
+void voice_ptt_set_cap(VoicePtt *p, long cap_ms)
+{
+    p->cap_ms = cap_ms > 0 ? cap_ms : VOICE_CAP_MS;
 }
 
 int voice_ptt_recording(const VoicePtt *p)
@@ -86,7 +92,7 @@ static VoiceStep armed_check(VoicePtt *p, unsigned long now, int busy)
 
 static int cap_reached(const VoicePtt *p, unsigned long now)
 {
-    return (long)(now - p->rec_start_at) >= VOICE_CAP_MS;
+    return (long)(now - p->rec_start_at) >= p->cap_ms;
 }
 
 VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now, int in_panel, int busy)
@@ -98,13 +104,14 @@ VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now, int in_p
         return mk(rec ? VA_DISCARD : VA_NONE, 0);
     }
     if (ev == VE_ESCAPE) {
-        if (rec) {
+        if (rec && in_panel) {
             int key_down = (p->state == VS_REC_HOLD || p->state == VS_STOP_PRESS
                             || p->state == VS_LATCHED_SPENT);
             p->state = key_down ? VS_KEY_SPENT : VS_IDLE;
             return mk(VA_DISCARD, 1);
         }
-        /* Escape keeps its meaning; a chord with it still spends the key. */
+        /* Out of the panel a recording is left alone. Escape keeps its meaning;
+         * a chord with it still spends the key. */
         if (p->state == VS_ARMED || p->state == VS_TOGGLE_PRESS) p->state = VS_KEY_SPENT;
         return mk(VA_NONE, 0);
     }
@@ -191,7 +198,7 @@ long voice_ptt_next_deadline(const VoicePtt *p, unsigned long now)
     if (p->state == VS_ARMED) {
         left = (long)p->delay_ms - (long)(now - p->key_down_at);
     } else if (voice_ptt_recording(p)) {
-        left = (long)VOICE_CAP_MS - (long)(now - p->rec_start_at);
+        left = p->cap_ms - (long)(now - p->rec_start_at);
     } else {
         return -1;
     }

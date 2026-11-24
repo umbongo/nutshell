@@ -1010,3 +1010,74 @@ int test_voice_latched_spent_lost_up_new_down_is_stop_press(void)
     ASSERT_EQ(p.state, VS_IDLE);
     TEST_END();
 }
+
+int test_voice_ptt_escape_out_of_panel_keeps_recording(void)
+{
+    TEST_BEGIN();
+    VoicePtt p;
+    VoiceStep s;
+
+    /* Toggle, latched by the mic button */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    ASSERT_EQ(st(&p, VE_MIC_CLICK, 1000, 1, 0).action, VA_OPEN);
+    ASSERT_EQ(p.state, VS_REC_LATCHED);
+    s = st(&p, VE_ESCAPE, 1100, 0, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(s.consume, 0);
+    ASSERT_EQ(p.state, VS_REC_LATCHED);
+    ASSERT_EQ(voice_ptt_recording(&p), 1);
+    s = st(&p, VE_ESCAPE, 1200, 1, 0);
+    ASSERT_EQ(s.action, VA_DISCARD);
+    ASSERT_EQ(s.consume, 1);
+    ASSERT_EQ(voice_ptt_recording(&p), 0);
+
+    /* Hold */
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 0);
+    ASSERT_EQ(st(&p, VE_KEY_DOWN, 1000, 1, 0).action, VA_OPEN);
+    ASSERT_EQ(p.state, VS_REC_HOLD);
+    s = st(&p, VE_ESCAPE, 1100, 0, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(s.consume, 0);
+    ASSERT_EQ(p.state, VS_REC_HOLD);
+    ASSERT_EQ(voice_ptt_recording(&p), 1);
+    s = st(&p, VE_ESCAPE, 1200, 1, 0);
+    ASSERT_EQ(s.action, VA_DISCARD);
+    ASSERT_EQ(s.consume, 1);
+
+    /* Toggle, stop press */
+    voice_ptt_init(&p, VOICE_MODE_TOGGLE, 0);
+    ASSERT_EQ(st(&p, VE_MIC_CLICK, 1000, 1, 0).action, VA_OPEN);
+    ASSERT_EQ(st(&p, VE_KEY_DOWN, 1100, 1, 0).action, VA_NONE);
+    ASSERT_EQ(p.state, VS_STOP_PRESS);
+    s = st(&p, VE_ESCAPE, 1150, 0, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(s.consume, 0);
+    ASSERT_EQ(p.state, VS_STOP_PRESS);
+    ASSERT_EQ(voice_ptt_recording(&p), 1);
+    s = st(&p, VE_ESCAPE, 1200, 1, 0);
+    ASSERT_EQ(s.action, VA_DISCARD);
+    ASSERT_EQ(s.consume, 1);
+    TEST_END();
+}
+
+int test_voice_ptt_live_cap(void)
+{
+    TEST_BEGIN();
+    VoicePtt p;
+    VoiceStep s;
+    voice_ptt_init(&p, VOICE_MODE_HOLD, 0);
+    ASSERT_EQ(p.cap_ms, VOICE_CAP_MS);
+    voice_ptt_set_cap(&p, VOICE_LIVE_CAP_MS);
+    ASSERT_EQ(st(&p, VE_KEY_DOWN, 1000, 1, 0).action, VA_OPEN);
+    s = st(&p, VE_TICK, 1000 + VOICE_CAP_MS + 5, 1, 0);
+    ASSERT_EQ(s.action, VA_NONE);
+    ASSERT_EQ(voice_ptt_next_deadline(&p, 1000), VOICE_LIVE_CAP_MS);
+    s = st(&p, VE_TICK, 1000 + VOICE_LIVE_CAP_MS, 1, 0);
+    ASSERT_EQ(s.action, VA_FINISH);
+
+    voice_ptt_set_cap(&p, 0);
+    ASSERT_EQ(p.cap_ms, VOICE_CAP_MS);
+    voice_ptt_set_cap(&p, -5);
+    ASSERT_EQ(p.cap_ms, VOICE_CAP_MS);
+    TEST_END();
+}

@@ -30,6 +30,7 @@ typedef enum {
 #define VOICE_GAIN_MAX_DB 30
 #define VOICE_GAIN_DEFAULT_DB 0
 #define VOICE_CAP_MS 60000
+#define VOICE_LIVE_CAP_MS 600000
 #define VOICE_SHORT_TAP_MS 300
 
 const char *voice_ptt_key_json(int key);        /* "right_shift" "right_ctrl" "f8" "f9"; default for out of range */

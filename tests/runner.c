@@ -3729,6 +3729,8 @@ int test_voice_binding_same(void);
 int test_voice_err_route(void);
 int test_voice_busy_text(void);
 int test_voice_ptt_capture_ended_first(void);
+int test_voice_ptt_escape_out_of_panel_keeps_recording(void);
+int test_voice_ptt_live_cap(void);
 int test_voice_toggle_cap_during_stop_press_tick(void);
 int test_voice_toggle_cap_during_stop_press_audio_first(void);
 int test_voice_cue_text(void);
@@ -8211,6 +8213,8 @@ int main(void) {
     failed += test_voice_err_route();
     failed += test_voice_busy_text();
     failed += test_voice_ptt_capture_ended_first();
+    failed += test_voice_ptt_escape_out_of_panel_keeps_recording();
+    failed += test_voice_ptt_live_cap();
     failed += test_voice_toggle_cap_during_stop_press_tick();
     failed += test_voice_toggle_cap_during_stop_press_audio_first();
     failed += test_voice_cue_text();

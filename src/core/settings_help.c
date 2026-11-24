@@ -493,8 +493,10 @@ static const SettingsHelp k_help[SH_COUNT] = {
       NULL,
       "Mode:\n\nToggle records from one clean press of the key to the "
       "next. Hold to talk records while you hold the key and stops when "
-      "you let go. A recording stops by itself after 60 seconds, and Escape "
-      "throws it away.\nDefault: Toggle.",
+      "you let go. A recording stops by itself after 10 minutes when the "
+      "words appear as you speak (OpenAI and Mistral), and after 60 seconds "
+      "otherwise. Escape throws it away, but only while the AI panel has the "
+      "keyboard focus.\nDefault: Toggle.",
       "Toggle",
       0, 0, 0u),
     E(SH_VOICE_MIC_DELAY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,

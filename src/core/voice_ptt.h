@@ -125,10 +125,13 @@ typedef enum { VE_KEY_DOWN, VE_KEY_UP, VE_OTHER, VE_ESCAPE, VE_TICK, VE_MIC_CLIC
 typedef struct {
     VoiceState state; int mode; int delay_ms;
     unsigned long key_down_at, rec_start_at;
+    long cap_ms;
 } VoicePtt;
 typedef struct { VoiceAction action; int consume; } VoiceStep;
 
 void voice_ptt_init(VoicePtt *p, int mode, int delay_ms);
+/* The per-recording length cap; cap_ms <= 0 means VOICE_CAP_MS. */
+void voice_ptt_set_cap(VoicePtt *p, long cap_ms);
 /* in_panel: keyboard focus is in the AI panel; busy: the assistant is streaming,
  * running commands or has a card waiting. */
 VoiceStep voice_ptt_step(VoicePtt *p, VoiceEvent ev, unsigned long now_ms,

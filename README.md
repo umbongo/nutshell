@@ -481,7 +481,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **Ctrl+A** | Select all messages | list focused |
 | **Esc** | Clear the selection | list focused |
 | **Right Shift** | Talk to the assistant: press, speak, press again | Voice on; key and mode in Settings > Voice |
-| **Esc** | Cancel a voice recording | While recording |
+| **Esc** | Cancel a voice recording | While recording, AI panel focused |
 | **PgUp, PgDn, Home, End, Up, Down** | Scroll the conversation | list focused |
 
 #### Window and help
