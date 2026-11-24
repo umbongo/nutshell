@@ -31,6 +31,12 @@ const char *voice_lang_name(const char *code);
 /* Inline hint for the Other box. Returns the tone: 0 neutral, 1 error. */
 int voice_lang_other_hint(const char *text, char *out, size_t cap);
 
+/* The same, for a box that was loaded holding the saved value `loaded`: while the
+ * text is still that unrecognised value (a legacy "pt-BR"), Save keeps it, so
+ * the hint says so in the neutral tone instead of "will not be saved". */
+int voice_lang_other_hint_loaded(const char *text, const char *loaded,
+                                 char *out, size_t cap);
+
 /* The ISO code to send for a stored id: the table's iso for a listed id, else the
  * part before the first '-' or '_', lower-cased. */
 void voice_lang_iso(const char *id, char *out, size_t cap);

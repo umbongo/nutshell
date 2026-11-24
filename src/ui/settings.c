@@ -234,6 +234,7 @@ typedef struct {
     SettingsCtrl *ctrl_voice_lang_hint;
     int      voice_lang_tone;     /* 0 neutral, 1 error: the hint's colour */
     char     voice_lang_prev[32]; /* the language saved when the page was built */
+    char     voice_lang_loaded_other[32]; /* what the Other box was filled with at load ("" if not Other) */
     int      voice_testing;       /* the Test runs until a stop trigger (voice_test_next owns it) */
     VoiceMeter vmeter;            /* the meter's ballistics, hold tick and 1 s window */
     ULONGLONG vmeter_tick;        /* GetTickCount64 of the last VAM_LEVEL (or the start) */
@@ -688,8 +689,9 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
         }
 
         if (c->hExtra) {
-            int extra_w_scaled = ns_scale(c->extra_w, m->dpi);
-            int new_w = crc.w - extra_w_scaled - m->gap;
+            /* A hidden extra (the Other language box) reserves no width. */
+            int extra_w_scaled = c->extra_off ? 0 : ns_scale(c->extra_w, m->dpi);
+            int new_w = crc.w - extra_w_scaled - (c->extra_off ? 0 : m->gap);
             if (new_w < 0) new_w = 0;
             SettingsRect erc = crc;
             erc.x = crc.x + new_w + m->gap;
@@ -1076,7 +1078,7 @@ static void voice_lang_sync(SettingsDlgData *d, int relay)
         char txt[64], hint[160];
         txt[0] = '\0';
         GetDlgItemText(d->hPage, IDC_VOICE_LANG_OTHER, txt, (int)sizeof(txt));
-        d->voice_lang_tone = voice_lang_other_hint(txt, hint, sizeof(hint));
+        d->voice_lang_tone = voice_lang_other_hint_loaded(txt, d->voice_lang_loaded_other, hint, sizeof(hint));
         SetWindowText(d->hVoiceLangHint, hint);
         InvalidateRect(d->hVoiceLangHint, NULL, TRUE);
     }
@@ -2274,11 +2276,16 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 const VoiceLang *lt = voice_lang_table(&nl);
                 for (size_t i = 0; i < nl; i++)
                     voice_combo_add_utf8(cmb, lt[i].label);
+                /* The closed box shrinks beside the Other box; the list keeps room for the names. */
+                SendMessage(cmb, CB_SETDROPPEDWIDTH, (WPARAM)ns_scale(170, nd->dpi), 0);
                 voice_combo_add_utf8(cmb, "Other\xE2\x80\xA6");   /* "Other..." with the real ellipsis */
                 int lsel = voice_lang_combo_index(vs->voice_stt_language);
+                if (nd->demo == 2) lsel = voice_lang_combo_index("en-GB");   /* the demo forces English (UK) */
                 SendMessage(cmb, CB_SETCURSEL, (WPARAM)lsel, 0);
                 (void)snprintf(nd->voice_lang_prev, sizeof(nd->voice_lang_prev), "%s",
                                vs->voice_stt_language);
+                (void)snprintf(nd->voice_lang_loaded_other, sizeof(nd->voice_lang_loaded_other),
+                               "%s", lsel == (int)nl ? vs->voice_stt_language : "");
                 HWND ed = make_edit2(nd, lsel == (int)nl ? vs->voice_stt_language : "",
                                      IDC_VOICE_LANG_OTHER, 0, SH_VOICE_LANGUAGE_OTHER);
                 SendMessage(ed, EM_SETLIMITTEXT, 31, 0);
@@ -2286,13 +2293,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     wchar_t cue[96];
                     if (MultiByteToWideChar(CP_UTF8, 0, VOICE_LANG_OTHER_CUE, -1, cue,
                                             (int)(sizeof(cue) / sizeof(cue[0]))) > 0)
-                        SendMessageW(ed, EM_SETCUEBANNER, 0, (LPARAM)cue);
+                        SendMessageW(ed, EM_SETCUEBANNER, TRUE, (LPARAM)cue);   /* TRUE: still shown while focused */
                 }
                 nd->ctrl_voice_lang = add_ctrl(nd, lbl, cmb, ed, SETTINGS_PAGE_VOICE,
-                                               0, 150, 1, 0, 1, 0);
+                                               0, 270, 1, 0, 1, 0);
                 nd->hVoiceLangHint = make_hint(nd, "");
                 nd->ctrl_voice_lang_hint = add_ctrl(nd, NULL, nd->hVoiceLangHint, NULL,
-                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0, 0, 1);
+                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0, 0, 0);   /* control column, under the combo */
                 voice_lang_sync(nd, 0);
             }
             {

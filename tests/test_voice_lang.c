@@ -192,9 +192,29 @@ int test_voice_lang_save_value(void)
     voice_lang_save_value((int)n, "pt-BR", "pt-BR", out, sizeof out);
     ASSERT_STR_EQ(out, "pt-BR");
     /* a bad selection index keeps the previous value */
+    voice_lang_save_value((int)n, NULL, "es", out, sizeof out);   /* Other, no text */
+    ASSERT_STR_EQ(out, "es");
     voice_lang_save_value(-1, "cy", "es", out, sizeof out);
     ASSERT_STR_EQ(out, "es");
     voice_lang_save_value((int)n + 1, "cy", NULL, out, sizeof out);
     ASSERT_STR_EQ(out, "");
+    TEST_END();
+}
+
+int test_voice_lang_other_hint_loaded(void)
+{
+    TEST_BEGIN();
+    char h[200];
+    /* the untouched legacy value: neutral, says it is kept */
+    ASSERT_EQ(voice_lang_other_hint_loaded("pt-BR", "pt-BR", h, sizeof h), 0);
+    ASSERT_TRUE(strstr(h, "Saved as pt-BR.") == h);
+    /* edited to something unrecognised: the ordinary error */
+    ASSERT_EQ(voice_lang_other_hint_loaded("pt-B", "pt-BR", h, sizeof h), 1);
+    ASSERT_TRUE(strstr(h, "Not recognised") == h);
+    /* a recognised loaded value, or no loaded value: the ordinary hint */
+    ASSERT_EQ(voice_lang_other_hint_loaded("cy", "cy", h, sizeof h), 0);
+    ASSERT_STR_EQ(h, "Welsh (cy)");
+    ASSERT_EQ(voice_lang_other_hint_loaded("xyz", "", h, sizeof h), 1);
+    ASSERT_EQ(voice_lang_other_hint_loaded("xyz", NULL, h, sizeof h), 1);
     TEST_END();
 }

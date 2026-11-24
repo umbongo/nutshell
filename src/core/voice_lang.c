@@ -156,6 +156,20 @@ int voice_lang_other_hint(const char *text, char *out, size_t cap)
     return 1;
 }
 
+int voice_lang_other_hint_loaded(const char *text, const char *loaded,
+                                 char *out, size_t cap)
+{
+    char code[3];
+    if (out && cap && text && loaded && loaded[0] && strcmp(text, loaded) == 0 &&
+        !voice_lang_parse_other(text, code, sizeof code)) {
+        (void)snprintf(out, cap,
+            "Saved as %s. Type a two-letter code such as cy, or a name such as "
+            "Welsh, to change it.", loaded);
+        return 0;
+    }
+    return voice_lang_other_hint(text, out, cap);
+}
+
 void voice_lang_iso(const char *id, char *out, size_t cap)
 {
     if (!out || cap == 0) return;

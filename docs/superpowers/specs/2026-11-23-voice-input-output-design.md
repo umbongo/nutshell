@@ -461,15 +461,15 @@ The page then has two titled sections.
   default 0 dB, shown as "+12 dB" beside it; software gain in Nutshell only,
   set while watching the Test meter; it takes effect live during a Test, and is
   enabled by the same rule as the device combo) **(maintainer, 2026-11-24)**.
-  The slider is a custom-drawn control (`ns_slider`, `Nutshell_Slider`), not the
-  stock trackbar, because the stock trackbar ignores the theme tokens: the track
-  is a `raised.base` pill, the filled part `accent.base`, the thumb takes the
-  hover surface from `ns_hover`, the focus ring is `tokens->focus`, and it is a
-  tab stop that reads Left/Right/Up/Down, PageUp/PageDown, Home and End
-  **(maintainer, 2026-11-24)**. Mic start delay (0-400 ms, default 150; greyed while Toggle
+  Mic start delay (0-400 ms, default 150; greyed while Toggle
   is selected, since it applies to Hold to talk only), Send
   automatically when I finish speaking (tick, off) **(maintainer, 2026-11-23:
   review by default, auto-send opt-in)**.
+- **The gain slider** is a custom-drawn control (`ns_slider`, `Nutshell_Slider`), not the
+  stock trackbar, because the stock trackbar ignores the theme tokens: the track
+  is a `raised.base` pill, the filled part `accent.base`, the thumb takes the
+  hover surface from `ns_hover`, the focus ring is `tokens->focus`, and it is a
+  tab stop that reads Left/Right/Up/Down, PageUp/PageDown, Home and End **(maintainer, 2026-11-24)**.
 - **Test is a toggle** **(maintainer, 2026-11-24)**: "Test" starts the
   capture and the live meter, "Stop test" stops it (rules in
   `src/core/voice_test.c`). It also stops when Settings closes, when the page
@@ -490,16 +490,19 @@ The page then has two titled sections.
   speech threshold (RMS 250, about -42 dBFS) with margin: a peak below -45
   cannot pass the gate, so nobody is speaking **(maintainer, 2026-11-24)**.
 - **Language** **(maintainer, 2026-11-24)**: a drop-down of the table in 4.1
-  (Auto-detect first), then **Other...** (shown "Other" with a real ellipsis).
-  Picking Other... shows a text box beside the drop-down (31 characters) and
+  (Auto-detect first), then **Other…** (the item reads "Other" followed by an
+  ellipsis character; the help text spells it "Other..." in ASCII).
+  Picking Other… shows a text box beside the drop-down (31 characters) and
   moves focus to it. The box carries the cue "2-letter code or name, e.g. cy or
-  Welsh" and a hint row under the Language row says, on every edit, what the
+  Welsh" (kept visible while the empty box has focus) and a hint row under the Language row says, on every edit, what the
   entry means or which format is wanted ("Welsh (cy)" in the neutral dim colour,
-  a format complaint in the warning colour). The box and hint are hidden while
+  a format complaint in the warning colour; while the box still holds an
+  unrecognised value loaded from the config, a neutral "Saved as pt-BR. ..."
+  line instead of the complaint, since Save keeps it). The box and hint are hidden while
   another item is picked. Save writes the list item's id; for Other, the code
   the entry parsed to; an unrecognised entry keeps the language saved before,
   so an untouched legacy value such as `pt-BR` is written back unchanged. A saved
-  code that is not in the list reloads as Other... with the box filled. Both the
+  code that is not in the list reloads as Other… with the box filled. Both the
   drop-down and the box have the page's hover tooltip (`SH_VOICE_LANGUAGE`,
   `SH_VOICE_LANGUAGE_OTHER`). The mapping is `voice_lang_combo_index` and
   `voice_lang_save_value` in `src/core/voice_lang.c`.
