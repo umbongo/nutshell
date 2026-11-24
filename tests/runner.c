@@ -3721,6 +3721,9 @@ int test_vvad_after_floor_change(void);
 int test_vvad_extra_db(void);
 int test_vvad_freeze_floor(void);
 int test_vep_pause_clamp_and_reset(void);
+int test_vvad_door_slam_with_tail_never_turn(void);
+int test_vvad_single_syllable_is_turn(void);
+int test_vvad_digital_silence_does_not_sink_floor(void);
 /* test_voice_transcript.c */
 int test_vt_draft_sep(void);
 int test_vt_rendered_full_text(void);
@@ -8301,6 +8304,9 @@ int main(void) {
     failed += test_vvad_extra_db();
     failed += test_vvad_freeze_floor();
     failed += test_vep_pause_clamp_and_reset();
+    failed += test_vvad_door_slam_with_tail_never_turn();
+    failed += test_vvad_single_syllable_is_turn();
+    failed += test_vvad_digital_silence_does_not_sink_floor();
     failed += test_vt_draft_sep();
     failed += test_vt_rendered_full_text();
     failed += test_vt_openai_revision();

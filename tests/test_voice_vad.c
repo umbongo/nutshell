@@ -215,8 +215,10 @@ int test_vvad_after_floor_change(void)
     sim_init(&s, 500);
     sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
     sim_run(&s, W(10000), NONE_DB, 0.0, -40.0);
-    ASSERT_EQ(s.ends, 0);
+    ASSERT_TRUE(s.abandons >= 1);   /* the step is noise: a start, then the reset */
+    ASSERT_FALSE(voice_ep_in_turn(&s.e));
     int ends0 = s.ends;
+    ASSERT_EQ(ends0, 0);
     sim_run(&s, W(1000), -15.0, 0.4, -40.0);
     sim_run(&s, W(3000), NONE_DB, 0.0, -40.0);
     ASSERT_EQ(s.ends, ends0 + 1);
@@ -251,11 +253,11 @@ int test_vvad_freeze_floor(void)
     voice_vad_init(&v);
     voice_vad_window(&v, -60.0);
     voice_vad_freeze_floor(&v, 1);
-    for (int i = 0; i < 500; i++) voice_vad_window(&v, -80.0);
+    for (int i = 0; i < 500; i++) voice_vad_window(&v, -70.0);
     ASSERT_TRUE(voice_vad_floor_db(&v) == -60.0);
     voice_vad_freeze_floor(&v, 0);
-    voice_vad_window(&v, -80.0);
-    ASSERT_TRUE(voice_vad_floor_db(&v) == -80.0);
+    voice_vad_window(&v, -70.0);
+    ASSERT_TRUE(voice_vad_floor_db(&v) == -70.0);
     TEST_END();
 }
 
@@ -276,5 +278,71 @@ int test_vep_pause_clamp_and_reset(void)
     while (out == VEP_NONE && n < 100) { out = voice_ep_window(&e, VV_SILENCE); n++; }
     ASSERT_EQ(n, 25);
     ASSERT_EQ(out, VEP_ABANDON);
+    /* 5000 clamps to 3000: 150 windows */
+    voice_ep_init(&e, 5000);
+    ASSERT_EQ(voice_ep_window(&e, VV_SPEECH), VEP_START);
+    out = VEP_NONE; n = 0;
+    while (out == VEP_NONE && n < 1000) { out = voice_ep_window(&e, VV_SILENCE); n++; }
+    ASSERT_EQ(n, 150);
+    TEST_END();
+}
+
+int test_vvad_door_slam_with_tail_never_turn(void)
+{
+    TEST_BEGIN();
+    Sim s;
+    sim_init(&s, 500);
+    sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
+    /* 200 ms at -10 dBFS, then a 30 dB decay over 500 ms (1.2 dB a window) */
+    for (int i = 0; i < W(200); i++) sim_win(&s, -10.0, 0.0, -60.0, 0.0);
+    for (int i = 0; i < W(500); i++) sim_win(&s, -10.0, 0.0, -60.0, 1.2 * (i + 1));
+    sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
+    ASSERT_EQ(s.ends, 0);
+    ASSERT_FALSE(voice_ep_in_turn(&s.e));
+    TEST_END();
+}
+
+int test_vvad_single_syllable_is_turn(void)
+{
+    TEST_BEGIN();
+    Sim s;
+    sim_init(&s, 500);
+    sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
+    static const double rise[] = { -44.0, -36.0, -27.0, -18.0 };      /* 80 ms */
+    for (int i = 0; i < 4; i++) sim_win(&s, rise[i], 0.0, -60.0, 0.0);
+    for (int i = 0; i < W(200); i++)                                    /* held, +-3 dB at 4 Hz */
+        sim_win(&s, -18.0 + 3.0 * sin(2.0 * PI_ * 4.0 * (double)i * 0.02), 0.0, -60.0, 0.0);
+    static const double fall[] = { -26.0, -34.0, -42.0, -50.0, -58.0 }; /* 100 ms */
+    for (int i = 0; i < 5; i++) sim_win(&s, fall[i], 0.0, -60.0, 0.0);
+    sim_run(&s, W(3000), NONE_DB, 0.0, -60.0);
+    ASSERT_EQ(s.starts, 1);
+    ASSERT_EQ(s.ends, 1);
+    TEST_END();
+}
+
+int test_vvad_digital_silence_does_not_sink_floor(void)
+{
+    TEST_BEGIN();
+    VoiceVad v;
+    voice_vad_init(&v);
+    voice_vad_window(&v, -90.0);
+    ASSERT_TRUE(voice_vad_floor_db(&v) > -90.0);
+    Sim s;
+    sim_init(&s, 500);
+    for (int i = 0; i < W(2000); i++) {
+        int16_t z[VVAD_WIN] = {0};
+        voice_ep_window(&s.e, voice_vad_window(&s.v, voice_window_db(z, VVAD_WIN)));
+    }
+    ASSERT_TRUE(voice_vad_floor_db(&s.v) >= -75.0);
+    s.win = 0;
+    sim_run(&s, W(3000), NONE_DB, 0.0, -40.0);
+    ASSERT_EQ(s.starts, 0);
+    /* a floor that did fall to real quiet is not sunk further by zeros */
+    Sim q;
+    sim_init(&q, 500);
+    sim_run(&q, W(1000), NONE_DB, 0.0, -60.0);
+    double f = voice_vad_floor_db(&q.v);
+    for (int i = 0; i < 100; i++) voice_vad_window(&q.v, -90.0);
+    ASSERT_TRUE(voice_vad_floor_db(&q.v) == f);
     TEST_END();
 }

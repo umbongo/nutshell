@@ -24,6 +24,20 @@
  *    mean, the burst ends and that window returns VV_NOISE_RESET. (So speech
  *    that is flat for a second counts as noise; real speech varies by more.)
  *
+ *  - impulse: a burst whose peak (a flat top counts as its first window; a later
+ *    window must top it by more than 1 dB to move it) is in its first 2 windows
+ *    (counted from its first candidate window), in which no window rises 3 dB or more over the
+ *    window before it, and whose last candidate window is at least 6 dB below
+ *    the peak (a monotonic decay: a door slam with its tail) is an impulse. At
+ *    the burst's end the detector returns VV_IMPULSE instead of VV_SILENCE and
+ *    the endpointer takes that burst's windows back out of the turn's speech.
+ *  - digital silence: windows at or below -85 dBFS never change the floor (and
+ *    never start it), and the floor never goes below -75 dBFS, so a muted or
+ *    warming-up mic does not sink the floor.
+ *  Known limit: slowly modulated real noise (a fan or HVAC with more than 4 dB
+ *  swing over 1 s) is not reset by the stationarity rule; it is capped at 120 s
+ *  by the endpointer. For the hand checks.
+ *
  * Endpointer: VEP_START on the first VV_SPEECH outside a turn (the six
  * candidate windows that opened the burst are credited as speech); inside a
  * turn VEP_END when pause_ms has passed since the last speech window and the
@@ -34,11 +48,12 @@
 
 #define VVAD_WIN 320                 /* 20 ms at 16 kHz */
 #define VVAD_RING 50
+#define VVAD_START_NEED 6      /* candidates (of the last 8) that open a burst; the endpointer credits them */
 
 /* RMS in dBFS of n samples, floored at -90 (n == 0 gives -90). */
 double voice_window_db(const int16_t *s, size_t n);
 
-typedef enum { VV_SILENCE = 0, VV_SPEECH, VV_NOISE_RESET } VoiceVadOut;
+typedef enum { VV_SILENCE = 0, VV_SPEECH, VV_NOISE_RESET, VV_IMPULSE } VoiceVadOut;
 
 typedef struct {
     double floor_db;
@@ -51,6 +66,12 @@ typedef struct {
     int in_burst;
     int frozen;
     int started;
+    double lev[8];          /* last 8 window levels, lev[7] newest */
+    /* impulse tracking, from the first candidate window of the burst */
+    int imp_pos;
+    int imp_peak_pos;
+    int imp_rose;
+    double imp_peak, imp_prev, imp_last_cand;
 } VoiceVad;
 
 void        voice_vad_init(VoiceVad *v);
@@ -67,6 +88,7 @@ typedef struct {
     int since_speech;       /* windows since the last speech window */
     int speech_windows;
     int turn_windows;
+    int burst_speech;       /* speech windows of the burst in progress */
 } VoiceEndpoint;
 
 void       voice_ep_init(VoiceEndpoint *e, int pause_ms);   /* pause clamped 500..3000 */
