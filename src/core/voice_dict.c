@@ -4,9 +4,7 @@
 
 void voice_dict_init(VoiceDict *d)
 {
-    memset(d, 0, sizeof *d);
-    d->state = VDS_IDLE;
-    d->link = VDL_NONE;
+    memset(d, 0, sizeof *d);   /* VDS_IDLE, VDL_NONE and every flag are zero */
 }
 
 static VoiceDictOut out(unsigned actions, VoiceDictText text)
@@ -37,7 +35,7 @@ static int link_open(const VoiceDict *d)
 static VoiceDictOut stop_recording(VoiceDict *d, unsigned long now)
 {
     d->state = VDS_FINISHING;
-    if (d->live && link_open(d))
+    if (d->live && d->link != VDL_FAILED)   /* DONE too: FINISHING always has an exit */
         d->final_deadline = now + VOICE_DICT_FINAL_WAIT_MS;
     return out(VDA_END_CAPTURE_KEEP, VDT_NONE);
 }
@@ -49,11 +47,18 @@ static VoiceDictOut submit(VoiceDict *d, unsigned actions)
     return out(actions | VDA_SUBMIT_BATCH, VDT_TRANSCRIBING);
 }
 
-static VoiceDictOut on_captured(VoiceDict *d, int a)
+static VoiceDictOut merge(VoiceDictOut x, VoiceDictOut y)
 {
+    return out(x.actions | y.actions, y.text != VDT_NONE ? y.text : x.text);
+}
+
+/* The capture has ended and delivered its audio (or none). Only meaningful
+ * while FINISHING; captured/have_audio are never set in any other state. */
+static VoiceDictOut on_captured_finishing(VoiceDict *d, int a)
+{
+    if (d->captured) return out(0, VDT_NONE);      /* a duplicate */
     d->captured = 1;
     d->have_audio = a ? 1 : 0;
-    if (d->state != VDS_FINISHING) return out(0, VDT_NONE);
     if (!d->live) {
         if (a) return submit(d, 0);
         return finish(d, 0, VDT_DIDNT_CATCH, 0);
@@ -65,6 +70,17 @@ static VoiceDictOut on_captured(VoiceDict *d, int a)
     if (d->link == VDL_DONE)                       /* the live final came while recording */
         return finish(d, VDA_CLOSE_LINK | (a ? VDA_DROP_AUDIO : 0u), VDT_NONE, 1);
     return out(0, VDT_NONE);                       /* keep the audio until final or failure */
+}
+
+static VoiceDictOut on_captured(VoiceDict *d, int a, unsigned long now)
+{
+    if (d->state == VDS_IDLE)                      /* nothing is waiting for it: free it */
+        return out(a ? VDA_DROP_AUDIO : 0u, VDT_NONE);
+    if (d->state == VDS_RECORDING) {               /* the audio thread ended it itself */
+        VoiceDictOut s = stop_recording(d, now);
+        return merge(s, on_captured_finishing(d, a));
+    }
+    return on_captured_finishing(d, a);
 }
 
 static VoiceDictOut on_link_failed(VoiceDict *d, int never_opened)
@@ -151,7 +167,7 @@ VoiceDictOut voice_dict_step(VoiceDict *d, VoiceDictEvent ev, int a, int b, unsi
         return finish(d, VDA_CLOSE_LINK | (d->have_audio ? VDA_DROP_AUDIO : 0u), VDT_NONE, 1);
 
     case VDE_CAPTURED:
-        return on_captured(d, a);
+        return on_captured(d, a, now);
 
     case VDE_BATCH_OK:
         return on_batch_done(d, 1);
@@ -159,10 +175,12 @@ VoiceDictOut voice_dict_step(VoiceDict *d, VoiceDictEvent ev, int a, int b, unsi
         return on_batch_done(d, 0);
 
     case VDE_TICK:
-        if (d->state == VDS_FINISHING && d->live && link_open(d) &&
+        if (d->state == VDS_FINISHING && d->live && d->link != VDL_FAILED &&
             (long)(now - d->final_deadline) >= 0) {
-            VoiceDictText t = d->send_after ? VDT_FINAL_LATE : VDT_NONE;
-            return finish(d, VDA_CLOSE_LINK | VDA_DROP_AUDIO, t, 0);
+            if (d->link == VDL_DONE)               /* the final arrived; the capture was lost */
+                return finish(d, VDA_CLOSE_LINK | VDA_DROP_AUDIO, VDT_NONE, 1);
+            return finish(d, VDA_CLOSE_LINK | VDA_DROP_AUDIO,
+                          d->send_after ? VDT_FINAL_LATE : VDT_NONE, 0);
         }
         return out(0, VDT_NONE);
     }
@@ -172,7 +190,7 @@ VoiceDictOut voice_dict_step(VoiceDict *d, VoiceDictEvent ev, int a, int b, unsi
 long voice_dict_next_deadline(const VoiceDict *d, unsigned long now)
 {
     long left;
-    if (d->state != VDS_FINISHING || !d->live || !link_open(d)) return -1;
+    if (d->state != VDS_FINISHING || !d->live || d->link == VDL_FAILED) return -1;
     left = (long)(d->final_deadline - now);
     return left < 0 ? 0 : left;
 }

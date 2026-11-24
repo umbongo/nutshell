@@ -12,6 +12,18 @@
  *    and changes nothing. In particular VDE_CAPTURED in VDS_IDLE (the live
  *    final already finished the recording) returns nothing: the glue frees
  *    that capture's audio itself.
+ *  - VDE_CAPTURED in IDLE with a = 1 returns VDA_DROP_AUDIO only (the glue
+ *    frees that audio; nothing else changes); with a = 0 nothing.
+ *  - VDE_CAPTURED while RECORDING means the audio thread ended the capture
+ *    itself (the length cap or a fault): it is handled as VDE_STOP followed by
+ *    the CAPTURED handling, in one step (actions OR'ed). captured/have_audio
+ *    are only ever set while FINISHING.
+ *  - The 3 s wait is armed whenever a live recording enters FINISHING with the
+ *    link not FAILED (DONE included), so FINISHING always has an exit. A TICK
+ *    past it with the link DONE finishes with the send rule (the final did
+ *    arrive); with the link still open it finishes without sending.
+ *  - VDA_SEND_BOX may arrive with an empty box (a live final with no words):
+ *    the glue then shows "Didn't catch that" and does not send.
  *  - Finishing (UNLOCK_TYPING, back to IDLE) clears every per-recording flag,
  *    so the next VDE_START begins clean.
  *  - VDA_SEND_BOX is set whenever the finish rule says "send": (send_after or
@@ -87,7 +99,7 @@ typedef struct {
 void voice_dict_init(VoiceDict *d);
 VoiceDictOut voice_dict_step(VoiceDict *d, VoiceDictEvent ev, int a, int b, unsigned long now);
 /* Milliseconds until the wait for the final text runs out; -1 when none is
- * armed (FINISHING, live, link not FAILED/DONE); clamped at 0. */
+ * armed (not FINISHING, batch, or link FAILED); clamped at 0. */
 long voice_dict_next_deadline(const VoiceDict *d, unsigned long now);
 const char *voice_dict_text(VoiceDictText t);
 
