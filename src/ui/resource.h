@@ -125,7 +125,7 @@
 #define IDC_VOICE_KEY            3102 /* speech-to-text API key edit */
 #define IDC_VOICE_URL            3103 /* custom speech-to-text base URL edit */
 #define IDC_VOICE_MODEL          3104 /* speech-to-text model (editable combo) */
-#define IDC_VOICE_LANG           3105 /* language code edit */
+#define IDC_VOICE_LANG           3105 /* language drop-down (speech-to-text) */
 #define IDC_VOICE_DEVICE         3106 /* input device combo */
 #define IDC_VOICE_TEST           3107 /* "Test" button beside the device combo */
 #define IDC_VOICE_METER          3108 /* the owner-drawn level meter row */
@@ -135,5 +135,6 @@
 #define IDC_VOICE_AUTO_SEND      3112 /* "Send automatically when I finish speaking" tickbox */
 #define IDC_VOICE_GAIN           3113 /* Settings > Voice: microphone gain slider (ns_slider) */
 #define IDC_VOICE_GAIN_VALUE     3114 /* its value label ("+12 dB") */
+#define IDC_VOICE_LANG_OTHER     3115 /* the Other language box, shown while "Other..." is picked */
 
 #endif

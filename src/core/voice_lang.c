@@ -180,3 +180,24 @@ const char *voice_lang_spelling_hint(const char *id)
         return "Use British English spelling, for example colour, organise, centre and travelled.";
     return NULL;
 }
+
+int voice_lang_combo_index(const char *stored)
+{
+    if (!stored || !stored[0]) return 0;
+    int idx = voice_lang_find(stored);
+    return idx >= 0 ? idx : (int)N_LANGS;
+}
+
+void voice_lang_save_value(int sel, const char *other_text, const char *prev,
+                           char *out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+    if (sel >= 0 && (size_t)sel < N_LANGS) {
+        (void)snprintf(out, cap, "%s", k_langs[sel].id);
+        return;
+    }
+    if (sel == (int)N_LANGS && voice_lang_parse_other(other_text ? other_text : "", out, cap))
+        return;
+    (void)snprintf(out, cap, "%s", prev ? prev : "");
+}

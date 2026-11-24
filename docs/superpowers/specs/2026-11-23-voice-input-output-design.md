@@ -454,12 +454,19 @@ The page then has two titled sections.
   URL (Custom only, with the existing clear-text warning), Model (editable
   combo).
 - Microphone: Input device (combo: "Windows default" plus each active capture
-  endpoint by its full friendly name), a **Test** button that records 3 s and shows the live level on a
-  meter (`ns_draw_meter`), Push-to-talk key (combo: Right Shift, Right Ctrl, F8, F9; Right
+  endpoint by its full friendly name), a **Test** button (a toggle, below) and, on the next row, the zoned
+  level meter with its verdict label (below), Push-to-talk key (combo: Right Shift, Right Ctrl, F8, F9; Right
   Shift is first and the default), Mode (Toggle / Hold to talk; Toggle is first
   and the default), Microphone gain (slider, -12 to +30 dB in 1 dB steps,
   default 0 dB, shown as "+12 dB" beside it; software gain in Nutshell only,
-  set while watching the Test meter) **(maintainer, 2026-11-24)**, Mic start delay (0-400 ms, default 150; greyed while Toggle
+  set while watching the Test meter; it takes effect live during a Test, and is
+  enabled by the same rule as the device combo) **(maintainer, 2026-11-24)**.
+  The slider is a custom-drawn control (`ns_slider`, `Nutshell_Slider`), not the
+  stock trackbar, because the stock trackbar ignores the theme tokens: the track
+  is a `raised.base` pill, the filled part `accent.base`, the thumb takes the
+  hover surface from `ns_hover`, the focus ring is `tokens->focus`, and it is a
+  tab stop that reads Left/Right/Up/Down, PageUp/PageDown, Home and End
+  **(maintainer, 2026-11-24)**. Mic start delay (0-400 ms, default 150; greyed while Toggle
   is selected, since it applies to Hold to talk only), Send
   automatically when I finish speaking (tick, off) **(maintainer, 2026-11-23:
   review by default, auto-send opt-in)**.
@@ -469,6 +476,12 @@ The page then has two titled sections.
   is left, when voice is unticked or when the capture fails; changing the input
   device while it runs restarts it on the new microphone, so the maintainer can
   compare microphones. It never uploads anything.
+- **The meter row** **(maintainer, 2026-11-24)**: the zoned bar on the left
+  (`ns_draw_level_meter`: bands for quiet, good, hot and loud under the bar, the
+  fill in the colour of the zone it sits in, a peak-hold tick) and the verdict
+  label on the right, coloured dim, amber, green or red by class; the label's
+  width is reserved from the widest text, so the bar does not jump. Before a
+  Test it is empty and reads "Press Test to check the level".
 - **The meter** shows dBFS of the gained signal (`src/core/voice_level.c`):
   fast attack, 20 dB/s release, a peak-hold tick held 1 s, floor -60 dBFS. A
   label classifies the peak of the last 1 s: below -45 "Speak to see the
@@ -476,8 +489,20 @@ The page then has two titled sections.
   drawn amber), -3 and above "Too loud". The -45 figure is the silence gate's
   speech threshold (RMS 250, about -42 dBFS) with margin: a peak below -45
   cannot pass the gate, so nobody is speaking **(maintainer, 2026-11-24)**.
-- Language (dropdown, English (UK) by default, with Other... and its text box
-  and format hint; see 4.1) **(maintainer, 2026-11-24)**.
+- **Language** **(maintainer, 2026-11-24)**: a drop-down of the table in 4.1
+  (Auto-detect first), then **Other...** (shown "Other" with a real ellipsis).
+  Picking Other... shows a text box beside the drop-down (31 characters) and
+  moves focus to it. The box carries the cue "2-letter code or name, e.g. cy or
+  Welsh" and a hint row under the Language row says, on every edit, what the
+  entry means or which format is wanted ("Welsh (cy)" in the neutral dim colour,
+  a format complaint in the warning colour). The box and hint are hidden while
+  another item is picked. Save writes the list item's id; for Other, the code
+  the entry parsed to; an unrecognised entry keeps the language saved before,
+  so an untouched legacy value such as `pt-BR` is written back unchanged. A saved
+  code that is not in the list reloads as Other... with the box filled. Both the
+  drop-down and the box have the page's hover tooltip (`SH_VOICE_LANGUAGE`,
+  `SH_VOICE_LANGUAGE_OTHER`). The mapping is `voice_lang_combo_index` and
+  `voice_lang_save_value` in `src/core/voice_lang.c`.
 
 **Text to Speech**
 - `Use current AI assistant to read replies aloud` (tick box), with the same
@@ -513,6 +538,12 @@ Every control gets a `settings_help` entry, label and help text.
 - Help > Keyboard Shortcuts and the AI panel's empty-state hint mention it.
 - `--ui-demo` states: `voice-recording`, `voice-transcribing`,
   `voice-speaking`, and the Voice settings page. All are added to `ui_gallery`.
+- `--ui-demo=settings-voice` **(maintainer, 2026-11-24)** opens Settings on the
+  Voice page with AI and voice ticked in memory, no device list and no capture.
+  It shows the gain slider at +6 dB and the meter in a fixed Good state (a level
+  in the good zone, a hold tick, the label "Good") through a demo-only fill, and
+  the Language row on English (UK), so the gallery captures the page without a
+  microphone.
 
 ## 9. Delivery
 

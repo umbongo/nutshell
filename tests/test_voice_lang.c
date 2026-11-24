@@ -151,3 +151,50 @@ int test_voice_lang_hint(void)
     ASSERT_NULL(voice_lang_spelling_hint(NULL));
     TEST_END();
 }
+
+int test_voice_lang_combo_index(void)
+{
+    TEST_BEGIN();
+    size_t n = 0;
+    (void)voice_lang_table(&n);
+    ASSERT_EQ(voice_lang_combo_index("en-GB"), 1);
+    ASSERT_EQ(voice_lang_combo_index(""), 0);
+    ASSERT_EQ(voice_lang_combo_index(NULL), 0);
+    ASSERT_EQ(voice_lang_combo_index("fr"), 6);
+    /* not listed (a custom code, or a legacy raw value): the Other item */
+    ASSERT_EQ(voice_lang_combo_index("cy"), (int)n);
+    ASSERT_EQ(voice_lang_combo_index("pt-BR"), (int)n);
+    TEST_END();
+}
+
+int test_voice_lang_save_value(void)
+{
+    TEST_BEGIN();
+    size_t n = 0;
+    (void)voice_lang_table(&n);
+    char out[32];
+    /* a listed item stores its id, whatever the Other box holds */
+    voice_lang_save_value(2, "cy", "fr", out, sizeof out);
+    ASSERT_STR_EQ(out, "en-US");
+    voice_lang_save_value(0, "", "fr", out, sizeof out);
+    ASSERT_STR_EQ(out, "");
+    /* Other with a recognised code or name stores the lower-case code */
+    voice_lang_save_value((int)n, "CY", "fr", out, sizeof out);
+    ASSERT_STR_EQ(out, "cy");
+    voice_lang_save_value((int)n, " Welsh ", "fr", out, sizeof out);
+    ASSERT_STR_EQ(out, "cy");
+    /* an unrecognised Other keeps the previously saved language */
+    voice_lang_save_value((int)n, "xyz", "fr", out, sizeof out);
+    ASSERT_STR_EQ(out, "fr");
+    voice_lang_save_value((int)n, "", "de", out, sizeof out);
+    ASSERT_STR_EQ(out, "de");
+    /* an untouched legacy raw value is written back unchanged */
+    voice_lang_save_value((int)n, "pt-BR", "pt-BR", out, sizeof out);
+    ASSERT_STR_EQ(out, "pt-BR");
+    /* a bad selection index keeps the previous value */
+    voice_lang_save_value(-1, "cy", "es", out, sizeof out);
+    ASSERT_STR_EQ(out, "es");
+    voice_lang_save_value((int)n + 1, "cy", NULL, out, sizeof out);
+    ASSERT_STR_EQ(out, "");
+    TEST_END();
+}

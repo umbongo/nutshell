@@ -31,6 +31,7 @@
 #include "ns_check.h"
 #include "ns_slider.h"
 #include "ns_tip.h"
+#include "voice_lang.h"
 #include "settings_help.h"
 #include "search_providers.h"
 #include "settings_entry.h"
@@ -156,6 +157,7 @@ typedef struct {
     int  stretch_v; /* 1 = absorb leftover vertical space on this page */
     int  visible;   /* conditional visibility (custom URL fields) */
     int  full_w;    /* 1 = no label column; control spans the whole pane */
+    int  extra_off; /* 1 = hExtra stays hidden although the row shows (the Other language box) */
 } SettingsCtrl;
 
 /* Raise this when a page outgrows it; add_ctrl refuses to overflow. */
@@ -227,6 +229,11 @@ typedef struct {
     HWND     hDlg;                /* the dialog window (timers, relayout) */
     HWND     hVoiceTestNote;      /* dim "No microphone was found." under the meter */
     SettingsCtrl *ctrl_voice_test_note;
+    HWND     hVoiceLangHint;      /* the Other language box's hint, under the Language row */
+    SettingsCtrl *ctrl_voice_lang;       /* the Language row (its extra is the Other box) */
+    SettingsCtrl *ctrl_voice_lang_hint;
+    int      voice_lang_tone;     /* 0 neutral, 1 error: the hint's colour */
+    char     voice_lang_prev[32]; /* the language saved when the page was built */
     int      voice_testing;       /* the Test runs until a stop trigger (voice_test_next owns it) */
     VoiceMeter vmeter;            /* the meter's ballistics, hold tick and 1 s window */
     ULONGLONG vmeter_tick;        /* GetTickCount64 of the last VAM_LEVEL (or the start) */
@@ -370,6 +377,7 @@ static SettingsCtrl *add_ctrl(SettingsDlgData *d, HWND lbl, HWND ctrl, HWND extr
     c->stretch_v = stretch_v;
     c->visible   = visible;
     c->full_w    = full_w;
+    c->extra_off = 0;
     return c;
 }
 
@@ -691,7 +699,7 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
             crc.w = new_w;
             SetWindowPos(c->hExtra, NULL, erc.x, erc.y, erc.w, erc.h,
                          SWP_NOZORDER | SWP_NOACTIVATE);
-            ShowWindow(c->hExtra, SW_SHOW);
+            ShowWindow(c->hExtra, c->extra_off ? SW_HIDE : SW_SHOW);
         } else if (c->extra_w > 0) {
             /* Reserve space with no companion control (the AI notes csb,
              * positioned separately below once the edit's real rect is
@@ -993,7 +1001,7 @@ static void voice_enable_sync(SettingsDlgData *d)
     HWND dev = GetDlgItem(d->hPage, IDC_VOICE_DEVICE);
     if (dev) EnableWindow(dev, (on && d->voice_dev_listed) ? TRUE : FALSE);
     HWND gain = GetDlgItem(d->hPage, IDC_VOICE_GAIN);
-    if (gain) EnableWindow(gain, (on && d->voice_dev_listed) ? TRUE : FALSE);
+    if (gain) EnableWindow(gain, (on && (d->voice_dev_listed || d->demo == 2)) ? TRUE : FALSE);   /* the demo shows the slider live */
     /* Test needs the listed microphones (voice saved on); while it runs the
      * button is the Stop control, so it stays enabled. */
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
@@ -1038,6 +1046,45 @@ static void ai_url_warn_update(SettingsDlgData *d)
  * window, and owns scrolling (both the AI notes edit and the whole page). */
 
 /* ---- Voice page: microphones, Test and the meter ------------------------ */
+
+/* The Language drop-down holds the table's labels and "Other..." last. */
+static int voice_lang_other_index(void)
+{
+    size_t n = 0;
+    (void)voice_lang_table(&n);
+    return (int)n;
+}
+
+static int voice_lang_is_other(const SettingsDlgData *d)
+{
+    return (int)SendDlgItemMessage(d->hPage, IDC_VOICE_LANG, CB_GETCURSEL, 0, 0)
+           == voice_lang_other_index();
+}
+
+/* Show the Other box and its hint only while "Other..." is picked, and keep the
+ * hint's text and tone in step with the box. Relays the page out when a row
+ * came or went. */
+static void voice_lang_sync(SettingsDlgData *d, int relay)
+{
+    if (!d || !d->hPage || !d->ctrl_voice_lang || !d->ctrl_voice_lang_hint) return;
+    int other = voice_lang_is_other(d);
+    int changed = (d->ctrl_voice_lang->extra_off == other) ||
+                  (d->ctrl_voice_lang_hint->visible != other);
+    d->ctrl_voice_lang->extra_off = other ? 0 : 1;
+    d->ctrl_voice_lang_hint->visible = other;
+    if (other) {
+        char txt[64], hint[160];
+        txt[0] = '\0';
+        GetDlgItemText(d->hPage, IDC_VOICE_LANG_OTHER, txt, (int)sizeof(txt));
+        d->voice_lang_tone = voice_lang_other_hint(txt, hint, sizeof(hint));
+        SetWindowText(d->hVoiceLangHint, hint);
+        InvalidateRect(d->hVoiceLangHint, NULL, TRUE);
+    }
+    if (relay && changed && d->cur_page == SETTINGS_PAGE_VOICE) {
+        relayout(GetParent(d->hPage), d);
+        InvalidateRect(d->hPage, NULL, TRUE);
+    }
+}
 
 static void voice_meter_redraw(SettingsDlgData *d)
 {
@@ -1248,10 +1295,19 @@ static void voice_meter_paint(const SettingsDlgData *d, const DRAWITEMSTRUCT *di
     const char *text = k_idle;
     unsigned int text_rgb = tk->text_dim;
     double level = 0.0, hold = 0.0;
-    if (d->voice_testing) {
-        level = voice_meter_frac(d->vmeter.level_db);
-        hold = voice_meter_frac(d->vmeter.hold_db);
-        VoiceLevelClass c = voice_level_classify(voice_meter_window_peak_db(&d->vmeter));
+    if (d->voice_testing || d->demo == 2) {
+        double level_db = d->vmeter.level_db, hold_db = d->vmeter.hold_db;
+        VoiceLevelClass c;
+        if (d->demo == 2) {
+            /* --ui-demo=settings-voice: a fixed GOOD level with a hold tick, no capture. */
+            level_db = (VOICE_LEVEL_GOOD_LO_DB + VOICE_LEVEL_GOOD_HI_DB) / 2.0;
+            hold_db = level_db + 3.0;
+            c = VLEVEL_GOOD;
+        } else {
+            c = voice_level_classify(voice_meter_window_peak_db(&d->vmeter));
+        }
+        level = voice_meter_frac(level_db);
+        hold = voice_meter_frac(hold_db);
         text = voice_level_label(c);
         switch (c) {
         case VLEVEL_SILENT: text_rgb = tk->text_dim; break;
@@ -1337,10 +1393,16 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                 SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
                 return (LRESULT)d->hBrBgPrimary;
             }
+            if (d->hVoiceLangHint && hCtl == d->hVoiceLangHint && d->voice_lang_tone == 1) {
+                SetTextColor((HDC)wParam, theme_cr(ns_tokens()->warning.base));
+                SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
+                return (LRESULT)d->hBrBgPrimary;
+            }
             int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb ||
                        hCtl == d->hCtxHint || hCtl == d->hToolTimeoutNote ||
                        hCtl == d->hToolRoundsNote ||
-                       hCtl == d->hVoiceBlock || hCtl == d->hVoiceAiNote);
+                       hCtl == d->hVoiceBlock || hCtl == d->hVoiceAiNote ||
+                       hCtl == d->hVoiceLangHint);
             for (int di = 0; di < d->n_dbg_dim && !dim; di++)
                 dim = (hCtl == d->hDbgDim[di]);
             SetTextColor((HDC)wParam,
@@ -2207,11 +2269,31 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             {
                 HWND lbl = make_label2(nd, SH_VOICE_LANGUAGE);
-                HWND ed = make_edit2(nd, vs->voice_stt_language, IDC_VOICE_LANG, 0,
-                                     SH_VOICE_LANGUAGE);
-                SendMessage(ed, EM_SETLIMITTEXT,
-                            (WPARAM)(sizeof(vs->voice_stt_language) - 1u), 0);
-                add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_VOICE, 70, 0, 1, 0, 1, 0);
+                HWND cmb = make_combo2_wide(nd, IDC_VOICE_LANG, SH_VOICE_LANGUAGE);
+                size_t nl = 0;
+                const VoiceLang *lt = voice_lang_table(&nl);
+                for (size_t i = 0; i < nl; i++)
+                    voice_combo_add_utf8(cmb, lt[i].label);
+                voice_combo_add_utf8(cmb, "Other\xE2\x80\xA6");   /* "Other..." with the real ellipsis */
+                int lsel = voice_lang_combo_index(vs->voice_stt_language);
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)lsel, 0);
+                (void)snprintf(nd->voice_lang_prev, sizeof(nd->voice_lang_prev), "%s",
+                               vs->voice_stt_language);
+                HWND ed = make_edit2(nd, lsel == (int)nl ? vs->voice_stt_language : "",
+                                     IDC_VOICE_LANG_OTHER, 0, SH_VOICE_LANGUAGE_OTHER);
+                SendMessage(ed, EM_SETLIMITTEXT, 31, 0);
+                {
+                    wchar_t cue[96];
+                    if (MultiByteToWideChar(CP_UTF8, 0, VOICE_LANG_OTHER_CUE, -1, cue,
+                                            (int)(sizeof(cue) / sizeof(cue[0]))) > 0)
+                        SendMessageW(ed, EM_SETCUEBANNER, 0, (LPARAM)cue);
+                }
+                nd->ctrl_voice_lang = add_ctrl(nd, lbl, cmb, ed, SETTINGS_PAGE_VOICE,
+                                               0, 150, 1, 0, 1, 0);
+                nd->hVoiceLangHint = make_hint(nd, "");
+                nd->ctrl_voice_lang_hint = add_ctrl(nd, NULL, nd->hVoiceLangHint, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0, 0, 1);
+                voice_lang_sync(nd, 0);
             }
             {
                 nd->hVoiceHead[1] = make_hint(nd, "Microphone");
@@ -2257,7 +2339,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             {
                 /* Microphone gain: the themed slider, its "+12 dB" value beside it. */
                 HWND lbl = make_label2(nd, SH_VOICE_MIC_GAIN);
-                int g0 = voice_gain_clamp(vs->voice_mic_gain_db);
+                int g0 = nd->demo == 2 ? 6 : voice_gain_clamp(vs->voice_mic_gain_db);   /* the demo shows +6 dB */
                 HWND sl = ns_slider_create(nd->hPage, IDC_VOICE_GAIN,
                                            VOICE_GAIN_MIN_DB, VOICE_GAIN_MAX_DB, g0);
                 page_track(nd, sl, SH_VOICE_MIC_GAIN);
@@ -2713,6 +2795,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             break;
 
+        case IDC_VOICE_LANG:
+            if (d && HIWORD(wParam) == CBN_SELCHANGE) {
+                voice_lang_sync(d, 1);
+                if (voice_lang_is_other(d))
+                    SetFocus(GetDlgItem(d->hPage, IDC_VOICE_LANG_OTHER));
+            }
+            break;
+
+        case IDC_VOICE_LANG_OTHER:
+            if (d && HIWORD(wParam) == EN_CHANGE) voice_lang_sync(d, 1);
+            break;
+
         case IDC_VOICE_TEST:
             if (d && HIWORD(wParam) == BN_CLICKED) voice_test_apply(d, VT_EV_PRESS);
             break;
@@ -3089,8 +3183,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     strcmp(s->voice_stt_model, ep->models[0]) == 0)
                     s->voice_stt_model[0] = '\0';
             }
-            GetDlgItemText(d->hPage, IDC_VOICE_LANG,
-                           s->voice_stt_language, (int)sizeof(s->voice_stt_language));
+            {
+                char other[64];
+                other[0] = '\0';
+                GetDlgItemText(d->hPage, IDC_VOICE_LANG_OTHER, other, (int)sizeof(other));
+                int lsel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_LANG,
+                                                   CB_GETCURSEL, 0, 0);
+                voice_lang_save_value(lsel, other, d->voice_lang_prev,
+                                      s->voice_stt_language, sizeof(s->voice_stt_language));
+            }
             {
                 int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_DEVICE,
                                                   CB_GETCURSEL, 0, 0);

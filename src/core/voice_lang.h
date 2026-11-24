@@ -38,4 +38,16 @@ void voice_lang_iso(const char *id, char *out, size_t cap);
 /* A prompt asking for the variant's spelling, or NULL ("en-GB" only). */
 const char *voice_lang_spelling_hint(const char *id);
 
+/* The dropdown index for a stored id: its table index, or the table size (the
+ * "Other..." item, which Settings fills with the stored value) when unlisted.
+ * NULL or "" is index 0, Auto-detect. */
+int voice_lang_combo_index(const char *stored);
+
+/* What Save stores: sel is the dropdown selection (the table size is Other).
+ * A listed item gives its id. Other gives the parsed code when the Other box
+ * text is recognised; otherwise prev, the language saved before, is kept (so an
+ * untouched legacy value such as "pt-BR" survives). A bad sel keeps prev too. */
+void voice_lang_save_value(int sel, const char *other_text, const char *prev,
+                           char *out, size_t cap);
+
 #endif

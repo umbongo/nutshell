@@ -3759,6 +3759,8 @@ int test_voice_lang_name(void);
 int test_voice_lang_other_hint(void);
 int test_voice_lang_iso(void);
 int test_voice_lang_hint(void);
+int test_voice_lang_combo_index(void);
+int test_voice_lang_save_value(void);
 /* test_voice_stt.c */
 int test_voice_stt_provider_table(void);
 int test_voice_base_url_normalise(void);
@@ -8232,6 +8234,8 @@ int main(void) {
     failed += test_voice_lang_other_hint();
     failed += test_voice_lang_iso();
     failed += test_voice_lang_hint();
+    failed += test_voice_lang_combo_index();
+    failed += test_voice_lang_save_value();
     failed += test_voice_stt_provider_table();
     failed += test_voice_base_url_normalise();
     failed += test_voice_stt_use_ai_reason();
