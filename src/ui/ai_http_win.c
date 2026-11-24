@@ -95,10 +95,16 @@ static int content_type_ok(const char *ct)
 
 typedef struct { int resolve, connect, send, recv; } HttpTimeouts;
 
+/* Closes a session this file opened; a caller's own session is left alone. */
+static void sess_close(HINTERNET s, int own)
+{
+    if (own) WinHttpCloseHandle(s);
+}
+
 static int ai_http_post_impl(const char *url, const char * const *headers,
                              const char *content_type,
                              const char *body, size_t body_len,
-                             const HttpTimeouts *to,
+                             const HttpTimeouts *to, void *session,
                              AiHttpResponse *resp, AiNetCancel *nc)
 {
     if (!resp) return -1;
@@ -120,7 +126,12 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         return -1;
     }
 
-    HINTERNET hSession = ns_winhttp_open(NULL);
+    /* A caller's session (session != NULL, the voice opener's) is used as it is and
+     * never opened or closed here; its timeouts are set on the session itself,
+     * exactly as for an own one, so the caller must not share it between
+     * concurrent calls with different timeouts. */
+    const int own = session == NULL;
+    HINTERNET hSession = own ? ns_winhttp_open(NULL) : (HINTERNET)session;
     if (!hSession) {
         snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed: %lu",
                  GetLastError());
@@ -133,7 +144,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
     if (!hConnect) {
         snprintf(resp->error, sizeof(resp->error), "WinHttpConnect failed: %lu",
                  GetLastError());
-        WinHttpCloseHandle(hSession);
+        sess_close(hSession, own);
         return -1;
     }
 
@@ -146,13 +157,13 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         snprintf(resp->error, sizeof(resp->error), "WinHttpOpenRequest failed: %lu",
                  GetLastError());
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        sess_close(hSession, own);
         return -1;
     }
     if (req_arm(hRequest, nc) != 0) {
         snprintf(resp->error, sizeof(resp->error), "cancelled");
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        sess_close(hSession, own);
         return -1;
     }
 
@@ -196,7 +207,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
                  GetLastError());
         req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        sess_close(hSession, own);
         return -1;
     }
 
@@ -205,7 +216,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
                  "WinHttpReceiveResponse failed: %lu", GetLastError());
         req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        sess_close(hSession, own);
         return -1;
     }
 
@@ -224,7 +235,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         snprintf(resp->error, sizeof(resp->error), "Out of memory");
         req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        sess_close(hSession, own);
         return -1;
     }
 
@@ -251,7 +262,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         snprintf(resp->error, sizeof(resp->error), "cancelled");
         req_close(hRequest, nc);
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        sess_close(hSession, own);
         return -1;
     }
 
@@ -263,7 +274,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
 
     req_close(hRequest, nc);
     WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    sess_close(hSession, own);
     return 0;
 }
 
@@ -599,9 +610,10 @@ static void note_cancel(AiNetCancel *nc, char *err, size_t cap)
 
 static int post_with(const char *url, const char * const *headers,
                      const char *ct, const char *body, size_t body_len,
-                     const HttpTimeouts *to, AiHttpResponse *resp, AiNetCancel *nc)
+                     const HttpTimeouts *to, void *session,
+                     AiHttpResponse *resp, AiNetCancel *nc)
 {
-    int rc = ai_http_post_impl(url, headers, ct, body, body_len, to, resp, nc);
+    int rc = ai_http_post_impl(url, headers, ct, body, body_len, to, session, resp, nc);
     if (rc != 0 && resp) note_cancel(nc, resp->error, sizeof(resp->error));
     return rc;
 }
@@ -612,7 +624,7 @@ int ai_http_post(const char *url, const char * const *headers,
 {
     /* AI responses can take 60+ seconds: receive timeout 120 s */
     static const HttpTimeouts chat = { 0, 60000, 30000, 120000 };
-    return post_with(url, headers, "application/json", body, body_len, &chat, resp, nc);
+    return post_with(url, headers, "application/json", body, body_len, &chat, NULL, resp, nc);
 }
 
 int ai_http_post_ct(const char *url, const char * const *headers,
@@ -620,7 +632,22 @@ int ai_http_post_ct(const char *url, const char * const *headers,
                     AiHttpResponse *resp, AiNetCancel *nc)
 {
     static const HttpTimeouts upload = { 10000, 10000, 30000, 60000 };
-    return post_with(url, headers, content_type, body, body_len, &upload, resp, nc);
+    return post_with(url, headers, content_type, body, body_len, &upload, NULL, resp, nc);
+}
+
+int ai_http_post_ct_ex(void *session, const char *url, const char * const *headers,
+                       const char *content_type, const char *body, size_t body_len,
+                       int send_ms, int recv_ms, AiHttpResponse *resp, AiNetCancel *nc)
+{
+    const HttpTimeouts to = { 10000, 10000, send_ms, recv_ms };
+    if (!session) {
+        if (resp) {
+            memset(resp, 0, sizeof(*resp));
+            snprintf(resp->error, sizeof(resp->error), "No session");
+        }
+        return -1;
+    }
+    return post_with(url, headers, content_type, body, body_len, &to, session, resp, nc);
 }
 
 int ai_http_get(const char *url, const char * const *headers,
@@ -669,6 +696,14 @@ int ai_http_post_ct(const char *url, const char * const *headers,
     }
     snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
     return -1;
+}
+
+int ai_http_post_ct_ex(void *session, const char *url, const char * const *headers,
+                       const char *content_type, const char *body, size_t body_len,
+                       int send_ms, int recv_ms, AiHttpResponse *resp, AiNetCancel *nc)
+{
+    (void)session; (void)send_ms; (void)recv_ms;
+    return ai_http_post_ct(url, headers, content_type, body, body_len, resp, nc);
 }
 
 int ai_http_get(const char *url, const char * const *headers,

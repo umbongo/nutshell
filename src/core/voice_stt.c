@@ -391,15 +391,156 @@ static void trim_into(const char *s, char *out, size_t cap, int *fits)
     *fits = 1;
 }
 
+void voice_stt_upload_timeouts(size_t wav_len, int *send_ms, int *recv_ms)
+{
+    const unsigned long long cap = 600000ull;
+    unsigned long long snd = 30000ull + 1000ull * ((unsigned long long)wav_len / 65536ull);
+    unsigned long long secs = wav_len > 44 ? ((unsigned long long)wav_len - 44ull) / 32000ull : 0ull;
+    unsigned long long rcv = 60000ull + 1000ull * (secs / 10ull);
+    if (snd > cap) snd = cap;
+    if (rcv > cap) rcv = cap;
+    if (send_ms) *send_ms = (int)snd;
+    if (recv_ms) *recv_ms = (int)rcv;
+}
+
+/* The JSON parser holds a string of at most 8,191 bytes (TOK_VALUE_MAX), so a
+ * long transcript cannot go through it. For a body that fails to parse and is
+ * longer than that, scan for the one string the reply is about: the top-level
+ * "text" of an OpenAI-shaped reply, or choices[0].message.content (the first
+ * "content" key at depth 4) of a chat-shaped one, and decode it into out.
+ * 1 on success (out holds the decoded text, NUL-terminated), -1 when the
+ * string is not there or malformed, 0 when it does not fit cap. */
+static int put_utf8(char *out, size_t cap, size_t *n, unsigned long cp)
+{
+    unsigned char b[4];
+    size_t k;
+    if (cp < 0x80) { b[0] = (unsigned char)cp; k = 1; }
+    else if (cp < 0x800) { b[0] = (unsigned char)(0xC0 | (cp >> 6)); b[1] = (unsigned char)(0x80 | (cp & 0x3F)); k = 2; }
+    else if (cp < 0x10000) {
+        b[0] = (unsigned char)(0xE0 | (cp >> 12)); b[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+        b[2] = (unsigned char)(0x80 | (cp & 0x3F)); k = 3;
+    } else {
+        b[0] = (unsigned char)(0xF0 | (cp >> 18)); b[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+        b[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F)); b[3] = (unsigned char)(0x80 | (cp & 0x3F)); k = 4;
+    }
+    if (*n + k + 1 > cap) return 0;
+    memcpy(out + *n, b, k);
+    *n += k;
+    return 1;
+}
+
+static int hex4(const char *p, const char *end, unsigned long *v)
+{
+    if (end - p < 4) return 0;
+    *v = 0;
+    for (int i = 0; i < 4; i++) {
+        char c = p[i];
+        int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? 10 + c - 'a'
+              : (c >= 'A' && c <= 'F') ? 10 + c - 'A' : -1;
+        if (d < 0) return 0;
+        *v = (*v << 4) | (unsigned long)d;
+    }
+    return 1;
+}
+
+/* p points just after the opening quote; decodes up to the closing quote. */
+static int decode_json_string(const char *p, const char *end, char *out, size_t cap)
+{
+    size_t n = 0;
+    while (p < end && *p != '"') {
+        unsigned long cp;
+        if (*p != '\\') {
+            if (n + 2 > cap) return 0;
+            out[n++] = *p++;
+            continue;
+        }
+        if (++p >= end) return -1;
+        char c = *p++;
+        switch (c) {
+        case 'n': cp = '\n'; break;
+        case 't': cp = '\t'; break;
+        case 'r': cp = '\r'; break;
+        case 'b': cp = '\b'; break;
+        case 'f': cp = '\f'; break;
+        case '"': case '\\': case '/': cp = (unsigned char)c; break;
+        case 'u':
+            if (!hex4(p, end, &cp)) return -1;
+            p += 4;
+            if (cp >= 0xD800 && cp < 0xDC00) {
+                unsigned long lo;
+                if (end - p >= 6 && p[0] == '\\' && p[1] == 'u' && hex4(p + 2, end, &lo) &&
+                    lo >= 0xDC00 && lo < 0xE000) {
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                    p += 6;
+                } else {
+                    cp = 0xFFFD;
+                }
+            } else if (cp >= 0xDC00 && cp < 0xE000) {
+                cp = 0xFFFD;
+            }
+            break;
+        default: return -1;
+        }
+        if (!put_utf8(out, cap, &n, cp)) return 0;
+    }
+    if (p >= end) return -1;
+    out[n] = '\0';
+    return 1;
+}
+
+static int scan_large_text(SttShape shape, const char *body, size_t len, char *out, size_t cap)
+{
+    const char *p = body, *end = body + len;
+    const int want_depth = shape == STT_SHAPE_GEMINI_CHAT ? 4 : 1;
+    const char *want_key = shape == STT_SHAPE_GEMINI_CHAT ? "content" : "text";
+    size_t kl = strlen(want_key);
+    int depth = 0;
+    while (p < end) {
+        char c = *p;
+        if (c == '{' || c == '[') { depth++; p++; continue; }
+        if (c == '}' || c == ']') { depth--; p++; continue; }
+        if (c != '"') { p++; continue; }
+        const char *s0 = p + 1, *q = s0;   /* a string: a key when a colon follows */
+        while (q < end && *q != '"') q += (*q == '\\' && q + 1 < end) ? 2 : 1;
+        if (q >= end) return -1;
+        const char *after = q + 1;
+        while (after < end && (*after == ' ' || *after == '\t' || *after == '\r' || *after == '\n')) after++;
+        int is_key = after < end && *after == ':';
+        if (is_key && depth == want_depth && (size_t)(q - s0) == kl && memcmp(s0, want_key, kl) == 0) {
+            after++;
+            while (after < end && (*after == ' ' || *after == '\t' || *after == '\r' || *after == '\n')) after++;
+            if (after >= end || *after != '"') return -1;
+            return decode_json_string(after + 1, end, out, cap);
+        }
+        p = q + 1;
+    }
+    return -1;
+}
+
 int voice_stt_parse(SttShape shape, const char *body, size_t len,
                     char *out, size_t cap, char *err, size_t errcap)
 {
-    (void)len;
     if (out && cap) out[0] = '\0';
     if (!body || !out || cap == 0) { put_err(err, errcap, "Empty speech-to-text response"); return 0; }
     JsonNode *root = json_parse(body);
     if (!root || root->type != JSON_OBJECT) {
         json_free(root);
+        if (len > 8192) {   /* maybe a transcript longer than the parser's string limit */
+            int fits = scan_large_text(shape, body, len, out, cap);
+            if (fits == 1) {
+                size_t n = strlen(out), a = 0;
+                while (a < n && (out[a] == ' ' || out[a] == '\t' || out[a] == '\r' || out[a] == '\n')) a++;
+                while (n > a && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\r' || out[n - 1] == '\n')) n--;
+                memmove(out, out + a, n - a);
+                out[n - a] = '\0';
+                return 1;
+            }
+            if (fits == 0) {
+                out[0] = '\0';
+                put_err(err, errcap, "The transcript was too long");
+                return 0;
+            }
+        }
         put_err(err, errcap, "The speech-to-text response was not valid JSON");
         return 0;
     }

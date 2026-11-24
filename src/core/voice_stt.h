@@ -69,6 +69,15 @@ char *voice_stt_multipart(const char *boundary, const unsigned char *wav, size_t
 char *voice_stt_gemini_body(const unsigned char *wav, size_t wav_len,
                             const char *model, const char *language, size_t *out_len);
 
+/* The smallest transcript buffer an upload result carries (heap): a 10-minute
+ * recording's text fits. */
+#define VOICE_STT_TEXT_MIN 65536
+
+/* WinHTTP send and receive timeouts (ms) for uploading a WAV of wav_len bytes
+ * (16 kHz 16-bit mono plus a 44-byte header): send 30 s + 1 s per 64 KiB, receive
+ * 60 s + 1 s per 10 s of audio; each capped at 10 minutes. Either output may be NULL. */
+void voice_stt_upload_timeouts(size_t wav_len, int *send_ms, int *recv_ms);
+
 /* 1 and the trimmed transcript in out, or 0 with err. */
 int voice_stt_parse(SttShape shape, const char *body, size_t len,
                     char *out, size_t cap, char *err, size_t errcap);

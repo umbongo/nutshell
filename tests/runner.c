@@ -3816,6 +3816,8 @@ int test_voice_stt_prompt_per_provider(void);
 int test_voice_stt_retry_plain(void);
 int test_voice_stt_multipart_target_prompt(void);
 int test_voice_stt_parse(void);
+int test_voice_stt_parse_large(void);
+int test_voice_stt_upload_timeouts(void);
 int test_voice_stt_http_error(void);
 int test_voice_live_resolve(void);
 int test_voice_live_session_openai(void);
@@ -8355,6 +8357,8 @@ int main(void) {
     failed += test_voice_stt_retry_plain();
     failed += test_voice_stt_multipart_target_prompt();
     failed += test_voice_stt_parse();
+    failed += test_voice_stt_parse_large();
+    failed += test_voice_stt_upload_timeouts();
     failed += test_voice_stt_http_error();
     failed += test_voice_live_resolve();
     failed += test_voice_live_session_openai();

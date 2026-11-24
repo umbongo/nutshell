@@ -350,8 +350,7 @@ void voice_on_stt(LPARAM lp)
     VoiceSttResult *r = (VoiceSttResult *)lp;
     if (!r) return;
     if (!g_audio_up || !g_token || r->token != g_token) {
-        secure_zero(r, sizeof(*r));   /* stale, or voice went off meanwhile */
-        free(r);
+        voice_stt_result_free(r);   /* stale, or voice went off meanwhile */
         return;
     }
     g_token = 0;
@@ -367,6 +366,5 @@ void voice_on_stt(LPARAM lp)
         ai_chat_voice_status(panel, r->err[0] ? r->err : "Transcription failed", 1);
     else
         ai_chat_voice_deliver(panel, r->text, s ? s->voice_auto_send : 0);
-    secure_zero(r, sizeof(*r));
-    free(r);
+    voice_stt_result_free(r);
 }
