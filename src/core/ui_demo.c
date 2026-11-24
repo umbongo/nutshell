@@ -13,19 +13,19 @@
  * always last and always means "union of the panel states" (not "ansi",
  * "local", "thinking", "thinking-compact", "thinking-extended", "thinking-open", "cmddetail", "settings-debug", "policy-auto",
  * "policy-compact", "shortcuts", "notice-info", "notice-warning",
- * "voice-recording", "voice-transcribing", "settings-voice" or "runlist", which reuse or swap content,
+ * "voice-recording", "voice-transcribing", "settings-voice", "header-status" or "runlist", which reuse or swap content,
  * open a modal window or exist to show one thing). "ansi" sits before "local"
  * so the names tests/test_ui_demo.c anchors from the end of the list keep
  * their positions, "runlist" before "ansi" for the same reason; "shortcuts"
  * sits before "notice-info" and "notice-warning", the voice states after
- * them, "settings-voice" (modal) last before "all".
+ * them, "settings-voice" (modal) after them, "header-status" last before "all".
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
     "nokey", "nosession", "batches", "runlist", "ansi", "local", "thinking", "thinking-compact", "thinking-extended",
     "thinking-open", "cmddetail",
     "settings-debug", "policy-auto", "policy-compact", "shortcuts", "notice-info", "notice-warning",
-    "voice-recording", "voice-transcribing", "settings-voice", "all"
+    "voice-recording", "voice-transcribing", "settings-voice", "header-status", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -704,7 +704,8 @@ int ui_demo_build(const char *state, AiConversation *conv,
     if (is_all || strcmp(state, "approval") == 0 ||
         strcmp(state, "cmddetail") == 0)
         build_approval(conv, approval);
-    if (is_all || strcmp(state, "executing") == 0)
+    if (is_all || strcmp(state, "executing") == 0 ||
+        strcmp(state, "header-status") == 0)
         build_executing(conv, approval);
     if (is_all || strcmp(state, "tool") == 0)
         build_tool(conv);
@@ -748,6 +749,15 @@ int ui_demo_build(const char *state, AiConversation *conv,
      * (see ai_chat_apply_demo_extras() in ai_chat.c). */
 
     return 0;
+}
+
+const char *ui_demo_header_status(const char *state)
+{
+    if (state && (strcmp(state, "header-status") == 0 ||
+                  strcmp(state, "all") == 0))
+        return "Still transcribing the last recording: wait for it to finish, "
+               "or press Esc to cancel it first";
+    return NULL;
 }
 
 CmdPolicy ui_demo_policy(const char *state)

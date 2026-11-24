@@ -33,7 +33,7 @@ int ai_composer_clamp_h(int want_h, int panel_h, int line_h, int dpi);
 /* Status-line controls, left to right (docs/superpowers/specs/
  * 2026-10-18-ai-auto-approve-button-design.md section 3): the policy pill
  * (sliced by ns_policy_layout() -- this module only places it), free
- * space, the context meter (bar + "used / limit" text) or the busy label,
+ * space, the context meter (bar + "used / limit" text),
  * and the Auto-approve button at the right edge. The caller measures both
  * label sets; this picks one of five tiers as the row narrows:
  *   1 full labels, meter bar and text   2 full labels, meter text only
@@ -60,16 +60,14 @@ enum {
 /* `policy` is the pill: x = status.x, w = the chosen label set's width (it
  * may run past `policy_clip` in tier 5; nothing paints or hits there).
  * `auto_btn` ends SP_SM in from the row's right edge in every tier. The
- * meter rects end at auto_btn.x - SP_SM. `label` is the busy label's
- * rect: from the visible pill's right edge + SP_MD to auto_btn.x - SP_SM,
- * zero-size when that is under 1 px. ai_chat.c and ns_draw.c compute no
- * rect of their own. */
+ * meter rects end at auto_btn.x - SP_SM. Status notes are not drawn here
+ * (they live in the header, ai_header_layout.h). ai_chat.c and ns_draw.c
+ * compute no rect of their own. */
 typedef struct {
     NsRect policy;
     int    policy_clip;
     NsRect auto_btn;
     NsRect meter_bar, meter_text;
-    NsRect label;
     int    compact;
     int    tier;
 } AiStatusLayout;

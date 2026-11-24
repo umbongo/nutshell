@@ -260,7 +260,7 @@ The AI assistant can see the recent history of your terminal output (1,000 lines
 #### Header
 
 - The session name, in the title font
-- A **model chip** naming the active model
+- The panel's **status**, right after the session name and the full width up to the buttons: the activity dot and word (Processing, Thinking, Responding, Executing, Waiting) and any status note (Continuing, Retrying, Running 2/3 · waiting for prompt, the voice notes). It is cut with an ellipsis only when the header cannot hold it all, and hovering it shows the full text. The model name is on each reply and in the context meter's tooltip, not in the header
 - Three icon buttons, each with a tooltip: **New chat** (clear the conversation and start fresh), **Save chat** (export the conversation as a plain text file), and **Undock/Dock** (pop the panel into its own window, or dock it back into the main frame)
 
 #### Status Line
@@ -272,7 +272,7 @@ A line above the input box, always visible once a session is connected:
   - **Auto-approve** runs commands up to the level without asking — the stops it covers turn solid. Turning it on at Critical (or moving to Critical while it is on) asks you to confirm first. A reply that arrives while its tab is hidden always waits for you, so keep the tab shown to let the panel work unattended
 
   The control takes its colour from the level (green at Read, blue at Unknown, amber at Write, red at Critical), so a permissive session stays visible at a glance. On a narrow panel the labels shorten to **R U W C** and **Auto**; hover any stop or the button for a short description. A new session starts from **Allowed** / **Auto-approve by default** in Settings under AI Assistant > Behaviour; clicking here only changes the current session
-- **Context meter** — a small bar plus `used / limit` numbers showing how much of the model's context window the conversation is using; hover it for the exact token counts
+- **Context meter** — a small bar plus `used / limit` numbers showing how much of the model's context window the conversation is using; hover it for the exact token counts and the model. Status notes no longer appear here; they are in the header (above)
 
 #### Sending Messages
 

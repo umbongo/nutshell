@@ -21,9 +21,12 @@ panel from opening at all instead of telling the user what to do next.
 
 Top to bottom, all sizes from `ns_type`, all colours from `ns_tokens()`:
 
-1. **Header** (`SP_XXL` tall): session name (`FONT_TITLE`), model chip
-   (`ns_draw_chip`, `raised`/`text_dim`), spacer, then three icon buttons with
-   tooltips — New chat, Save chat, Undock/Dock.
+1. **Header** (`SP_XXL` tall): session name (`FONT_TITLE`), the status
+   (activity dot and word or a status note, `FONT_CAPTION`; ellipsised only when
+   the header cannot hold it, full text in a tooltip), then three icon buttons
+   with tooltips — New chat, Save chat, Undock/Dock. The model chip that sat
+   after the name was removed **(maintainer, 2026-11-24)**; the model shows on each reply
+   and in the context meter's tooltip.
 2. **Thread** — the existing `chat_listview`, taking all the height between
    header and status line; unchanged except the approval card and the empty
    state below.

@@ -117,16 +117,6 @@ void ai_status_layout(NsRect status, int dpi, const AiStatusMeasure *m,
             out->meter_bar.h = seg_h;
         }
     }
-
-    int pill_right = out->policy.x + out->policy.w;
-    if (pill_right > out->policy_clip) pill_right = out->policy_clip;
-    int label_x = pill_right + gap_md;
-    if (meter_right - label_x > 0) {
-        out->label.x = label_x;
-        out->label.y = seg_y;
-        out->label.w = meter_right - label_x;
-        out->label.h = seg_h;
-    }
 }
 
 int ai_status_hit(const AiStatusLayout *sl, const NsPolicyLayout *pl,

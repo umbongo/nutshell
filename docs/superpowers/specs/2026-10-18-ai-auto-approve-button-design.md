@@ -90,15 +90,16 @@ blocked / pending / approved outcomes in `chat_approval_add_session()`
 The row is the AI panel's status line, laid out by `ai_status_layout()` in
 `src/core/ai_panel_layout.c` (core, natively tested in `tests/test_ai_panel.c`): the
 policy pill on the left, the context meter (bar and text) right-aligned with the bar
-dropped before the text, and the busy label drawn right-aligned into the meter's space.
+dropped before the text. (The busy label that once shared the meter's space moved to the panel header **(maintainer, 2026-11-24)**; `AiStatusLayout.label` is gone.)
 The button joins that layout; `ns_policy_layout()`, `ns_policy_width()` and
 `ns_policy_hit()` in `src/core/ns_layout.c` keep slicing the pill.
 
-- **Order, left to right**: pill, free space, meter (or the busy label), **Auto-approve
-  button at the right edge**. The meter and the busy label end at the button's left
-  edge minus `SP_SM`; the layout returns that label rect and `ai_chat.c`'s
-  `context_label` drawing uses it instead of `status_rc.right`, so the busy label can
-  never paint over the button.
+- **Order, left to right**: pill, free space, meter, **Auto-approve
+  button at the right edge**. The meter ends at the button's left edge minus
+  `SP_SM`. Status notes ("Continuing", "Retrying", the voice notes) are no longer
+  drawn in this row: they are shown in the panel header after the session name
+  **(maintainer, 2026-11-24)**, so the meter and its numbers are always drawn at
+  their tier.
 - **Shrink order** as the row narrows, decided in `ai_status_layout()` from the
   caller's measured label widths (full and compact sets) and the meter widths:
   1. full labels, meter bar and text;
@@ -110,7 +111,7 @@ The button joins that layout; `ns_policy_layout()`, `ns_policy_width()` and
      argument; cells that are not wholly inside it are marked unhittable, and
      `ns_draw_policy` paints inside `IntersectClipRect` on the same bound so a partly
      clipped cell neither paints under the button nor takes a click.
-  The layout returns the button rect, the pill rect and clip, the meter and label rects,
+  The layout returns the button rect, the pill rect and clip, the meter rects,
   the `compact` flag and which label set to draw. `ai_chat.c` and `ns_draw.c` consume it
   and compute no rect of their own.
 - **Pill**: four touching cells, one band each (the rail is gone). Colour follows
@@ -131,7 +132,7 @@ The button joins that layout; `ns_policy_layout()`, `ns_policy_width()` and
   `NS_POLICY_STOPS + 1`); the button is hit by a plain rect test on the layout's rect.
 - **Tests** for the layout, in `tests/test_ai_panel.c` and `tests/test_ns_layout.c`:
   each of the five tiers at a width inside it; the two widths either side of each
-  threshold; the button, the label rect, the meter and the pill never overlap at any
+  threshold; the button, the meter and the pill never overlap at any
   tested width; the hit-test maps each cell and the button and refuses a clipped cell.
 
 ## 4. Tooltips
@@ -219,7 +220,7 @@ Native (`make test`):
   unchanged; save after load writes the normalised token.
 
 What the native suite cannot reach, because `ai_chat.c` is `NON_TEST_SRCS`: the
-confirmation box and its guard, the tooltip tools, the busy-label rect, the background
+confirmation box and its guard, the tooltip tools, the header status, the background
 policy copy and the switch-back start. Covered on Windows: two new `--ui-demo` states,
 `policy-auto` (button on at Write, a running card) and `policy-compact` (the panel at a
 width below the compact threshold, set through the panel's persisted width before the
@@ -286,7 +287,7 @@ with this one's merge.
 5. Settings can reach Critical plus auto with no prompt. **Accepted**: the box on Save.
 6. The message box has no re-entrancy handling. **Accepted**: session captured, guard,
    tooltip hidden, re-check after Yes.
-7. The busy label paints over the button. **Accepted**: label rect from the layout.
+7. The busy label paints over the button. **Resolved**: the label left the row **(maintainer, 2026-11-24)**; status notes are in the header.
 8. One callback tool over the panel never re-triggers; the cell tip cannot warn about
    auto. **Accepted**: one rect tool per element; `auto_on` parameter.
 9. Removing `set_unattended` breaks about fifteen tests and leaves `clamp`/`from_token`
@@ -311,7 +312,7 @@ Where the implementation departs from, or settles, what is written above.
 
 - The harness reads the state through a new `WM_AI_GET_POLICY` (`WM_USER + 104`), answered with `cmd_policy_status_word()` (bits 0-7 the level, 0x100 the button); the "existing status query" this spec assumed did not exist.
 - `policy-compact` narrows the docked demo panel through `ui_demo_panel_width_px(state, dpi)`, applied after `create_ai_chat()`; the panel width is not persisted, and an undocked demo is not narrowed.
-- The busy label and the context meter are alternatives that share the meter's space; section 3's "never overlap" means elements shown at once.
+- The busy label and the context meter once shared the meter's space; since 2026-11-24 the label is in the header and the meter is always drawn.
 - `cmd_policy_clamp()` keeps a range clamp for internal callers (`clamp_range`) and normalises splits only at the entry points (`cmd_policy_clamp`, `cmd_policy_set_allowed`, `cmd_policy_set_auto`, the token loader); the test-only `cmd_policy_set_unattended` keeps splits (it uses `clamp_range`).
 - `cmd_policy_cycle_unattended` stays because a native test calls it; no `src/ui` caller remains.
 - Settings asks the Critical question only when Save would enter the combination from the stored policy (`cmd_policy_needs_confirm(stored, next)`, the same rule as the panel); a Save that leaves a stored Critical + on unchanged does not ask. No keeps the stored policy and the rest of the page still saves.

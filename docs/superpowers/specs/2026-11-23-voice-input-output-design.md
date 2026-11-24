@@ -228,7 +228,9 @@ These are surveyed facts, file:line as of `main` 4c1a4e7 (v1.2.89).
    session (tab) and conversation that were active when it started. If, when
    the transcript returns, a different tab is shown, New chat was pressed, or
    that session has closed, the transcript is discarded with a short status
-   ("Voice message dropped: the chat changed"). It is never sent to another
+   ("Voice message dropped: the chat changed"). Short statuses appear in the
+   panel header after the session name, not in the bottom strip, where they
+   were truncated **(maintainer, 2026-11-24)**. It is never sent to another
    host.
 4. If the input box is empty, the transcript is written into `hInput` with the
    caret at the end and the focus in the box, and **not** sent, so the
@@ -539,6 +541,11 @@ Every control gets a `settings_help` entry, label and help text.
   the defaults and list the chords that keep working. Regenerate README's
   block.
 - Help > Keyboard Shortcuts and the AI panel's empty-state hint mention it.
+- The Listening and Transcribing cue is also shown in the panel header's status
+  slot, besides the input placeholder, because a draft in the box hides the
+  placeholder **(maintainer, 2026-11-24)**.
+- `--ui-demo=header-status` **(maintainer, 2026-11-24)** shows a long status
+  note in the header beside the Executing dot, and is added to `ui_gallery`.
 - `--ui-demo` states: `voice-recording`, `voice-transcribing`,
   `voice-speaking`, and the Voice settings page. All are added to `ui_gallery`.
 - `--ui-demo=settings-voice` **(maintainer, 2026-11-24)** opens Settings on the

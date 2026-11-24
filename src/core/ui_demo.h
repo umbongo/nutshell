@@ -63,6 +63,12 @@
  * Settings on the Voice page (voice and AI ticked in memory only). None is
  * part of "all": it keeps its pinned shape, and the settings page is modal.
  *
+ * "header-status" (2026-11-24) builds "executing"'s content, and the win32
+ * side puts the long note ui_demo_header_status() returns into the panel
+ * header after the session name, beside the Executing dot. "all" shows the
+ * same note (it adds nothing to the conversation, so "all" keeps its pinned
+ * shape).
+ *
  * "runlist" (2026-11-11, the command list, spec 2026-11-05-run-command-tool
  * decision 21) builds a conversation of two replies; `approval` holds the
  * live batch under the second one (ran, running, queued, queued) and
@@ -123,6 +129,12 @@ int ui_demo_thinking_pref(const char *state);
 /* Every recognised state name, in a stable order ending with "all".
  * *count receives the array length. Never returns NULL. */
 const char *const *ui_demo_states(int *count);
+
+/* The status note the demo shows in the panel header (the text the real
+ * panel puts there for "Still transcribing the last recording..."): long,
+ * to show the header's room, for "header-status" and "all"; NULL for every
+ * other state and for NULL. */
+const char *ui_demo_header_status(const char *state);
 
 /* The policy the demo tab starts with: Write with Auto-approve on for
  * "policy-auto", Write with it off for every other state and for NULL --

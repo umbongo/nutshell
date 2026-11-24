@@ -114,15 +114,15 @@ void ai_chat_request_policy_change(HWND hwnd, AiChatData *d, CmdPolicy next)
     apply_policy_change(d, next);
 }
 
-/* Recompute the context meter/usage state and clear any busy-indicator
- * override text (see ai_chat_start_indicator()) so the status line goes back to
- * showing the normal used/limit numbers. The numbers themselves are
+/* Recompute the context meter/usage state and clear the header status note
+ * (see ai_chat_start_indicator()). The numbers themselves are
  * measured fresh from d->context_limit/actual_*_tokens/d->conv at paint
  * time (ai_chat_get_status_paint()) -- this just triggers that repaint. */
 void ai_chat_update_context_bar(AiChatData *d)
 {
     if (!d) return;
     d->context_label[0] = '\0';
+    ai_chat_header_invalidate(d);   /* the note lived in the header */
     ai_chat_invalidate_status_line(d);
 }
 
@@ -287,6 +287,7 @@ void ai_chat_status_tools_update(AiChatData *d)
     AiStatusPaint sp;
     ai_chat_get_status_paint(d, NULL, &sp);
     for (int t = 0; t < STATUS_TOOL_COUNT; t++) {
+        if (t == STATUS_TOOL_HEADER) continue;   /* ai_chat_header_sync() owns it */
         NsRect r = { 0, 0, 0, 0 };
         if (t < NS_POLICY_STOPS) {
             r = sp.pl.hit[t];
@@ -312,8 +313,7 @@ void ai_chat_status_tools_update(AiChatData *d)
 }
 
 /* Paint the status line: bg_secondary fill with a border rule on top, the
- * policy control, and the context meter + used/limit numbers (or, while a
- * ai_chat_start_indicator() busy override is set, that text instead of the meter). */
+ * policy control, and the context meter + used/limit numbers. */
 void ai_chat_paint_status_line(AiChatData *d, HDC hdc)
 {
     const ThemeTokens *tok = ns_tokens();
@@ -349,18 +349,9 @@ void ai_chat_paint_status_line(AiChatData *d, HDC hdc)
         if (saved_dc) RestoreDC(hdc, saved_dc);
     }
 
-    /* Busy override, or the context meter + used/limit numbers. The busy
-     * label uses the layout's label rect, which ends SP_SM short of the
-     * button, so it can never paint over it (spec section 3). */
-    if (d->context_label[0]) {
-        if (sp.sl.label.w > 0) {
-            RECT rc = ai_chat_to_RECT(sp.sl.label);
-            SetTextColor(hdc, theme_cr(tok->text_main));
-            DrawTextA(hdc, d->context_label, -1, &rc,
-                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX |
-                      DT_END_ELLIPSIS);
-        }
-    } else if (sp.has_meter) {
+    /* The context meter + used/limit numbers. Status notes are painted in
+     * the panel header, not here. */
+    if (sp.has_meter) {
         if (sp.sl.meter_bar.w > 0) {
             int actual = d->actual_input_tokens + d->actual_output_tokens;
             int tokens = actual > 0 ? actual : ai_context_estimate_tokens_ex(&d->conv, d->last_snapshot_len);

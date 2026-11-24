@@ -326,10 +326,11 @@ typedef struct {
     /* Context window usage meter, painted in the status line (no child
      * window any more -- see ai_chat_get_status_paint()). */
     int  context_limit;       /* token limit for model, 0=unknown */
-    /* Busy-indicator override text ("Waiting for output", "Continuing"...):
-     * when non-empty, painted in place of the meter's used/limit numbers.
-     * Set by ai_chat_start_indicator(), cleared by ai_chat_update_context_bar(). */
-    char context_label[64];
+    /* Status note ("Continuing", "Retrying", the voice notes...): when
+     * non-empty, painted in the panel header after the session name (not in
+     * the status strip; 2026-11-24). Set by ai_chat_start_indicator() and
+     * ai_chat_voice_status(), cleared by ai_chat_update_context_bar(). */
+    char context_label[256];
     int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
     int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
 
@@ -430,7 +431,8 @@ typedef struct {
     HWND hMicBtn;               /* NULL while voice is off */
     AiVoiceUi voice_ui;
     char voice_cue[128];        /* UTF-8 placeholder painted in the empty input */
-    char voice_status[64];      /* the transient text last put in context_label */
+    char voice_status[256];     /* the transient text last put in context_label */
+    NsRect header_tip;          /* where the header status tooltip tool sits (0 = none) */
     NsHover mic_hover;
     int mic_hover_tracking;
     NsAnimList anim;            /* the panel's own ns_motion list; TIMER_MOTION steps it */
@@ -510,10 +512,11 @@ typedef struct {
 #define STATUS_HIT_COUNT      (NS_POLICY_STOPS + 1)
 
 /* Tooltip tool ids on the panel: STATUS_TOOL_BASE + hit id (cells 0..3,
- * button 4), then the context meter. */
+ * button 4), then the context meter, then the header status text. */
 #define STATUS_TOOL_BASE  100
 #define STATUS_TOOL_METER STATUS_HIT_COUNT
-#define STATUS_TOOL_COUNT (STATUS_HIT_COUNT + 1)
+#define STATUS_TOOL_HEADER (STATUS_HIT_COUNT + 1)   /* the header's status text */
+#define STATUS_TOOL_COUNT (STATUS_HIT_COUNT + 2)
 
 typedef struct {
     NsRect status;
@@ -687,6 +690,9 @@ void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
 void ai_chat_relayout(AiChatData *d);
 void ai_chat_paint_header(AiChatData *d, HDC hdc);
 void ai_chat_header_sync(AiChatData *d);
+/* The header status text (UTF-8): note, voice cue or activity word; NULL if
+ * none. *is_word (may be NULL) is 1 for the activity word. */
+const char *ai_chat_header_text(const AiChatData *d, int *is_word);
 void ai_chat_header_invalidate(AiChatData *d);
 void ai_chat_apply_zoom(AiChatData *d, int delta);
 

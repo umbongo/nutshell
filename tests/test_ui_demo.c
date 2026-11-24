@@ -42,25 +42,26 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 27);
+    ASSERT_EQ(count, 28);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "settings-voice");    /* modal, not part of "all" */
-    ASSERT_STR_EQ(states[count - 3], "voice-transcribing");
-    ASSERT_STR_EQ(states[count - 4], "voice-recording");
-    ASSERT_STR_EQ(states[count - 5], "notice-warning");
-    ASSERT_STR_EQ(states[count - 6], "notice-info");
-    ASSERT_STR_EQ(states[count - 7], "shortcuts");
-    ASSERT_STR_EQ(states[count - 8], "policy-compact");
-    ASSERT_STR_EQ(states[count - 9], "policy-auto");
-    ASSERT_STR_EQ(states[count - 10], "settings-debug");
-    ASSERT_STR_EQ(states[count - 11], "cmddetail");
-    ASSERT_STR_EQ(states[count - 12], "thinking-open");
-    ASSERT_STR_EQ(states[count - 13], "thinking-extended");
-    ASSERT_STR_EQ(states[count - 14], "thinking-compact");
-    ASSERT_STR_EQ(states[count - 15], "thinking");
-    ASSERT_STR_EQ(states[count - 16], "local");
-    ASSERT_STR_EQ(states[count - 17], "ansi");
-    ASSERT_STR_EQ(states[count - 18], "runlist");   /* not part of "all" */
+    ASSERT_STR_EQ(states[count - 2], "header-status");     /* 2026-11-24 */
+    ASSERT_STR_EQ(states[count - 3], "settings-voice");    /* modal, not part of "all" */
+    ASSERT_STR_EQ(states[count - 4], "voice-transcribing");
+    ASSERT_STR_EQ(states[count - 5], "voice-recording");
+    ASSERT_STR_EQ(states[count - 6], "notice-warning");
+    ASSERT_STR_EQ(states[count - 7], "notice-info");
+    ASSERT_STR_EQ(states[count - 8], "shortcuts");
+    ASSERT_STR_EQ(states[count - 9], "policy-compact");
+    ASSERT_STR_EQ(states[count - 10], "policy-auto");
+    ASSERT_STR_EQ(states[count - 11], "settings-debug");
+    ASSERT_STR_EQ(states[count - 12], "cmddetail");
+    ASSERT_STR_EQ(states[count - 13], "thinking-open");
+    ASSERT_STR_EQ(states[count - 14], "thinking-extended");
+    ASSERT_STR_EQ(states[count - 15], "thinking-compact");
+    ASSERT_STR_EQ(states[count - 16], "thinking");
+    ASSERT_STR_EQ(states[count - 17], "local");
+    ASSERT_STR_EQ(states[count - 18], "ansi");
+    ASSERT_STR_EQ(states[count - 19], "runlist");   /* not part of "all" */
     TEST_END();
 }
 
@@ -637,6 +638,37 @@ int test_ui_demo_voice_states_are_empty_states(void)
     }
     ASSERT_TRUE(!ui_demo_state_valid("voice"));
     ASSERT_TRUE(!ui_demo_state_valid("Settings-voice"));
+    TEST_END();
+}
+
+/* "header-status" (2026-11-24): the "executing" content plus a long status
+ * note the win32 side puts in the panel header (ui_demo_header_status()),
+ * which "all" shows too. No other state carries one. */
+int test_ui_demo_header_status_state(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(ui_demo_state_valid("header-status"));
+    const char *note = ui_demo_header_status("header-status");
+    ASSERT_NOT_NULL(note);
+    ASSERT_TRUE(strlen(note) > 60);                 /* long enough to need the room */
+    ASSERT_TRUE(strlen(note) < 255);                /* fits context_label */
+    ASSERT_STR_EQ(ui_demo_header_status("all"), note);
+    ASSERT_NULL(ui_demo_header_status("executing"));
+    ASSERT_NULL(ui_demo_header_status("chat"));
+    ASSERT_NULL(ui_demo_header_status("voice-recording"));
+    ASSERT_NULL(ui_demo_header_status(NULL));
+
+    AiConversation conv, exec_conv;
+    ApprovalQueue approval, approval2, eq, eq2;
+    ASSERT_EQ(ui_demo_build("header-status", &conv, &approval, &approval2, NULL, 0), 0);
+    ASSERT_EQ(ui_demo_build("executing", &exec_conv, &eq, &eq2, NULL, 0), 0);
+    ASSERT_EQ(conv.msg_count, exec_conv.msg_count);
+    ASSERT_EQ(approval.count, eq.count);
+    ASSERT_TRUE(approval.count > 0);
+    ASSERT_TRUE(!ui_demo_is_thinking_state("header-status"));
+    ASSERT_EQ(ui_demo_thinking_pref("header-status"), -1);
+    ai_conv_reset(&conv);
+    ai_conv_reset(&exec_conv);
     TEST_END();
 }
 

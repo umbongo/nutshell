@@ -346,7 +346,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
          * chip to its right is painted, not a child window. */
         nd->hSessionLabel = CreateWindow("STATIC",
             nd->session_name[0] ? nd->session_name : "",
-            WS_VISIBLE | WS_CHILD | SS_LEFT | SS_ENDELLIPSIS,
+            WS_VISIBLE | WS_CHILD | SS_LEFT | SS_CENTERIMAGE | SS_ENDELLIPSIS,
             0, 0, 1, 1,
             hwnd, (HMENU)IDC_SESSION_LABEL, NULL, NULL);
 
@@ -570,6 +570,15 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             } else if (t == STATUS_HIT_AUTO) {
                 cmd_policy_auto_tip(on, pol.allowed,
                                     d->tooltip_buf, sizeof(d->tooltip_buf));
+            } else if (t == STATUS_TOOL_HEADER) {
+                /* The header status in full (it may be ellipsised there),
+                 * as the ANSI text the tooltip control takes. */
+                const char *full = ai_chat_header_text(d, NULL);
+                wchar_t wbuf[300];
+                if (full && MultiByteToWideChar(CP_UTF8, 0, full, -1, wbuf, 300) > 0)
+                    WideCharToMultiByte(CP_ACP, 0, wbuf, -1, d->tooltip_buf,
+                                        (int)sizeof(d->tooltip_buf), "?", NULL);
+                d->tooltip_buf[sizeof(d->tooltip_buf) - 1] = '\0';
             } else if (t == STATUS_TOOL_METER && sp.has_meter) {
                 int actual = d->actual_input_tokens + d->actual_output_tokens;
                 int est = (actual > 0) ? 0 : ai_context_estimate_tokens_ex(&d->conv, d->last_snapshot_len);
@@ -2013,12 +2022,7 @@ next_coalesce:;
                 InvalidateRect(d->hChatList, NULL, FALSE);
             }
             /* Also repaint header area for the header bar indicator */
-            {
-                RECT hdr_rc;
-                GetClientRect(hwnd, &hdr_rc);
-                hdr_rc.bottom = ns_scale(4, d->dpi) + ns_scale(24, d->dpi) + ns_scale(4, d->dpi) + ns_scale(16, d->dpi) + ns_scale(4, d->dpi);
-                InvalidateRect(hwnd, &hdr_rc, FALSE);
-            }
+            ai_chat_header_invalidate(d);
         } else if (wParam == TIMER_SCROLL_SYNC) {
             /* ChatListView handles its own scroll; only sync input */
             ai_chat_input_sync_scroll(d);
@@ -2093,7 +2097,7 @@ next_coalesce:;
 
     case WM_PAINT:
         if (d && d->theme) {
-            /* The header's model chip and the status line are painted
+            /* The header's status and the status line are painted
              * elements (not child windows), so they need repainting on
              * every WM_PAINT regardless of activity; the activity dot +
              * one-word status inside ai_chat_paint_header() is the only piece
@@ -3052,6 +3056,15 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     {
         const int demo_pref = ui_demo_thinking_pref(state);
         if (demo_pref >= 0) ai_chat_set_thinking_pref(hwnd, demo_pref);
+    }
+
+    /* "header-status" and "all": a long status note in the panel header. */
+    {
+        const char *note = ui_demo_header_status(state);
+        if (note) {
+            snprintf(d->context_label, sizeof(d->context_label), "%s", note);
+            ai_chat_header_invalidate(d);
+        }
     }
 
     float now = (float)GetTickCount() / 1000.0f;
