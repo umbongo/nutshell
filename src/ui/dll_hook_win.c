@@ -30,7 +30,7 @@ __attribute__((used)) PfnDliHook __pfnDliNotifyHook2 = ns_dli_hook;
 #define SELF_REPORT_MAX_MODULES 256
 #define SELF_REPORT_NAME_MAX    MAX_PATH
 
-int ns_self_report_write(const char *path)
+int ns_self_report_write(const char *path, int sapi_state)
 {
     if (path == NULL || path[0] == '\0') return 0;
 
@@ -61,6 +61,12 @@ int ns_self_report_write(const char *path)
     int extra = snprintf(text + len, sizeof(text) - len, "voice-net-opens: %ld\n",
                          voice_net_open_count());
     if (extra > 0 && (size_t)extra < sizeof(text) - len) len += (size_t)extra;
+    /* --self-report-sapi's control: -1 not asked (no line), 0 or 1 */
+    if (sapi_state >= 0) {
+        extra = snprintf(text + len, sizeof(text) - len, "sapi-control: %s\n",
+                         sapi_state == 1 ? "held" : "unavailable");
+        if (extra > 0 && (size_t)extra < sizeof(text) - len) len += (size_t)extra;
+    }
 
     wchar_t wpath[MAX_PATH];
     if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH) <= 0)

@@ -91,6 +91,18 @@ void cli_parse(int argc, char **argv, CliOptions *out)
                            a + 14); /* past "--self-report=" */
             report_seen = 1;
             continue; /* a modifier, like --theme */
+#ifdef NS_VOICE_WAV_SEAM
+        } else if (long_flag_match(a, "--voice-wav", 11, &has_inline)) {
+            if (!has_inline || a[12] == '\0') {
+                set_error(out, "Missing value for ", a);
+                return;
+            }
+            (void)snprintf(out->voice_wav, sizeof(out->voice_wav), "%s", a + 12);
+            continue; /* a modifier, like --self-report: the WAV replaces the microphone */
+#endif
+        } else if (strcmp(a, "--self-report-sapi") == 0) {
+            out->self_report_sapi = 1;
+            continue; /* a modifier of --self-report; inert without it */
         } else if (flag_eq(a, "--local", "--local")) {
             act = CLI_CONNECT_LOCAL;
         } else if (flag_eq(a, "-sn", "--session-name")) {

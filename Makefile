@@ -75,7 +75,7 @@ LDFLAGS = -mwindows -Os -flto -Wl,--gc-sections -s $(LINK_MODE) \
 # export tables). Built under build/, never committed (*.a is gitignored).
 DELAY_DEF_DIR = build-support/delayload
 DELAY_LIB_DIR = build/delayload
-DELAY_LIBS    = $(DELAY_LIB_DIR)/libcrypt32_delay.a $(DELAY_LIB_DIR)/libwinhttp_delay.a
+DELAY_LIBS    = $(DELAY_LIB_DIR)/libcrypt32_delay.a $(DELAY_LIB_DIR)/libwinhttp_delay.a $(DELAY_LIB_DIR)/libwtsapi32_delay.a
 
 $(DELAY_LIB_DIR)/lib%_delay.a: $(DELAY_DEF_DIR)/%.def
 	@mkdir -p $(DELAY_LIB_DIR)
@@ -155,7 +155,7 @@ WIN_ONLY_TESTS = tests/test_winhttp_open_win.c tests/test_icons.c tests/test_loc
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
                  tests/test_pw_reveal_win.c tests/test_telnet_io_win.c \
                  tests/test_ns_tip_win.c tests/test_settings_label_win.c \
-                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_stt_win.c tests/test_voice_net_win.c tests/test_voice_ptt_win.c tests/test_voice_ws_win.c tests/test_voice_live_win.c tests/ws_loopback_win.c tests/test_ns_slider_win.c tests/test_ns_draw_level_meter_win.c
+                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_stt_win.c tests/test_voice_net_win.c tests/test_voice_ptt_win.c tests/test_voice_ws_win.c tests/test_voice_live_win.c tests/test_voice_lock_win.c tests/test_voice_tts_win.c tests/test_voice_conv_win.c tests/ws_loopback_win.c tests/test_ns_slider_win.c tests/test_ns_draw_level_meter_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -265,7 +265,7 @@ $(call write-stamp,$(FUZZ_FLAGS_STAMP),$(FUZZ_FLAGS_TEXT))
 $(call write-stamp,$(FUZZ_SRCS_STAMP),$(FUZZ_SRCS_TEXT))
 
 
-.PHONY: all clean test lint lint-gate debug release wintest selftest-wine fuzz fuzz-run fuzz-long
+.PHONY: all clean test lint lint-gate debug release wintest selftest-wine fuzz fuzz-run fuzz-long seam-leak-check harness-exe
 
 # ── Win32-only test harness: the icon renderer (GDI+) and the ConPTY
 # backend (real pseudo-consoles, real child processes).  Runs directly on a
@@ -314,22 +314,70 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    tests/test_notice_dlg_win.c \
                    src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c \
-                   src/ui/voice_audio_win.c src/core/wav.c tests/test_voice_audio_win.c \
+                   src/ui/voice_audio_win.c src/core/wav.c src/core/voice_vad.c src/core/voice_listen.c tests/test_voice_audio_win.c \
                    src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/json_scan.c src/core/voice_lang.c src/core/voice_gate.c \
                    src/core/voice_config.c src/core/base64.c src/core/json_validate.c src/config/json_parser.c src/config/json_tokenizer.c src/core/vector.c \
                    tests/test_voice_stt_win.c src/ui/voice_net_win.c tests/test_voice_net_win.c src/core/voice_ptt.c tests/test_voice_ptt_win.c \
                    src/ui/voice_ws_win.c tests/test_voice_ws_win.c tests/ws_loopback_win.c \
-                   src/ui/voice_live_win.c src/core/voice_live.c src/core/voice_resample.c src/core/voice_sgate.c src/core/voice_ledger.c tests/test_voice_live_win.c \
-                   src/ui/ns_slider.c src/core/ns_slider_math.c tests/test_ns_slider_win.c src/core/voice_level.c tests/test_ns_draw_level_meter_win.c tests/win_runner.c
+                   src/ui/voice_live_win.c src/core/voice_live.c src/core/voice_resample.c src/core/voice_sgate.c src/core/voice_ledger.c tests/test_voice_live_win.c src/ui/voice_lock_win.c tests/test_voice_lock_win.c \
+                   src/ui/ns_slider.c src/core/ns_slider_math.c tests/test_ns_slider_win.c src/core/voice_level.c tests/test_ns_draw_level_meter_win.c \
+                   src/ui/voice_tts_win.c src/ui/voice_voices_win.c src/core/voice_speak.c src/core/voice_voices.c tests/test_voice_tts_win.c \
+                   src/ui/voice_conv_win.c src/core/voice_conv.c src/core/voice_echo.c src/core/voice_transcript.c tests/test_voice_conv_win.c \
+                   tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
                    $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui -Itests
-WIN_TEST_LDFLAGS = $(DEP_LIB) -lcrypto -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp -lole32 -lcrypt32
+WIN_TEST_LDFLAGS = $(DEP_LIB) -lcrypto -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp -lole32 -lcrypt32 -lwtsapi32
+
+# ── The WAV-injection seam (spec 2026-11-24, section 12; plan Task 16). A harness-only build
+# reads --voice-wav=<file> in place of the microphone; the code is under
+# #ifdef NS_VOICE_WAV_SEAM and carries the marker strings below. The release exe must never
+# hold them: seam-leak-check compiles the three files that hold the seam with the release
+# flags to assembly (-fno-lto, so the literals are visible) and fails on a marker;
+# `release` runs the same grep over the linked exe before UPX packs it. Forcing the seam on
+# (make seam-leak-check SEAM_CHECK_DEFS=-DNS_VOICE_WAV_SEAM) must fail.
+SEAM_DIR        = build/seamcheck
+SEAM_CHECK_DEFS =
+SEAM_CHECK_SRCS = src/core/cli_args.c src/ui/voice_audio_win.c src/main.c
+SEAM_MARKERS    = ns-voice-wav-seam|--voice-wav
+
+seam-leak-check:
+	@rm -rf $(SEAM_DIR); mkdir -p $(SEAM_DIR)
+	@for f in $(SEAM_CHECK_SRCS); do \
+		$(CC) $(CFLAGS) -fno-lto $(SEAM_CHECK_DEFS) -S $$f -o $(SEAM_DIR)/`basename $$f .c`.s || exit 1; \
+	done
+	@if grep -E -q '$(SEAM_MARKERS)' $(SEAM_DIR)/*.s; then \
+		echo "FAIL: the WAV-injection seam is compiled into the release flags"; \
+		grep -E -l '$(SEAM_MARKERS)' $(SEAM_DIR)/*.s; exit 1; \
+	else echo "seam-leak-check: ok (no seam in $(SEAM_CHECK_SRCS))"; fi
+
+# The harness exe: every source recompiled with -DNS_VOICE_WAV_SEAM into its own object
+# directory, linked to build/win/nutshell-it.exe (git-ignored, never UPX-packed, never
+# committed). It touches neither the release objects nor build/win/nutshell.exe.
+IT_DIR     = build/win/it-obj
+IT_TARGET  = $(BUILD_DIR)/nutshell-it.exe
+IT_OBJS    = $(addprefix $(IT_DIR)/,$(OBJS))
+
+harness-exe: $(IT_TARGET)
+
+$(IT_TARGET): $(IT_OBJS) $(DELAY_LIBS)
+	@mkdir -p $(dir $@)
+	$(CC) $(IT_OBJS) -o $@ $(LDFLAGS)
+
+$(IT_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DNS_VOICE_WAV_SEAM -c $< -o $@
+
+$(IT_DIR)/%.o: %.rc
+	@mkdir -p $(dir $@)
+	$(WINDRES) -Isrc/ui $< $@
 
 all: $(TARGET)
 
 release: $(TARGET)
+	@command -v strings >/dev/null 2>&1 || { echo 'FAIL: strings is not installed, so the WAV seam check cannot run'; exit 1; }
+	@! strings -a $(TARGET) | grep -E -q '$(SEAM_MARKERS)' || { echo 'FAIL: the WAV seam is in $(TARGET)'; exit 1; }
 	upx --best --lzma $(TARGET)
 
 $(TARGET): $(OBJS) $(DELAY_LIBS)
@@ -450,7 +498,7 @@ selftest-wine: $(TARGET)
 		echo "[skip] selftest-wine needs wine and xvfb-run"; \
 	else \
 		set -e; \
-		for m in off voiceoff on; do \
+		for m in off voiceoff on conv sapi; do \
 			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
 			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
 			case $$m in \
@@ -459,9 +507,11 @@ selftest-wine: $(TARGET)
 					|| { echo "FAIL: the off config does not tick voice (the sed matched nothing)"; exit 1; } ;; \
 			voiceoff) cp tests/selftest/nutshell-ai-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			on) cp tests/selftest/nutshell-voice-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			conv|sapi) cp tests/selftest/nutshell-voice-conv.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			esac; \
+			extra=; [ $$m = sapi ] && extra=--self-report-sapi; \
 			( cd $(SELFTEST_DIR)/$$m && WINEPREFIX=$(SELFTEST_PREFIX) WINEDEBUG=-all \
-				timeout 120 xvfb-run -a wine nutshell.exe -nc --self-report=report.txt ); \
+				timeout 120 xvfb-run -a wine nutshell.exe -nc --self-report=report.txt $$extra ); \
 			sh tests/selftest/check.sh $$m $(SELFTEST_DIR)/$$m/report.txt; \
 		done; \
 	fi

@@ -918,8 +918,8 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
   **(spec author's call of that condition)**, the shared notice dialog (not a
   `MessageBox`) says: "Windows has no British English woman's voice
   installed, so replies use <voice>. To get one, add English (United Kingdom)
-  under Windows Settings > Time & language > Speech, or choose AI speech in
-  Settings > Voice." The dialog is modal, so the conversation is Paused while
+  under Windows Settings > Time & language > Speech." (The clause "or choose
+  AI speech in Settings > Voice" is added with AI speech in PR 3.) The dialog is modal, so the conversation is Paused while
   it shows and the reply is held (§5.4); it is spoken when the dialog closes.
   The Voice page shows the same fact. Verify the Windows Settings path on
   Windows 10 and 11.
@@ -1250,7 +1250,7 @@ Each wording is the **spec author's call**, except where marked:
 The notice dialog, once per launch (critique round 2; main session's call):
 "Windows has no British English woman's voice installed, so replies use
 <voice>. To get one, add English (United Kingdom) under Windows Settings >
-Time & language > Speech, or choose AI speech in Settings > Voice."
+Time & language > Speech." (PR 3 adds "or choose AI speech in Settings > Voice".)
 
 Settings > Voice lines: "Live text as you speak needs OpenAI or Mistral";
 the English (UK) voices line (§8.3); "Your microphone reports no echo
@@ -1725,6 +1725,272 @@ first build's choices where they differ:
 - A batch recording keeps today's rules: auto-send is decided when the
   transcript arrives (empty box), and losing activation while recording still
   discards it.
+
+### Found at build time (PR 2, 2026-11-24)
+
+Built and tested on `automaton` (native suite, `wintest` under Wine, MinGW
+release compile) with no microphone, no SAPI engine that works and no Windows
+audio stack, so most of the audio and speech facts below are *Windows hand
+check pending*. "Measured here" means a test or command on `automaton`;
+"reported" means read from a header or a metadata mirror, not run.
+
+**The must-verify items PR 2 needs:**
+6. *OneCore voices with SAPI.* Not measured: Wine has no usable SAPI (item 15).
+   Ruling (builder's call): the list is deduplicated by name and **the SAPI
+   desktop token is kept over a OneCore token of the same name**, so the
+   unverified `ISpVoice::SetVoice` path with a OneCore token is only reached
+   for a voice SAPI does not list itself. `VTT_READY.hr` carries a `SetVoice`
+   failure and the default voice is kept. Windows hand check pending: a
+   OneCore-only voice speaking.
+7. *SAPI purge latency and `SetVolume` mid-utterance.* Not measured here (no
+   SAPI under Wine). The speak path is built on `ISpVoice` as designed (word
+   offsets, end of reply, purge, volume); the PR 3 render-client fallback is not
+   built. Windows hand check pending: the purge latency, the duck level
+   applying mid-reply, the word offsets, the end of a reply and the notify
+   event's reset mode.
+8. *Self-ducking.* The opt-out is **built up front, not held back as a
+   fallback**: our default render session gets `SetDuckingPreference(TRUE)`
+   through `IAudioSessionManager2` / `IAudioSessionControl2`. Costs nothing if
+   it was not needed. Whether the opt-out works, and whether our own speech
+   is lowered at all, is *Windows hand check pending*.
+9. *Ducking of other apps.* No code fallback, as written. Windows hand check
+   pending, with the Communications setting at its default and at "Do
+   nothing", and with a capture device that is not the default communications
+   device.
+10. *Echo cancellation.* The effects-manager interface is not in the MinGW
+    headers or in Wine. `IAudioEffectsManager` (4460B3AE-4B44-4527-8676-7548A8ACD260;
+    methods in the order Register, Unregister, GetAudioEffects,
+    SetAudioEffectState) and `IAcousticEchoCancellationControl`
+    (F4AE25B5-AAA3-437D-B6B3-DBBE2D0E9549; one method,
+    `SetEchoCancellationRenderEndpoint`) are taken from the windows-rs 0.58.0
+    metadata mirror of the SDK's `audioclient.h` (reported; Microsoft's pages
+    give the names and the Windows 11 availability, not the IIDs). The echo
+    cancellation effect id (6f64adbe-8211-11e2-8c70-2c27d7f001fa) is from
+    Microsoft's audio-signal-processing-modes page. **A wrong value fails
+    safe:** the capture reports echo cancellation 0 and the half-duplex path of
+    §9.1 is used. Under Wine only that failure path ran (measured here: the
+    capture opens or reports an error, never hangs, ledger at zero). Windows
+    hand check pending: what the effects manager reports on the maintainer's
+    devices, the render-endpoint reference, and a reply on speakers not
+    transcribed back.
+11. *Bluetooth hands-free profile.* Not built beyond the Voice page's headset
+    line. Windows hand check pending.
+12. *Which en-GB voices are usable.* Not measured: no voices under Wine.
+    The choice chain is built and tested on a fake list (§14). Windows hand
+    check pending: which voices are listed on each of the maintainer's PCs.
+14. *The §3 counts, rechecked on 2026-11-25 against the branch.* Settings
+    keys: **62** (the spec's 57 was 2026-11-24; `main` at `6733361` has 58,
+    `voice_stt_live_model` arrived with PR 1; PR 2 adds `voice_mode`,
+    `voice_pause_ms`, `voice_windows_voice` and `voice_windows_voice_name`).
+    `CFG_KEYS_MAX` is **96** and `NOTICE_ITEMS_MAX` is **24**, unchanged.
+    `build-support/delayload/winhttp.def` lists **17** entries (13 at the
+    spec's count, plus the four WebSocket calls PR 1 added; PR 2 adds none).
+    PR 2 adds `build-support/delayload/wtsapi32.def` (session-lock
+    registration; `wtsapi32.dll` is delay-loaded and absent from the static
+    import table, checked with `objdump -p` on the unpacked exe). Greps:
+    `awk 'NR>=484&&NR<=552' src/config/loader.c | grep -c '^ *CK('` (the
+    `k_setting_keys` table, `git show 6733361:src/config/loader.c` for
+    `main`); `grep -n 'define CFG_KEYS_MAX' src/config/config.h`;
+    `grep -n 'define NOTICE_ITEMS_MAX' src/core/notice.h`;
+    `grep -c '^WinHttp' build-support/delayload/winhttp.def`.
+15. *The SAPI control under Wine.* Measured here: `make selftest-wine` passes
+    in all five modes (off, voiceoff, on, conv, sapi). Under this Wine
+    `CoCreateInstance(CLSID_SpVoice)` **succeeds**; `ISpVoice::SetInterest`
+    and `SetNotifyWin32Event` return `E_NOTIMPL`, so speech cannot be set up
+    (the Task 12 report first attributed this to `CoCreateInstance`, which was
+    wrong). The report still shows `requested: sapi.dll` and `module:
+    sapi.dll`, so the control proves the check can fail: the `sapi` mode
+    asserts both lines, and no `wtsapi32.dll`, and notes `sapi-control:
+    unavailable`. It would skip only if `sapi.dll` were never requested. The
+    `on` and `conv` modes assert neither `sapi.dll` nor `wtsapi32.dll` is
+    requested or mapped, and `conv` asserts `mmdevapi.dll` is requested and
+    that the voice network open count is 0. The control's result on Windows
+    (`sapi-control: held`) is *Windows hand check pending*.
+
+**The open questions PR 2 answers:**
+18. *MinGW headers.* The toolchain has `IAudioClient2`, `AudioClientProperties`
+    and `IAudioSessionControl2`. `IAudioSessionManager2`'s IID
+    (77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F) is the SDK's value. The two echo
+    cancellation interfaces and their `AUDIO_EFFECT` / state types are copied
+    from the metadata mirror, each inside its own `#ifndef` guard, so a newer
+    header wins (§7.5). The SAPI GUIDs (`CLSID_SpVoice`, `CLSID_SpObjectToken`,
+    `IID_ISpVoice`, `IID_ISpObjectToken`) come from MinGW's `sapi53.h`; none is
+    hand-written. A newer MSYS2 header set on the Windows box may collide:
+    *Windows hand check pending* (`mingw32-make test` and a release build).
+19. *The thresholds, as built* (`src/core/voice_vad.h` and `voice_listen.h`
+    carry the numbers):
+    - Detector, 20 ms windows: margin 12 dB over the floor (plus the extra
+      while we speak), absolute minimum -55 dBFS, a burst opens after 6 of 8
+      windows over the bar and closes after 15 windows without one; steady
+      sound (50 windows within 4 dB) counts as noise; digital silence (-85 dBFS or less) never changes the floor, and
+      the floor is clamped at -75 dBFS.
+    - **Impulse rule:** a burst of at most 40 candidate windows that rises at
+      least 3 dB from the window before and decays **15 dB or more** from its
+      peak to its last candidate window is an impulse (`VV_IMPULSE`), and its
+      windows are taken off the turn's speech. 15 dB, not 6: a smooth falling
+      400 ms word was dropped at 6 dB; a slam decays 30 dB or more. The cost
+      if wrong is one wasted transcription and "Didn't catch that".
+    - A turn needs 300 ms of speech (`VOICE_SHORT_TAP_MS`), so a one-syllable
+      "no" under 300 ms is not a turn. Pause 0.5 to 3 s, turn cap 2 minutes.
+    - **Cut-in counting rule (builder's call):** speech windows count
+      cumulatively and reset only after 300 ms of non-speech (the un-duck
+      rule), in both speak modes; the plan's "at most two gap windows" rule
+      never fired on modulated speech in half-duplex. Measured here with a
+      flat tone: with echo cancellation, duck at 59 and cut at 69 windows from
+      the start (about 200 and 400 ms after speech began, as designed); half
+      duplex, duck at 109 and cut at 119 with the user starting at window 100.
+    - **Half-duplex echo estimate:** follows the reply's level instantly for
+      the first 25 windows, then rises at most 0.5 dB a window, and is held
+      while a cut-in is accumulating; a candidate must be at least 10 dB over
+      it. Known limit (hand check): speech in the first 500 ms of a reply lifts
+      the estimate and can block a cut-in for a few seconds; a reply that
+      jumps more than 10 dB louder while a cut-in is counting could cut with
+      no user.
+    - Real speech syllable dips and the 4 Hz modulated test tone are the only
+      speech shapes tried: *Windows hand check pending* on speakers and on a
+      headset (a cough must not stop a reply).
+21. *The module split and thread layout, as built.*
+    - `src/core`, portable: `voice_vad.[ch]` (detector and pause endpointer),
+      `voice_listen.[ch]` (listener: turn and cut-in events), `voice_conv.[ch]`
+      (the conversation state machine), `voice_speak.[ch]` (speakable text,
+      sentence chunks, the question check), `voice_echo.[ch]` (echo filter and
+      the repeat and continue matcher), `voice_voices.[ch]` (voice list,
+      dedupe, the choice chain and when the notice is due). The turn classifier
+      (`voice_turn_classify`) is in `voice_echo.[ch]` and the card kinds are in
+      `voice_conv.[ch]`; the resource ledger needed no new file.
+    - `src/ui`, Win32: `voice_conv_win.[ch]` (the controller glue: event queue,
+      one flag per resource, ops table), `voice_tts_win.[ch]` (SAPI),
+      `voice_voices_win.[ch]` (registry voice list), `voice_lock_win.[ch]`
+      (session lock), plus the conversation capture inside
+      `voice_audio_win.c` and the routing in `voice_win.c`, `window.c` and the
+      `ai_chat*.c` files.
+    - Threads: the audio thread (one capture, now also the conversation
+      capture, with its own commands and tokens) and **one speech thread per
+      speech context** (`tts_thread`, at most two contexts keyed by token: the
+      conversation's and the Play sample's or the self-report's). A context is
+      held after an error until the UI reaps it with `voice_tts_reap(token,
+      gen)`; the generation stops a stale exit message from killing a restarted
+      context, and a matching reap always goes through the bounded quit
+      teardown. No other thread was added.
+22. *Send status.* It comes from `ai_chat_send_user_message_ex(d, voice_turn)`,
+    which `ai_chat_send_user_message` now wraps, and from
+    `ai_chat_voice_send_turn(panel, voice_turn)`. Statuses: `VSS_SENT`,
+    `VSS_BUSY`, `VSS_NO_SESSION`, `VSS_FULL`, `VSS_LAUNCH_FAILED`, `VSS_EMPTY`
+    (`ai_chat_launch_stream_thread` now returns an `int`). `ai_rounds_on_send`
+    keeps the auto-approve round count for a voice turn and resets it for a
+    typed one; Stop still resets it. Card kinds announced: `VCARD_COMMAND`
+    (`run_command`), `VCARD_WRITE` and `VCARD_OTHER`. No tool writes a file
+    today, so `VCARD_WRITE` matches a forward-looking name list in
+    `voice_conv.c`: a new write tool must be added there. A card is posted
+    once, from `reply_batch_build` and from the tool-decide ask path.
+23. *"Chat turn idle".* `voice_turn_check` in `ai_chat_voice.c` posts
+    `WM_VOICE_TURN_IDLE` when the chat is idle (not busy, no card waiting) at
+    every busy-changed site, at the end of the displayed session's response,
+    after a launch failure, after a card answer and after a stream cancel. It
+    posts rather than calls. Because the busy-changed sites run before the
+    relaunch decision, and one turn can post twice, **the controller re-checks
+    `ai_chat_voice_idle()` when the message arrives** and drops it outside
+    Working; the 3-second idle poll starts only after the chat has been seen
+    busy for the turn (with a 10-second fallback for a chat that never shows
+    busy).
+27. *Typing lock.* `voice_conv_is_typing_locked()` is true while a turn is
+    open: Hearing, Ending, and Speaking while an echo-cancellation cut-in
+    candidate is open (Listening, Working, Paused and the rest leave the box
+    free). It was renamed from the plan's `voice_conv_typing_locked(void)`,
+    which clashed with the core function of the same name. A typed Send while
+    Listening with no speech heard is a typed message (it resets the round cap)
+    and moves the conversation to Working.
+28. *The WAV seam.* A separate harness build, `build/win/nutshell-it.exe`
+    (`make harness-exe`), compiled with `-DNS_VOICE_WAV_SEAM`; it adds
+    `--voice-wav=<path>` and a wall-clock-paced feed in place of the microphone.
+    **It is never in the release exe.** `make seam-leak-check` compiles the
+    three seam files with the release flags and greps the assembly for the
+    seam's markers; `make release` also greps the linked, pre-UPX exe and
+    aborts before packing. Measured here: the check passes on the release flags
+    and fails with the seam forced on. The seam build writes `<wav>.capture`
+    (open or closed) and `<wav>.header` (the painted approval header) so the
+    PowerShell cases can assert what the self-report cannot show mid-run (the
+    self-report is written once at start-up). The two harness cases
+    (`voice_live_dictation_fixture`, `voice_conversation_card_fixture`, in
+    `tests/integration/cases/97-voice.ps1`) are written and never parsed or
+    run: no `pwsh` here. Both need `NUTSHELL_IT_STT_KEY` (OpenAI) besides the
+    model key, and the conversation case approves the card and only waits,
+    without asserting the command ran.
+
+**The builder's calls, where a reader of the spec would expect otherwise:**
+- **No speech-rate setting** (`voice_speech_rate`): the spec makes it
+  optional; one setting row if it is wanted.
+- **Key mode greyed whole** in Conversation mode: a single combo item cannot be
+  greyed, so the whole Hold choice combo is.
+- **Held replies and phrases.** A reply or a "went wrong" phrase held while Paused is spoken on resume only if
+  under 30 s old (strict). A card raised while Paused is recorded and announced
+  once on resume with no age limit: the card stays on screen, and the spoken
+  line is only a cue (§5.4 gives the 30 s rule for replies; the code keeps it
+  for replies and the held phrase). A pause that begins while an approval
+  announcement is being spoken cuts it off; it is not repeated. A typed Send while Paused is accepted and drops any held reply.
+  A notice open for longer than 30 s therefore loses the held reply.
+- **Silence clock.** The 3-minute clock restarts when Listening resumes after
+  Speaking (a long command or a long reply must not end the conversation) and
+  does not restart on an empty, echo or abandoned turn (a noisy room must not
+  keep a conversation alive).
+- **Send while Hearing** ends the turn through a capture "end turn now"
+  command (`voice_audio_conv_end_turn`): the same path as the endpointer's
+  pause (live end, turn event, audio kept), so the batch fallback still works
+  if the live link fails. The capture API of the first draft had no such
+  command.
+- **A pre-empted conversation capture** (a dictation or Test open, another
+  conversation, or a non-conversation end arriving first) posts `VAE_CONV_ENDED`
+  under the conversation's token, which ends the conversation as a lost device.
+  `VAE_NO_MEMORY` under it is per turn and non-fatal. Capture tokens are unique
+  per open.
+- **Speech contexts are reaped by generation** (item 21).
+- **Lock during a batch dictation recording:** the key state machine was left
+  latched after a lock discarded the recording; `post_step` now ends the
+  capture whenever dictation returns to idle. Windows hand check pending.
+- **The Settings Voice page** adds Mode, Pause before sending, Windows voice and
+  Play sample (`--ui-demo=settings-voice`). `settings.c` is not in the
+  `wintest` build, so the layout has no automated test: the Mode and greying
+  logic is tested through a pure helper (`voice_mode_enables`) and the layout is
+  a hand check. Play sample does not end the conversation: Settings is modal, so
+  the conversation is Paused and its speech already stopped; the button then
+  speaks the sample. It does nothing, silently, if Enable voice and Conversation
+  are ticked but not yet saved. Voice off and shutdown quit the sample's context
+  too.
+- **Win+L** ends a dictation or conversation recording through
+  `WTSRegisterSessionNotification` (delay-loaded `wtsapi32.dll`, registered
+  only while a recording or conversation runs). **An RDP or console disconnect
+  (`WTS_REMOTE_DISCONNECT`, `WTS_CONSOLE_DISCONNECT`) counts as a lock** (main
+  session's ruling after the final review, fail safe: nobody is at the
+  microphone), for dictation and conversation alike; the note still reads
+  "Windows was locked".
+- **Final review fixes (2026-11-25).** A cut-in's turn is owned by the listener:
+  the controller's `VCE_CUT` sends no mode command, and the audio thread's
+  mode command for LISTEN is a no-op while the listener is already in a turn
+  (it used to wipe it). A mode command that does wipe an open turn, and an
+  end-turn with none open, post `VLN_TURN_ABANDON` so the controller never
+  waits for audio that cannot come. Hearing (130 s), Ending (180 s, longer than the upload's own timeouts) and
+  Speaking (10 min) have watchdogs back to Listening. The resume after a
+  modal dialog is posted (`WM_VOICE_ACTIVATION`) so Settings' apply runs first.
+  A turn or reply for a changed chat ends the conversation instead of being
+  sent or read. The voice key works with the focus outside the panel while a
+  conversation runs. Every reply starts at full volume (the cut and each
+  speech reset the duck).
+- **Opus review fixes (2026-11-25).** A speech thread that reports an error stays
+  in its loop (no `VTT_EXITED`), so the glue quits it on `VTT_ERROR` for the
+  current reply (an older reply's error is ignored) and voice off and shutdown
+  quit every speech context (`voice_tts_quit_all`). A dialog that disables only
+  the undocked AI panel pauses the conversation (`dialog_open` op; the panel's
+  `WM_ENABLE` TRUE posts its resume). The speak mode is recomputed from each
+  new capture's echo-cancellation report. A local repeat or continue does not
+  restart the 3-minute silence clock (§5.6: from the last turn sent). Deadlines
+  compare as signed differences so the 32-bit tick wrap is safe. Not fixed:
+  a send that bypasses `voice_send_pressed` (Retry) does not take the
+  conversation to Working (notes, Open list).
+- **Not exercised by any test:** the real ops table and the routing in
+  `voice_win.c`, `window.c` and `ai_chat*.c`. They compile clean under MinGW
+  with `-Werror` and the extra flags, but no `wintest` links them.
+- **Test counts at the end of PR 2's code:** 4525 native on `automaton` (libssh2
+  stub), 173 `wintest` (after the final review fixes).
 
 ## 17. Critique (2026-11-24, claude-fable-5-2 high)
 

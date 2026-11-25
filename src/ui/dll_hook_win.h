@@ -5,6 +5,6 @@
  * by "module: <dll>" for every module loaded in this process (toolhelp
  * snapshot) to path, as UTF-8. A relative path is relative to the working
  * directory. Returns 1 on success, 0 when the file cannot be written. */
-int ns_self_report_write(const char *path);
+int ns_self_report_write(const char *path, int sapi_state);
 
 #endif

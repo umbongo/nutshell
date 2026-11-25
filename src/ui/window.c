@@ -47,6 +47,8 @@
 #include "voice_gate.h"
 #include "settings_layout.h"
 #include "voice_win.h"
+#include "voice_conv_win.h"
+#include "voice_tts_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
@@ -552,6 +554,7 @@ static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
 static char g_startup_theme[CLI_THEME_MAX];
 static char g_self_report_path[CLI_REPORT_MAX];
 static int  g_self_report_failed;
+static int  g_self_report_sapi;       /* --self-report-sapi */
 static HWND g_hwndAiChat = NULL;
 static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
@@ -2712,6 +2715,7 @@ static void create_demo_session(HWND hwnd)
 
 static void hide_ai_panel(HWND parent) {
     if (!g_hwndAiChat || !IsWindow(g_hwndAiChat)) return;
+    voice_on_panel_closed();   /* a conversation ends with its panel */
     if (g_ai_docked) {
         g_ai_last_width = g_ai_panel_width;
         /* Focus goes back to the terminal as the close STARTS, not when the
@@ -2753,6 +2757,7 @@ static void on_ai_clicked(void) {
         } else {
             /* Floating toggle */
             if (IsWindowVisible(g_hwndAiChat)) {
+                voice_on_panel_closed();   /* a conversation ends with its panel */
                 ai_panel_release_focus(parent, "toggle_floating");
                 ShowWindow(g_hwndAiChat, SW_HIDE);
             } else {
@@ -2837,6 +2842,11 @@ static void ai_feature_on(HWND hwnd)
 HWND ui_ai_panel(void)
 {
     return (g_hwndAiChat && IsWindow(g_hwndAiChat)) ? g_hwndAiChat : NULL;
+}
+
+const ThemeColors *ui_current_theme(void)
+{
+    return g_theme;
 }
 
 const Settings *ui_current_settings(void)
@@ -5370,6 +5380,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 SetWindowTextA(hwnd, APP_TITLE);
             } else if (wParam == VOICE_TIMER_ID) {
                 voice_on_timer();
+            } else if (wParam == VOICE_CONV_TIMER_ID) {
+                voice_on_conv_timer();
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
             } else if (wParam == ANIM_TIMER_ID) {
@@ -5472,6 +5484,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             voice_on_chat_changed_msg();
             return 0;
 
+        case WM_VOICE_TTS:
+            voice_on_tts(lParam);
+            return 0;
+
+        case WM_VOICE_TURN_IDLE:
+            voice_on_turn_idle();
+            return 0;
+
+        case WM_VOICE_CARD:
+            voice_on_card(wParam);
+            return 0;
+
+        case WM_VOICE_NOTICE:
+            voice_on_notice();
+            return 0;
+
+        case WM_VOICE_ACTIVATION:
+            voice_on_activation();
+            return 0;
+
+        case WM_WTSSESSION_CHANGE:
+            voice_on_session_change(wParam);
+            break;   /* on to DefWindowProc */
+
         case WM_SELF_REPORT:
             /* Hidden --self-report=<path> (spec section 6): the record is
              * complete once WM_STARTUP_CONNECT has run. A failed write is
@@ -5486,8 +5522,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * (bounded) so the record is complete. Nothing waits with voice off. */
             if (voice_gate_on())
                 (void)voice_audio_wait_ready(5000);
-            if (!ns_self_report_write(g_self_report_path))
+            /* --self-report-sapi: the one constructor creates an SpVoice and
+             * holds it while the report is written, so sapi.dll is requested
+             * and mapped. Voice off: nothing is created (hold returns 0). A
+             * report that carries `sapi-control: unavailable` tells check.sh
+             * Wine could not create the object. */
+            int sapi_state = -1;   /* -1 not asked, 0 unavailable, 1 held */
+            if (g_self_report_sapi && voice_gate_on())
+                sapi_state = voice_tts_selftest_hold();
+            if (!ns_self_report_write(g_self_report_path, sapi_state))
                 g_self_report_failed = 1;
+            if (sapi_state == 1) voice_tts_selftest_release();
             PostMessage(hwnd, WM_CLOSE, 0, 0);
             return 0;
 
@@ -6218,8 +6263,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_ACTIVATEAPP:
         case WM_ENABLE:
             /* Losing activation, or a modal dialog disabling this window,
-             * ends a push-to-talk recording. */
+             * ends a push-to-talk recording; a conversation pauses (and resumes
+             * when either comes back). */
             if (!wParam) voice_on_deactivate();
+            if (msg == WM_ACTIVATEAPP) voice_on_activateapp(wParam != 0);
+            if (msg == WM_ENABLE && wParam) PostMessage(hwnd, WM_VOICE_ACTIVATION, 0, 0);
+            else voice_on_activation();
             break;
 
         case WM_NCACTIVATE: {
@@ -6553,6 +6602,11 @@ void ui_set_self_report(const char *path)
 {
     (void)snprintf(g_self_report_path, sizeof(g_self_report_path), "%s",
                    path ? path : "");
+}
+
+void ui_set_self_report_sapi(int on)
+{
+    g_self_report_sapi = on ? 1 : 0;
 }
 
 int ui_self_report_failed(void)

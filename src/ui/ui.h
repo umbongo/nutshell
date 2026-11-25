@@ -16,6 +16,10 @@ void ui_set_startup_action(CliAction action, const char *arg,
  * leaves it off. */
 void ui_set_self_report(const char *path);
 
+/* --self-report-sapi: 1 to hold an SpVoice while the report is written. Inert
+ * without a report path or with voice off. */
+void ui_set_self_report_sapi(int on);
+
 /* 1 when --self-report was given and writing the file failed. */
 int ui_self_report_failed(void);
 

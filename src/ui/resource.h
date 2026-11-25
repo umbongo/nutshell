@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.95"
-#define APP_VERSION_BINARY  1,2,95,0
+#define APP_VERSION        "1.2.99"
+#define APP_VERSION_BINARY  1,2,99,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -137,5 +137,9 @@
 #define IDC_VOICE_GAIN_VALUE     3114 /* its value label ("+12 dB") */
 #define IDC_VOICE_LIVE_MODEL     3116 /* Settings > Voice: live speech-to-text model (editable combo, OpenAI/Mistral) */
 #define IDC_VOICE_LANG_OTHER     3115 /* the Other language box, shown while "Other..." is picked */
+#define IDC_VOICE_MODE           3117 /* Settings > Voice: Mode combo (Dictation / Conversation) */
+#define IDC_VOICE_PAUSE          3118 /* Conversation: "Pause before sending" edit (seconds, one decimal) */
+#define IDC_VOICE_WIN_VOICE      3119 /* Conversation: Windows voice combo (Automatic first) */
+#define IDC_VOICE_PLAY_SAMPLE    3120 /* Conversation: "Play sample" button */
 
 #endif

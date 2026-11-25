@@ -1,0 +1,8 @@
+; DLL search-order hardening: wtsapi32.dll is not a KnownDLL, so it must not be
+; a static import (see Makefile's DELAY_LIBS comment). It is only needed while a
+; voice recording runs, to hear the session lock; the delay-load hook records
+; the request. Lists only what voice_lock_win.c calls.
+LIBRARY wtsapi32.dll
+EXPORTS
+WTSRegisterSessionNotification
+WTSUnRegisterSessionNotification

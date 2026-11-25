@@ -11,6 +11,7 @@
 #include "secure_zero.h"
 #include "voice_lang.h"
 #include "voice_stt.h"
+#include "wav.h"
 #include "../config/json_parser.h"
 
 #define MODEL_MAX_LEN 100
@@ -84,6 +85,7 @@ int voice_live_resolve(const Settings *s, VoiceLiveTarget *t)
                                                    : voice_live_models(p)[0];
     if (!model_ok(model)) return 0;
     t->prov = p;
+    t->gate_rms = PCM_SPEECH_RMS;
     t->port = 443;
     t->secure = 1;
     snprintf(t->model, sizeof t->model, "%s", model);

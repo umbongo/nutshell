@@ -125,6 +125,7 @@ void ai_chat_voice_attach(HWND panel, int on)
     DestroyWindow(d->hMicBtn);
     d->hMicBtn = NULL;
     d->voice_ui = AIV_IDLE;
+    d->voice_level = 0.0;
     d->voice_cue[0] = '\0';
     ai_chat_header_invalidate(d);   /* the cue was shown in the header */
     d->anim.count = 0;   /* drop the pulse */
@@ -137,10 +138,12 @@ void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8)
 {
     AiChatData *d = panel_data(panel);
     if (!d) return;
+    const AiVoiceUi was = d->voice_ui;
     d->voice_ui = st;
+    if (st != AIV_RECORDING) d->voice_level = 0.0;
     snprintf(d->voice_cue, sizeof(d->voice_cue), "%s",
              (st != AIV_IDLE && cue_utf8) ? cue_utf8 : "");
-    if (st == AIV_RECORDING && !ns_reduced_motion()) {
+    if (st == AIV_RECORDING && was != AIV_RECORDING && !ns_reduced_motion()) {   /* a header change keeps the cycle */
         ns_anim_list_add(&d->anim, ANIM_VOICE_PULSE, (unsigned long)GetTickCount(),
                          VOICE_PULSE_MS);
         SetTimer(panel, TIMER_MOTION, MOTION_TICK_MS, NULL);
@@ -151,6 +154,20 @@ void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8)
     }
     if (d->hInput) InvalidateRect(d->hInput, NULL, TRUE);
     ai_chat_header_invalidate(d);   /* the cue shows in the header too */
+}
+
+void ai_chat_voice_set_level(HWND panel, double frac)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d) return;
+    if (d->voice_ui != AIV_RECORDING || !(frac >= 0.0)) frac = 0.0;   /* 0 = not following a level */
+    else if (frac < 0.001) frac = 0.001;
+    if (frac > 1.0) frac = 1.0;
+    const double was = d->voice_level;
+    d->voice_level = frac;
+    /* The pulse timer repaints at its own rate; only a visible change repaints here. */
+    if (d->hMicBtn && (frac - was > 0.04 || was - frac > 0.04))
+        InvalidateRect(d->hMicBtn, NULL, FALSE);
 }
 
 void ai_chat_voice_status(HWND panel, const char *text, int is_error)
@@ -355,11 +372,132 @@ void ai_chat_voice_on_destroy(AiChatData *d)
      * still land, nothing is sent). */
     d->voice_typing_locked = 0;
     if (d->voice_ui != AIV_IDLE) voice_on_deactivate();
+    voice_on_panel_closed();   /* a conversation ends with its panel */
+}
+
+/* ---- Conversation mode: what the chat tells the controller ---- */
+
+static HWND main_window_of(const AiChatData *d)
+{
+    if (!d || !d->hwnd) return NULL;
+    HWND root = GetAncestor(d->hwnd, GA_ROOT);
+    if (root && root != d->hwnd) return root;
+    /* Undocked: an owned top-level window, so no parent and no other root. */
+    HWND owner = GetParent(d->hwnd);
+    return owner ? owner : GetWindow(d->hwnd, GW_OWNER);
+}
+
+/* No card waits for the user: an unsettled command batch whose queue still needs a
+ * decision (a held-only batch counts: busy_of() sees pending entries only). */
+static int card_waiting(const AiChatData *d)
+{
+    if (!d->active_state) return 0;
+    const CmdBatchSet *bs = &d->active_state->batches;
+    for (int i = 0; i < bs->count; i++) {
+        const CmdBatch *b = bs->b[i];
+        if (!cmd_batch_is_tool(b) && !b->settled && chat_approval_needs_user(&b->q))
+            return 1;
+    }
+    return 0;
+}
+
+static int idle_of(const AiChatData *d)
+{
+    return d && d->active_state && !busy_of(d) && !card_waiting(d);
+}
+
+/* Post "the chat is idle" to the main window; the controller re-checks with
+ * ai_chat_voice_idle() and ignores it when no conversation runs. Never a direct call. */
+static void voice_turn_check(AiChatData *d)
+{
+    if (!idle_of(d)) return;
+    HWND main = main_window_of(d);
+    if (main) PostMessage(main, WM_VOICE_TURN_IDLE, 0, 0);
+}
+
+void ai_chat_voice_turn_check(AiChatData *d)
+{
+    voice_turn_check(d);
+}
+
+void ai_chat_voice_card_posted(AiChatData *d, const char *tool_name)
+{
+    HWND main = main_window_of(d);
+    if (main)
+        PostMessage(main, WM_VOICE_CARD, (WPARAM)voice_card_kind(tool_name), 0);
 }
 
 void ai_chat_voice_busy_changed(AiChatData *d)
 {
     if (d && d->hMicBtn) InvalidateRect(d->hMicBtn, NULL, FALSE);
+    voice_turn_check(d);
+}
+
+VoiceSendStatus ai_chat_voice_send_turn(HWND panel, int voice_turn)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d) return VSS_NO_SESSION;
+    return ai_chat_send_user_message_ex(d, voice_turn);
+}
+
+unsigned ai_chat_voice_msg_count(HWND panel)
+{
+    const AiChatData *d = panel_data(panel);
+    return d && d->conv.msg_count > 0 ? (unsigned)d->conv.msg_count : 0;
+}
+
+int ai_chat_voice_reply(HWND panel, unsigned since, char **text, int *is_error)
+{
+    if (text) *text = NULL;
+    if (is_error) *is_error = 0;
+    const AiChatData *d = panel_data(panel);
+    if (!d || !text) return 0;
+    if (is_error && d->active_state) *is_error = d->active_state->last_turn_error ? 1 : 0;
+    for (int i = d->conv.msg_count - 1; i >= 0 && (unsigned)i >= since; i--) {
+        if (d->conv.messages[i].role != AI_ROLE_ASSISTANT) continue;
+        const char *full = ai_msg_content(&d->conv.messages[i]);
+        if (!full) return 0;
+        const size_t cap = strlen(full) + 1;
+        char *out = (char *)malloc(cap);
+        if (!out) return 0;
+        out[0] = '\0';
+        /* As the chat shows it: only the text before the first live [EXEC]. */
+        if (ai_response_split(full, out, cap, NULL, 0) <= 0)
+            memcpy(out, full, cap);
+        int prose = 0;
+        for (const char *p = out; *p; p++)
+            if ((unsigned char)*p > ' ') { prose = 1; break; }
+        if (!prose) {
+            secure_zero(out, cap);
+            free(out);
+            return 0;
+        }
+        *text = out;
+        return 1;
+    }
+    return 0;
+}
+
+int ai_chat_voice_idle(HWND panel)
+{
+    return idle_of(panel_data(panel));
+}
+
+void ai_chat_voice_cancel_work(HWND panel)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d) return;
+    if (d->dispatch_active || ACTIVE_BUSY(d)) ai_chat_stop_work(d);
+}
+
+void ai_chat_voice_send_caption(HWND panel, int stop)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hSendBtn) return;
+    if (!stop && busy_of(d)) return;   /* a working chat keeps its Stop */
+    if (stop) SetWindowTextW(d->hSendBtn, L"\x25A0");   /* the same square the launch sets */
+    else SetWindowText(d->hSendBtn, ">");
+    InvalidateRect(d->hSendBtn, NULL, TRUE);
 }
 
 /* ---- The painted pieces ---- */
@@ -453,7 +591,9 @@ void ai_chat_voice_draw_mic(AiChatData *d, LPDRAWITEMSTRUCT dis)
             float t = 1.0f;
             if (ns_anim_list_get(&d->anim, ANIM_VOICE_PULSE, (unsigned long)GetTickCount(), 0, &st))
                 t = (float)st.t;
-            alpha = 0.45f + 0.55f * (t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f);
+            /* The swing is fixed for dictation; in a conversation it follows the voice. */
+            const float swing = d->voice_level > 0.0 ? 0.20f + 0.35f * (float)d->voice_level : 0.55f;
+            alpha = (1.0f - swing) + swing * (t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f);
             if (alpha < 0.0f) alpha = 0.0f;
             if (alpha > 1.0f) alpha = 1.0f;
         }

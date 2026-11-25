@@ -94,6 +94,12 @@ static const MsgRow k_msgs[NOTICE_MSG_COUNT] = {
     /* ai_chat.c Save */
     [NOTICE_MSG_CHAT_SAVE_FAILED] = { NOTICE_WARNING, ARG_NONE, "Save Error",
         "Failed to save file.", NULL },
+    /* voice_win.c, the first spoken reply of a launch when Automatic found no
+     * English (UK) woman's voice; the opening names the voice in use */
+    [NOTICE_MSG_VOICE_BRITISH] = { NOTICE_INFO, ARG_NAME, "Spoken replies",
+        "Windows has no British English woman's voice installed, so replies use ",
+        ". To get one, add English (United Kingdom) under Windows Settings > Time & "
+        "language > Speech." },
 };
 
 int notice_msg(Notice *n, NoticeMsgId id, const char *arg)

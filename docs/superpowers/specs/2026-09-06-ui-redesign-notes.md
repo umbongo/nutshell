@@ -551,9 +551,11 @@ Open, in priority order:
       off while recording and while transcribing stops at once, and no transcript arrives
       later. (t) Changing the STT provider on the Voice page moves a default model to the new
       provider's default and keeps a typed one.
-      (u) Win+L during a Toggle recording: locking may not send WM_ACTIVATEAPP, so a latched
-      recording can run to the 60 s cap and send; a follow-up could map WTS_SESSION_LOCK
-      through a delay-loaded wtsapi32. (v) With the microphone blocked in Windows privacy
+      (u) CLOSED in code (feat/voice-conversation, PR 2; hand check pending, see the
+      Conversation mode item): Win+L during a Toggle recording now ends it, through
+      WTS_SESSION_LOCK on a delay-loaded wtsapi32 (`voice_lock_win.c`, registered only
+      while a recording or conversation runs). It used to run to the 60 s cap, because
+      locking may not send WM_ACTIVATEAPP. (v) With the microphone blocked in Windows privacy
       settings, an open that returns E_ACCESSDENIED (Activate or Initialize) shows "Windows
       may be blocking the microphone: Settings > Privacy & security > Microphone" (panel and
       Settings > Voice Test); never seen, Wine does not return it.
@@ -572,8 +574,8 @@ Open, in priority order:
       case `voice_off_right_shift_reaches_input` has not been run. (ad) Both Shift keys held
       then released in either order, then a clean Right Shift press works; a capital typed
       with Right Shift during a Toggle recording keeps it recording. Item (u), Win+L during a
-      Toggle recording, matters more now that Toggle is the default; the follow-up is not
-      built (with auto-send off, the default since feat/voice-review-default, such a
+      Toggle recording, mattered more once Toggle was the default; it is now fixed in code
+      (with auto-send off, the default since feat/voice-review-default, such a
       recording now only fills the box).
       Review by default (feat/voice-review-default) adds: (ae) with "Send automatically when I
       finish speaking" unticked (the default), speak into an empty box: the words appear in
@@ -667,6 +669,113 @@ Open, in priority order:
       provider and with "Use current AI assistant". (p) The upgrade notice line "Voice: live
       speech-to-text model". (q) The integration harness has no live-dictation case yet: the
       WAV-injection seam is left to PR 2 (live spec §16 item 28).
+- [ ] **Conversation mode (PR 2 of live voice, feat/voice-conversation): nothing run on
+      Windows.** Built and tested here under Wine and the native suite (4519 tests, 170
+      `wintest`) with no microphone, no working SAPI and no real audio device; live spec
+      §16 "Found at build time (PR 2)" says what each fact rests on. Each line is its own
+      check.
+      (a) Echo cancellation: what the effects manager reports on the maintainer's devices
+      (the two interface IIDs come from the windows-rs 0.58.0 metadata mirror, a wrong one
+      fails safe to half-duplex), the render-endpoint reference being set, and a reply on
+      speakers not transcribed back.
+      (b) Ducking: other apps' audio lowered during a conversation, with the Communications
+      setting at its default and at "Do nothing", and with a capture device that is not the
+      default communications device; whether Nutshell's own speech is lowered (the opt-out
+      `SetDuckingPreference` is built, never run).
+      (c) Cutting in on speakers and on a headset: a cough does not stop a reply; the key
+      stops speech and keeps the conversation; "carry on" and "say that again" are handled
+      locally; the detector numbers (12 dB margin, 15 dB impulse decay, 300 ms un-duck)
+      against real speech and real slams.
+      (d) Voices: the default on a PC with and without the English (UK) pack; which en-GB
+      voices are listed; the notice dialog; a OneCore voice speaking (the dedupe keeps the
+      SAPI token over a OneCore one of the same name, so this is only reached for a
+      OneCore-only voice).
+      (e) A Bluetooth headset in a conversation (the communications category may move it
+      to hands-free, with worse sound).
+      (f) A full conversation with the free-space question and its approval card: the mic
+      indicator off while the card waits; the round cap needing an on-screen approval after
+      voice turns; Alt+Tab and Settings pausing; Win+L; 3 minutes without a turn; the
+      self-report and the SAPI control.
+      (g) The SAPI speak path: word offsets, end of reply, purge latency, volume (duck)
+      mid-reply, SetVoice with a OneCore token, the notify event's reset mode.
+      (h) Task 13's Win32 routing, which no `wintest` links: the key and the mic button
+      starting and ending a conversation, Escape, the Send/Stop caption, the pause while a
+      dialog is open, lock, panel hide docked and floating, the mic pulse following the
+      level, `WM_ACTIVATEAPP` timing (the hint is passed from the message), the Settings
+      Test meter working while a conversation is paused by the dialog, and the draft cue
+      while typing in Listening.
+      (i) The Settings > Voice layout (`--ui-demo=settings-voice`: Mode, Pause, Windows
+      voice, wrapped notes, the dim "seconds" hint) at 100 %, 125 % and 200 %, and Play
+      sample (also: it does nothing after Enable voice and Conversation are ticked but not
+      yet saved).
+      (j) The push-to-talk key state after a lock during a batch dictation recording: the
+      next press starts a recording (the fix is `ptt_end_capture` in `post_step`).
+      (k) Half-duplex priming: user speech in the first 500 ms of a reply lifts the echo
+      estimate; how long a cut-in is blocked, and a reply jumping 10 dB louder cutting
+      with no user.
+      (l) `mingw32-make test` and `mingw32-make clean && mingw32-make release` on the
+      Windows box (newer gcc and MSYS2 headers; the copied echo cancellation declarations
+      are guarded by `#ifndef`).
+      (m) The SAPI self-report control (`--self-report-sapi`) reporting `sapi-control:
+      held` and both `sapi.dll` lines; under Wine it passes on the DLL lines with
+      `sapi-control: unavailable` (SetInterest and SetNotifyWin32Event return E_NOTIMPL).
+      (n) The two harness cases written and never parsed or run, `voice_live_dictation_fixture`
+      and `voice_conversation_card_fixture` (`97-voice.ps1`, ai tier, need
+      `nutshell-it.exe` from `make harness-exe` and `NUTSHELL_IT_STT_KEY` besides the model
+      key); likely first fixes: `GetNewClosure()` with the `$Exe` override, the
+      `SpeechAudioFormatInfo` overload, reading the Send button text, the mic click as
+      `WM_COMMAND`. The conversation case does not assert the command ran.
+      (o) Follow-ups noted in the build, not built: Play sample has no help entry; a
+      notice raised for a launch is lost if the conversation ends before the handler runs;
+      the echo estimate's and detector's deferred minors are in the live spec §16.
+      (p) From the final whole-branch review (2026-11-25), not built, no code: keeping the
+      British-voice notice open for more than 30 s loses the held reply (the first reply of a
+      first conversation); the cheat sheet's width check skips the `SC_VOICE` rows and the
+      voice row is now much longer, so eyeball `--ui-demo=shortcuts`; `test_vspeak_long_reply`
+      checks chunk sizes only and cannot detect non-linear time; `test_vconv_win_off_mid_reply`
+      uses the fake ops table, so the real speech thread's join on voice off is a hand check.
+      The final review's fixes (a cut-in's turn, the watchdogs, an RDP or console disconnect
+      counting as a lock, the posted resume after a dialog, the key with focus outside the
+      panel, a changed chat, full volume after a cut-in) each want a Windows hand check too.
+      (q) Follow-ups from the re-review of those fixes, not built: a spoken reply longer than
+      10 minutes is cut silently by the Speaking watchdog ("continue" resumes it; refreshing
+      the clock on each spoken word would avoid it); a Hearing or Ending watchdog expiry
+      restarts the 3-minute silence clock, against the rule that a failed turn must not, so
+      with uploads hanging a noisy room can keep a conversation alive; a list item or
+      indented line that starts with a one-line triple-backtick span opens a fence and the
+      rest of the reply is not read (fails closed); after a pause cuts an approval
+      announcement the header returns to "Working..." although a card waits, and the
+      announcement is not repeated; Settings is destroyed before its owner is re-enabled, so
+      Windows may activate another application for a moment and the conversation would show
+      "Paused ... in the background" until the user clicks back (unverified, hand check); the
+      note shown when an RDP or console disconnect ends recording still reads "Windows was
+      locked".
+      (r) From the two Opus reviews of the whole branch (2026-11-25), not built: Retry (and any
+      other send that does not go through `voice_send_pressed`) leaves a running conversation
+      Listening with the microphone open while the chat works, and its reply is not spoken
+      (spec 5.2 closes the capture while Working): it needs an "external send" event for the
+      controller (Listening to Working, capture closed, the reply baseline taken), not a
+      patch; Enter while a reply is being spoken stops the speech instead of sending the typed
+      text (Send shows Stop), against spec 5.1 "sent with Enter as normal": the maintainer
+      decides; `voice_audio_conv_end` and `voice_audio_conv_mode` go through `va_push_raw`,
+      which drops the command if `realloc` fails, so under memory exhaustion the glue believes
+      the capture closed while the device stays open (a close that cannot fail: a token field
+      under the queue lock); the glue's event queue drops events past 24 silently, a `VCE_END`
+      included (not reachable today, at most about 3 per step); hand checks: the ducking
+      opt-out is set on the default render session after the capture client is initialised
+      (Microsoft's guidance applies it to the communications stream's session before it
+      opens), so do other apps and the reply duck?; the speech thread's CPU during an idle
+      conversation (the SAPI notify event's reset mode); whether trimming the chat's message
+      list between a send and its reply can make the conversation skip the reply; the failed
+      post of a conversation turn (`va_post` now frees it) has no test, the seam cannot make
+      `PostMessage` fail.
+      (s) From the Opus re-review of those fixes (2026-11-25), not built: the "I couldn't
+      send that" phrase after a refused turn still restarts the 3-minute silence clock
+      (`on_sent` reaches Speaking through `enter_speaking`, which clears `local_speech`), so
+      with the chat full a noisy room keeps the microphone open; set `local_speech = 1` on
+      the refusal path. A local repeat that is paused and resumed also restarts it.
+      `voice_echo.c:204` and `:208` compare tick counts without a wrap-safe subtraction (a
+      conversation spanning the 49.7-day wrap only).
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a

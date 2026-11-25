@@ -500,14 +500,15 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Right Shift",
       0, 0, 0u),
     E(SH_VOICE_PTT_MODE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
-      "Mode:",
+      "Key mode:",
       NULL,
-      "Mode:\n\nToggle records from one clean press of the key to the "
+      "Key mode:\n\nToggle records from one clean press of the key to the "
       "next. Hold to talk records while you hold the key and stops when "
       "you let go. A recording stops by itself after 10 minutes when the "
       "words appear as you speak (OpenAI and Mistral), and after 60 seconds "
       "otherwise. Escape throws it away, but only while the AI panel has the "
-      "keyboard focus.\nDefault: Toggle.",
+      "keyboard focus. Hold to talk and the Mic start delay apply in Dictation "
+      "only.\nDefault: Toggle.",
       "Toggle",
       0, 0, 0u),
     E(SH_VOICE_MIC_DELAY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
@@ -531,6 +532,48 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "assistant is busy, your words are added to the box and not sent."
       "\nDefault: Off.",
       "Off",
+      0, 0, 0u),
+    E(SH_VOICE_MODE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Mode:",
+      NULL,
+      "Mode:\n\nDictation puts your words in the message box for you to read "
+      "and send with Send. Conversation sends each turn by itself after a "
+      "pause and reads the assistant's replies aloud. In Conversation mode "
+      "the voice key always toggles: press it to start a conversation, "
+      "press it again to end it, or press it to stop a spoken reply. A "
+      "conversation also ends on Escape while the AI panel has the keyboard "
+      "focus, when Windows locks, or after 3 minutes with nothing said."
+      "\nDefault: Dictation, so your words wait in the box for you to press Send.",
+      "Dictation, so your words wait in the box for you to press Send",
+      0, 0, 0u),
+    E(SH_VOICE_PAUSE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Pause before sending:",
+      NULL,
+      "Pause before sending:\n\nIn Conversation mode, how long you must stay "
+      "silent before what you said is sent. Set from 0.5 to 3 seconds; a "
+      "shorter pause answers sooner but may cut you off mid-thought. It "
+      "applies in Conversation mode only.\nDefault: 1.2 seconds.",
+      "1.2 seconds",
+      0, 0, 0u),
+    E(SH_VOICE_WIN_VOICE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Windows voice:",
+      NULL,
+      "Windows voice:\n\nThe voice that reads the assistant's replies aloud "
+      "in Conversation mode. Automatic picks an English (UK) woman's voice "
+      "when one is installed, and otherwise the Windows default. To add a "
+      "voice, open Windows Settings, then Time & language, then Speech, "
+      "and choose Add voices."
+      "\nDefault: Automatic (an English (UK) woman's voice if one is installed).",
+      "Automatic (an English (UK) woman's voice if one is installed)",
+      0, 0, 0u),
+    E(SH_VOICE_WIN_VOICE_NAME, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Windows voice name:",
+      NULL,
+      "Windows voice name:\n\nThe friendly name of the chosen Windows voice, "
+      "kept so Settings can show it when the voice is not installed on this "
+      "PC. It is set by the Windows voice choice, not typed."
+      "\nDefault: none, as Automatic is used.",
+      "none, as Automatic is used",
       0, 0, 0u),
 
     /* AI_WEB */

@@ -541,6 +541,10 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("voice_ptt_mode",                NULL, NULL, SH_VOICE_PTT_MODE, "Voice: push-to-talk mode"),
     CK("voice_mic_delay_ms",            NULL, NULL, SH_VOICE_MIC_DELAY, "Voice: mic start delay"),
     CK("voice_auto_send",               NULL, NULL, SH_VOICE_AUTO_SEND, "Voice: send automatically"),
+    CK("voice_mode",                    NULL, NULL, SH_VOICE_MODE, "Voice: mode"),
+    CK("voice_pause_ms",                NULL, NULL, SH_VOICE_PAUSE, "Voice: pause before sending"),
+    CK("voice_windows_voice",           NULL, NULL, SH_VOICE_WIN_VOICE, "Voice: Windows voice"),
+    CK("voice_windows_voice_name",      NULL, NULL, SH_VOICE_WIN_VOICE_NAME, "Voice: Windows voice name"),
 };
 #undef CK
 
@@ -983,6 +987,15 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         s->voice_mic_delay_ms = (int)json_obj_num(jset, "voice_mic_delay_ms",
                                                   (double)s->voice_mic_delay_ms);
         s->voice_auto_send = json_obj_bool(jset, "voice_auto_send", s->voice_auto_send);
+        s->voice_mode = voice_mode_from_json(json_obj_str(jset, "voice_mode"));
+        s->voice_pause_ms = voice_pause_clamp((int)json_obj_num(jset, "voice_pause_ms",
+                                                                (double)s->voice_pause_ms));
+        if ((sv = json_obj_str(jset, "voice_windows_voice"))) {
+            field_copy(s->voice_windows_voice, sizeof(s->voice_windows_voice), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_windows_voice_name"))) {
+            field_copy(s->voice_windows_voice_name, sizeof(s->voice_windows_voice_name), sv);
+        }
         /* One-time migrations of untouched voice defaults, keyed on the internal
          * marker "voice_defaults_rev" (written by every save, not an upgrade-notice
          * key). Nothing is saved here (the demo and read-only callers load the
@@ -1339,6 +1352,16 @@ int config_save(const Config *cfg, const char *path)
     fputs(",\n", f);
     fprintf(f, "    \"voice_mic_delay_ms\": %d,\n", s->voice_mic_delay_ms);
     fprintf(f, "    \"voice_auto_send\": %s,\n", s->voice_auto_send ? "true" : "false");
+    fputs("    \"voice_mode\": ", f);
+    fprint_json_str(f, voice_mode_json(s->voice_mode));
+    fputs(",\n", f);
+    fprintf(f, "    \"voice_pause_ms\": %d,\n", voice_pause_round(s->voice_pause_ms));
+    fputs("    \"voice_windows_voice\": ", f);
+    fprint_json_str(f, s->voice_windows_voice);
+    fputs(",\n", f);
+    fputs("    \"voice_windows_voice_name\": ", f);
+    fprint_json_str(f, s->voice_windows_voice_name);
+    fputs(",\n", f);
     /* Internal marker, last and not in k_setting_keys: see config_load_report. */
     fputs("    \"voice_defaults_rev\": 3\n", f);
     fputs("  },\n  \"profiles\": [\n", f);

@@ -29,6 +29,10 @@ typedef struct {
     char demo_state[CLI_DEMO_STATE_MAX]; /* CLI_UI_DEMO: "chat","all",... */
     char theme[CLI_THEME_MAX];           /* --theme <name>, only with --ui-demo */
     char self_report[CLI_REPORT_MAX];    /* --self-report=<path>, only with a plain run or -nc */
+    int  self_report_sapi;               /* --self-report-sapi: hold an SpVoice while the report is written */
+#ifdef NS_VOICE_WAV_SEAM
+    char voice_wav[CLI_REPORT_MAX];      /* --voice-wav=<path>: the harness build's microphone (never in the release exe) */
+#endif
 } CliOptions;
 
 /* Parse argv (argv[0] ignored). Never fails hard: bad input yields
@@ -42,7 +46,9 @@ typedef struct {
  * modifier: accepted only on its own or with -nc, CLI_ERROR with any other
  * action. The running app then writes its DLL record and module list to
  * <path> after startup and exits; a relative path is relative to the
- * working directory. */
+ * working directory. --self-report-sapi (hidden) is a further modifier: the
+ * app then holds an SpVoice while the report is written (voice on only);
+ * parsed on its own it does nothing. */
 void cli_parse(int argc, char **argv, CliOptions *out);
 
 /* Static usage text listing every flag. */

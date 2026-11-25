@@ -97,9 +97,9 @@ void ai_chat_batch_record_oldest_if_full(AiChatData *d, AiSessionState *owner)
 void ai_chat_batch_settle_rows(AiChatData *d, CmdBatch *batch)
 {
     if (!d || !batch) return;
-    ai_chat_voice_busy_changed(d);   /* a card finishing frees the mic button */
     batch->settled = 1;
     chat_msg_batch_settle(&d->msg_list, batch->id);
+    ai_chat_voice_busy_changed(d);   /* a card finishing frees the mic button; after `settled`, so the idle check sees it */
 }
 
 /* Once every entry in a batch has been decided (chat_approval_all_decided
@@ -447,6 +447,7 @@ void ai_chat_tool_card_answer(AiChatData *d, CmdBatch *batch, ToolDecision answe
 
     tool_wait_over(d);
     ai_chat_maybe_start_next_batch(d);        /* no-op while the stream is busy */
+    ai_chat_voice_turn_check(d);              /* a card answer may leave the chat idle */
 }
 
 /* WM_AI_TOOL_DECIDE (spec decision 15). Never waits; frees `m` on every
@@ -580,6 +581,7 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
         if (d->hChatList) chat_listview_reset_cmd_expand(d->hChatList);
         ai_chat_relayout(d);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        ai_chat_voice_card_posted(d, m->name);   /* a card waits for the user */
     } else {
         /* Restored by the session switch (activity_phase). */
         owner->activity_phase = (int)ACTIVITY_WAITING;

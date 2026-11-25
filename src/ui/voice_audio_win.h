@@ -4,6 +4,7 @@
 #include <windows.h>
 #include "wav.h"
 #include "voice_ptt.h"
+#include "voice_listen.h"
 
 /*
  * voice_audio_win -- every WASAPI object lives on ONE audio thread
@@ -27,11 +28,24 @@ typedef enum {
     VAM_LEVEL,            /* lParam = raw peak 0..32768 of the last ~50 ms, after gain */
     VAM_CAPTURED,         /* lParam = VoiceCapture* (receiver frees with voice_audio_free_capture) */
     VAM_ERROR,            /* lParam = VOICE_ERR_PACK(err, token): nothing to free */
-    VAM_DEVICES_CHANGED   /* lParam 0: from IMMNotificationClient; re-enumerate */
+    VAM_DEVICES_CHANGED,  /* lParam 0: from IMMNotificationClient; re-enumerate */
+    /* Conversation capture: lParam packs (value << 24) | (token & VOICE_TOKEN_MASK) unless noted. */
+    VAM_CONV_OPENED,      /* value = echo cancellation: 0 none, 1 on, 2 turned on by us */
+    VAM_CONV_EVENT,       /* value = VoiceListenEvent */
+    VAM_CONV_TURN         /* lParam = VoiceCapture* of the finished turn (TURN_END/CAP); receiver frees */
+    /* VAM_LEVEL is posted every 50 ms during a conversation capture too (the mic pulse) */
 } VoiceAudioMsg;
+#define VOICE_CONV_PACK(value, token) \
+    ((LPARAM)((((uintptr_t)(value) & 0xFFu) << 24) | ((uintptr_t)(token) & VOICE_TOKEN_MASK)))
 
 typedef enum { VAE_NONE = 0, VAE_NO_DEVICE, VAE_DEVICE_LOST, VAE_OPEN_FAILED,
-               VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED } VoiceAudioErr;
+               VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED,
+               VAE_CONV_ENDED } VoiceAudioErr;
+/* VAE_CONV_ENDED, under a conversation token: the conversation capture is gone because a
+ * non-conversation command (a dictation or Test begin or end, or another conversation begin)
+ * pre-empted it; its device is closed and its turn wiped. Fatal for that capture. By contrast
+ * VAE_NO_MEMORY under a conversation token is per-turn: that one turn was lost, the capture
+ * keeps running. A device error (VAE_DEVICE_LOST, ...) is fatal too. */
 /* An error and the recording token it belongs to (0: not a push-to-talk
  * recording: a Settings Test, an enumeration or the thread itself) packed
  * into one lParam: the token's low 24 bits (VOICE_TOKEN_MASK) above the
@@ -68,7 +82,33 @@ void voice_audio_test_live_hooks(void (*feed)(unsigned token, const int16_t *s, 
  * (no device), then its finish. */
 void voice_audio_test_ingest_live(int live, unsigned token, int gain_db, int cap_ms,
                                   const int16_t *s, size_t n);
+/* Conversation capture (spec 5.3, 7.3): the device is opened in the communications category
+ * (echo cancellation when the endpoint offers it) and every captured buffer, after the gain,
+ * goes to a VoiceListen on the audio thread. Posts VAM_CONV_OPENED or VAM_ERROR for token.
+ * No 60 s / 10 min cap applies; the listener caps each turn. gain_db is rounded and clamped. */
+int  voice_audio_conv_begin(const char *device_id_utf8, unsigned token, double gain_db,
+                            int pause_ms);
+void voice_audio_conv_mode(unsigned token, VoiceListenMode m);   /* HOLD wipes a turn in progress */
+void voice_audio_conv_attach_live(unsigned token, unsigned live_token);  /* turn so far is replayed */
+void voice_audio_conv_end(unsigned token);    /* close the device, wipe the turn */
+/* End the open turn now, as the endpointer's pause would: VAM_CONV_EVENT TURN_END, the live
+ * session's end, then VAM_CONV_TURN with the audio kept. No-op with no open turn or a stale
+ * token. (Send pressed while hearing.) */
+void voice_audio_conv_end_turn(unsigned token);
+/* TEST-ONLY seams (no device): open a conversation state on the audio thread, and feed it
+ * samples as the capture path would (gain applied, then the listener). */
+void voice_audio_test_conv_open(unsigned token, int pause_ms);
+void voice_audio_test_conv_ingest(unsigned token, const int16_t *s, size_t n);
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
+
+#ifdef NS_VOICE_WAV_SEAM
+/* The harness build only (make harness-exe): a 16 kHz mono 16-bit PCM WAV replaces WASAPI for
+ * every capture, dictation and conversation. "" clears it. */
+void voice_audio_seam_set_wav(const char *path);
+/* Appends a conversation header line to "<wav>.header" (the harness reads it; the header is painted,
+ * not a window text). A no-op with no WAV set. */
+void voice_audio_seam_note_header(const char *text);
+#endif
 
 #endif /* NUTSHELL_VOICE_AUDIO_WIN_H */

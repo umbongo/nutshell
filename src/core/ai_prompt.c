@@ -2976,6 +2976,7 @@ void ai_session_discard(AiSessionState *st)
     st->policy_seeded = 0;
     st->activity_phase = 0;
     st->auto_rounds = 0;
+    st->last_turn_error = 0;
     st->auto_tool_rounds = 0;
     st->tool_round_stream = 0;
     st->tool_round_iter = 0;
@@ -2987,6 +2988,11 @@ void ai_session_discard(AiSessionState *st)
 void ai_rounds_user_message(AiSessionState *s)
 {
     if (s) s->auto_rounds = 0;
+}
+
+void ai_rounds_on_send(AiSessionState *s, int voice_turn)
+{
+    if (s && !voice_turn) s->auto_rounds = 0;
 }
 
 void ai_rounds_continue(AiSessionState *s, int unattended)

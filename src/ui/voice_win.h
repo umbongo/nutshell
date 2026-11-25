@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include "../config/config.h"
+#include "ui_theme.h"
 
 /*
  * voice_win -- the voice feature's controller. It sets the voice gate and
@@ -15,6 +16,8 @@
 /* A main-window timer id window.c does not use: the one-shot that ends the
  * Mic start delay or the 60 s cap. */
 #define VOICE_TIMER_ID 0x56F1
+/* The conversation controller's one-shot timer is VOICE_CONV_TIMER_ID (0x56F2), in
+ * voice_conv_win.h. */
 
 /* The AI panel (docked or not), or NULL; owned by window.c. */
 HWND ui_ai_panel(void);
@@ -27,6 +30,10 @@ int  voice_pump_filter(const MSG *m);
 /* WM_ACTIVATEAPP(FALSE) or WM_ENABLE(FALSE): end a recording (VE_DEACTIVATE). */
 void voice_on_deactivate(void);
 
+/* WM_WTSSESSION_CHANGE from window.c's WndProc: a lock ends the dictation recording
+ * softly (and, from Task 13, the conversation). Any other change is ignored. */
+void voice_on_session_change(WPARAM wp);
+
 /* WM_TIMER with VOICE_TIMER_ID. */
 void voice_on_timer(void);
 
@@ -35,6 +42,9 @@ void voice_mic_clicked(void);
 
 /* The live settings, owned by window.c; NULL before the config is loaded. */
 const Settings *ui_current_settings(void);
+
+/* The current theme (for the notice dialog); owned by window.c. */
+const ThemeColors *ui_current_theme(void);
 
 /* Bring the voice feature in line with the settings: sets the gate to
  * opt_feature_active(settings, OPT_VOICE), then starts (gate on) or stops
@@ -73,5 +83,34 @@ void voice_on_chat_changed_msg(void);
  * a dictation recording is running or finishing and voice took the Send (it ends the
  * recording and sends once the words are in); the handler then returns without sending. */
 int voice_send_pressed(void);
+
+/* Posted to the main window by ai_chat when the chat is idle (nothing streaming, no
+ * dispatch, no card waiting for the user), and when a card needing the user appears
+ * (wParam = VoiceCardKind). The controller re-checks and ignores both when no
+ * conversation runs. window.c routes them (Task 13). */
+#define WM_VOICE_TURN_IDLE (WM_APP + 0x45)
+#define WM_VOICE_CARD      (WM_APP + 0x46)
+/* Posted by the conversation glue when the first spoken reply of a launch needs the
+ * "no British voice" notice; the handler shows it (the dialog pauses the conversation). */
+#define WM_VOICE_NOTICE    (WM_APP + 0x47)
+/* Posted when the window is enabled again (a modal dialog closed): the conversation's
+ * resume runs after the code that follows the dialog (Settings: voice_feature_apply),
+ * so a voice setting saved off or changed never reopens the microphone first. */
+#define WM_VOICE_ACTIVATION (WM_APP + 0x48)
+
+/* The Send/Stop handler's Stop branch ran: a conversation ends its turn. */
+void voice_on_chat_stop(void);
+
+/* Conversation mode: window.c and the panel route these (each is a no-op with no
+ * conversation running). */
+void voice_on_activation(void);          /* WM_ACTIVATEAPP / WM_ENABLE, both directions */
+void voice_on_activateapp(int active);   /* WM_ACTIVATEAPP's wParam, just before voice_on_activation */
+void voice_on_box_changed(void);         /* EN_CHANGE of the AI input box: the conversation's draft cue */
+void voice_on_tts(LPARAM lp);            /* WM_VOICE_TTS: lParam is a VoiceTtsMsg the receiver frees */
+void voice_on_turn_idle(void);           /* WM_VOICE_TURN_IDLE */
+void voice_on_card(WPARAM kind);         /* WM_VOICE_CARD */
+void voice_on_notice(void);              /* WM_VOICE_NOTICE */
+void voice_on_conv_timer(void);          /* WM_TIMER with VOICE_CONV_TIMER_ID */
+void voice_on_panel_closed(void);        /* the AI panel was hidden or destroyed */
 
 #endif /* NUTSHELL_VOICE_WIN_H */

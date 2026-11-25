@@ -101,6 +101,10 @@ typedef struct Settings {
     int  voice_ptt_mode;                 /* VoicePttMode; JSON "toggle"/"hold" (default toggle) */
     int  voice_mic_delay_ms;             /* 0-400, default 150 */
     int  voice_auto_send;                /* 1 = send a transcript as soon as it arrives; 0 = put it in the input for review */
+    int  voice_mode;                     /* VOICE_MODE_DICTATION (0) or VOICE_MODE_CONVERSATION (1); JSON "dictation"/"conversation" */
+    int  voice_pause_ms;                 /* Conversation: silence that ends a turn, 500-3000, default 1200 */
+    char voice_windows_voice[256];       /* SAPI token id of the spoken-reply voice; empty = Automatic */
+    char voice_windows_voice_name[128];  /* its friendly name, for display */
 } Settings;
 
 typedef struct {

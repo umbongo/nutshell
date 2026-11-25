@@ -745,6 +745,8 @@ function New-NutshellTestEnv {
         voice_mic_gain_db = 0
         voice_ptt_key = "right_shift"; voice_ptt_mode = "toggle"
         voice_mic_delay_ms = 150; voice_auto_send = $false
+        voice_mode = "dictation"; voice_pause_ms = 1200
+        voice_windows_voice = ""; voice_windows_voice_name = ""
         voice_defaults_rev = 3   # internal marker, last in config_save() (not in the known-key table)
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }

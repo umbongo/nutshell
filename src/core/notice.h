@@ -94,6 +94,7 @@ typedef enum {
     NOTICE_MSG_FOLDER_MISSING,       /* open_dir.h; arg: the title     */
     NOTICE_MSG_FOLDER_IS_FILE,       /* open_dir.h; arg: the title     */
     NOTICE_MSG_CHAT_SAVE_FAILED,     /* ai_chat.c Save                 */
+    NOTICE_MSG_VOICE_BRITISH,        /* voice_win.c; arg: the voice's name */
     NOTICE_MSG_COUNT
 } NoticeMsgId;
 

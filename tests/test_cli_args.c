@@ -441,6 +441,29 @@ int test_cli_self_report_with_run(void)
     TEST_END();
 }
 
+int test_cli_self_report_sapi_flag(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "-nc", "--self-report=r.txt", "--self-report-sapi" };
+    char *a2[] = { "nutshell", "--self-report=r.txt" };
+    char *a3[] = { "nutshell", "--self-report-sapi" };
+    char *a4[] = { "nutshell", "-v", "--self-report=r.txt", "--self-report-sapi" };
+    cli_parse(4, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_RUN_NO_CONNECT);
+    ASSERT_EQ(o.self_report_sapi, 1);
+    cli_parse(2, a2, &o);
+    ASSERT_EQ(o.self_report_sapi, 0);
+    /* without --self-report it is parsed but inert: main() passes it on only
+     * with a report path */
+    cli_parse(2, a3, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_RUN);
+    ASSERT_STR_EQ(o.self_report, "");
+    cli_parse(4, a4, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
 int test_cli_self_report_with_no_connect(void)
 {
     TEST_BEGIN();

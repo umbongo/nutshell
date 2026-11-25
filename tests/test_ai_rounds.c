@@ -307,3 +307,42 @@ int test_ai_rounds_runcmd_fourth_attended(void) {
     ASSERT_EQ(ai_rounds_batch_policy(&s, p).unattended, p.unattended);
     TEST_END();
 }
+
+/* ---- ai_rounds_on_send: a voice turn keeps the count (conversation mode) ---- */
+
+int test_ai_rounds_voice_turn_keeps_count(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    CmdPolicy p = auto_policy(CMD_WRITE);
+    ai_rounds_continue(&s, 1);
+    ai_rounds_continue(&s, 1);
+    ai_rounds_continue(&s, 1);
+    ASSERT_EQ(s.auto_rounds, AI_AUTO_ROUNDS_MAX);
+    ai_rounds_on_send(&s, 1);
+    ASSERT_EQ(s.auto_rounds, AI_AUTO_ROUNDS_MAX);
+    ASSERT_EQ(ai_rounds_paused(&s, p), 1);   /* the cap still applies */
+    ai_rounds_on_send(NULL, 1);              /* NULL-safe */
+    TEST_END();
+}
+
+int test_ai_rounds_typed_turn_resets(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    s.auto_rounds = AI_AUTO_ROUNDS_MAX;
+    ai_rounds_on_send(&s, 0);
+    ASSERT_EQ(s.auto_rounds, 0);
+    ai_rounds_on_send(NULL, 0);
+    TEST_END();
+}
+
+int test_ai_rounds_stop_resets(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    s.auto_rounds = 2;
+    ai_rounds_user_message(&s);
+    ASSERT_EQ(s.auto_rounds, 0);
+    TEST_END();
+}
