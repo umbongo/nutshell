@@ -3393,6 +3393,7 @@ int test_config_keys_match_saved_file(void)
     size_t n = 0;
     const ConfigSettingKey *keys = config_setting_keys(&n);
     ASSERT_TRUE(n <= CFG_KEYS_MAX);
+    ASSERT_EQ(n, (size_t)69);
     /* the table plus the internal voice_defaults_rev marker, always last */
     ASSERT_EQ(vec_size(&jset->as.obj.keys), n + 1u);
     ASSERT_STR_EQ((const char *)vec_get(&jset->as.obj.keys, n), "voice_defaults_rev");
@@ -3406,7 +3407,8 @@ int test_config_keys_match_saved_file(void)
          * the upgrade notice says "Voice: ..." rather than the bare "Model") */
         if (keys[i].sh_id >= 0) {
             ASSERT_NOT_NULL(settings_help_get(keys[i].sh_id));
-            if (strncmp(keys[i].key, "voice_", 6) != 0 && strcmp(keys[i].key, "stt_api_key") != 0)
+            if (strncmp(keys[i].key, "voice_", 6) != 0 && strcmp(keys[i].key, "stt_api_key") != 0
+                && strcmp(keys[i].key, "tts_api_key") != 0)
                 ASSERT_NULL(keys[i].label);
         } else {
             ASSERT_NOT_NULL(keys[i].label);

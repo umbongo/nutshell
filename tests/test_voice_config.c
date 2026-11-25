@@ -1443,3 +1443,319 @@ int test_voice_mode_enables(void)
     ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation, 0);
     TEST_END();
 }
+
+/* ---- PR 3: AI speech settings ------------------------------------------- */
+
+static const char *const k_ais_keys[7] = {
+    "voice_speech_engine", "voice_tts_provider", "voice_tts_url", "tts_api_key",
+    "voice_ai_voice", "voice_ai_tts_model", "voice_ai_style",
+};
+
+int test_voice_ais_settings_defaults(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}"));
+    Config *c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        const Settings *s = &c->settings;
+        ASSERT_EQ(s->voice_speech_engine, VOICE_SPEECH_WINDOWS);
+        ASSERT_STR_EQ(s->voice_tts_provider, VOICE_AIS_DEFAULT_PROVIDER);
+        ASSERT_STR_EQ(s->voice_tts_provider, "mistral");
+        ASSERT_STR_EQ(s->voice_tts_url, "");
+        ASSERT_STR_EQ(s->tts_api_key, "");
+        ASSERT_STR_EQ(s->tts_api_key_for, "");
+        ASSERT_STR_EQ(s->tts_api_key_enc_preserved, "");
+        ASSERT_STR_EQ(s->voice_ai_voice, "");
+        ASSERT_STR_EQ(s->voice_ai_tts_model, "");
+        ASSERT_STR_EQ(s->voice_ai_style, "");
+        config_free(c);
+    }
+    ASSERT_STR_EQ(voice_speech_json(VOICE_SPEECH_WINDOWS), "windows");
+    ASSERT_STR_EQ(voice_speech_json(VOICE_SPEECH_AI), "ai");
+    ASSERT_EQ(voice_speech_from_json("ai"), VOICE_SPEECH_AI);
+    ASSERT_EQ(voice_speech_from_json("windows"), VOICE_SPEECH_WINDOWS);
+    ASSERT_EQ(voice_speech_from_json("loud"), VOICE_SPEECH_WINDOWS);
+    ASSERT_EQ(voice_speech_from_json(NULL), VOICE_SPEECH_WINDOWS);
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_ais_settings_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    Settings *s = &cfg->settings;
+    s->voice_speech_engine = VOICE_SPEECH_AI;
+    snprintf(s->voice_tts_provider, sizeof s->voice_tts_provider, "custom");
+    snprintf(s->voice_tts_url, sizeof s->voice_tts_url, "http://10.0.0.5:8880/v1");
+    snprintf(s->voice_ai_voice, sizeof s->voice_ai_voice, "bf_emma");
+    snprintf(s->voice_ai_tts_model, sizeof s->voice_ai_tts_model, "kokoro");
+    snprintf(s->voice_ai_style, sizeof s->voice_ai_style, "say \"hi\"\nslowly");
+    snprintf(s->tts_api_key, sizeof s->tts_api_key, "sk-tts-secret");
+    snprintf(s->tts_api_key_for, sizeof s->tts_api_key_for, "custom http://10.0.0.5:8880/v1");
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (txt) {
+        ASSERT_TRUE(strstr(txt, "\"voice_speech_engine\": \"ai\"") != NULL);
+        ASSERT_TRUE(strstr(txt, "\"tts_api_key\": \"$dpapi$v1$") != NULL);
+        ASSERT_TRUE(strstr(txt, "sk-tts-secret") == NULL);
+        /* the binding is inside the blob too, never a JSON key of its own */
+        ASSERT_TRUE(strstr(txt, "tts_api_key_for") == NULL);
+        ASSERT_TRUE(strstr(txt, "\"custom http://10.0.0.5:8880/v1\"") == NULL);
+        free(txt);
+    }
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        const Settings *t = &l->settings;
+        ASSERT_EQ(t->voice_speech_engine, VOICE_SPEECH_AI);
+        ASSERT_STR_EQ(t->voice_tts_provider, "custom");
+        ASSERT_STR_EQ(t->voice_tts_url, "http://10.0.0.5:8880/v1");
+        ASSERT_STR_EQ(t->voice_ai_voice, "bf_emma");
+        ASSERT_STR_EQ(t->voice_ai_tts_model, "kokoro");
+        ASSERT_STR_EQ(t->voice_ai_style, "say \"hi\"\nslowly");
+        ASSERT_STR_EQ(t->tts_api_key, "sk-tts-secret");
+        ASSERT_STR_EQ(t->tts_api_key_for, "custom http://10.0.0.5:8880/v1");
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_ais_key_binding_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    snprintf(cfg->settings.tts_api_key, sizeof cfg->settings.tts_api_key, "k1");
+    snprintf(cfg->settings.tts_api_key_for, sizeof cfg->settings.tts_api_key_for, "mistral");
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_STR_EQ(l->settings.tts_api_key, "k1");
+        ASSERT_STR_EQ(l->settings.tts_api_key_for, "mistral");
+        config_free(l);
+    }
+    /* a key with no binding: the key is the whole plaintext, the binding empty */
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("bare-key", enc, sizeof enc), CRYPTO_OK);
+    char json[1024];
+    snprintf(json, sizeof json,
+             "{\"settings\": {\"font\": \"Consolas\", \"tts_api_key\": \"%s\"}, \"profiles\": []}", enc);
+    ASSERT_TRUE(vcfg_write(json));
+    l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_STR_EQ(l->settings.tts_api_key, "bare-key");
+        ASSERT_STR_EQ(l->settings.tts_api_key_for, "");
+        config_free(l);
+    }
+    /* only the first newline splits: the key may not hold one but must not lose text */
+    ASSERT_EQ(crypto_encrypt_dpapi("custom http://h/v1\nk\nz", enc, sizeof enc), CRYPTO_OK);
+    snprintf(json, sizeof json,
+             "{\"settings\": {\"font\": \"Consolas\", \"tts_api_key\": \"%s\"}, \"profiles\": []}", enc);
+    ASSERT_TRUE(vcfg_write(json));
+    l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_STR_EQ(l->settings.tts_api_key_for, "custom http://h/v1");
+        ASSERT_STR_EQ(l->settings.tts_api_key, "k\nz");
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_ais_key_preserved(void)
+{
+    TEST_BEGIN();
+    fake_dpapi_set_identity(0x11);
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("mistral\nmy-tts-key", enc, sizeof enc), CRYPTO_OK);
+    char json[1024];
+    snprintf(json, sizeof json,
+             "{\"settings\": {\"font\": \"Consolas\", \"tts_api_key\": \"%s\"}, \"profiles\": []}", enc);
+    ASSERT_TRUE(vcfg_write(json));
+    fake_dpapi_set_identity(0x22);
+    Config *cfg = config_load(VCFG);
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_STR_EQ(cfg->settings.tts_api_key, "");
+        ASSERT_STR_EQ(cfg->settings.tts_api_key_for, "");
+        ASSERT_STR_EQ(cfg->settings.tts_api_key_enc_preserved, enc);
+        ASSERT_EQ(config_save(cfg, VCFG), 0);
+        config_free(cfg);
+    }
+    char *raw = vcfg_read();
+    ASSERT_NOT_NULL(raw);
+    if (raw) { ASSERT_TRUE(strstr(raw, enc) != NULL); free(raw); }
+    fake_dpapi_set_identity(0x11);
+    Config *c2 = config_load(VCFG);
+    ASSERT_NOT_NULL(c2);
+    if (c2) {
+        ASSERT_STR_EQ(c2->settings.tts_api_key, "my-tts-key");
+        ASSERT_STR_EQ(c2->settings.tts_api_key_for, "mistral");
+        config_free(c2);
+    }
+    /* a new key drops the preserved blob */
+    fake_dpapi_set_identity(0x22);
+    cfg = config_load(VCFG);
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        snprintf(cfg->settings.tts_api_key, sizeof cfg->settings.tts_api_key, "fresh");
+        snprintf(cfg->settings.tts_api_key_for, sizeof cfg->settings.tts_api_key_for, "mistral");
+        config_secret_drop_stale_preserved(cfg->settings.tts_api_key,
+            cfg->settings.tts_api_key_enc_preserved,
+            sizeof cfg->settings.tts_api_key_enc_preserved);
+        ASSERT_STR_EQ(cfg->settings.tts_api_key_enc_preserved, "");
+        ASSERT_EQ(config_save(cfg, VCFG), 0);
+        config_free(cfg);
+    }
+    raw = vcfg_read();
+    ASSERT_NOT_NULL(raw);
+    if (raw) { ASSERT_TRUE(strstr(raw, enc) == NULL); free(raw); }
+    c2 = config_load(VCFG);
+    ASSERT_NOT_NULL(c2);
+    if (c2) { ASSERT_STR_EQ(c2->settings.tts_api_key, "fresh"); config_free(c2); }
+    fake_dpapi_set_identity(0x42);
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_ais_style_empty_kept(void)
+{
+    TEST_BEGIN();
+    const char *vals[2] = { "x", "" };
+    for (int i = 0; i < 2; i++) {
+        char json[256];
+        snprintf(json, sizeof json,
+                 "{\"settings\": {\"font\": \"Consolas\", \"voice_ai_style\": \"%s\"}, \"profiles\": []}",
+                 vals[i]);
+        ASSERT_TRUE(vcfg_write(json));
+        Config *c = config_load(VCFG);
+        ASSERT_NOT_NULL(c);
+        if (c) { ASSERT_STR_EQ(c->settings.voice_ai_style, vals[i]); config_free(c); }
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_ais_unknown_provider_kept(void)
+{
+    TEST_BEGIN();
+    const char *ids[3] = { "openai", "gemini", "groq" };
+    for (int i = 0; i < 3; i++) {
+        char json[256];
+        snprintf(json, sizeof json,
+                 "{\"settings\": {\"font\": \"Consolas\", \"voice_tts_provider\": \"%s\"}, \"profiles\": []}",
+                 ids[i]);
+        ASSERT_TRUE(vcfg_write(json));
+        Config *c = config_load(VCFG);
+        ASSERT_NOT_NULL(c);
+        if (c) {
+            ASSERT_STR_EQ(c->settings.voice_tts_provider, ids[i]);
+            settings_validate(&c->settings);
+            ASSERT_STR_EQ(c->settings.voice_tts_provider, ids[i]);
+            ASSERT_EQ(config_save(c, VCFG), 0);
+            config_free(c);
+        }
+        Config *l = config_load(VCFG);
+        ASSERT_NOT_NULL(l);
+        if (l) { ASSERT_STR_EQ(l->settings.voice_tts_provider, ids[i]); config_free(l); }
+    }
+    ASSERT_TRUE(vcfg_write("{\"settings\": {\"font\": \"Consolas\", \"voice_speech_engine\": \"loud\"}, \"profiles\": []}"));
+    Config *c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) { ASSERT_EQ(c->settings.voice_speech_engine, VOICE_SPEECH_WINDOWS); config_free(c); }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_ais_notice_lines(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    ConfigLoadReport r;
+    Settings s;
+    config_default_settings(&s);
+    memset(&r, 0, sizeof r);
+    r.status = CONFIG_LOAD_OK;
+    for (int i = 0; i < 7; i++) r.missing[r.missing_count++] = vkey_index(k_ais_keys[i]);
+    for (int i = 0; i < 7; i++) ASSERT_TRUE(r.missing[i] != 255);
+    ASSERT_EQ(notice_upgrade(&n, "1.2.100", &r, &s), 1);
+    ASSERT_EQ(n.item_count, 7);
+    if (n.item_count == 7) {
+        ASSERT_STR_EQ(n.items[0].label, "Voice: speech");
+        ASSERT_STR_EQ(n.items[0].value, "Windows speech");
+        ASSERT_STR_EQ(n.items[1].label, "Voice: speech provider");
+        ASSERT_STR_EQ(n.items[1].value, "Mistral");
+        ASSERT_STR_EQ(n.items[2].label, "Voice: speech URL");
+        ASSERT_STR_EQ(n.items[2].value, "none");
+        ASSERT_STR_EQ(n.items[3].label, "Voice: speech API key");
+        ASSERT_STR_EQ(n.items[3].value,
+                      "none; the speech-to-text key is used when the provider is the same");
+        ASSERT_STR_EQ(n.items[4].label, "Voice: AI voice");
+        ASSERT_STR_EQ(n.items[4].value,
+                      "the provider's default (for Mistral, Mary, British English)");
+        ASSERT_STR_EQ(n.items[5].label, "Voice: AI speech model");
+        ASSERT_STR_EQ(n.items[5].value, "the provider's default");
+        ASSERT_STR_EQ(n.items[6].label, "Voice: accent and style");
+        ASSERT_STR_EQ(n.items[6].value, "none");
+    }
+    /* with the voice switch new too, they fold into the one "Voice" line */
+    r.missing[r.missing_count++] = vkey_index("voice_enabled");
+    ASSERT_EQ(notice_upgrade(&n, "1.2.100", &r, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    ASSERT_STR_EQ(n.items[0].label, "Voice");
+    TEST_END();
+}
+
+int test_voice_ais_digest(void)
+{
+    TEST_BEGIN();
+    Settings a, b;
+    config_default_settings(&a);
+    const uint64_t base = voice_settings_digest(&a);
+    config_default_settings(&b);
+    b.voice_speech_engine = VOICE_SPEECH_AI;
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_tts_provider, sizeof b.voice_tts_provider, "custom");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_tts_url, sizeof b.voice_tts_url, "http://h/v1");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.tts_api_key, sizeof b.tts_api_key, "k");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.tts_api_key_for, sizeof b.tts_api_key_for, "mistral");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_ai_voice, sizeof b.voice_ai_voice, "v");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_ai_tts_model, sizeof b.voice_ai_tts_model, "m");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    config_default_settings(&b);
+    snprintf(b.voice_ai_style, sizeof b.voice_ai_style, "calm");
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    /* the binding differs, the key does not */
+    Settings c1, c2;
+    config_default_settings(&c1);
+    config_default_settings(&c2);
+    snprintf(c1.tts_api_key, sizeof c1.tts_api_key, "k");
+    snprintf(c2.tts_api_key, sizeof c2.tts_api_key, "k");
+    snprintf(c1.tts_api_key_for, sizeof c1.tts_api_key_for, "mistral");
+    snprintf(c2.tts_api_key_for, sizeof c2.tts_api_key_for, "custom http://h");
+    ASSERT_TRUE(voice_settings_digest(&c1) != voice_settings_digest(&c2));
+    TEST_END();
+}

@@ -99,7 +99,7 @@ static const MsgRow k_msgs[NOTICE_MSG_COUNT] = {
     [NOTICE_MSG_VOICE_BRITISH] = { NOTICE_INFO, ARG_NAME, "Spoken replies",
         "Windows has no British English woman's voice installed, so replies use ",
         ". To get one, add English (United Kingdom) under Windows Settings > Time & "
-        "language > Speech." },
+        "language > Speech, or choose AI speech in Settings > Voice." },
 };
 
 int notice_msg(Notice *n, NoticeMsgId id, const char *arg)
@@ -210,7 +210,8 @@ static void key_label(const ConfigSettingKey *k, char *out, size_t cap)
 static int is_voice_subkey(const char *key)
 {
     return strncmp(key, "voice_", 6) == 0 ? strcmp(key, "voice_enabled") != 0
-                                          : strcmp(key, "stt_api_key") == 0;
+                                          : strcmp(key, "stt_api_key") == 0
+                                            || strcmp(key, "tts_api_key") == 0;
 }
 
 int notice_upgrade(Notice *n, const char *version, const ConfigLoadReport *rep,

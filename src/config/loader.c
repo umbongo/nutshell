@@ -248,7 +248,7 @@ static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
     }
 
     if (crypto_is_dpapi(raw)) {
-        char tmp[CFG_STR_MAX];
+        char tmp[CFG_STR_MAX * 2 + 2];
         if (crypto_decrypt_dpapi(raw, tmp, sizeof(tmp)) == CRYPTO_OK) {
             field_copy(plain_out, plain_cap, tmp);
         } else {
@@ -259,7 +259,7 @@ static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
     }
 
     if (crypto_is_encrypted(raw)) {
-        char tmp[CFG_STR_MAX];
+        char tmp[CFG_STR_MAX * 2 + 2];
         if (crypto_decrypt(raw, tmp, sizeof(tmp)) == CRYPTO_OK) {
             field_copy(plain_out, plain_cap, tmp);
             if (out_migrated) *out_migrated = 1;
@@ -320,6 +320,40 @@ static int secret_prepare(const char *plain, const char *preserved,
     }
     out[0] = '\0';
     return CRYPTO_OK;
+}
+
+/* The speech key is stored bound to its provider: the DPAPI plaintext is
+ * "<binding>\n<key>". Split `plain` at its first newline: the part before goes
+ * to `binding_out`, the rest to `key_out`. No newline: the binding is empty and
+ * the key is the whole plaintext. */
+static void split_bound_key(const char *plain, char *binding_out, size_t binding_cap,
+                            char *key_out, size_t key_cap)
+{
+    binding_out[0] = '\0';
+    const char *nl = strchr(plain, '\n');
+    if (!nl) {
+        field_copy(key_out, key_cap, plain);
+        return;
+    }
+    size_t bl = (size_t)(nl - plain);
+    if (bl >= binding_cap) bl = binding_cap - 1u;
+    memcpy(binding_out, plain, bl);
+    binding_out[bl] = '\0';
+    field_copy(key_out, key_cap, nl + 1);
+}
+
+/* secret_prepare() for the speech key: encrypts "<binding>\n<key>" through a
+ * stack buffer that is wiped. An empty key stores nothing new (the preserved
+ * blob, if any, is written back). */
+static int tts_secret_prepare(const Settings *s, char *out, size_t out_cap)
+{
+    if (s->tts_api_key[0] == '\0')
+        return secret_prepare("", s->tts_api_key_enc_preserved, out, out_cap);
+    char bound[CFG_STR_MAX * 2 + 2];
+    (void)snprintf(bound, sizeof(bound), "%s\n%s", s->tts_api_key_for, s->tts_api_key);
+    int rc = secret_prepare(bound, s->tts_api_key_enc_preserved, out, out_cap);
+    secure_zero(bound, sizeof(bound));
+    return rc;
 }
 
 /* ---- Unparseable-config backup ---------------------------------------- */
@@ -545,6 +579,13 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("voice_pause_ms",                NULL, NULL, SH_VOICE_PAUSE, "Voice: pause before sending"),
     CK("voice_windows_voice",           NULL, NULL, SH_VOICE_WIN_VOICE, "Voice: Windows voice"),
     CK("voice_windows_voice_name",      NULL, NULL, SH_VOICE_WIN_VOICE_NAME, "Voice: Windows voice name"),
+    CK("voice_speech_engine",           NULL, NULL, SH_VOICE_SPEECH, "Voice: speech"),
+    CK("voice_tts_provider",            NULL, NULL, SH_VOICE_TTS_PROVIDER, "Voice: speech provider"),
+    CK("voice_tts_url",                 NULL, NULL, SH_VOICE_TTS_URL, "Voice: speech URL"),
+    CK("tts_api_key",                   NULL, NULL, SH_VOICE_TTS_KEY, "Voice: speech API key"),
+    CK("voice_ai_voice",                NULL, NULL, SH_VOICE_AI_VOICE, "Voice: AI voice"),
+    CK("voice_ai_tts_model",            NULL, NULL, SH_VOICE_AI_MODEL, "Voice: AI speech model"),
+    CK("voice_ai_style",                NULL, NULL, SH_VOICE_AI_STYLE, "Voice: accent and style"),
 };
 #undef CK
 
@@ -696,6 +737,8 @@ void config_free(Config *cfg)
      * passwords are wiped by config_profile_free() above already). */
     secure_zero(cfg->settings.ai_api_key, sizeof(cfg->settings.ai_api_key));
     secure_zero(cfg->settings.stt_api_key, sizeof(cfg->settings.stt_api_key));
+    secure_zero(cfg->settings.tts_api_key, sizeof(cfg->settings.tts_api_key));
+    secure_zero(cfg->settings.tts_api_key_for, sizeof(cfg->settings.tts_api_key_for));
     free(cfg);
 }
 
@@ -996,6 +1039,31 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         if ((sv = json_obj_str(jset, "voice_windows_voice_name"))) {
             field_copy(s->voice_windows_voice_name, sizeof(s->voice_windows_voice_name), sv);
         }
+        s->voice_speech_engine = voice_speech_from_json(json_obj_str(jset, "voice_speech_engine"));
+        if ((sv = json_obj_str(jset, "voice_tts_provider"))) {
+            field_copy(s->voice_tts_provider, sizeof(s->voice_tts_provider), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_tts_url"))) {
+            field_copy(s->voice_tts_url, sizeof(s->voice_tts_url), sv);
+        }
+        if ((sv = json_obj_str(jset, "tts_api_key"))) {
+            char bound[CFG_STR_MAX * 2 + 2];
+            load_secret(sv, bound, sizeof(bound),
+                        s->tts_api_key_enc_preserved, sizeof(s->tts_api_key_enc_preserved),
+                        &migrated);
+            split_bound_key(bound, s->tts_api_key_for, sizeof(s->tts_api_key_for),
+                            s->tts_api_key, sizeof(s->tts_api_key));
+            secure_zero(bound, sizeof(bound));
+        }
+        if ((sv = json_obj_str(jset, "voice_ai_voice"))) {
+            field_copy(s->voice_ai_voice, sizeof(s->voice_ai_voice), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_ai_tts_model"))) {
+            field_copy(s->voice_ai_tts_model, sizeof(s->voice_ai_tts_model), sv);
+        }
+        if ((sv = json_obj_str(jset, "voice_ai_style"))) {
+            field_copy(s->voice_ai_style, sizeof(s->voice_ai_style), sv);
+        }
         /* One-time migrations of untouched voice defaults, keyed on the internal
          * marker "voice_defaults_rev" (written by every save, not an upgrade-notice
          * key). Nothing is saved here (the demo and read-only callers load the
@@ -1178,6 +1246,14 @@ int config_save(const Config *cfg, const char *path)
         return -1;
     }
 
+    char tts_api_key_blob[CFG_BLOB_MAX];
+    if (tts_secret_prepare(s, tts_api_key_blob, sizeof(tts_api_key_blob)) != CRYPTO_OK) {
+        secure_zero(tts_api_key_blob, sizeof(tts_api_key_blob));
+        secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
+        secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+        return -1;
+    }
+
     char (*pw_blobs)[CFG_BLOB_MAX] = NULL;
     if (n > 0u) {
         pw_blobs = xmalloc(n * sizeof(*pw_blobs));
@@ -1191,6 +1267,7 @@ int config_save(const Config *cfg, const char *path)
                 free(pw_blobs);
                 secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
                 secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
+                secure_zero(tts_api_key_blob, sizeof(tts_api_key_blob));
                 return -1;
             }
         }
@@ -1212,6 +1289,7 @@ int config_save(const Config *cfg, const char *path)
         }
         secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
         secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
+        secure_zero(tts_api_key_blob, sizeof(tts_api_key_blob));
         return -1;
     }
 
@@ -1362,6 +1440,27 @@ int config_save(const Config *cfg, const char *path)
     fputs("    \"voice_windows_voice_name\": ", f);
     fprint_json_str(f, s->voice_windows_voice_name);
     fputs(",\n", f);
+    fputs("    \"voice_speech_engine\": ", f);
+    fprint_json_str(f, voice_speech_json(s->voice_speech_engine));
+    fputs(",\n", f);
+    fputs("    \"voice_tts_provider\": ", f);
+    fprint_json_str(f, s->voice_tts_provider);
+    fputs(",\n", f);
+    fputs("    \"voice_tts_url\": ", f);
+    fprint_json_str(f, s->voice_tts_url);
+    fputs(",\n", f);
+    fputs("    \"tts_api_key\": ", f);
+    fprint_json_str(f, tts_api_key_blob);
+    fputs(",\n", f);
+    fputs("    \"voice_ai_voice\": ", f);
+    fprint_json_str(f, s->voice_ai_voice);
+    fputs(",\n", f);
+    fputs("    \"voice_ai_tts_model\": ", f);
+    fprint_json_str(f, s->voice_ai_tts_model);
+    fputs(",\n", f);
+    fputs("    \"voice_ai_style\": ", f);
+    fprint_json_str(f, s->voice_ai_style);
+    fputs(",\n", f);
     /* Internal marker, last and not in k_setting_keys: see config_load_report. */
     fputs("    \"voice_defaults_rev\": 3\n", f);
     fputs("  },\n  \"profiles\": [\n", f);
@@ -1429,6 +1528,7 @@ int config_save(const Config *cfg, const char *path)
         }
         secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
         secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
+        secure_zero(tts_api_key_blob, sizeof(tts_api_key_blob));
         return -1;
     }
 
@@ -1460,6 +1560,7 @@ int config_save(const Config *cfg, const char *path)
     }
     secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
     secure_zero(stt_api_key_blob, sizeof(stt_api_key_blob));
+    secure_zero(tts_api_key_blob, sizeof(tts_api_key_blob));
 
     return moved;
 }

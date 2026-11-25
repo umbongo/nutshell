@@ -96,6 +96,8 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_VOICE_TEST), N(SH_VOICE_MIC_GAIN), N(SH_VOICE_PTT_KEY), N(SH_VOICE_PTT_MODE), N(SH_VOICE_MIC_DELAY),
     N(SH_VOICE_AUTO_SEND),
     N(SH_VOICE_MODE), N(SH_VOICE_PAUSE), N(SH_VOICE_WIN_VOICE), N(SH_VOICE_WIN_VOICE_NAME),
+    N(SH_VOICE_SPEECH), N(SH_VOICE_TTS_PROVIDER), N(SH_VOICE_TTS_URL), N(SH_VOICE_TTS_KEY),
+    N(SH_VOICE_AI_VOICE), N(SH_VOICE_AI_MODEL), N(SH_VOICE_AI_STYLE), N(SH_VOICE_PLAY_SAMPLE),
     N(SH_AI_WEB_FETCH), N(SH_AI_SEARCH), N(SH_AI_SEARCH_URL), N(SH_AI_MAX_RESULTS),
     N(SH_DBG_ENABLE), N(SH_DBG_LEVEL_RENDER), N(SH_DBG_LEVEL_TERM), N(SH_DBG_LEVEL_AI),
     N(SH_DBG_LEVEL_SSH), N(SH_DBG_LEVEL_SHELL), N(SH_DBG_LEVEL_GENERAL),
@@ -111,7 +113,7 @@ int test_settings_help_table_matches_enum(void) {
     const SettingsHelp *t = settings_help_table(&n);
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(n, (size_t)SH_COUNT);
-    ASSERT_EQ(SH_COUNT, 69);
+    ASSERT_EQ(SH_COUNT, 77);
     ASSERT_EQ(sizeof(k_names) / sizeof(k_names[0]), (size_t)SH_COUNT);
     ASSERT_NOT_NULL(settings_help_table(NULL));
     if (t != NULL && n == (size_t)SH_COUNT) {
@@ -239,6 +241,32 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
     case SH_VOICE_STT_PROVIDER:   str = s->voice_stt_provider; break;
     case SH_VOICE_STT_KEY:        str = s->stt_api_key; break;
     case SH_VOICE_STT_URL:        str = s->voice_stt_url; break;
+    case SH_VOICE_TTS_URL:
+        (void)snprintf(out, n, "%s", s->voice_tts_url[0] != '\0' ? s->voice_tts_url : "none");
+        return 1;
+    case SH_VOICE_AI_STYLE:
+        (void)snprintf(out, n, "%s", s->voice_ai_style[0] != '\0' ? s->voice_ai_style : "none");
+        return 1;
+    case SH_VOICE_TTS_KEY:
+        (void)snprintf(out, n, "%s", s->tts_api_key[0] != '\0' ? s->tts_api_key
+            : "none; the speech-to-text key is used when the provider is the same");
+        return 1;
+    case SH_VOICE_AI_VOICE:
+        (void)snprintf(out, n, "%s", s->voice_ai_voice[0] != '\0' ? s->voice_ai_voice
+            : "the provider's default");
+        return 1;
+    case SH_VOICE_AI_MODEL:
+        (void)snprintf(out, n, "%s", s->voice_ai_tts_model[0] != '\0' ? s->voice_ai_tts_model
+            : "the provider's default");
+        return 1;
+    case SH_VOICE_SPEECH:
+        (void)snprintf(out, n, "%s", s->voice_speech_engine == VOICE_SPEECH_AI
+                       ? "AI speech" : "Windows speech");
+        return 1;
+    case SH_VOICE_TTS_PROVIDER:
+        (void)snprintf(out, n, "%s", strcmp(s->voice_tts_provider, "mistral") == 0
+                       ? "Mistral" : s->voice_tts_provider);
+        return 1;
     case SH_VOICE_STT_MODEL:      str = s->voice_stt_model; break;
     case SH_VOICE_STT_LIVE_MODEL:
         (void)snprintf(out, n, "%s", s->voice_stt_live_model[0] != '\0'
@@ -660,7 +688,8 @@ int test_settings_help_every_id_in_settings_c(void) {
         /* The four PR 2 voice ids get their controls in the Settings UI task
          * (Task 14 of the conversation plan); remove this skip then. */
         if (tab[i].id == SH_VOICE_MODE || tab[i].id == SH_VOICE_PAUSE
-            || tab[i].id == SH_VOICE_WIN_VOICE || tab[i].id == SH_VOICE_WIN_VOICE_NAME)
+            || tab[i].id == SH_VOICE_WIN_VOICE || tab[i].id == SH_VOICE_WIN_VOICE_NAME
+            || (tab[i].id >= SH_VOICE_SPEECH && tab[i].id <= SH_VOICE_PLAY_SAMPLE))
             continue;
         int found = has_identifier(src, tab[i].name);
         if (!found) printf("  src/ui/settings.c never names %s\n", tab[i].name);
@@ -691,17 +720,19 @@ int test_settings_help_ai_enable_entry(void) {
 
 int test_settings_help_voice_entries(void) {
     TEST_BEGIN();
-    for (int id = (int)SH_VOICE_ENABLE; id <= (int)SH_VOICE_WIN_VOICE_NAME; id++) {
+    for (int id = (int)SH_VOICE_ENABLE; id <= (int)SH_VOICE_PLAY_SAMPLE; id++) {
         const SettingsHelp *e = settings_help_get(id);
         ASSERT_NOT_NULL(e);
         if (e == NULL) continue;
         ASSERT_EQ(e->page, SETTINGS_PAGE_VOICE);
-        ASSERT_EQ(e->kind, id == (int)SH_VOICE_TEST ? SH_KIND_ACTION : SH_KIND_SETTING);
+        ASSERT_EQ(e->kind, (id == (int)SH_VOICE_TEST || id == (int)SH_VOICE_PLAY_SAMPLE)
+                         ? SH_KIND_ACTION : SH_KIND_SETTING);
     }
     ASSERT_EQ((int)SH_VOICE_WIN_VOICE_NAME - (int)SH_VOICE_ENABLE + 1, 20);
+    ASSERT_EQ((int)SH_VOICE_PLAY_SAMPLE - (int)SH_VOICE_ENABLE + 1, 28);
     /* between the AI Behaviour and the AI Web entries */
     ASSERT_EQ(settings_help_get((int)SH_VOICE_ENABLE - 1)->page, SETTINGS_PAGE_AI_BEHAVIOUR);
-    ASSERT_EQ(settings_help_get((int)SH_VOICE_WIN_VOICE_NAME + 1)->page, SETTINGS_PAGE_AI_WEB);
+    ASSERT_EQ(settings_help_get((int)SH_VOICE_PLAY_SAMPLE + 1)->page, SETTINGS_PAGE_AI_WEB);
     const SettingsHelp *e = settings_help_get((int)SH_VOICE_ENABLE);
     ASSERT_STR_EQ(e->label, "Enable voice");
     ASSERT_STR_EQ(e->default_text, "Off");
@@ -730,5 +761,18 @@ int test_settings_help_voice_entries(void) {
     e = settings_help_get((int)SH_VOICE_TEST);
     ASSERT_STR_EQ(e->label, "Test");
     ASSERT_NULL(e->default_text);
+    TEST_END();
+}
+
+int test_settings_help_play_sample(void) {
+    TEST_BEGIN();
+    const SettingsHelp *e = settings_help_get((int)SH_VOICE_PLAY_SAMPLE);
+    ASSERT_NOT_NULL(e);
+    if (e != NULL) {
+        ASSERT_EQ(e->page, SETTINGS_PAGE_VOICE);
+        ASSERT_EQ(e->kind, SH_KIND_ACTION);
+        ASSERT_STR_EQ(e->label, "Play sample");
+        ASSERT_NULL(e->default_text);
+    }
     TEST_END();
 }

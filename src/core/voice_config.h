@@ -52,6 +52,13 @@ int voice_ptt_mode_from_json(const char *s);    /* unknown/NULL -> VOICE_MODE_TO
 const char *voice_ptt_mode_label(int mode);     /* "Toggle" "Hold to talk"; default for out of range */
 const char *voice_mode_json(int mode);          /* "dictation" "conversation"; Dictation for out of range */
 int voice_mode_from_json(const char *s);        /* unknown/NULL -> VOICE_MODE_DICTATION */
+
+/* Settings.voice_speech_engine: who speaks the replies. */
+#define VOICE_SPEECH_WINDOWS 0
+#define VOICE_SPEECH_AI 1
+#define VOICE_AIS_DEFAULT_PROVIDER "mistral"
+const char *voice_speech_json(int e);           /* "windows" "ai"; Windows for out of range */
+int voice_speech_from_json(const char *s);      /* unknown/NULL -> VOICE_SPEECH_WINDOWS */
 int voice_pause_clamp(int ms);                  /* into VOICE_PAUSE_MIN_MS..VOICE_PAUSE_MAX_MS */
 int voice_pause_round(int ms);                  /* clamped, then to the nearest 100 (halves up) */
 int voice_pause_parse(const char *text, int keep_ms); /* Settings entry in seconds ("1.2", "1,5") -> ms, rounded to 100 and clamped; keep_ms when it is not a plain non-negative number */
