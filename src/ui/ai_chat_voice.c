@@ -363,7 +363,10 @@ static HWND main_window_of(const AiChatData *d)
 {
     if (!d || !d->hwnd) return NULL;
     HWND root = GetAncestor(d->hwnd, GA_ROOT);
-    return root && root != d->hwnd ? root : GetParent(d->hwnd);
+    if (root && root != d->hwnd) return root;
+    /* Undocked: an owned top-level window, so no parent and no other root. */
+    HWND owner = GetParent(d->hwnd);
+    return owner ? owner : GetWindow(d->hwnd, GW_OWNER);
 }
 
 /* No card waits for the user: an unsettled command batch whose queue still needs a

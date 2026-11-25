@@ -45,6 +45,7 @@ int test_ai_session_discard_clears_everything(void)
     TEST_BEGIN();
     AiSessionState s;
     fill_state(&s);
+    s.last_turn_error = 1;
     ASSERT_EQ(s.batches.count, 2);
     ai_session_discard(&s);
     ASSERT_EQ(s.valid, 0);
@@ -60,6 +61,7 @@ int test_ai_session_discard_clears_everything(void)
     ASSERT_EQ(s.stream_phase, 0);
     ASSERT_EQ(s.activity_phase, 0);
     ASSERT_EQ(s.auto_rounds, 0);
+    ASSERT_EQ(s.last_turn_error, 0);
     ASSERT_EQ(s.auto_tool_rounds, 0);
     ASSERT_EQ((int)s.tool_round_stream, 0);
     ASSERT_EQ(s.tool_round_iter, 0);

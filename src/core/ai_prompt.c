@@ -2976,6 +2976,7 @@ void ai_session_discard(AiSessionState *st)
     st->policy_seeded = 0;
     st->activity_phase = 0;
     st->auto_rounds = 0;
+    st->last_turn_error = 0;
     st->auto_tool_rounds = 0;
     st->tool_round_stream = 0;
     st->tool_round_iter = 0;
