@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "voice_aispeech.h"
+#include "ai_netcancel.h"
 
 /*
  * voice_aispeech_win -- the AI speech engine: spoken replies from a speech provider, played
@@ -72,8 +73,12 @@ void voice_ais_on_audio(UINT kind, LPARAM lp);
 void voice_ais_on_msg(VoiceAisMsg *m);
 void voice_ais_on_timer(UINT_PTR id);
 
-/* 7b installs the real fetch; tests install fakes; NULL = none (every speak fails NET). */
+/* voice_ais_start installs the real fetch (Mistral and Custom over WinHTTP) when none is set;
+ * tests install fakes; NULL with no context started = none (every speak fails NET). */
 void voice_ais_set_fetch(VoiceAisFetch f);
+/* The job's cancel token, fired by every cancel and quit: the real fetch hands it to its request
+ * so a stop closes a blocked WinHTTP call at once. `job` is the fetch's first argument. */
+AiNetCancel *voice_ais_job_nc(void *job);
 
 /* TEST-ONLY seam, never product code: the cap on chunks per reply (0 restores the default). */
 void voice_ais_test_max_chunks(size_t n);

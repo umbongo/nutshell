@@ -19,6 +19,12 @@
 #include "ai_gate.h"
 #include "voice_ledger.h"
 #include "voice_speak.h"
+#include "voice_net_win.h"
+#include "voice_wavstream.h"
+#include "voice_aispeech.h"
+#include "base64.h"
+#include "sse_line.h"
+#include "http_loopback_win.h"
 
 #define VA_TOKEN 0x00321u
 #define VA_TOKEN_B 0x00777u
@@ -731,6 +737,423 @@ int test_voice_ais_quit_all_two_contexts(void)
     va_pump(300);
     ASSERT_EQ(voice_ledger_all_zero(), 1);
     va_end(w);
+    TEST_END();
+}
+
+/* ---- Task 7b: the real fetch against the loopback server ---- */
+
+#define VR_FIX_WAV "tests/fixtures/voice_tts/provisional_mistral_wav.sse"
+#define VR_CAP_WAV "tests/fixtures/voice_tts/mistral_stream_wav.sse"
+#define VR_KEY "test-key-0000"
+
+static HWND vr_begin(void)
+{
+    HWND w = va_begin();
+    if (w) {
+        voice_ais_set_fetch(NULL);          /* voice_ais_start installs the real fetch */
+        voice_net_test_reset_count();
+    }
+    return w;
+}
+
+static VoiceAisTarget vr_target(int port, VoiceAisShape shape)
+{
+    VoiceAisTarget t;
+    memset(&t, 0, sizeof(t));
+    snprintf(t.url, sizeof(t.url), "http://127.0.0.1:%d/v1/audio/speech", port);
+    snprintf(t.model, sizeof(t.model), "tts-model");
+    snprintf(t.voice, sizeof(t.voice), "alloy");
+    snprintf(t.provider, sizeof(t.provider), shape == VAIS_SHAPE_MISTRAL ? "mistral" : "custom");
+    t.shape = shape;
+    return t;
+}
+
+static int vr_under_wine(void)
+{
+    HMODULE nt = GetModuleHandleA("ntdll.dll");
+    return nt != NULL && GetProcAddress(nt, "wine_get_version") != NULL;
+}
+
+/* Speaks `text` as reply 1 and waits for its end; 1 when an end arrived. */
+static int vr_speak(HWND w, const VoiceAisTarget *t, const char *key, const char *text)
+{
+    if (voice_ais_start(w, VA_TOKEN) != 1) return 0;
+    voice_ais_speak(VA_TOKEN, 1, text, 0, t, key);
+    return va_wait_end(1, 10000);
+}
+
+static long vr_error_hr(void)
+{
+    const int i = va_find(VTT_ERROR, 1);
+    return i >= 0 ? g_log[i].hr : 12345;
+}
+
+static char *vr_read(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *b = (char *)malloc((size_t)n + 1);
+    if (b && fread(b, 1, (size_t)n, f) != (size_t)n) { free(b); b = NULL; }
+    fclose(f);
+    if (b) { b[n] = '\0'; if (len) *len = (size_t)n; }
+    return b;
+}
+
+static int vr_write(const char *path, const char *a, size_t an, const char *b, size_t bn)
+{
+    FILE *f = test_fopen_private(path);
+    if (!f) return 0;
+    if (an) fwrite(a, 1, an, f);
+    if (bn) fwrite(b, 1, bn, f);
+    fclose(f);
+    return 1;
+}
+
+/* Runs one Mistral reply against an SSE file; 1 when an end arrived. */
+static int vr_mistral_file(HWND w, HttpLoop **hp, const char *path, const char *key)
+{
+    HlAudio a;
+    memset(&a, 0, sizeof(a));
+    a.sse_file = path;
+    *hp = hl_start(HLS_SSE, &a);
+    if (!*hp) return 0;
+    VoiceAisTarget t = vr_target(hl_port(*hp), VAIS_SHAPE_MISTRAL);
+    return vr_speak(w, &t, key, "One. Two.");
+}
+
+int test_voice_ais_custom_wav_done(void)
+{
+    TEST_BEGIN();
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    HlAudio a = { 1, 0, 0.25, NULL };
+    HttpLoop *h = hl_start(HLS_WAV, &a);
+    ASSERT_NOT_NULL(h);
+    if (w && h) {
+        VoiceAisTarget t = vr_target(hl_port(h), VAIS_SHAPE_OPENAI);
+        ASSERT_EQ(vr_speak(w, &t, VR_KEY, "One. Two."), 1);
+        va_pump(100);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 1);
+        ASSERT_EQ(va_count(VTT_ERROR, 1), 0);
+        ASSERT_TRUE(strstr(hl_request_head(h), "Authorization: Bearer " VR_KEY) != NULL);
+        ASSERT_TRUE(strstr(hl_request_head(h), "POST /v1/audio/speech") != NULL);
+        size_t bn = 0;
+        const char *body = hl_request_body(h, &bn);
+        ASSERT_TRUE(body != NULL && strstr(body, "\"input\":\"One. Two.\"") != NULL);
+        ASSERT_TRUE(body != NULL && strstr(body, "\"response_format\":\"wav\"") != NULL);
+        ASSERT_EQ((int)voice_net_open_count(), 1);
+        ASSERT_EQ(hl_requests(h), 1);
+        const long fr = (long)voice_audio_test_render_frames(1);
+        ASSERT_TRUE(fr >= 5999 && fr <= 6001);
+        voice_ais_quit(VA_TOKEN, 3000);
+        ASSERT_EQ(voice_ledger_all_zero(), 1);
+    }
+    if (h) hl_stop(h);
+    va_end(w);
+    TEST_END();
+}
+
+int test_voice_ais_custom_no_key(void)
+{
+    TEST_BEGIN();
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    HttpLoop *h = hl_start(HLS_WAV, NULL);
+    ASSERT_NOT_NULL(h);
+    if (w && h) {
+        VoiceAisTarget t = vr_target(hl_port(h), VAIS_SHAPE_OPENAI);
+        ASSERT_EQ(vr_speak(w, &t, "", "One. Two."), 1);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 1);
+        ASSERT_TRUE(strstr(hl_request_head(h), "Authorization") == NULL);
+        ASSERT_TRUE(strstr(hl_request_head(h), "POST /v1/audio/speech") != NULL);
+        voice_ais_quit(VA_TOKEN, 3000);
+    }
+    if (h) hl_stop(h);
+    va_end(w);
+    TEST_END();
+}
+
+/* The frames a clean decode of an SSE file gives (the expectation, built apart from the fetch). */
+typedef struct { VoiceAisSse st; VoiceWavStream ws; } VrCount;
+
+static int vr_count_line(const char *line, size_t len, void *ctx)
+{
+    VrCount *x = (VrCount *)ctx;
+    VoiceAisEv ev;
+    int over = voice_ais_sse_line(&x->st, line, len, &ev);
+    if (ev.kind == VAIS_EV_AUDIO) {
+        const size_t cap = voice_wavs_out_max(ev.audio_len);
+        int16_t *o = (int16_t *)malloc(cap * sizeof(int16_t));
+        if (o) { (void)voice_wavs_feed(&x->ws, ev.audio, ev.audio_len, o, cap); free(o); }
+        free(ev.audio);
+    }
+    return over;
+}
+
+static uint64_t vr_fixture_frames(const char *path)
+{
+    size_t n = 0;
+    char *raw = vr_read(path, &n);
+    if (!raw) return 0;
+    SseLine sl;
+    sse_line_init(&sl);
+    static VrCount c;
+    memset(&c, 0, sizeof(c));
+    voice_ais_sse_init(&c.st);
+    voice_wavs_init(&c.ws, VWS_RAW_NONE);
+    sse_line_feed(&sl, raw, n, vr_count_line, &c);
+    sse_line_free(&sl);
+    free(raw);
+    return voice_wavs_frames(&c.ws);
+}
+
+static int vr_mistral_checks(HWND w, const char *path)   /* 0 when every check held */
+{
+    int _tf_local_fail = 0;
+    HttpLoop *h = NULL;
+    const uint64_t want = vr_fixture_frames(path);
+    int got_end = vr_mistral_file(w, &h, path, VR_KEY);
+    ASSERT_EQ(got_end, 1);
+    ASSERT_TRUE(want > 1000);
+    va_pump(100);
+    ASSERT_EQ(va_count(VTT_DONE, 1), 1);
+    ASSERT_EQ(va_count(VTT_ERROR, 1), 0);
+    const long fr = (long)voice_audio_test_render_frames(1);
+    ASSERT_TRUE(fr >= (long)want - 1 && fr <= (long)want + 1);
+    if (h) {
+        size_t bn = 0;
+        const char *body = hl_request_body(h, &bn);
+        ASSERT_TRUE(body != NULL && strstr(body, "\"voice_id\"") != NULL);
+        ASSERT_TRUE(body != NULL && strstr(body, "\"stream\":true") != NULL);
+        ASSERT_TRUE(strstr(hl_request_head(h), "Accept: text/event-stream") != NULL);
+        ASSERT_TRUE(strstr(hl_request_head(h), "Authorization: Bearer " VR_KEY) != NULL);
+        hl_stop(h);
+    }
+    voice_ais_quit(VA_TOKEN, 3000);
+    return _tf_local_fail;
+}
+
+int test_voice_ais_mistral_sse(void)
+{
+    TEST_BEGIN();
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    if (w) ASSERT_EQ(vr_mistral_checks(w, VR_FIX_WAV), 0);
+    va_end(w);
+    TEST_END();
+}
+
+int test_voice_ais_mistral_capture(void)
+{
+    TEST_BEGIN();
+    FILE *f = fopen(VR_CAP_WAV, "rb");
+    if (!f) TEST_SKIP("no capture: " VR_CAP_WAV " (Task 0)");
+    fclose(f);
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    if (w) ASSERT_EQ(vr_mistral_checks(w, VR_CAP_WAV), 0);
+    va_end(w);
+    TEST_END();
+}
+
+/* One event of the stream ends in an error, or only the done event arrives: each fails. */
+static int vr_expect_stream_fail(int mode)   /* 0 when every check held */
+{
+    int _tf_local_fail = 0;
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    HttpLoop *h = hl_start(mode, NULL);
+    ASSERT_NOT_NULL(h);
+    if (w && h) {
+        VoiceAisTarget t = vr_target(hl_port(h), VAIS_SHAPE_MISTRAL);
+        ASSERT_EQ(vr_speak(w, &t, VR_KEY, "One. Two."), 1);
+        va_pump(100);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+        ASSERT_EQ(va_count(VTT_ERROR, 1), 1);
+        ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+        voice_ais_quit(VA_TOKEN, 3000);
+    }
+    if (h) hl_stop(h);
+    va_end(w);
+    return _tf_local_fail;
+}
+
+int test_voice_ais_sse_error_event(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_stream_fail(HLS_SSE_ERROR), 0); TEST_END(); }
+int test_voice_ais_sse_done_only(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_stream_fail(HLS_SSE_DONE_ONLY), 0); TEST_END(); }
+
+/* Each custom-server failure of the decoder or the stream, by mode and by the hr it must give. */
+static int vr_expect_custom(int mode, long want_hr)   /* 0 when every check held */
+{
+    int _tf_local_fail = 0;
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    HttpLoop *h = hl_start(mode, NULL);
+    ASSERT_NOT_NULL(h);
+    if (w && h) {
+        VoiceAisTarget t = vr_target(hl_port(h), VAIS_SHAPE_OPENAI);
+        ASSERT_EQ(vr_speak(w, &t, VR_KEY, "One. Two."), 1);
+        va_pump(100);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+        ASSERT_EQ(va_count(VTT_ERROR, 1), 1);
+        ASSERT_EQ((int)vr_error_hr(), (int)want_hr);
+        voice_ais_quit(VA_TOKEN, 3000);
+        ASSERT_EQ(voice_ledger_all_zero(), 1);
+    }
+    if (h) hl_stop(h);
+    va_end(w);
+    return _tf_local_fail;
+}
+
+int test_voice_ais_badrate_is_format(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_WAV_BADRATE, VOICE_AIS_HR_FORMAT), 0); TEST_END(); }
+int test_voice_ais_second_header_fails(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_WAV_TWICE, VOICE_AIS_HR_STREAM), 0); TEST_END(); }
+int test_voice_ais_empty_body_fails(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_EMPTY, VOICE_AIS_HR_STREAM), 0); TEST_END(); }
+int test_voice_ais_http_401(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_401, 401), 0); TEST_END(); }
+int test_voice_ais_http_429(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_429, 429), 0); TEST_END(); }
+int test_voice_ais_http_404_and_422(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(vr_expect_custom(HLS_404, 404), 0);
+    ASSERT_EQ(vr_expect_custom(HLS_422, 422), 0);
+    TEST_END();
+}
+
+/* An SSE line over SSE_LINE_MAX is discarded and counted; the rest of the stream is otherwise
+ * a clean reply, so only the skipped-line check can fail it. */
+int test_voice_ais_oversized_line_fails(void)
+{
+    TEST_BEGIN();
+    static const char *const path = TEST_TMP_DIR "/nutshell_vais_oversize.sse";
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    size_t n = 0;
+    char *fix = vr_read(VR_FIX_WAV, &n);
+    ASSERT_NOT_NULL(fix);
+    if (w && fix) {
+        const size_t big = SSE_LINE_MAX + 1000;
+        char *line = (char *)malloc(big + 3);
+        ASSERT_NOT_NULL(line);
+        if (line) {
+            line[0] = ':'; line[1] = ' ';
+            memset(line + 2, 'x', big);
+            line[big + 2] = '\n';
+            ASSERT_EQ(vr_write(path, line, big + 3, fix, n), 1);
+            free(line);
+            HttpLoop *h = NULL;
+            ASSERT_EQ(vr_mistral_file(w, &h, path, VR_KEY), 1);
+            va_pump(100);
+            ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+            ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+            if (h) hl_stop(h);
+            voice_ais_quit(VA_TOKEN, 3000);
+        }
+    }
+    free(fix);
+    remove(path);
+    va_end(w);
+    TEST_END();
+}
+
+/* Audio but no speech.audio.done: the stream was cut, so it is a failure (R32). */
+int test_voice_ais_mistral_no_done_fails(void)
+{
+    TEST_BEGIN();
+    static const char *const path = TEST_TMP_DIR "/nutshell_vais_nodone.sse";
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    size_t n = 0;
+    char *fix = vr_read(VR_FIX_WAV, &n);
+    ASSERT_NOT_NULL(fix);
+    if (w && fix) {
+        const char *done = strstr(fix, "event: speech.audio.done");
+        ASSERT_NOT_NULL(done);
+        if (done) {
+            ASSERT_EQ(vr_write(path, fix, (size_t)(done - fix), NULL, 0), 1);
+            HttpLoop *h = NULL;
+            ASSERT_EQ(vr_mistral_file(w, &h, path, VR_KEY), 1);
+            va_pump(100);
+            ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+            ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+            if (h) hl_stop(h);
+            voice_ais_quit(VA_TOKEN, 3000);
+        }
+    }
+    free(fix);
+    remove(path);
+    va_end(w);
+    TEST_END();
+}
+
+/* A stream that stops mid-frame, then says done: the decoder is in DATA with a partial frame
+ * and frames > 0, so only voice_wavs_finish_ok can fail it. */
+int test_voice_ais_partial_frame_fails(void)
+{
+    TEST_BEGIN();
+    static const char *const path = TEST_TMP_DIR "/nutshell_vais_partial.sse";
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    unsigned char wav[44 + 5];
+    memcpy(wav, "RIFF", 4); memset(wav + 4, 0xFF, 4); memcpy(wav + 8, "WAVEfmt ", 8);
+    const unsigned char fmt[] = { 16,0,0,0, 1,0, 1,0, 0xC0,0x5D,0,0, 0x80,0xBB,0,0, 2,0, 16,0 };
+    memcpy(wav + 16, fmt, sizeof(fmt));
+    memcpy(wav + 36, "data", 4); memset(wav + 40, 0xFF, 4);
+    const unsigned char pcm[5] = { 1, 2, 3, 4, 5 };   /* two frames and half of a third */
+    memcpy(wav + 44, pcm, 5);
+    char b64[128];
+    const size_t bl = base64_encode(wav, sizeof(wav), b64, sizeof(b64));
+    ASSERT_TRUE(bl > 0 && bl < sizeof(b64));
+    if (w && bl > 0 && bl < sizeof(b64)) {
+        b64[bl] = '\0';
+        char text[400];
+        snprintf(text, sizeof(text),
+                 "event: speech.audio.delta\ndata: {\"type\": \"speech.audio.delta\", \"audio_data\": \"%s\"}\n\n"
+                 "event: speech.audio.done\ndata: {\"type\": \"speech.audio.done\"}\n\n", b64);
+        ASSERT_EQ(vr_write(path, text, strlen(text), NULL, 0), 1);
+        HttpLoop *h = NULL;
+        ASSERT_EQ(vr_mistral_file(w, &h, path, VR_KEY), 1);
+        va_pump(100);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+        ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+        if (h) hl_stop(h);
+        voice_ais_quit(VA_TOKEN, 3000);
+    }
+    remove(path);
+    va_end(w);
+    TEST_END();
+}
+
+/* A server that never answers: quit fires the request's token and returns well inside 4 s. */
+int test_voice_ais_quit_while_server_hangs(void)
+{
+    TEST_BEGIN();
+    int skipped = 0;
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    HttpLoop *h = hl_start(HLS_HANG, NULL);
+    ASSERT_NOT_NULL(h);
+    if (w && h) {
+        VoiceAisTarget t = vr_target(hl_port(h), VAIS_SHAPE_OPENAI);
+        ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+        voice_ais_speak(VA_TOKEN, 1, "One. Two.", 0, &t, VR_KEY);
+        ULONGLONG end = GetTickCount64() + 6000;
+        while (hl_requests(h) < 1 && GetTickCount64() < end) va_pump(10);
+        ASSERT_EQ(hl_requests(h), 1);
+        const ULONGLONG t0 = GetTickCount64();
+        voice_ais_quit(VA_TOKEN, 3000);
+        ASSERT_TRUE(GetTickCount64() - t0 < 4000);
+        if (voice_ledger_count(VRES_SPEECH_REQ) != 0 && vr_under_wine()) {
+            skipped = 1;                    /* Wine does not wake a blocked WinHTTP call */
+        } else {
+            ASSERT_EQ(voice_ledger_count(VRES_SPEECH_REQ), 0);
+            ASSERT_EQ(voice_ledger_all_zero(), 1);
+        }
+    }
+    if (h) hl_stop(h);                      /* closes the server side, which frees a Wine-blocked call */
+    if (skipped) (void)va_wait_ledger(VRES_SPEECH_REQ, 0, 4000);
+    va_end(w);
+    if (skipped) TEST_SKIP("Wine does not abort a synchronous WinHTTP call");
     TEST_END();
 }
 

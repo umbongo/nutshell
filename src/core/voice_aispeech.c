@@ -391,6 +391,10 @@ static void handle_data(VoiceAisSse *s, const char *data, size_t len, VoiceAisEv
     json_free(root);
     if (has_error) { ev->kind = VAIS_EV_ERROR; return; }
     if (done) {
+        if (len > 0 && !parsed) {                   /* a known name with data that is not JSON fails */
+            ev->kind = VAIS_EV_ERROR;
+            return;
+        }
         ev->kind = s->audio_seen ? VAIS_EV_DONE : VAIS_EV_ERROR;   /* a reply with no audio is a failure */
         return;
     }

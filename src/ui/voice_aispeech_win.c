@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +14,12 @@
 #include "voice_ptt.h"
 #include "voice_speak.h"
 #include "secure_zero.h"
+#include "ai_http.h"
+#include "ai_netcancel.h"
+#include "voice_net_win.h"
+#include "voice_wavstream.h"
+#include "sse_line.h"
+#include "dlog.h"
 
 #define AIS_MAX_CTX      VOICE_AIS_TIMER_COUNT
 #define AIS_MAX_CHUNKS   2048
@@ -34,6 +41,7 @@ typedef struct AisJob {
     size_t n;
     VoiceAisTarget target;
     VoiceAisFetch fetch;
+    AiNetCancel nc;                /* fired by every cancel and quit: closes the blocked request */
     int dead, cancel;              /* under g_lock */
     unsigned cur_chunk;            /* under g_lock */
     uint64_t chunk_frames;         /* frames pushed for cur_chunk, under g_lock */
@@ -143,6 +151,10 @@ static void cancel_jobs(unsigned token)
     for (AisJob *j = g_jobs; j != NULL; j = j->next)
         if (j->token == token) j->cancel = 1;
     unlock();
+    /* The tokens are fired outside the lock: closing a request handle can wait for the worker's
+     * callback, which takes the lock. Only this (UI) thread frees a job, so the list is safe. */
+    for (AisJob *j = g_jobs; j != NULL; j = j->next)
+        if (j->token == token) ai_nc_fire(&j->nc);
 }
 
 /* The byte offset of a position in chunk `chunk`, `frames` in. */
@@ -309,6 +321,151 @@ static DWORD WINAPI ais_worker(LPVOID arg)
     return 0;                        /* j may be freed by the UI from here on: never touched again */
 }
 
+/* ---- the real fetch (Task 7b) ---- */
+
+#define AIS_RECV_MS     60000          /* the longest the server may be silent */
+#define AIS_FEED_PIECE  8192           /* one decoder feed: out buffer = voice_wavs_out_max of it */
+#define AIS_OUT_SAMPLES (AIS_FEED_PIECE / 2 + 1)   /* == voice_wavs_out_max(AIS_FEED_PIECE) */
+/* R25: Mistral asks for wav, so its deltas decode as one WAV stream. If the capture ever shows
+ * a header per delta, change this one value to VWS_RAW_F32_MONO and the body's format. */
+#define AIS_MISTRAL_RAW VWS_RAW_NONE
+
+typedef struct {
+    void *job;
+    VoiceAisPush push;
+    int mistral;
+    int stopped;                        /* push refused: dead, cancelled or no render queue */
+    int done;                           /* Mistral: speech.audio.done seen */
+    int failed;                         /* an error event, a bad delta or a decoder error */
+    int fmt_err;                        /* the decoder error was "unsupported audio format" */
+    VoiceWavStream wav;
+    SseLine sse;
+    VoiceAisSse st;
+    int16_t out[AIS_OUT_SAMPLES];
+} AisFetch;
+
+/* Audio bytes into the decoder, its samples into push. 1 to stop the stream. Never reads the
+ * decoder's frame count: the resume offset counts what push accepted (the job's own count). */
+static int fetch_feed(AisFetch *f, const unsigned char *p, size_t n)
+{
+    while (n > 0) {
+        const size_t k = n < AIS_FEED_PIECE ? n : AIS_FEED_PIECE;
+        const size_t got = voice_wavs_feed(&f->wav, p, k, f->out, voice_wavs_out_max(k));
+        if (voice_wavs_state(&f->wav) == VWS_ERROR) {
+            f->failed = 1;
+            f->fmt_err = voice_wavs_error_is_format(&f->wav);
+            return 1;
+        }
+        if (got > 0 && !f->push(f->job, f->out, got)) { f->stopped = 1; return 1; }
+        p += k;
+        n -= k;
+    }
+    return 0;
+}
+
+static int fetch_sse_line(const char *line, size_t len, void *ctx)
+{
+    AisFetch *f = (AisFetch *)ctx;
+    VoiceAisEv ev;
+    const int over = voice_ais_sse_line(&f->st, line, len, &ev);
+    switch (ev.kind) {
+    case VAIS_EV_AUDIO: {
+        const int stop = fetch_feed(f, ev.audio, ev.audio_len);
+        secure_zero(ev.audio, ev.audio_len);
+        free(ev.audio);
+        return stop;
+    }
+    case VAIS_EV_DONE:  f->done = 1; return 1;
+    case VAIS_EV_ERROR: f->failed = 1; return 1;
+    default:
+        if (ev.event[0] != '\0')        /* an ignored event: its name only, never its data */
+            DLOG(DLOG_AI, DLOG_INFO, 0, "voice.speech_event", "event=%s", ev.event);
+        return over;
+    }
+}
+
+static int fetch_stream_cb(const char *data, size_t len, void *ctx)
+{
+    AisFetch *f = (AisFetch *)ctx;
+    if (f->mistral) return sse_line_feed(&f->sse, data, len, fetch_sse_line, f);
+    return fetch_feed(f, (const unsigned char *)data, len);
+}
+
+/* One chunk: 0, or a VOICE_AIS_HR_* or an HTTP status. Classified on the HTTP status and the
+ * decoder's state, never on error text. */
+static long ais_fetch(void *job, const VoiceAisTarget *t, const char *key, const char *text,
+                      size_t len, VoiceAisPush push)
+{
+    size_t body_len = 0;
+    char *body = voice_ais_body(t, text, len, &body_len);
+    if (body == NULL) return VOICE_AIS_HR_RESOLVE;      /* a model or voice that cannot be sent */
+
+    const size_t klen = key != NULL ? strlen(key) : 0;
+    char *auth = NULL;
+    size_t auth_cap = 0;
+    if (klen > 0) {
+        auth_cap = klen + 32;
+        auth = (char *)malloc(auth_cap);
+        if (auth != NULL) snprintf(auth, auth_cap, "Authorization: Bearer %s", key);
+    }
+    const char *hdrs[3];
+    size_t nh = 0;
+    if (auth != NULL) hdrs[nh++] = auth;
+    if (t->shape == VAIS_SHAPE_MISTRAL) hdrs[nh++] = "Accept: text/event-stream";
+    hdrs[nh] = NULL;
+
+    AisFetch *f = (AisFetch *)calloc(1, sizeof(*f));
+    long r = VOICE_AIS_HR_NET;
+    if (f != NULL && (klen == 0 || auth != NULL)) {
+        f->job = job;
+        f->push = push;
+        f->mistral = t->shape == VAIS_SHAPE_MISTRAL;
+        voice_wavs_init(&f->wav, f->mistral ? AIS_MISTRAL_RAW : VWS_RAW_NONE);
+        sse_line_init(&f->sse);
+        voice_ais_sse_init(&f->st);                      /* once per request: audio_seen is per stream */
+
+        int status = 0;
+        char err[512];
+        int rc = -1;
+        HINTERNET sess = voice_net_open(VNK_TTS);
+        if (sess != NULL) {
+            rc = ai_http_post_stream_ex(sess, t->url, hdrs, body, body_len, AIS_RECV_MS,
+                                        fetch_stream_cb, f, &status, err, sizeof(err),
+                                        voice_ais_job_nc(job));
+            WinHttpCloseHandle(sess);
+        }
+        secure_zero(err, sizeof(err));                    /* it may hold the server's reply body */
+        DLOG(DLOG_AI, DLOG_INFO, 0, "voice.speech_request", "kind=%s status=%d", t->provider, status);
+
+        if (rc != 0) {
+            r = status >= 300 ? (long)status : VOICE_AIS_HR_NET;
+        } else if (f->stopped) {
+            r = 0;                                        /* the worker reads its own flags */
+        } else if (f->failed) {
+            r = f->fmt_err ? VOICE_AIS_HR_FORMAT : VOICE_AIS_HR_STREAM;
+        } else if ((f->mistral && !f->done) ||            /* R32: cut off before the done event */
+                   sse_line_skipped(&f->sse) > 0 ||       /* a line was too long and dropped */
+                   !voice_wavs_finish_ok(&f->wav)) {      /* no header, no frame or half a frame */
+            r = VOICE_AIS_HR_STREAM;
+        } else {
+            r = 0;
+        }
+    }
+    if (f != NULL) {
+        if (f->sse.buf != NULL) secure_zero(f->sse.buf, f->sse.cap);
+        sse_line_free(&f->sse);
+        voice_wavs_wipe(&f->wav);
+        secure_zero(f, sizeof(*f));
+        free(f);
+    }
+    if (auth != NULL) { secure_zero(auth, auth_cap); free(auth); }
+    secure_zero(body, body_len + 1);
+    free(body);
+    return r;
+}
+
+AiNetCancel *voice_ais_job_nc(void *job) { return &((AisJob *)job)->nc; }
+
 /* ---- contexts ---- */
 
 int voice_ais_start(HWND notify, unsigned token)
@@ -328,6 +485,7 @@ int voice_ais_start(HWND notify, unsigned token)
     c->volume = 100;
     c->auto_quit = (token == VOICE_AIS_SAMPLE_TOKEN);
     g_ctx[slot] = c;
+    if (g_fetch == NULL) g_fetch = ais_fetch;   /* the real one, unless a test installed a fake */
     return 1;
 }
 
@@ -451,6 +609,7 @@ void voice_ais_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
     j->n = n;
     j->target = *t;
     j->fetch = g_fetch;
+    ai_nc_init(&j->nc);
     j->token = token;
     j->rid = rid;
     j->notify = c->notify;
@@ -505,6 +664,8 @@ static void ctx_quit_one(AisCtx *c, unsigned wait_ms)
     for (j = g_jobs; j != NULL; j = j->next)
         if (j->token == token) { j->dead = 1; j->cancel = 1; }
     unlock();
+    for (j = g_jobs; j != NULL; j = j->next)
+        if (j->token == token) ai_nc_fire(&j->nc);   /* outside the lock, see cancel_jobs */
 
     for (j = g_jobs; j != NULL; j = nx) {
         nx = j->next;
@@ -541,6 +702,7 @@ void voice_ais_quit_all(unsigned wait_ms)
         lock();
         for (AisJob *j = g_jobs; j != NULL; j = j->next) { j->dead = 1; j->cancel = 1; }
         unlock();
+        for (AisJob *j = g_jobs; j != NULL; j = j->next) ai_nc_fire(&j->nc);
     }
     for (int i = 0; i < AIS_MAX_CTX; i++)
         if (g_ctx[i] != NULL) ctx_quit_one(g_ctx[i], wait_ms);

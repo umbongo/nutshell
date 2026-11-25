@@ -106,8 +106,9 @@ void voice_ais_sse_init(VoiceAisSse *s);
  * ERROR), else 0, so it can be returned from an SseLineFn to stop the feed.
  * speech.audio.delta (by its event: name or its data "type") carries audio_data,
  * base64; speech.audio.done ends it, and is an ERROR when no audio came before it;
- * an error event or member, an undecodable delta or data that is not JSON is an
- * ERROR; anything else is ignored. */
+ * an error event or member, an undecodable delta, or data that is not JSON under
+ * no event name or under a known one (delta, done, error) is an ERROR; anything
+ * else, including non-JSON data under an unknown name, is ignored. */
 int  voice_ais_sse_line(VoiceAisSse *s, const char *line, size_t len, VoiceAisEv *ev);
 
 /* While a reply streams: 1,600 frames of 24 kHz audio per UTF-8 byte of its chunk. */

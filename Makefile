@@ -323,7 +323,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/ns_slider.c src/core/ns_slider_math.c tests/test_ns_slider_win.c src/core/voice_level.c tests/test_ns_draw_level_meter_win.c \
                    src/ui/voice_tts_win.c src/ui/voice_voices_win.c src/core/voice_speak.c src/core/voice_voices.c tests/test_voice_tts_win.c \
                    src/ui/voice_conv_win.c src/core/voice_conv.c src/core/voice_echo.c src/core/voice_transcript.c tests/test_voice_conv_win.c \
-                   src/ui/voice_aispeech_win.c src/core/voice_aispeech.c tests/test_voice_aispeech_win.c \
+                   src/ui/voice_aispeech_win.c src/core/voice_aispeech.c src/core/voice_wavstream.c src/core/sse_line.c tests/test_voice_aispeech_win.c \
                    tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \

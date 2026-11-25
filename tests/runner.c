@@ -3042,6 +3042,7 @@ int test_vais_sse_done_and_error(void);
 int test_vais_sse_done_without_audio(void);
 int test_vais_sse_split_lines(void);
 int test_vais_sse_bad_base64(void);
+int test_vais_sse_done_non_json_is_error(void);
 int test_vais_sse_capture_wav(void);
 int test_vais_sse_capture_pcm(void);
 int test_vais_sse_capture_error(void);
@@ -8715,6 +8716,7 @@ int main(void) {
     failed += test_vais_sse_done_without_audio();
     failed += test_vais_sse_split_lines();
     failed += test_vais_sse_bad_base64();
+    failed += test_vais_sse_done_non_json_is_error();
     failed += test_vais_sse_capture_wav();
     failed += test_vais_sse_capture_pcm();
     failed += test_vais_sse_capture_error();

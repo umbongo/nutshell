@@ -874,6 +874,8 @@ static int check_error_stream(const char *path)
     char *raw = read_all(path, &len);
     if (!raw || len == 0 || !feed_file(path, 4096, &r)) { free(raw); rec_free(&r); return 0; }
     int has_data_line = strstr(raw, "data:") != NULL;
+    if (!has_data_line)
+        printf("  check_error_stream: %s has no \"data:\" line; accepted as a plain HTTP error body\n", path);
     free(raw);
     int done = 0;
     for (int i = 0; i < r.n; i++) if (r.kinds[i] == VAIS_EV_DONE) done = 1;
@@ -973,6 +975,27 @@ int test_vais_sse_unknown_event_non_json_ignored(void)
     feed_text("event: speech.audio.delta\ndata: ping\n\n", &r);
     ASSERT_EQ(r.n, 1);
     ASSERT_EQ(r.kinds[0], (int)VAIS_EV_ERROR);
+    rec_free(&r);
+    TEST_END();
+}
+
+/* Task 7b: under the done name, data that is not JSON fails the reply (R28 as amended). */
+int test_vais_sse_done_non_json_is_error(void)
+{
+    TEST_BEGIN();
+    EvRec r;
+    rec_init(&r);
+    feed_text("data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"QUJDRA==\"}\n\n"
+              "event: speech.audio.done\ndata: garbage not json\n\n", &r);
+    ASSERT_EQ(r.n, 2);
+    ASSERT_EQ(r.kinds[1], (int)VAIS_EV_ERROR);
+    rec_free(&r);
+    /* the same done with JSON data still ends cleanly, and with no data at all too */
+    rec_init(&r);
+    feed_text("data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"QUJDRA==\"}\n\n"
+              "event: speech.audio.done\ndata: {\"type\":\"speech.audio.done\"}\n\n", &r);
+    ASSERT_EQ(r.n, 2);
+    ASSERT_EQ(r.kinds[1], (int)VAIS_EV_DONE);
     rec_free(&r);
     TEST_END();
 }
