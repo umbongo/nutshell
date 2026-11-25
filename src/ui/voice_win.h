@@ -116,6 +116,8 @@ void voice_on_turn_idle(void);           /* WM_VOICE_TURN_IDLE */
 void voice_on_card(WPARAM kind);         /* WM_VOICE_CARD */
 void voice_on_notice(void);              /* WM_VOICE_NOTICE */
 void voice_on_conv_timer(void);          /* WM_TIMER with VOICE_CONV_TIMER_ID */
+void voice_on_ais(LPARAM lp);            /* WM_VOICE_AIS: frees the VoiceAisMsg */
+void voice_on_ais_timer(UINT_PTR id);    /* WM_TIMER in VOICE_AIS_TIMER_BASE..+1 */
 void voice_on_panel_closed(void);        /* the AI panel was hidden or destroyed */
 
 #endif /* NUTSHELL_VOICE_WIN_H */

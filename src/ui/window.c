@@ -49,6 +49,7 @@
 #include "voice_win.h"
 #include "voice_conv_win.h"
 #include "voice_tts_win.h"
+#include "voice_aispeech_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
@@ -5382,6 +5383,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 voice_on_timer();
             } else if (wParam == VOICE_CONV_TIMER_ID) {
                 voice_on_conv_timer();
+            } else if (wParam >= VOICE_AIS_TIMER_BASE && wParam < VOICE_AIS_TIMER_BASE + 2) {
+                voice_on_ais_timer(wParam);
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
             } else if (wParam == ANIM_TIMER_ID) {
@@ -5486,6 +5489,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_VOICE_TTS:
             voice_on_tts(lParam);
+            return 0;
+
+        case WM_VOICE_AIS:
+            voice_on_ais(lParam);
             return 0;
 
         case WM_VOICE_TURN_IDLE:

@@ -1,6 +1,8 @@
 #include "voice_conv_win.h"
 
 #include "secure_zero.h"
+#include "voice_aispeech.h"
+#include "voice_config.h"
 #include "voice_echo.h"
 #include "voice_level.h"
 #include "voice_listen.h"
@@ -41,6 +43,9 @@ static unsigned long g_adj;                 /* the test clock offset */
 static unsigned g_seq;
 static unsigned g_cap_token, g_live_token, g_stt_token, g_tts_token;
 static int g_cap_open, g_link_open, g_stt_open, g_tts_alive;
+static int g_tts_engine;                    /* VOICE_SPEECH_* of the live speech context */
+static int g_engine_cfg;                    /* the configured engine, read at conversation start */
+static int g_ai_off;                        /* AI speech cannot work this conversation (R37) */
 static int g_aec = -1;                      /* the last VAM_CONV_OPENED value */
 static VoiceListenMode g_want_mode = VLM_HOLD;
 static int g_have_mode;
@@ -422,13 +427,55 @@ static void send_now(int voice_turn)
 
 /* ---- speech ---- */
 
+/* Who speaks the next text: AI speech unless Windows speech is configured or AI speech cannot
+ * work in this conversation. */
+static int want_engine(void)
+{
+    return (g_engine_cfg == VOICE_SPEECH_AI && !g_ai_off) ? VOICE_SPEECH_AI : VOICE_SPEECH_WINDOWS;
+}
+
+static int start_context(int engine)
+{
+    g_tts_token = next_token();
+    if (!g_ops->tts_start(g_tts_token, engine)) return 0;
+    g_tts_alive = 1;
+    g_tts_engine = engine;
+    return 1;
+}
+
+static void header_raw(const char *t)
+{
+    if (!t || !t[0] || !g_ops->header) return;
+    snprintf(g_last_header, sizeof g_last_header, "%s", t);
+#ifdef NS_VOICE_WAV_SEAM
+    voice_audio_seam_note_header(t);
+#endif
+    g_ops->header(t);
+}
+
+#define HDR_AI_FAILED "AI speech failed: using Windows speech"
+
+/* Starts the wanted engine; AI speech that cannot start reads with Windows speech, with the header. */
+static int start_best(void)
+{
+    const int want = want_engine();
+    g_tts_alive = 0;
+    if (start_context(want)) return 1;
+    if (want != VOICE_SPEECH_AI) return 0;
+    header_raw(HDR_AI_FAILED);
+    return start_context(VOICE_SPEECH_WINDOWS);
+}
+
+/* The context a text is spoken with: the live one when it is the wanted engine's, else it is
+ * quit and the wanted one started (a reply after a fallback returns to AI speech). */
 static int ensure_engine(void)
 {
-    if (g_tts_alive) return 1;
-    g_tts_token = next_token();
-    if (!g_ops->tts_start(g_tts_token)) return 0;
-    g_tts_alive = 1;
-    return 1;
+    if (g_tts_alive && g_tts_engine == want_engine()) return 1;
+    if (g_tts_alive) {
+        g_ops->tts_quit(g_tts_token);
+        g_tts_alive = 0;
+    }
+    return start_best();
 }
 
 static void mark_not_playing(int read_to_end)
@@ -450,12 +497,8 @@ static void stop_speech(void)
     mark_not_playing(0);
 }
 
-static void begin_speak(const char *text, size_t from, int is_reply)
+static void speak_with_context(const char *text, size_t from, int is_reply)
 {
-    if (!text || !ensure_engine()) {
-        enqueue(VCE_SPEECH_FAILED, 0, 0);
-        return;
-    }
     g_notice_pending = 0;
     /* a cut-in's duck is over once the speech it ducked is gone: every reply starts at full volume */
     if (g_ops->tts_volume) g_ops->tts_volume(g_tts_token, 100);
@@ -473,12 +516,22 @@ static void begin_speak(const char *text, size_t from, int is_reply)
     g_ops->tts_speak(g_tts_token, g_cur_id, text, from);
 }
 
+static void begin_speak(const char *text, size_t from, int is_reply)
+{
+    if (!text || !ensure_engine()) {
+        enqueue(VCE_SPEECH_FAILED, 0, 0);
+        return;
+    }
+    speak_with_context(text, from, is_reply);
+}
+
 /* The first reply of a launch, with Automatic landing on a voice that is not an English (UK)
  * woman's: not spoken now; WM_VOICE_NOTICE shows the notice and the conversation pauses
  * while it is up, then speaks the held reply from 0 on resume. */
 static int notice_wanted(void)
 {
     if (g_notice_raised || g_notice_checked || !g_ops->notice_due) return 0;
+    if (g_engine_cfg == VOICE_SPEECH_AI) return 0;   /* the notice is for Windows speech only; a fallback never raises it */
     g_notice_checked = 1;
     g_notice_voice[0] = '\0';
     return g_ops->notice_due(g_notice_voice, sizeof g_notice_voice);
@@ -558,13 +611,7 @@ static void show_header(VoiceConvHeader h)
     if (h == VCH_LISTENING && g_c.state == VCS_LISTENING && g_ops->box_has_text
         && g_ops->box_has_text())
         t = CUE_DRAFT;
-    if (t[0] && g_ops->header) {
-        snprintf(g_last_header, sizeof g_last_header, "%s", t);
-#ifdef NS_VOICE_WAV_SEAM
-        voice_audio_seam_note_header(t);
-#endif
-        g_ops->header(t);
-    }
+    header_raw(t);
 }
 
 /* The draft cue follows the box while Listening: a draft in the box shows the cue, an empty box
@@ -632,8 +679,7 @@ static void apply(VoiceConvOut o)
     if (a & VCA_CLOSE_LINK) close_link();
     if (a & VCA_LOCK_REG) (void)g_ops->lock_reg();
     if (a & VCA_ENGINE_START) {
-        g_tts_token = next_token();
-        g_tts_alive = g_ops->tts_start(g_tts_token) ? 1 : 0;
+        (void)start_best();
     }
     if (a & VCA_CLOSE_CAPTURE) close_capture();
     if (a & VCA_OPEN_CAPTURE) open_capture();
@@ -724,6 +770,9 @@ void voice_conv_set_ops(const VoiceConvOps *ops)
     g_in_step = 0;
     g_pend_end = g_keep_words = g_ducked = 0;
     g_progress_at = 0;
+    g_engine_cfg = VOICE_SPEECH_WINDOWS;
+    g_ai_off = 0;
+    g_tts_engine = VOICE_SPEECH_WINDOWS;
     g_cap_open = g_link_open = g_stt_open = g_tts_alive = 0;
     g_cap_token = g_live_token = g_stt_token = g_tts_token = 0;
     g_aec = -1;
@@ -800,6 +849,8 @@ void voice_conv_start(int live)
     reset_resources();
     g_last_header[0] = '\0';
     g_notice_checked = 0;   /* g_aec keeps the last report for the Settings page */
+    g_ai_off = 0;           /* R37: a new conversation tries AI speech again */
+    g_engine_cfg = g_ops->speech_engine ? g_ops->speech_engine() : VOICE_SPEECH_WINDOWS;
     g_since = g_ops->msg_count();
     voice_conv_event(VCE_START, live ? 1 : 0, 0);
 }
@@ -974,6 +1025,51 @@ void voice_conv_on_stt(VoiceSttResult *r)
     pump();
 }
 
+/* An AI speech failure for the current reply (R10, R15, R37): quits the AI context and reads the
+ * rest of the reply, from the failure's offset, with Windows speech. A setting that cannot work
+ * writes the note once and keeps this conversation on Windows speech; a passing failure shows the
+ * header and the next reply tries AI speech again. */
+static void ai_fallback(const VoiceTtsMsg *m)
+{
+    char reason[200], resolve_err[160], text[320];
+    char *rest = g_spoken ? dup_str(g_spoken) : NULL;
+    const int was_ducked = g_ducked;
+    const int is_reply = g_cur_is_reply;
+    size_t from = m->offset;
+    if (voice_ais_failure_fatal(m->hr)) {
+        resolve_err[0] = '\0';
+        if (m->hr == VOICE_AIS_HR_RESOLVE && g_ops->ai_resolve_error
+            && !g_ops->ai_resolve_error(resolve_err, sizeof resolve_err))
+            resolve_err[0] = '\0';
+        voice_ais_failure_reason(m->hr, resolve_err, reason, sizeof reason);
+        snprintf(text, sizeof text, "AI speech is off for this conversation: %s. "
+                 "Replies are read with Windows speech.", reason);
+        g_ai_off = 1;
+        note(text);
+    } else {
+        header_raw(HDR_AI_FAILED);
+    }
+    g_ops->tts_quit(g_tts_token);
+    g_tts_alive = 0;
+    if (!rest || !start_context(VOICE_SPEECH_WINDOWS)) {
+        if (rest) {
+            secure_zero(rest, strlen(rest) + 1);
+            free(rest);
+        }
+        mark_not_playing(0);
+        voice_conv_event(VCE_SPEECH_FAILED, 0, 0);
+        return;
+    }
+    if (from > strlen(rest)) from = strlen(rest);
+    speak_with_context(rest, from, is_reply);
+    if (was_ducked && g_ops->tts_volume) {   /* a cut-in's duck outlives the engine change */
+        g_ops->tts_volume(g_tts_token, VOICE_TTS_DUCK_PERCENT);
+        g_ducked = 1;
+    }
+    secure_zero(rest, strlen(rest) + 1);
+    free(rest);
+}
+
 void voice_conv_on_tts(const VoiceTtsMsg *m)
 {
     if (!m) return;
@@ -1006,6 +1102,10 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
         /* An error for an older reply is nothing. The thread stays in its loop after an error
          * (no VTT_EXITED follows a failed Speak), so it is quit here, not just forgotten. */
         if (m->reply_id != 0 && m->reply_id != g_cur_id) break;
+        if (g_tts_alive && g_tts_engine == VOICE_SPEECH_AI && g_playing) {
+            ai_fallback(m);
+            break;
+        }
         if (g_tts_alive) g_ops->tts_quit(g_tts_token);
         g_tts_alive = 0;
         mark_not_playing(0);
