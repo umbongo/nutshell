@@ -36,6 +36,7 @@ typedef struct {
     int box_text;
     int notice_voice, notice_due_calls; char notice_name[160]; int notice_due_first;
     int app_active;
+    int dialog_open;    /* a dialog owned by the undocked panel is up */
     int chat_differs;   /* the panel's binding is no longer the conversation's */
     HWND win;
 } Fake;
@@ -108,6 +109,7 @@ static int f_reply(unsigned since, char **text, int *err)
     return 1;
 }
 static int f_idle(void) { return F.idle; }
+static int f_dialog_open(void) { return F.dialog_open; }
 static int f_chat_same(void) { return !F.chat_differs; }
 static void f_cancel_work(void) { F.cancel_work++; }
 static void f_note(const char *t) { F.notes++; snprintf(F.note, sizeof F.note, "%s", t); }
@@ -155,7 +157,7 @@ static VoiceConvOps fake_ops(void)
     o.live_begin = f_live_begin; o.live_replace = f_live_replace; o.drop_words = f_drop_words;
     o.lock_typing = f_lock_typing; o.send_caption = f_caption; o.mic_ui = f_mic;
     o.box_has_text = f_box_text; o.notice_voice = f_notice_voice;
-    o.notice_due = f_notice_due; o.app_active = f_app_active; o.chat_same = f_chat_same;
+    o.notice_due = f_notice_due; o.app_active = f_app_active; o.dialog_open = f_dialog_open; o.chat_same = f_chat_same;
     return o;
 }
 
@@ -818,6 +820,75 @@ int test_vconv_win_reply_after_duck_is_full_volume(void)
     to_speaking();
     ASSERT_EQ(F.tts_speak, 1);
     ASSERT_EQ(F.volume, 100);                  /* the reply starts at full volume */
+    voice_conv_event(VCE_PRESS, 0, 0);
+    voice_conv_event(VCE_PRESS, 0, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* A speech thread that reports an error stays in its loop (no VTT_EXITED): the glue quits it
+ * itself, so no SpVoice outlives the conversation. An error for an older reply is ignored. */
+int test_vconv_win_tts_error_quits_the_context(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    ASSERT_EQ(F.tts_start, 1);
+    tts_msg(VTT_ERROR, F.speak_id + 50, 0);    /* a reply that is not the current one */
+    ASSERT_EQ(F.tts_quit, 0);
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    tts_msg(VTT_ERROR, F.speak_id, 0);         /* Speak failed for the current reply */
+    ASSERT_EQ(F.tts_quit, 1);
+    ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    voice_conv_event(VCE_PRESS, 0, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+    vc_end(w);
+    TEST_END();
+}
+
+/* A dialog that disables only the undocked AI panel pauses the conversation too: the main
+ * window stays enabled, so the pause decision must also ask the panel. */
+int test_vconv_win_panel_dialog_pauses(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    ASSERT_EQ(F.cap_begin, 1);
+    F.dialog_open = 1;
+    voice_conv_on_activation();                /* the panel's WM_ENABLE(FALSE) */
+    ASSERT_EQ(F.cap_end, 1);
+    ASSERT_STR_EQ(F.header, "Paused while a dialog is open");
+    F.dialog_open = 0;
+    voice_conv_on_activation();                /* and its WM_ENABLE(TRUE) */
+    ASSERT_EQ(F.cap_begin, 2);
+    ASSERT_STR_EQ(F.header, "Listening\xE2\x80\xA6 speak, then pause to send");
+    voice_conv_event(VCE_PRESS, 0, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* The speak mode follows the echo-cancellation report of the capture that just opened, not the
+ * previous one's: the default microphone may have changed while the conversation was paused. */
+int test_vconv_win_speak_mode_follows_new_capture(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    ASSERT_EQ(F.mode, VLM_SPEAK_AEC);
+    PostMessage(w, WM_ACTIVATEAPP, FALSE, 0);   /* paused: the reply is held from its cut-off */
+    pump();
+    PostMessage(w, WM_ACTIVATEAPP, TRUE, 0);    /* resumed: a new capture, the held reply speaks */
+    pump();
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(0, voice_conv_capture_token()));
+    ASSERT_EQ(F.mode, VLM_SPEAK_HD);            /* the new device has no echo cancellation */
     voice_conv_event(VCE_PRESS, 0, 0);
     voice_conv_event(VCE_PRESS, 0, 0);
     ASSERT_TRUE(voice_ledger_all_zero());

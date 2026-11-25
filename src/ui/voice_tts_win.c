@@ -465,6 +465,12 @@ void voice_tts_quit(unsigned token, unsigned wait_ms)
     }
 }
 
+void voice_tts_quit_all(unsigned wait_ms)
+{
+    for (int i = 0; i < TTS_MAX_CTX; i++)
+        if (g_ctx[i] != NULL) voice_tts_quit(g_ctx[i]->token, wait_ms);
+}
+
 int voice_tts_running(void)
 {
     for (int i = 0; i < TTS_MAX_CTX; i++) if (g_ctx[i] != NULL) return 1;

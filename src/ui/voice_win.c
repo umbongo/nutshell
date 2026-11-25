@@ -809,6 +809,12 @@ static void rc_tts_quit(unsigned token) { voice_tts_quit(token, 3000); }
 static int rc_lock_reg(void) { return voice_lock_register(g_main); }
 static void rc_lock_unreg(void) { voice_lock_unregister(g_main); }
 
+static int rc_dialog_open(void)
+{
+    HWND panel = ui_ai_panel();
+    return panel && IsWindow(panel) && !IsWindowEnabled(panel);
+}
+
 static int rc_chat_same(void)
 {
     VoiceBinding now;
@@ -909,7 +915,7 @@ static const VoiceConvOps k_conv_ops = {
     rc_note, rc_header,
     rc_live_begin, rc_live_replace, rc_drop_words, rc_lock_typing, rc_send_caption, rc_mic_ui,
     rc_box_has_text, rc_notice_voice,
-    rc_notice_due, rc_level, NULL, rc_chat_same
+    rc_notice_due, rc_level, NULL, rc_dialog_open, rc_chat_same
 };
 
 /* What window.c and the panel route to the conversation (each is a no-op with none running). */
@@ -1003,7 +1009,7 @@ void voice_feature_apply(HWND main)
     } else {
         g_voice_filter = NULL;
         voice_conv_event(VCE_END, VCX_OFF, 0);   /* capture ended, speech quit, link closed, lock unregistered */
-        voice_tts_quit(VOICE_TTS_SAMPLE_TOKEN, 3000);   /* a Play sample in flight */
+        voice_tts_quit_all(3000);   /* every speech context: a Play sample, or a thread left after an error */
         stop_everything();
         voice_stt_cancel_all();   /* an upload in flight is cancelled and joined */
         voice_live_reap(3000);    /* closes and joins every live session */
@@ -1020,7 +1026,7 @@ void voice_feature_shutdown(void)
     voice_gate_set_enabled(0);
     g_voice_filter = NULL;
     voice_conv_event(VCE_END, VCX_OFF, 0);
-    voice_tts_quit(VOICE_TTS_SAMPLE_TOKEN, 3000);   /* a Play sample in flight */
+    voice_tts_quit_all(3000);   /* every speech context: a Play sample, or a thread left after an error */
     stop_everything();
     voice_stt_cancel_all();
     voice_live_reap(3000);

@@ -74,6 +74,10 @@ void voice_tts_quit(unsigned token, unsigned wait_ms);
  * stays for deliberate teardown. */
 void voice_tts_reap(unsigned token, unsigned gen);
 
+/* voice_tts_quit for every context held (conversation, Play sample, any whose thread
+ * stayed in its loop after an error): voice off and shutdown. */
+void voice_tts_quit_all(unsigned wait_ms);
+
 int  voice_tts_running(void);   /* 1 while any speech thread is held */
 
 /* Play sample: start (VOICE_TTS_SAMPLE_TOKEN), speak "Hello. This is how replies

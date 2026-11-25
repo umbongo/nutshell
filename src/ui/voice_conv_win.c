@@ -768,6 +768,8 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
         if (!g_cap_open || !tok_eq(tok, g_cap_token)) return;
         if (kind == VAM_CONV_OPENED) {
             g_aec = (int)val;
+            if (g_want_mode == VLM_SPEAK_AEC || g_want_mode == VLM_SPEAK_HD)
+                g_want_mode = speak_mode();   /* this device's report, not the previous capture's */
             apply_mode();   /* the speak mode depends on what the device reported */
             return;
         }
@@ -913,6 +915,10 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
         voice_conv_event(VCE_SPEECH_DONE, 0, 0);
         break;
     case VTT_ERROR:
+        /* An error for an older reply is nothing. The thread stays in its loop after an error
+         * (no VTT_EXITED follows a failed Speak), so it is quit here, not just forgotten. */
+        if (m->reply_id != 0 && m->reply_id != g_cur_id) break;
+        if (g_tts_alive) g_ops->tts_quit(g_tts_token);
         g_tts_alive = 0;
         mark_not_playing(0);
         voice_conv_event(VCE_SPEECH_FAILED, 0, 0);
@@ -993,6 +999,7 @@ void voice_conv_on_activation(void)
     int want;
     if (!ops_ready() || !voice_conv_running()) return;
     if (g_main && !IsWindowEnabled(g_main)) want = VCP_DIALOG;
+    else if (g_ops->dialog_open && g_ops->dialog_open()) want = VCP_DIALOG;
     else if (!(g_active_hint >= 0 ? g_active_hint : app_active())) want = VCP_BACKGROUND;
     else want = VCP_NONE;
     if (want == g_paused) return;

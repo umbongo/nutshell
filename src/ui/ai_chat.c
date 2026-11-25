@@ -2301,8 +2301,15 @@ next_coalesce:;
          * panel, ends a push-to-talk recording. */
         if (!wParam) voice_on_deactivate();
         if (msg == WM_ACTIVATEAPP) voice_on_activateapp(wParam != 0);
-        voice_on_activation();   /* a conversation pauses or resumes */
+        /* a conversation pauses or resumes; the resume is posted, as the main window's is, so
+         * the code after the dialog runs first */
+        if (msg == WM_ENABLE && wParam) PostMessage(hwnd, WM_VOICE_ACTIVATION, 0, 0);
+        else voice_on_activation();
         break;
+
+    case WM_VOICE_ACTIVATION:
+        voice_on_activation();
+        return 0;
 
     case WM_CLOSE:
         if (d && d->docked) {
