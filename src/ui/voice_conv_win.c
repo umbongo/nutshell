@@ -294,11 +294,21 @@ static void release_upload(void)
     g_ops->stt_cancel(g_stt_token);
 }
 
+/* The Ending deadline follows this turn's upload: twice its send and receive timeouts (the one
+ * retry). The WAV is the PCM at 16 kHz 16-bit mono plus its 44-byte header. */
+static void set_ending_budget(void)
+{
+    int send_ms = 0, recv_ms = 0;
+    voice_stt_upload_timeouts(44u + g_turn_audio->pcm.n * sizeof(int16_t), &send_ms, &recv_ms);
+    voice_conv_set_ending_budget(&g_c, 2ul * ((unsigned long)send_ms + (unsigned long)recv_ms));
+}
+
 static void do_submit(void)
 {
     g_batch_want = 0;
     if (g_stt_open) release_upload();
     g_stt_token = next_token();
+    set_ending_budget();
     if (g_ops->stt_submit(g_turn_audio, g_stt_token)) {
         g_stt_open = 1;
     } else {
@@ -712,6 +722,11 @@ unsigned voice_conv_capture_token(void)
 void voice_conv_test_advance(unsigned long ms)
 {
     g_adj += ms;
+}
+
+size_t voice_conv_test_turn_audio_bytes(void)
+{
+    return g_turn_audio ? g_turn_audio->pcm.n * sizeof(int16_t) : 0;
 }
 
 void voice_conv_start(int live)

@@ -1355,23 +1355,18 @@ int test_vconv_hearing_watchdog(void)
     TEST_END();
 }
 
-/* A batch Ending whose audio or transcript never arrives gives up. */
+/* A batch Ending whose audio or transcript never arrives is bounded: it sets its deadline
+ * (the ending_* tests below pin what happens when it passes). */
 int test_vconv_ending_watchdog(void)
 {
     TEST_BEGIN();
-    VoiceConv c; VoiceConvOut o;
+    VoiceConv c;
     unsigned long t0 = goto_state(&c, VCS_ENDING, 0);
     long left = voice_conv_next_deadline(&c, t0);
     ASSERT_TRUE(left > 0 && left <= VOICE_CONV_ENDING_MAX_MS);
     ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS - 100).actions, 0u);
     ASSERT_EQ(c.state, VCS_ENDING);
-    o = run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 100);
-    ASSERT_EQ(c.state, VCS_LISTENING);
-    ASSERT_TRUE(has(o, VCA_DROP_TURN | VCA_CANCEL_BATCH | VCA_UNLOCK_TYPING | VCA_MODE_LISTEN));
-    ASSERT_EQ(o.header, VCH_DIDNT_CATCH);
-    run(&c, VCE_PRESS, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 200);
-    ASSERT_TRUE(clean());
-    /* live: the 3 s final wait comes first, the watchdog still bounds the whole Ending */
+    /* live: the 3 s final wait comes first, the deadline still bounds the whole Ending */
     t0 = goto_state(&c, VCS_ENDING, 1);
     left = voice_conv_next_deadline(&c, t0);
     ASSERT_TRUE(left > 0 && left <= VOICE_CONV_FINAL_WAIT_MS);
@@ -1379,9 +1374,7 @@ int test_vconv_ending_watchdog(void)
     ASSERT_EQ(c.state, VCS_ENDING);
     left = voice_conv_next_deadline(&c, t0 + VOICE_CONV_FINAL_WAIT_MS + 10);
     ASSERT_TRUE(left > 0);
-    o = run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 100);
-    ASSERT_EQ(c.state, VCS_LISTENING);
-    run(&c, VCE_PRESS, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 200);
+    run(&c, VCE_END, VCX_OFF, 0, t0 + 5000);
     ASSERT_TRUE(clean());
     TEST_END();
 }
@@ -1661,16 +1654,72 @@ int test_vconv_hearing_watchdog_keeps_silence_clock(void)
     TEST_END();
 }
 
-int test_vconv_ending_watchdog_keeps_silence_clock(void)
+/* Task 13: a turn stuck in Ending ends the conversation, with a note, at its deadline. */
+int test_vconv_ending_deadline_default(void)
 {
     TEST_BEGIN();
-    VoiceConv c;
-    unsigned long t = goto_state(&c, VCS_ENDING, 0);
-    run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_ENDING_MAX_MS + 100);
-    ASSERT_EQ(c.state, VCS_LISTENING);
-    run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_ENDING_MAX_MS + 200);
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t0 = goto_state(&c, VCS_ENDING, 0);
+    ASSERT_EQ(c.ending_max, (unsigned long)VOICE_CONV_ENDING_MAX_MS);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + 179000).actions, 0u);
+    ASSERT_EQ(c.state, VCS_ENDING);
+    o = run(&c, VCE_TICK, 0, 0, t0 + 180000);
     ASSERT_EQ(c.state, VCS_IDLE);
+    ASSERT_EQ(o.note, VCN_END_STUCK);
+    ASSERT_TRUE(has(o, VCA_CANCEL_BATCH | VCA_UNLOCK_TYPING));
+    ASSERT_EQ(o.actions & VCA_DROP_TURN, 0u);
     ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_ending_deadline_budget(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t0 = goto_state(&c, VCS_ENDING, 0);
+    voice_conv_set_ending_budget(&c, 324000ul);
+    ASSERT_EQ(c.ending_max, 334000ul);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + 180000).actions, 0u);
+    ASSERT_EQ(c.state, VCS_ENDING);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + 333000).actions, 0u);
+    ASSERT_TRUE(voice_conv_next_deadline(&c, t0 + 180000) > 100000);
+    o = run(&c, VCE_TICK, 0, 0, t0 + 334000);
+    ASSERT_EQ(c.state, VCS_IDLE);
+    ASSERT_EQ(o.note, VCN_END_STUCK);
+    ASSERT_TRUE(clean());
+    /* a small budget never shortens the default */
+    t0 = goto_state(&c, VCS_ENDING, 0);
+    voice_conv_set_ending_budget(&c, 1000ul);
+    ASSERT_EQ(c.ending_max, (unsigned long)VOICE_CONV_ENDING_MAX_MS);
+    /* every entry to Ending starts from the default again */
+    voice_conv_set_ending_budget(&c, 324000ul);
+    run(&c, VCE_END, VCX_OFF, 0, t0 + 10);
+    t0 = goto_state(&c, VCS_ENDING, 0);
+    ASSERT_EQ(c.ending_max, (unsigned long)VOICE_CONV_ENDING_MAX_MS);
+    TEST_END();
+}
+
+int test_vconv_ending_deadline_live(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t0 = goto_state(&c, VCS_ENDING, 1);
+    run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_FINAL_WAIT_MS + 10);   /* the fallback batch starts */
+    ASSERT_EQ(c.state, VCS_ENDING);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + 179000).actions, 0u);
+    o = run(&c, VCE_TICK, 0, 0, t0 + 180000);
+    ASSERT_EQ(c.state, VCS_IDLE);
+    ASSERT_EQ(o.note, VCN_END_STUCK);
+    ASSERT_TRUE(has(o, VCA_CANCEL_BATCH));
+    ASSERT_EQ(o.actions & VCA_DROP_TURN, 0u);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_ending_note_text(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(voice_conv_note_text(VCN_END_STUCK), "Conversation ended: the last turn took too long");
     TEST_END();
 }
 

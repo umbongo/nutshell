@@ -88,5 +88,7 @@ unsigned voice_conv_capture_token(void);            /* the open conversation cap
 
 /* TEST-ONLY seam: moves the glue's clock forward (the machine's 3-minute and 30-second rules). */
 void voice_conv_test_advance(unsigned long ms);
+/* TEST-ONLY seam: the bytes of the turn's audio the glue still holds (0 when none). */
+size_t voice_conv_test_turn_audio_bytes(void);
 
 #endif /* NUTSHELL_VOICE_CONV_WIN_H */

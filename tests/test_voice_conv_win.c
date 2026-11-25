@@ -661,6 +661,41 @@ int test_vconv_win_send_while_hearing_batch(void)
     TEST_END();
 }
 
+/* Task 13 (R29): a turn stuck in Ending ends the conversation with a note; its audio is wiped
+ * and its words stay in the box. */
+int test_vconv_win_ending_wipes_audio_keeps_words(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    const unsigned tok = hear_then_send(1);
+    live_msg(VLE_READY, "", NULL);
+    live_msg(VLE_DELTA, "i1", "hello wor");
+    voice_conv_event(VCE_SEND, 0, 0);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    aud_event(VLN_TURN_END);
+    voice_conv_on_audio(VAM_CONV_TURN, (LPARAM)make_turn(tok));   /* kept as the fallback */
+    ASSERT_TRUE(voice_conv_test_turn_audio_bytes() > 0);
+    ASSERT_EQ(F.drop_words, 0);
+    F.notes = 0;
+    voice_conv_test_advance(181000ul);
+    voice_conv_on_timer();   /* the live final never came: the fallback batch starts */
+    voice_conv_on_timer();
+    /* the upload's own budget (2 x (30 s + 60 s) + 10 s for this short turn) holds the Ending open
+     * past the 180 s default: the glue set it when it submitted */
+    ASSERT_TRUE(voice_conv_running());
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    voice_conv_test_advance(10000ul);
+    voice_conv_on_timer();   /* the upload never answers: the deadline */
+    ASSERT_TRUE(!voice_conv_running());
+    ASSERT_EQ((int)voice_conv_test_turn_audio_bytes(), 0);
+    ASSERT_EQ(F.drop_words, 0);
+    ASSERT_EQ(F.notes, 1);
+    ASSERT_STR_EQ(F.note, "Conversation ended: the last turn took too long");
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
 int test_vconv_win_send_while_hearing_live_link_fails_to_fallback(void)
 {
     TEST_BEGIN();

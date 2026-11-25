@@ -164,6 +164,7 @@ int test_voice_audio_conv_end_then_same_token_open(void);
 int test_voice_audio_close_cannot_be_lost(void);
 int test_vconv_win_send_while_hearing_batch(void);
 int test_vconv_win_send_while_hearing_live_link_fails_to_fallback(void);
+int test_vconv_win_ending_wipes_audio_keeps_words(void);
 int test_vconv_win_fallback_failed_note(void);
 int test_vconv_win_draft_cue_follows_the_box(void);
 int test_vconv_win_audio_lost_leaves_ending(void);
@@ -555,6 +556,7 @@ int main(int argc, char **argv)
     failed += test_voice_audio_conv_end_then_same_token_open();
     failed += test_vconv_win_send_while_hearing_batch();
     failed += test_vconv_win_send_while_hearing_live_link_fails_to_fallback();
+    failed += test_vconv_win_ending_wipes_audio_keeps_words();
     failed += test_vconv_win_fallback_failed_note();
     failed += test_vconv_win_draft_cue_follows_the_box();
     failed += test_vconv_win_audio_lost_leaves_ending();

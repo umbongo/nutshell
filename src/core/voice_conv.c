@@ -18,6 +18,12 @@ void voice_conv_init(VoiceConv *c)
     c->pause = VCP_NONE;
 }
 
+void voice_conv_set_ending_budget(VoiceConv *c, unsigned long upload_ms)
+{
+    unsigned long want = upload_ms + 10000ul;
+    c->ending_max = want > VOICE_CONV_ENDING_MAX_MS ? want : (unsigned long)VOICE_CONV_ENDING_MAX_MS;
+}
+
 int voice_conv_active(const VoiceConv *c) { return c->state != VCS_IDLE; }
 int voice_conv_typing_locked(const VoiceConv *c) { return c->typing; }
 
@@ -393,6 +399,7 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             /* typing is accepted while paused too; a held reply is not spoken over it */
             unsigned x = VCA_SEND_TYPED;
             c->state = VCS_ENDING;
+            c->ending_max = VOICE_CONV_ENDING_MAX_MS;
             c->sending = 1;
             if (c->held) {
                 x |= VCA_DROP_HELD;
@@ -435,6 +442,7 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             unsigned x = VCA_MODE_HOLD;
             VoiceConvHeader h;
             c->state = VCS_ENDING;
+            c->ending_max = VOICE_CONV_ENDING_MAX_MS;
             if (c->live && c->link) {
                 x |= VCA_END_TURN_AUDIO;
                 c->final_armed = 1;
@@ -526,10 +534,8 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
         if (st == VCS_ENDING) {
             if (c->live && c->link && c->final_armed && (long)(now - c->final_deadline) >= 0)
                 return live_fallback(c);
-            if (now - c->state_at >= VOICE_CONV_ENDING_MAX_MS) {
-                c->sending = 0;
-                return ending_to_listening(c, VCA_DROP_TURN, VCH_DIDNT_CATCH);
-            }
+            if (now - c->state_at >= c->ending_max)   /* releases the link and the upload; the words stay */
+                return go_idle(c, VCN_END_STUCK, 0);
             return none;
         }
         if (st == VCS_LISTENING) {
@@ -574,7 +580,7 @@ long voice_conv_next_deadline(const VoiceConv *c, unsigned long now)
         left = (long)(c->state_at + VOICE_CONV_SPEAKING_MAX_MS - now);
         return left < 0 ? 0 : left;
     case VCS_ENDING:
-        left = (long)(c->state_at + VOICE_CONV_ENDING_MAX_MS - now);
+        left = (long)(c->state_at + c->ending_max - now);
         if (c->live && c->link && c->final_armed) {
             long f = (long)(c->final_deadline - now);
             if (f < left) left = f;
@@ -623,6 +629,7 @@ const char *voice_conv_note_text(VoiceConvNote n)
     case VCN_END_LOCK:     return "Conversation ended: Windows was locked";
     case VCN_END_SILENCE:  return "Conversation ended: nothing said for 3 minutes";
     case VCN_END_CHAT:     return "Conversation ended: the chat changed";
+    case VCN_END_STUCK:    return "Conversation ended: the last turn took too long";
     case VCN_BUSY:         return "The assistant is busy";
     case VCN_NO_SESSION:   return "Connect a session first";
     case VCN_FULL:         return "The conversation is full: start a New Chat";
