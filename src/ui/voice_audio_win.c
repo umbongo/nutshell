@@ -111,6 +111,7 @@ typedef struct {
     int       flag;      /* test_only / keep / on */
     int       gain_db;   /* VC_BEGIN, VC_SET_GAIN */
     int       cap_ms;    /* VC_BEGIN: this capture's length cap, <= 0 = VOICE_CAP_MS */
+    int       pause_ms;  /* VC_CONV_BEGIN, VC_TEST_CONV_OPEN: the endpoint pause */
     int       live;      /* VC_BEGIN: feed the live session */
     unsigned  token2;    /* VC_CONV_ATTACH: the live session's token */
     int16_t  *data;      /* VC_TEST_CONV_INGEST: owned by the command, wiped and freed when run */
@@ -591,9 +592,19 @@ static int va_open_endpoint(VaState *st, const char *id, unsigned token, VaComms
     return 1;
 }
 
+/* A command that is not the conversation's pre-empts it: the capture is closed and the UI is
+ * told under the conversation's token (VAE_CONV_ENDED), so it never believes one is open. */
+static void va_conv_preempted(VaState *st)
+{
+    unsigned token = st->token;
+    va_finish(st, 0);
+    va_post_err(st->ctx, VAE_CONV_ENDED, token);
+}
+
 static void va_begin(VaState *st, const VaCmd *c)
 {
-    if (st->active || st->conv) va_finish(st, 0);
+    if (st->conv) va_conv_preempted(st);
+    else if (st->active) va_finish(st, 0);
     if (!va_open_endpoint(st, c->id, c->token, NULL, NULL)) return;
     pcm_init(&st->pcm, va_cap_samples(c->cap_ms));
     st->token = c->token;
@@ -611,7 +622,8 @@ static void va_begin(VaState *st, const VaCmd *c)
 /* A fresh conversation state (no device yet); NULL on OOM (error posted). */
 static VaConv *va_conv_new(VaState *st, unsigned token, int pause_ms, int gain_db)
 {
-    if (st->active || st->conv) va_finish(st, 0);
+    if (st->conv) va_conv_preempted(st);
+    else if (st->active) va_finish(st, 0);
     VaConv *cv = (VaConv *)calloc(1, sizeof(*cv));
     if (!cv) { va_post_err(st->ctx, VAE_NO_MEMORY, token); return NULL; }
     voice_listen_init(&cv->listen, voice_pause_clamp(pause_ms));
@@ -627,7 +639,7 @@ static VaConv *va_conv_new(VaState *st, unsigned token, int pause_ms, int gain_d
 
 static void va_conv_begin(VaState *st, const VaCmd *c)
 {
-    VaConv *cv = va_conv_new(st, c->token, c->cap_ms, c->gain_db);
+    VaConv *cv = va_conv_new(st, c->token, c->pause_ms, c->gain_db);
     if (!cv) return;
     int echo = 0;
     st->conv = cv;                       /* va_finish / va_close_client release cv->com */
@@ -836,7 +848,10 @@ static DWORD WINAPI va_thread(LPVOID arg)
             switch (c.kind) {
             case VC_ENUM:  va_enumerate(&st); break;
             case VC_BEGIN: va_begin(&st, &c); break;
-            case VC_END:   va_finish(&st, c.flag); break;
+            case VC_END:
+                if (st.conv) va_conv_preempted(&st);   /* a dictation end is not the conversation's */
+                else va_finish(&st, c.flag);
+                break;
             case VC_WATCH: va_watch(&st, c.flag); break;
             case VC_SET_GAIN: va_set_gain(&st, c.gain_db); break;
             case VC_CONV_BEGIN:  va_conv_begin(&st, &c); break;
@@ -844,7 +859,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_CONV_ATTACH: va_conv_attach(&st, c.token, c.token2); break;
             case VC_CONV_END:    va_conv_end(&st, c.token); break;
             case VC_TEST_CONV_OPEN:
-                st.conv = va_conv_new(&st, c.token, c.cap_ms, 0);
+                st.conv = va_conv_new(&st, c.token, c.pause_ms, 0);
                 break;
             case VC_TEST_CONV_INGEST:
                 if (va_conv_is(&st, c.token) && c.data) va_ingest(&st, c.data, c.n);
@@ -1109,8 +1124,11 @@ int voice_audio_conv_begin(const char *id, unsigned token, double gain_db, int p
     c.kind = VC_CONV_BEGIN;
     snprintf(c.id, sizeof(c.id), "%s", id ? id : "");
     c.token = token;
+    /* clamp the double first: a huge or NaN value must not reach the int conversion */
+    if (!(gain_db >= (double)VOICE_GAIN_MIN_DB)) gain_db = (double)VOICE_GAIN_MIN_DB;
+    if (gain_db > (double)VOICE_GAIN_MAX_DB) gain_db = (double)VOICE_GAIN_MAX_DB;
     c.gain_db = voice_gain_clamp((int)lround(gain_db));
-    c.cap_ms = pause_ms;
+    c.pause_ms = pause_ms;
     return va_push_raw(&c);
 }
 
@@ -1151,7 +1169,7 @@ void voice_audio_test_conv_open(unsigned token, int pause_ms)
     memset(&c, 0, sizeof(c));
     c.kind = VC_TEST_CONV_OPEN;
     c.token = token;
-    c.cap_ms = pause_ms;
+    c.pause_ms = pause_ms;
     va_push_raw(&c);
 }
 

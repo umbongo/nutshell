@@ -742,6 +742,38 @@ int test_voice_audio_conv_attach_live_feeds(void)
     TEST_END();
 }
 
+/* A dictation end or begin during a conversation pre-empts it: the UI is told, under the
+ * conversation's token, that the capture is gone (it must not keep believing one is open). */
+int test_voice_audio_conv_preempted_is_reported(void)
+{
+    TEST_BEGIN();
+    for (int via_begin = 0; via_begin < 2; via_begin++) {
+        va_begin_test();
+        HWND w = va_window();
+        ASSERT_EQ(voice_audio_start(w), 1);
+        ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+        voice_audio_test_conv_open(CV_TOKEN, CV_PAUSE_MS);
+        if (via_begin) voice_audio_capture_begin("", 5, 0, 0, VOICE_CAP_MS, 0);
+        else voice_audio_capture_end(0);
+        WPARAM wp = 0; LPARAM lp = 0;
+        ASSERT_EQ(va_wait(BIT(VAM_ERROR), 3000, &wp, &lp), 1);
+        ASSERT_EQ((int)VOICE_ERR_CODE(lp), (int)VAE_CONV_ENDED);
+        ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), (int)CV_TOKEN);
+        /* the conversation is gone: its ingest does nothing and a second end is silent */
+        static int16_t s[CV_TOTAL];
+        cv_build(s);
+        voice_audio_test_conv_ingest(CV_TOKEN, s, CV_TOTAL);
+        voice_audio_conv_end(CV_TOKEN);
+        CvGot g;
+        memset(&g, 0, sizeof g);
+        cv_collect(&g, 500, 0);
+        ASSERT_EQ(g.n_ev, 0);
+        ASSERT_NULL(g.turn);
+        va_end_test(w);
+    }
+    TEST_END();
+}
+
 int test_voice_audio_conv_hold_wipes(void)
 {
     TEST_BEGIN();

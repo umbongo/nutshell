@@ -39,7 +39,13 @@ typedef enum {
     ((LPARAM)((((uintptr_t)(value) & 0xFFu) << 24) | ((uintptr_t)(token) & VOICE_TOKEN_MASK)))
 
 typedef enum { VAE_NONE = 0, VAE_NO_DEVICE, VAE_DEVICE_LOST, VAE_OPEN_FAILED,
-               VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED } VoiceAudioErr;
+               VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED,
+               VAE_CONV_ENDED } VoiceAudioErr;
+/* VAE_CONV_ENDED, under a conversation token: the conversation capture is gone because a
+ * non-conversation command (a dictation or Test begin or end, or another conversation begin)
+ * pre-empted it; its device is closed and its turn wiped. Fatal for that capture. By contrast
+ * VAE_NO_MEMORY under a conversation token is per-turn: that one turn was lost, the capture
+ * keeps running. A device error (VAE_DEVICE_LOST, ...) is fatal too. */
 /* An error and the recording token it belongs to (0: not a push-to-talk
  * recording: a Settings Test, an enumeration or the thread itself) packed
  * into one lParam: the token's low 24 bits (VOICE_TOKEN_MASK) above the

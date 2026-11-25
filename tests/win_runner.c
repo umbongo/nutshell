@@ -117,6 +117,7 @@ int test_voice_audio_conv_begin_headless(void);
 int test_voice_audio_conv_turn_posted(void);
 int test_voice_audio_conv_attach_live_feeds(void);
 int test_voice_audio_conv_hold_wipes(void);
+int test_voice_audio_conv_preempted_is_reported(void);
 int test_voice_ptt_posted_keys(void);
 int test_voice_ptt_posted_right_shift(void);
 int test_voice_stt_refused_when_gate_off(void);
@@ -470,6 +471,7 @@ int main(int argc, char **argv)
     failed += test_voice_audio_conv_turn_posted();
     failed += test_voice_audio_conv_attach_live_feeds();
     failed += test_voice_audio_conv_hold_wipes();
+    failed += test_voice_audio_conv_preempted_is_reported();
     failed += test_voice_ptt_posted_keys();
     failed += test_voice_ptt_posted_right_shift();
     failed += test_voice_stt_refused_when_gate_off();
