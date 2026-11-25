@@ -4,6 +4,7 @@
 #include <windows.h>
 #include "wav.h"
 #include "voice_ptt.h"
+#include "voice_listen.h"
 
 /*
  * voice_audio_win -- every WASAPI object lives on ONE audio thread
@@ -27,8 +28,15 @@ typedef enum {
     VAM_LEVEL,            /* lParam = raw peak 0..32768 of the last ~50 ms, after gain */
     VAM_CAPTURED,         /* lParam = VoiceCapture* (receiver frees with voice_audio_free_capture) */
     VAM_ERROR,            /* lParam = VOICE_ERR_PACK(err, token): nothing to free */
-    VAM_DEVICES_CHANGED   /* lParam 0: from IMMNotificationClient; re-enumerate */
+    VAM_DEVICES_CHANGED,  /* lParam 0: from IMMNotificationClient; re-enumerate */
+    /* Conversation capture: lParam packs (value << 24) | (token & VOICE_TOKEN_MASK) unless noted. */
+    VAM_CONV_OPENED,      /* value = echo cancellation: 0 none, 1 on, 2 turned on by us */
+    VAM_CONV_EVENT,       /* value = VoiceListenEvent */
+    VAM_CONV_TURN         /* lParam = VoiceCapture* of the finished turn (TURN_END/CAP); receiver frees */
+    /* VAM_LEVEL is posted every 50 ms during a conversation capture too (the mic pulse) */
 } VoiceAudioMsg;
+#define VOICE_CONV_PACK(value, token) \
+    ((LPARAM)((((uintptr_t)(value) & 0xFFu) << 24) | ((uintptr_t)(token) & VOICE_TOKEN_MASK)))
 
 typedef enum { VAE_NONE = 0, VAE_NO_DEVICE, VAE_DEVICE_LOST, VAE_OPEN_FAILED,
                VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED } VoiceAudioErr;
@@ -68,6 +76,19 @@ void voice_audio_test_live_hooks(void (*feed)(unsigned token, const int16_t *s, 
  * (no device), then its finish. */
 void voice_audio_test_ingest_live(int live, unsigned token, int gain_db, int cap_ms,
                                   const int16_t *s, size_t n);
+/* Conversation capture (spec 5.3, 7.3): the device is opened in the communications category
+ * (echo cancellation when the endpoint offers it) and every captured buffer, after the gain,
+ * goes to a VoiceListen on the audio thread. Posts VAM_CONV_OPENED or VAM_ERROR for token.
+ * No 60 s / 10 min cap applies; the listener caps each turn. gain_db is rounded and clamped. */
+int  voice_audio_conv_begin(const char *device_id_utf8, unsigned token, double gain_db,
+                            int pause_ms);
+void voice_audio_conv_mode(unsigned token, VoiceListenMode m);   /* HOLD wipes a turn in progress */
+void voice_audio_conv_attach_live(unsigned token, unsigned live_token);  /* turn so far is replayed */
+void voice_audio_conv_end(unsigned token);    /* close the device, wipe the turn */
+/* TEST-ONLY seams (no device): open a conversation state on the audio thread, and feed it
+ * samples as the capture path would (gain applied, then the listener). */
+void voice_audio_test_conv_open(unsigned token, int pause_ms);
+void voice_audio_test_conv_ingest(unsigned token, const int16_t *s, size_t n);
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
 

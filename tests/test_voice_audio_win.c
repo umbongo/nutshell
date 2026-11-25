@@ -15,6 +15,7 @@
 #include "voice_gate.h"
 #include "ai_gate.h"
 #include "dll_record.h"
+#include "voice_listen.h"
 
 static LRESULT CALLBACK va_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -549,6 +550,220 @@ int test_voice_audio_live_ingest_feeds_gained_samples(void)
     ASSERT_EQ(g_rec.ends, 1);
 
     voice_audio_test_live_hooks(NULL, NULL);
+    TEST_END();
+}
+
+/* ---- conversation capture (Task 11) ---------------------------------- */
+
+#define CV_WIN VVAD_WIN
+#define CV_TOKEN 0x00ABCDEu
+
+static unsigned cv_lp_token(LPARAM lp) { return (unsigned)((uintptr_t)lp & VOICE_TOKEN_MASK); }
+static int cv_lp_value(LPARAM lp) { return (int)(((uintptr_t)lp >> 24) & 0xFFu); }
+
+/* Quiet room: 20 windows at +-20, enough for the floor. Speech: a varying square wave at
+ * +-8000 (not flat, so the stationarity rule never calls it noise). */
+static void cv_quiet(int16_t *s, size_t windows)
+{
+    for (size_t i = 0; i < windows * CV_WIN; i++) s[i] = (i & 1) ? (int16_t)-20 : (int16_t)20;
+}
+static void cv_speech(int16_t *s, size_t windows)
+{
+    for (size_t w = 0; w < windows; w++) {
+        int16_t a = (int16_t)(6000 + (int)(w % 5) * 1200);
+        for (size_t i = 0; i < CV_WIN; i++) s[w * CV_WIN + i] = (i & 1) ? (int16_t)-a : a;
+    }
+}
+
+typedef struct { size_t audio; } CvRef;
+static void cv_ref_audio(void *u, const int16_t *s, size_t n) { (void)s; ((CvRef *)u)->audio += n; }
+static void cv_ref_event(void *u, VoiceListenEvent e) { (void)u; (void)e; }
+
+#define CV_LEAD 20
+#define CV_SPEECH 30
+#define CV_TAIL 45
+#define CV_PAUSE_MS 500
+#define CV_TOTAL ((CV_LEAD + CV_SPEECH + CV_TAIL) * CV_WIN)
+
+static void cv_build(int16_t *s)
+{
+    cv_quiet(s, CV_LEAD);
+    cv_speech(s + CV_LEAD * CV_WIN, CV_SPEECH);
+    cv_quiet(s + (CV_LEAD + CV_SPEECH) * CV_WIN, CV_TAIL);
+}
+
+/* What a bare VoiceListen makes of the same stream: the turn's audio length. */
+static size_t cv_reference_turn_len(const int16_t *s)
+{
+    VoiceListen l;
+    CvRef r = { 0 };
+    VoiceListenSink k = { cv_ref_audio, cv_ref_event, &r };
+    voice_listen_init(&l, CV_PAUSE_MS);
+    voice_listen_set_mode(&l, VLM_LISTEN);
+    voice_listen_feed(&l, s, CV_TOTAL, &k);
+    voice_listen_wipe(&l);
+    return r.audio;
+}
+
+/* Messages for one conversation, in arrival order, until `want_turn` TURN or `ms`. */
+typedef struct { int ev[16]; int n_ev; VoiceCapture *turn; int levels; } CvGot;
+static void cv_collect(CvGot *g, DWORD ms, int stop_on_turn)
+{
+    ULONGLONG end = GetTickCount64() + ms;
+    MSG msg;
+    while (GetTickCount64() < end) {
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message != WM_VOICE_AUDIO) continue;
+            if (msg.wParam == VAM_CONV_EVENT && g->n_ev < 16) {
+                g->ev[g->n_ev++] = cv_lp_value(msg.lParam);
+            } else if (msg.wParam == VAM_CONV_TURN) {
+                if (g->turn) voice_audio_free_capture(g->turn);
+                g->turn = (VoiceCapture *)msg.lParam;
+                if (stop_on_turn) return;
+            } else if (msg.wParam == VAM_LEVEL) {
+                g->levels++;
+            } else if (msg.wParam == VAM_DEVICES) {
+                voice_audio_free_devices((VoiceDeviceList *)msg.lParam);
+            } else if (msg.wParam == VAM_CAPTURED) {
+                voice_audio_free_capture((VoiceCapture *)msg.lParam);
+            }
+        }
+        Sleep(10);
+    }
+}
+
+static int cv_has(const CvGot *g, int e)
+{
+    for (int i = 0; i < g->n_ev; i++) if (g->ev[i] == e) return 1;
+    return 0;
+}
+static int cv_index(const CvGot *g, int e)
+{
+    for (int i = 0; i < g->n_ev; i++) if (g->ev[i] == e) return i;
+    return -1;
+}
+
+int test_voice_audio_conv_begin_headless(void)
+{
+    TEST_BEGIN();
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_NOT_NULL(w);
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    ASSERT_EQ(voice_audio_conv_begin("", CV_TOKEN, 0.0, 1200), 1);
+    WPARAM wp = 0; LPARAM lp = 0;
+    ASSERT_EQ(va_wait(BIT(VAM_CONV_OPENED) | BIT(VAM_ERROR), 5000, &wp, &lp), 1);
+    if (wp == VAM_CONV_OPENED) {
+        ASSERT_TRUE(cv_lp_value(lp) >= 0 && cv_lp_value(lp) <= 2);
+        ASSERT_EQ((int)cv_lp_token(lp), (int)CV_TOKEN);
+    } else {
+        ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), (int)CV_TOKEN);
+    }
+    voice_audio_conv_end(CV_TOKEN);
+    ULONGLONG t0 = GetTickCount64();
+    voice_audio_stop();                      /* joins, no hang */
+    ASSERT_TRUE(GetTickCount64() - t0 < 3500);
+    va_end_test(w);
+    TEST_END();
+}
+
+int test_voice_audio_conv_turn_posted(void)
+{
+    TEST_BEGIN();
+    static int16_t s[CV_TOTAL];
+    cv_build(s);
+    size_t want = cv_reference_turn_len(s);
+    ASSERT_TRUE(want > (size_t)CV_SPEECH * CV_WIN);       /* speech plus pre-roll plus the pause */
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_test_conv_open(CV_TOKEN, CV_PAUSE_MS);
+    voice_audio_test_conv_ingest(CV_TOKEN, s, CV_TOTAL);
+    CvGot g;
+    memset(&g, 0, sizeof g);
+    cv_collect(&g, 5000, 1);
+    ASSERT_NOT_NULL(g.turn);
+    ASSERT_TRUE(cv_has(&g, VLN_TURN_START));
+    ASSERT_TRUE(cv_has(&g, VLN_TURN_END));
+    ASSERT_TRUE(cv_index(&g, VLN_TURN_START) < cv_index(&g, VLN_TURN_END));
+    ASSERT_EQ((int)g.turn->pcm.n, (int)want);
+    ASSERT_EQ((int)g.turn->token, (int)CV_TOKEN);
+    ASSERT_TRUE(g.turn->pcm.n > (size_t)CV_SPEECH * CV_WIN + (size_t)CV_PAUSE_MS * 16);
+    voice_audio_free_capture(g.turn);
+    voice_audio_conv_end(CV_TOKEN);
+    va_end_test(w);
+    TEST_END();
+}
+
+typedef struct { size_t samples; int feeds; int ends; size_t before_end; unsigned tok; } CvLive;
+static CvLive g_cvl;
+static void cvl_feed(unsigned t, const int16_t *s, size_t n)
+{ (void)s; g_cvl.tok = t; g_cvl.feeds++; g_cvl.samples += n; if (!g_cvl.ends) g_cvl.before_end = g_cvl.samples; }
+static void cvl_end(unsigned t) { (void)t; g_cvl.ends++; }
+
+int test_voice_audio_conv_attach_live_feeds(void)
+{
+    TEST_BEGIN();
+    static int16_t s[CV_TOTAL];
+    cv_build(s);
+    size_t want = cv_reference_turn_len(s);
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    memset(&g_cvl, 0, sizeof g_cvl);
+    voice_audio_test_live_hooks(cvl_feed, cvl_end);
+    voice_audio_test_conv_open(CV_TOKEN, CV_PAUSE_MS);
+    /* lead-in and 20 windows of speech: the turn is under way */
+    size_t part = (size_t)(CV_LEAD + 20) * CV_WIN;
+    voice_audio_test_conv_ingest(CV_TOKEN, s, part);
+    CvGot g;
+    memset(&g, 0, sizeof g);
+    cv_collect(&g, 3000, 0);
+    ASSERT_TRUE(cv_has(&g, VLN_TURN_START));
+    ASSERT_EQ(g_cvl.feeds, 0);                 /* nothing attached yet */
+    voice_audio_conv_attach_live(CV_TOKEN, 77);
+    voice_audio_test_conv_ingest(CV_TOKEN, s + part, CV_TOTAL - part);
+    CvGot g2;
+    memset(&g2, 0, sizeof g2);
+    cv_collect(&g2, 5000, 1);
+    ASSERT_NOT_NULL(g2.turn);
+    ASSERT_EQ(g_cvl.ends, 1);                  /* feed_end once */
+    ASSERT_EQ((int)g_cvl.tok, 77);
+    ASSERT_EQ((int)g_cvl.samples, (int)want);  /* replay of the turn so far, then every window */
+    ASSERT_TRUE(g_cvl.feeds >= 2);             /* the replay is a feed of its own */
+    ASSERT_EQ((int)g_cvl.before_end, (int)want);
+    voice_audio_free_capture(g2.turn);
+    voice_audio_test_live_hooks(NULL, NULL);
+    voice_audio_conv_end(CV_TOKEN);
+    va_end_test(w);
+    TEST_END();
+}
+
+int test_voice_audio_conv_hold_wipes(void)
+{
+    TEST_BEGIN();
+    static int16_t s[CV_TOTAL];
+    cv_build(s);
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_test_conv_open(CV_TOKEN, CV_PAUSE_MS);
+    size_t part = (size_t)(CV_LEAD + 20) * CV_WIN;
+    voice_audio_test_conv_ingest(CV_TOKEN, s, part);
+    voice_audio_conv_mode(CV_TOKEN, VLM_HOLD);
+    voice_audio_test_conv_ingest(CV_TOKEN, s + part, CV_TOTAL - part);
+    CvGot g;
+    memset(&g, 0, sizeof g);
+    cv_collect(&g, 1500, 0);
+    ASSERT_TRUE(cv_has(&g, VLN_TURN_START));
+    ASSERT_NULL(g.turn);                       /* the turn was wiped, never posted */
+    ASSERT_FALSE(cv_has(&g, VLN_TURN_END));
+    voice_audio_conv_end(CV_TOKEN);
+    va_end_test(w);
     TEST_END();
 }
 

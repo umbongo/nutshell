@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "test_framework.h"
+#include "wav.h"
 #include "voice_live_win.h"
 #include "voice_live.h"
 #include "voice_ledger.h"
@@ -202,6 +203,7 @@ static void make_target(VoiceLiveTarget *t, int mistral, int port)
     snprintf(t->model, sizeof(t->model), "%s", mistral ? "voxtral-mini-transcribe-realtime-3" : "gpt-live-transcribe");
     t->rate = mistral ? 16000u : 24000u;
     t->hangover_ms = mistral ? VOICE_LIVE_HANGOVER_MISTRAL_MS : VOICE_LIVE_HANGOVER_OPENAI_MS;
+    t->gate_rms = PCM_SPEECH_RMS;
 }
 
 /* Speech at RMS 2000: a square wave of +-2000. */

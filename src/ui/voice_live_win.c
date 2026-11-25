@@ -710,7 +710,7 @@ int voice_live_start(HWND notify, const VoiceLiveTarget *t, const char *key, uns
     s->ev_session = CreateEventA(NULL, TRUE, FALSE, NULL);
     s->ev_ready = CreateEventA(NULL, TRUE, FALSE, NULL);
     s->ev_over = CreateEventA(NULL, TRUE, FALSE, NULL);
-    voice_sgate_init(&s->gate, PCM_SPEECH_RMS, t->hangover_ms);
+    voice_sgate_init(&s->gate, t->gate_rms, t->hangover_ms);
     voice_rs_init(&s->rs);
     s->refs = 3;
     if (!s->key || !s->ev_feed || !s->ev_cancel || !s->ev_session || !s->ev_ready || !s->ev_over) {

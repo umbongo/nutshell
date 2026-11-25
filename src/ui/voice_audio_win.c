@@ -4,11 +4,13 @@
 #include <objbase.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <audiopolicy.h>
 #include <audiosessiontypes.h>
 #include <propidl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "dll_record.h"
 #include "secure_zero.h"
@@ -30,6 +32,62 @@ static const GUID VA_IID_IMMNotificationClient =
     {0x7991EEC9, 0x7E89, 0x4D85, {0x83, 0x90, 0x6C, 0x70, 0x3C, 0xEC, 0x60, 0xC0}};
 static const GUID VA_IID_IUnknown =
     {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+/* Conversation capture (echo cancellation, ducking opt-out). Sources, all checked 2026-11-25:
+ * IID_IAudioClient2, IID_IAudioSessionManager2, IID_IAudioSessionControl2: the mingw-w64
+ * audioclient.h / audiopolicy.h in this toolchain (IAudioClient2, IAudioSessionControl2) and
+ * the Windows SDK's (IAudioSessionManager2, 77AA99A0-...).
+ * IID_IAudioEffectsManager 4460B3AE-4B44-4527-8676-7548A8ACD260 and
+ * IID_IAcousticEchoCancellationControl F4AE25B5-AAA3-437D-B6B3-DBBE2D0E9549, with their vtable
+ * orders and AUDIO_EFFECT: the Windows SDK audioclient.h as mirrored by the windows-rs 0.58.0
+ * metadata (crates/libs/windows/src/Windows/Win32/Media/Audio/mod.rs); method names and the
+ * Windows 11 (build 22000 / 22621) availability from learn.microsoft.com
+ * (nn-audioclient-iaudioeffectsmanager, nn-audioclient-iacousticechocancellationcontrol).
+ * AUDIO_EFFECT_TYPE_ACOUSTIC_ECHO_CANCELLATION 6f64adbe-8211-11e2-8c70-2c27d7f001fa: the "CLSIDs
+ * for System Effects" table on learn.microsoft.com (audio-signal-processing-modes, KSMedia.h).
+ * A wrong GUID fails safe: GetService gives E_NOINTERFACE and the conversation runs without
+ * echo cancellation. */
+static const GUID VA_IID_IAudioClient2 =
+    {0x726778CD, 0xF60A, 0x4EDA, {0x82, 0xDE, 0xE4, 0x76, 0x10, 0xCD, 0x78, 0xAA}};
+static const GUID VA_IID_IAudioSessionManager2 =
+    {0x77AA99A0, 0x1BD6, 0x484F, {0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F}};
+static const GUID VA_IID_IAudioSessionControl2 =
+    {0xBFB7FF88, 0x7239, 0x4FC9, {0x8F, 0xA2, 0x07, 0xC9, 0x50, 0xBE, 0x9C, 0x6D}};
+static const GUID VA_IID_IAudioEffectsManager =
+    {0x4460B3AE, 0x4B44, 0x4527, {0x86, 0x76, 0x75, 0x48, 0xA8, 0xAC, 0xD2, 0x60}};
+static const GUID VA_IID_IAcousticEchoCancellationControl =
+    {0xF4AE25B5, 0xAAA3, 0x437D, {0xB6, 0xB3, 0xDB, 0xBE, 0x2D, 0x0E, 0x95, 0x49}};
+static const GUID VA_EFFECT_AEC =
+    {0x6F64ADBE, 0x8211, 0x11E2, {0x8C, 0x70, 0x2C, 0x27, 0xD7, 0xF0, 0x01, 0xFA}};
+
+#ifndef __IAudioEffectsManager_INTERFACE_DEFINED__
+#define __IAudioEffectsManager_INTERFACE_DEFINED__
+typedef enum AUDIO_EFFECT_STATE { AUDIO_EFFECT_STATE_OFF = 0, AUDIO_EFFECT_STATE_ON = 1 } AUDIO_EFFECT_STATE;
+typedef struct AUDIO_EFFECT { GUID id; BOOL canSetState; AUDIO_EFFECT_STATE state; } AUDIO_EFFECT;
+typedef struct IAudioEffectsManager IAudioEffectsManager;
+typedef struct IAudioEffectsManagerVtbl {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(IAudioEffectsManager *, REFIID, void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(IAudioEffectsManager *);
+    ULONG (STDMETHODCALLTYPE *Release)(IAudioEffectsManager *);
+    HRESULT (STDMETHODCALLTYPE *RegisterAudioEffectsChangedNotificationCallback)(IAudioEffectsManager *, void *);
+    HRESULT (STDMETHODCALLTYPE *UnregisterAudioEffectsChangedNotificationCallback)(IAudioEffectsManager *, void *);
+    HRESULT (STDMETHODCALLTYPE *GetAudioEffects)(IAudioEffectsManager *, AUDIO_EFFECT **, UINT32 *);
+    HRESULT (STDMETHODCALLTYPE *SetAudioEffectState)(IAudioEffectsManager *, GUID, AUDIO_EFFECT_STATE);
+} IAudioEffectsManagerVtbl;
+struct IAudioEffectsManager { const IAudioEffectsManagerVtbl *lpVtbl; };
+#endif
+
+#ifndef __IAcousticEchoCancellationControl_INTERFACE_DEFINED__
+#define __IAcousticEchoCancellationControl_INTERFACE_DEFINED__
+typedef struct IAcousticEchoCancellationControl IAcousticEchoCancellationControl;
+typedef struct IAcousticEchoCancellationControlVtbl {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(IAcousticEchoCancellationControl *, REFIID, void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(IAcousticEchoCancellationControl *);
+    ULONG (STDMETHODCALLTYPE *Release)(IAcousticEchoCancellationControl *);
+    HRESULT (STDMETHODCALLTYPE *SetEchoCancellationRenderEndpoint)(IAcousticEchoCancellationControl *, PCWSTR);
+} IAcousticEchoCancellationControlVtbl;
+struct IAcousticEchoCancellationControl { const IAcousticEchoCancellationControlVtbl *lpVtbl; };
+#endif
+
 /* PKEY_Device_FriendlyName */
 static const PROPERTYKEY VA_PKEY_FriendlyName =
     {{0xA45C254E, 0xDF1C, 0x4EFD, {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
@@ -43,7 +101,9 @@ static size_t va_cap_samples(int cap_ms)
 #define VA_STALL_MS     2000u
 #define VA_LEVEL_MS     50u
 
-typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH, VC_SET_GAIN } VaCmdKind;
+typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH, VC_SET_GAIN,
+               VC_CONV_BEGIN, VC_CONV_MODE, VC_CONV_ATTACH, VC_CONV_END,
+               VC_TEST_CONV_OPEN, VC_TEST_CONV_INGEST } VaCmdKind;
 typedef struct {
     VaCmdKind kind;
     char      id[256];
@@ -52,6 +112,9 @@ typedef struct {
     int       gain_db;   /* VC_BEGIN, VC_SET_GAIN */
     int       cap_ms;    /* VC_BEGIN: this capture's length cap, <= 0 = VOICE_CAP_MS */
     int       live;      /* VC_BEGIN: feed the live session */
+    unsigned  token2;    /* VC_CONV_ATTACH: the live session's token */
+    int16_t  *data;      /* VC_TEST_CONV_INGEST: owned by the command, wiped and freed when run */
+    size_t    n;
 } VaCmd;
 
 /* Everything one audio thread uses lives in its own context, so a thread
@@ -83,6 +146,8 @@ static void va_ctx_free(VaCtx *c)
     if (c->wake) CloseHandle(c->wake);
     if (c->ready) CloseHandle(c->ready);
     DeleteCriticalSection(&c->qcs);
+    for (int i = 0; i < c->qn; i++)          /* commands the thread never ran */
+        if (c->q[i].data) { secure_zero(c->q[i].data, c->q[i].n * sizeof(int16_t)); free(c->q[i].data); }
     free(c->q);
     free(c);
 }
@@ -155,11 +220,43 @@ typedef struct {
     int                  level_peak;   /* raw 0..32768, max since the last post */
     int                  raw_nonzero;  /* any non-zero sample seen before the gain */
     int                  active;
+    struct VaConv       *conv;         /* a conversation capture (or the test seam's state) */
 } VaState;
+
+/* The communications-category extras of a conversation capture; every object is released
+ * when the capture closes (before the audio client). */
+typedef struct {
+    IAudioEffectsManager *fx;
+    IAcousticEchoCancellationControl *aec;
+    IAudioSessionManager2 *sm;
+    IAudioSessionControl2 *duck;
+} VaComms;
+
+typedef struct VaConv {
+    VoiceListen listen;
+    VaComms     com;
+    PcmBuf      turn;          /* this turn's audio; empty between turns */
+    int         in_turn;
+    int         live;          /* a live session is attached ... */
+    unsigned    live_token;    /* ... under this token */
+    int         echo;          /* 0 none, 1 on, 2 turned on by us */
+} VaConv;
+
+/* A turn is at most 2 minutes (the listener caps it) plus the pre-roll it replays. */
+#define VA_CONV_TURN_SAMPLES ((size_t)120 * WAV_RATE + (size_t)VL_PREROLL * VVAD_WIN)
+
+static void va_comms_release(VaComms *c)
+{
+    if (c->duck) { IAudioSessionControl2_Release(c->duck); c->duck = NULL; }
+    if (c->sm) { IAudioSessionManager2_Release(c->sm); c->sm = NULL; }
+    if (c->aec) { c->aec->lpVtbl->Release(c->aec); c->aec = NULL; }
+    if (c->fx) { c->fx->lpVtbl->Release(c->fx); c->fx = NULL; }
+}
 
 static void va_close_client(VaState *st)
 {
     if (st->client) IAudioClient_Stop(st->client);
+    if (st->conv) va_comms_release(&st->conv->com);
     if (st->cap) { IAudioCaptureClient_Release(st->cap); st->cap = NULL; }
     if (st->client) { IAudioClient_Release(st->client); st->client = NULL; }
     if (st->buf_ev) { CloseHandle(st->buf_ev); st->buf_ev = NULL; }
@@ -181,10 +278,120 @@ static void va_live_end(unsigned token)
     else voice_live_feed_end(token);
 }
 
+/* ---- conversation capture helpers (audio thread) ----------------------- */
+
+static void va_conv_wipe_turn(VaConv *cv)
+{
+    pcm_free(&cv->turn);                 /* secure wipe, free, reset */
+    cv->in_turn = 0;
+    cv->live = 0;                        /* the UI closes the live session itself, as for a discard */
+}
+
+/* Frees the conversation state: the audio is user content, wiped first. */
+static void va_conv_drop(VaState *st)
+{
+    VaConv *cv = st->conv;
+    if (!cv) return;
+    st->conv = NULL;
+    voice_listen_wipe(&cv->listen);
+    pcm_free(&cv->turn);
+    secure_zero(cv, sizeof(*cv));
+    free(cv);
+}
+
+static void va_conv_post_event(VaState *st, VoiceListenEvent e)
+{
+    va_post(st->ctx, VAM_CONV_EVENT, VOICE_CONV_PACK((unsigned)e, st->token));
+}
+
+/* The finished turn (TURN_END / TURN_CAP): the live session is ended after the last samples,
+ * then the capture is posted; ownership of the audio moves to the receiver. */
+static void va_conv_turn_done(VaState *st)
+{
+    VaConv *cv = st->conv;
+    if (!cv->in_turn) return;
+    if (cv->live) { va_live_end(cv->live_token); cv->live = 0; }
+    VoiceCapture *c = (VoiceCapture *)calloc(1, sizeof(*c));
+    if (!c) {
+        va_conv_wipe_turn(cv);
+        va_post_err(st->ctx, VAE_NO_MEMORY, st->token);
+        return;
+    }
+    c->pcm = cv->turn;                   /* ownership moves */
+    memset(&cv->turn, 0, sizeof(cv->turn));
+    cv->in_turn = 0;
+    c->verdict = pcm_classify(c->pcm.s, c->pcm.n);
+    c->used_default = st->used_default;
+    c->token = st->token;
+    va_post(st->ctx, VAM_CONV_TURN, (LPARAM)c);
+}
+
+static void va_conv_sink_audio(void *u, const int16_t *s, size_t n)
+{
+    VaState *st = (VaState *)u;
+    VaConv *cv = st->conv;
+    if (!cv || !cv->in_turn) return;
+    size_t before = cv->turn.n;
+    size_t took = pcm_append(&cv->turn, s, n);
+    if (took > 0 && cv->live) va_live_feed(cv->live_token, cv->turn.s + before, took);
+}
+
+static void va_conv_sink_event(void *u, VoiceListenEvent e)
+{
+    VaState *st = (VaState *)u;
+    VaConv *cv = st->conv;
+    if (!cv) return;
+    switch (e) {
+    case VLN_TURN_START:
+        pcm_free(&cv->turn);
+        pcm_init(&cv->turn, VA_CONV_TURN_SAMPLES);
+        cv->in_turn = 1;
+        break;
+    case VLN_TURN_END:
+    case VLN_TURN_CAP:
+        va_conv_post_event(st, e);
+        va_conv_turn_done(st);
+        return;
+    case VLN_TURN_ABANDON:
+        va_conv_wipe_turn(cv);
+        break;
+    default:
+        break;
+    }
+    va_conv_post_event(st, e);
+}
+
+/* The one place conversation samples enter: the capture feed (and the test seam's) -- gain,
+ * the mic pulse's peak, then the listener. The sink does the rest. */
+static void va_conv_ingest(VaState *st, const int16_t *src, size_t frames)
+{
+    VaConv *cv = st->conv;
+    VoiceListenSink k = { va_conv_sink_audio, va_conv_sink_event, st };
+    int16_t buf[1600];
+    while (cv && frames > 0) {
+        size_t n = frames > 1600 ? 1600 : frames;
+        memcpy(buf, src, n * sizeof(int16_t));
+        pcm_apply_gain_q16(buf, n, st->gain_q16);
+        int pk = (int)(pcm_peak(buf, n) * 32768.0 + 0.5);
+        if (pk > st->level_peak) st->level_peak = pk;
+        voice_listen_feed(&cv->listen, buf, n, &k);
+        secure_zero(buf, n * sizeof(int16_t));
+        src += n;
+        frames -= n;
+        cv = st->conv;
+    }
+}
+
 /* Ends the capture: the client is stopped and released first (so the
  * device is closed between recordings), then the result is posted. */
 static void va_finish(VaState *st, int keep)
 {
+    if (st->conv) {                      /* a conversation posts no capture: its turns went already */
+        va_close_client(st);
+        st->active = 0;
+        va_conv_drop(st);
+        return;
+    }
     if (!st->active) return;
     va_close_client(st);
     st->active = 0;
@@ -223,8 +430,64 @@ static int va_utf8_to_wide(const char *u, wchar_t *w, int cap)
 
 /* Activate, initialise and start a client on dev. 1 and the three outputs
  * set, or 0 with nothing left open. */
-static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
-                       IAudioCaptureClient **out_cap, HANDLE *out_ev, int *denied)
+/* The default render endpoint's id (for the echo reference) and the ducking opt-out for our
+ * own speech's session (spec 7.3). Both are best effort. */
+static void va_comms_render(IMMDeviceEnumerator *enm, VaComms *cm, int echo_ctl)
+{
+    IMMDevice *rd = NULL;
+    if (!enm || FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(enm, eRender, eConsole, &rd)) || !rd)
+        return;
+    LPWSTR id = NULL;
+    if (echo_ctl && cm->aec && SUCCEEDED(IMMDevice_GetId(rd, &id)) && id)
+        cm->aec->lpVtbl->SetEchoCancellationRenderEndpoint(cm->aec, id);
+    if (id) CoTaskMemFree(id);
+    if (SUCCEEDED(IMMDevice_Activate(rd, &VA_IID_IAudioSessionManager2, CLSCTX_ALL, NULL,
+                                     (void **)&cm->sm)) && cm->sm) {
+        IAudioSessionControl *sc = NULL;
+        if (SUCCEEDED(IAudioSessionManager2_GetAudioSessionControl(cm->sm, NULL, 0, &sc)) && sc) {
+            if (FAILED(IAudioSessionControl_QueryInterface(sc, &VA_IID_IAudioSessionControl2,
+                                                           (void **)&cm->duck)))
+                cm->duck = NULL;
+            else
+                IAudioSessionControl2_SetDuckingPreference(cm->duck, TRUE);
+            IAudioSessionControl_Release(sc);
+        }
+    }
+    IMMDevice_Release(rd);
+}
+
+/* After Initialize: the echo-cancellation effect and its render reference. Returns the
+ * VAM_CONV_OPENED value: 0 none, 1 on, 2 turned on by us. */
+static int va_comms_aec(IMMDeviceEnumerator *enm, IAudioClient *cl, VaComms *cm)
+{
+    int echo = 0;
+    if (SUCCEEDED(IAudioClient_GetService(cl, &VA_IID_IAudioEffectsManager, (void **)&cm->fx)) && cm->fx) {
+        AUDIO_EFFECT *fx = NULL;
+        UINT32 nfx = 0;
+        if (SUCCEEDED(cm->fx->lpVtbl->GetAudioEffects(cm->fx, &fx, &nfx)) && fx) {
+            for (UINT32 i = 0; i < nfx; i++) {
+                if (!IsEqualGUID(&fx[i].id, &VA_EFFECT_AEC)) continue;
+                if (fx[i].state == AUDIO_EFFECT_STATE_ON) echo = 1;
+                else if (fx[i].canSetState &&
+                         SUCCEEDED(cm->fx->lpVtbl->SetAudioEffectState(cm->fx, fx[i].id,
+                                                                       AUDIO_EFFECT_STATE_ON)))
+                    echo = 2;
+                break;
+            }
+            CoTaskMemFree(fx);
+        }
+    }
+    int ctl = SUCCEEDED(IAudioClient_GetService(cl, &VA_IID_IAcousticEchoCancellationControl,
+                                                (void **)&cm->aec)) && cm->aec;
+    va_comms_render(enm, cm, ctl);
+    return echo;
+}
+
+/* cm: a conversation capture's extras (NULL for dictation): the communications category before
+ * Initialize, the echo-cancellation setup after it; *echo gets the VAM_CONV_OPENED value. */
+static int va_open_dev(IMMDeviceEnumerator *enm, IMMDevice *dev, IAudioClient **out_cl,
+                       IAudioCaptureClient **out_cap, HANDLE *out_ev, int *denied,
+                       VaComms *cm, int *echo)
 {
     IAudioClient *cl = NULL;
     IAudioCaptureClient *cap = NULL;
@@ -236,6 +499,19 @@ static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
         return 0;
     }
 
+    if (cm) {                               /* failure is not fatal: no echo cancellation */
+        IAudioClient2 *c2 = NULL;
+        if (SUCCEEDED(IAudioClient_QueryInterface(cl, &VA_IID_IAudioClient2, (void **)&c2)) && c2) {
+            AudioClientProperties props;
+            memset(&props, 0, sizeof(props));
+            props.cbSize = (UINT32)sizeof(props);
+            props.bIsOffload = FALSE;
+            props.eCategory = AudioCategory_Communications;
+            props.Options = AUDCLNT_STREAMOPTIONS_NONE;
+            IAudioClient2_SetClientProperties(c2, &props);
+            IAudioClient2_Release(c2);
+        }
+    }
     WAVEFORMATEX wfx;
     memset(&wfx, 0, sizeof(wfx));
     wfx.wFormatTag = WAVE_FORMAT_PCM;
@@ -253,8 +529,10 @@ static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
     else if (SUCCEEDED(hr)) hr = E_FAIL;   /* no event: keep a real failure (E_ACCESSDENIED) as it is */
     if (SUCCEEDED(hr))
         hr = IAudioClient_GetService(cl, &VA_IID_IAudioCaptureClient, (void **)&cap);
+    if (SUCCEEDED(hr) && cm && echo) *echo = va_comms_aec(enm, cl, cm);
     if (SUCCEEDED(hr)) hr = IAudioClient_Start(cl);
     if (FAILED(hr) || !cap) {
+        if (cm) va_comms_release(cm);
         if (hr == E_ACCESSDENIED) *denied = 1;
         if (cap) IAudioCaptureClient_Release(cap);
         IAudioClient_Release(cl);
@@ -267,24 +545,26 @@ static int va_open_dev(IMMDevice *dev, IAudioClient **out_cl,
     return 1;
 }
 
-static void va_begin(VaState *st, const VaCmd *c)
+/* Opens the chosen endpoint (else the default capture one) into st->client/cap/buf_ev and sets
+ * used_default; posts the error for `token` and returns 0 when nothing opened. cm: see
+ * va_open_dev. */
+static int va_open_endpoint(VaState *st, const char *id, unsigned token, VaComms *cm, int *echo)
 {
-    if (st->active) va_finish(st, 0);
-    if (!st->enm) { va_post_err(st->ctx, VAE_NO_DEVICE, c->token); return; }
+    if (!st->enm) { va_post_err(st->ctx, VAE_NO_DEVICE, token); return 0; }
 
     IAudioClient *cl = NULL;
     IAudioCaptureClient *cap = NULL;
     HANDLE ev = NULL;
     int ok = 0, denied = 0;
     st->used_default = 0;
-    if (c->id[0]) {
+    if (id[0]) {
         IMMDevice *dev = NULL;
         wchar_t wid[256];
-        if (va_utf8_to_wide(c->id, wid, 256) &&
+        if (va_utf8_to_wide(id, wid, 256) &&
             SUCCEEDED(IMMDeviceEnumerator_GetDevice(st->enm, wid, &dev)) && dev) {
             DWORD state = 0;
             if (SUCCEEDED(IMMDevice_GetState(dev, &state)) && state == DEVICE_STATE_ACTIVE)
-                ok = va_open_dev(dev, &cl, &cap, &ev, &denied);
+                ok = va_open_dev(st->enm, dev, &cl, &cap, &ev, &denied, cm, echo);
             IMMDevice_Release(dev);
         }
         /* Not found, not active or would not open: Windows default; the
@@ -295,19 +575,26 @@ static void va_begin(VaState *st, const VaCmd *c)
         IMMDevice *dev = NULL;
         if (FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(st->enm, eCapture,
                                                                eConsole, &dev)) || !dev) {
-            va_post_err(st->ctx, VAE_NO_DEVICE, c->token);
-            return;
+            va_post_err(st->ctx, VAE_NO_DEVICE, token);
+            return 0;
         }
-        ok = va_open_dev(dev, &cl, &cap, &ev, &denied);
+        ok = va_open_dev(st->enm, dev, &cl, &cap, &ev, &denied, cm, echo);
         IMMDevice_Release(dev);
         if (!ok) {
-            va_post_err(st->ctx, denied ? VAE_ACCESS_DENIED : VAE_OPEN_FAILED, c->token);
-            return;
+            va_post_err(st->ctx, denied ? VAE_ACCESS_DENIED : VAE_OPEN_FAILED, token);
+            return 0;
         }
     }
     st->client = cl;
     st->cap = cap;
     st->buf_ev = ev;
+    return 1;
+}
+
+static void va_begin(VaState *st, const VaCmd *c)
+{
+    if (st->active || st->conv) va_finish(st, 0);
+    if (!va_open_endpoint(st, c->id, c->token, NULL, NULL)) return;
     pcm_init(&st->pcm, va_cap_samples(c->cap_ms));
     st->token = c->token;
     st->test_only = c->flag;
@@ -317,6 +604,68 @@ static void va_begin(VaState *st, const VaCmd *c)
     st->level_peak = 0;
     st->raw_nonzero = 0;
     st->gain_q16 = pcm_gain_q16(c->gain_db);
+}
+
+/* ---- conversation capture commands ------------------------------------ */
+
+/* A fresh conversation state (no device yet); NULL on OOM (error posted). */
+static VaConv *va_conv_new(VaState *st, unsigned token, int pause_ms, int gain_db)
+{
+    if (st->active || st->conv) va_finish(st, 0);
+    VaConv *cv = (VaConv *)calloc(1, sizeof(*cv));
+    if (!cv) { va_post_err(st->ctx, VAE_NO_MEMORY, token); return NULL; }
+    voice_listen_init(&cv->listen, voice_pause_clamp(pause_ms));
+    voice_listen_set_mode(&cv->listen, VLM_LISTEN);   /* a capture starts listening; the glue moves it */
+    st->token = token;
+    st->test_only = 0;
+    st->live = 0;
+    st->level_peak = 0;
+    st->raw_nonzero = 0;
+    st->gain_q16 = pcm_gain_q16(gain_db);
+    return cv;
+}
+
+static void va_conv_begin(VaState *st, const VaCmd *c)
+{
+    VaConv *cv = va_conv_new(st, c->token, c->cap_ms, c->gain_db);
+    if (!cv) return;
+    int echo = 0;
+    st->conv = cv;                       /* va_finish / va_close_client release cv->com */
+    if (!va_open_endpoint(st, c->id, c->token, &cv->com, &echo)) {
+        va_conv_drop(st);
+        return;
+    }
+    cv->echo = echo;
+    st->active = 1;
+    st->t_start = st->t_last_ev = st->t_last_level = GetTickCount64();
+    va_post(st->ctx, VAM_CONV_OPENED, VOICE_CONV_PACK((unsigned)echo, c->token));
+}
+
+static int va_conv_is(const VaState *st, unsigned token)
+{
+    return st->conv && (st->token & VOICE_TOKEN_MASK) == (token & VOICE_TOKEN_MASK);
+}
+
+static void va_conv_set_mode(VaState *st, unsigned token, VoiceListenMode m)
+{
+    if (!va_conv_is(st, token)) return;
+    voice_listen_set_mode(&st->conv->listen, m);   /* abandons a turn in progress, silently */
+    va_conv_wipe_turn(st->conv);                   /* so the audio held for it goes too */
+}
+
+static void va_conv_attach(VaState *st, unsigned token, unsigned live_token)
+{
+    if (!va_conv_is(st, token)) return;
+    VaConv *cv = st->conv;
+    cv->live = 1;
+    cv->live_token = live_token;
+    if (cv->in_turn && cv->turn.n > 0)     /* the turn so far, once; later windows follow as they come */
+        va_live_feed(live_token, cv->turn.s, cv->turn.n);
+}
+
+static void va_conv_end(VaState *st, unsigned token)
+{
+    if (va_conv_is(st, token)) va_finish(st, 0);
 }
 
 /* The one place a gain command takes effect, for the thread and the seam. */
@@ -331,6 +680,7 @@ static void va_set_gain(VaState *st, int gain_db)
  * pending level, then wipes the samples, so it never accumulates audio. */
 static void va_ingest(VaState *st, const int16_t *src, size_t frames)
 {
+    if (st->conv) { va_conv_ingest(st, src, frames); return; }
     size_t before = st->pcm.n;
     size_t take = pcm_append(&st->pcm, src, frames);
     if (take == 0) return;
@@ -379,7 +729,7 @@ static int va_drain(VaState *st)
 
 static void va_level(VaState *st, ULONGLONG now)
 {
-    if (!st->test_only || now - st->t_last_level < VA_LEVEL_MS) return;
+    if ((!st->test_only && !st->conv) || now - st->t_last_level < VA_LEVEL_MS) return;
     st->t_last_level = now;
     int pk = st->level_peak > 32768 ? 32768 : st->level_peak;
     st->level_peak = 0;
@@ -489,7 +839,18 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_END:   va_finish(&st, c.flag); break;
             case VC_WATCH: va_watch(&st, c.flag); break;
             case VC_SET_GAIN: va_set_gain(&st, c.gain_db); break;
+            case VC_CONV_BEGIN:  va_conv_begin(&st, &c); break;
+            case VC_CONV_MODE:   va_conv_set_mode(&st, c.token, (VoiceListenMode)c.flag); break;
+            case VC_CONV_ATTACH: va_conv_attach(&st, c.token, c.token2); break;
+            case VC_CONV_END:    va_conv_end(&st, c.token); break;
+            case VC_TEST_CONV_OPEN:
+                st.conv = va_conv_new(&st, c.token, c.cap_ms, 0);
+                break;
+            case VC_TEST_CONV_INGEST:
+                if (va_conv_is(&st, c.token) && c.data) va_ingest(&st, c.data, c.n);
+                break;
             }
+            if (c.data) { secure_zero(c.data, c.n * sizeof(int16_t)); free(c.data); }
         }
         if (st.active) {
             ULONGLONG now = GetTickCount64();
@@ -497,7 +858,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
             if (!va_drain(&st)) { va_fail(&st, VAE_DEVICE_LOST); continue; }
             /* The cap ends a push-to-talk capture here, so the device never
              * stays open past it whatever the UI does (a Test runs until stopped). */
-            if (!st.test_only && st.token != 0 && pcm_full(&st.pcm)) {
+            if (!st.test_only && !st.conv && st.token != 0 && pcm_full(&st.pcm)) {
                 va_finish(&st, 1);
                 continue;
             }
@@ -506,7 +867,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
         }
     }
 
-    va_finish(&st, 0);
+    va_finish(&st, 0);              /* closes a conversation too (device, objects, turn audio) */
     va_watch(&st, 0);               /* unregistered here, never inside a callback */
     if (st.enm) IMMDeviceEnumerator_Release(st.enm);
     if (com) CoUninitialize();
@@ -720,6 +1081,91 @@ void voice_audio_test_ingest_live(int live, unsigned token, int gain_db, int cap
     st.active = 1;
     va_ingest(&st, s, n);
     va_finish(&st, 0);          /* discards the samples; the live end still fires */
+}
+
+/* Appends a command as it is (no coalescing); the queue grows, nothing is dropped. Returns 0
+ * with no thread or no memory; the caller then still owns c->data. */
+static int va_push_raw(const VaCmd *c)
+{
+    VaCtx *cx = g_ctx;
+    int ok = 0;
+    if (!cx) return 0;
+    EnterCriticalSection(&cx->qcs);
+    if (cx->qn >= cx->qcap) {
+        int ncap = cx->qcap ? cx->qcap * 2 : VOICE_AUDIO_QUEUE_MIN;
+        VaCmd *nq = (VaCmd *)realloc(cx->q, (size_t)ncap * sizeof(VaCmd));
+        if (nq) { cx->q = nq; cx->qcap = ncap; }
+    }
+    if (cx->qn < cx->qcap) { cx->q[cx->qn++] = *c; ok = 1; }
+    LeaveCriticalSection(&cx->qcs);
+    if (ok) SetEvent(cx->wake);
+    return ok;
+}
+
+int voice_audio_conv_begin(const char *id, unsigned token, double gain_db, int pause_ms)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_CONV_BEGIN;
+    snprintf(c.id, sizeof(c.id), "%s", id ? id : "");
+    c.token = token;
+    c.gain_db = voice_gain_clamp((int)lround(gain_db));
+    c.cap_ms = pause_ms;
+    return va_push_raw(&c);
+}
+
+void voice_audio_conv_mode(unsigned token, VoiceListenMode m)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_CONV_MODE;
+    c.token = token;
+    c.flag = (int)m;
+    va_push_raw(&c);
+}
+
+void voice_audio_conv_attach_live(unsigned token, unsigned live_token)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_CONV_ATTACH;
+    c.token = token;
+    c.token2 = live_token;
+    va_push_raw(&c);
+}
+
+void voice_audio_conv_end(unsigned token)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_CONV_END;
+    c.token = token;
+    va_push_raw(&c);
+}
+
+/* TEST-ONLY seams (wintest), never called by product code: a conversation state with no
+ * device on the audio thread, and samples fed to it through the capture feed. */
+void voice_audio_test_conv_open(unsigned token, int pause_ms)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_TEST_CONV_OPEN;
+    c.token = token;
+    c.cap_ms = pause_ms;
+    va_push_raw(&c);
+}
+
+void voice_audio_test_conv_ingest(unsigned token, const int16_t *s, size_t n)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_TEST_CONV_INGEST;
+    c.token = token;
+    c.n = n;
+    c.data = (int16_t *)malloc(n * sizeof(int16_t));
+    if (!c.data) return;
+    memcpy(c.data, s, n * sizeof(int16_t));
+    if (!va_push_raw(&c)) { secure_zero(c.data, n * sizeof(int16_t)); free(c.data); }
 }
 
 void voice_audio_free_devices(VoiceDeviceList *l) { free(l); }

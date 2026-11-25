@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "config.h"
 #include "voice_live.h"
+#include "wav.h"
 #include "voice_lang.h"
 #include "json_validate.h"
 #include "json_parser.h"
@@ -38,6 +39,7 @@ int test_voice_live_resolve(void)
     ASSERT_EQ(t.rate, 24000);
     ASSERT_EQ(t.hangover_ms, VOICE_LIVE_HANGOVER_OPENAI_MS);
     ASSERT_EQ(t.key_from_chat, 0);
+    ASSERT_EQ(t.gate_rms, PCM_SPEECH_RMS);   /* dictation keeps the speech gate */
 
     ls(&s, "mistral");
     ASSERT_EQ(voice_live_provider(&s), VLP_MISTRAL);

@@ -28,6 +28,9 @@ typedef struct {
     int key_from_chat;          /* as SttTarget */
     unsigned rate;              /* 24000 OpenAI, 16000 Mistral */
     int hangover_ms;
+    int gate_rms;               /* speech gate threshold (int16 RMS): dictation PCM_SPEECH_RMS; a
+                                   conversation turn passes 0 (every window is speech: the listener
+                                   already gated it, and the flush at feed end commits) */
 } VoiceLiveTarget;
 
 /* The effective speech-to-text provider when it is OpenAI or Mistral, else VLP_NONE. */
