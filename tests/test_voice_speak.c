@@ -219,6 +219,28 @@ int test_vspeak_indented_fence(void)
     TEST_END();
 }
 
+/* A fence indented four or more spaces (or a tab) under a list item, with no blank line
+ * above it, is still a fence: the code is not read aloud. */
+int test_vspeak_deep_indented_fence(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("1. Run this:\n    ```bash\n    sudo rm -rf /x\n    ```\nDone.",
+                         "Run this: The code is on screen. Done."));
+    ASSERT_TRUE(speak_eq("Run:\n\t```sh\n\tsudo reboot\n\t```\nDone.",
+                         "Run: The code is on screen. Done."));
+    TEST_END();
+}
+
+/* A fence that opens on the list marker's own line. */
+int test_vspeak_fence_after_list_marker(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("- ```bash\n  sudo rm -rf /x\n  ```\nDone.",
+                         "The code is on screen. Done."));
+    ASSERT_TRUE(speak_eq("1. ```\n   secret\n   ```\nDone.", "The code is on screen. Done."));
+    TEST_END();
+}
+
 int test_vspeak_tilde_fence(void)
 {
     TEST_BEGIN();

@@ -3714,6 +3714,8 @@ int test_vvoices_lcid_parsing(void);
 int test_vvoices_notice_due(void);
 int test_vspeak_indented_fence(void);
 int test_vspeak_tilde_fence(void);
+int test_vspeak_deep_indented_fence(void);
+int test_vspeak_fence_after_list_marker(void);
 int test_vspeak_unclosed_fence(void);
 int test_vspeak_pipeless_table(void);
 int test_vspeak_fence_in_quote(void);
@@ -8421,6 +8423,8 @@ int main(void) {
     failed += test_vvoices_notice_due();
     failed += test_vspeak_indented_fence();
     failed += test_vspeak_tilde_fence();
+    failed += test_vspeak_deep_indented_fence();
+    failed += test_vspeak_fence_after_list_marker();
     failed += test_vspeak_unclosed_fence();
     failed += test_vspeak_pipeless_table();
     failed += test_vspeak_fence_in_quote();

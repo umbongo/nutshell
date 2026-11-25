@@ -1,12 +1,14 @@
 #include "voice_echo.h"
 
 #include "voice_speak.h"
+#include "secure_zero.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct {
     char  *text;   /* lower-cased words, each NUL-terminated */
+    size_t tcap;   /* bytes allocated for text (wiped whole on free) */
     size_t *off;   /* word offsets into text */
     size_t *len;
     size_t n;
@@ -19,6 +21,7 @@ static int word_byte(unsigned char c)
 
 static void words_free(Words *w)
 {
+    if (w->text) secure_zero(w->text, w->tcap);   /* the user's words */
     free(w->text); free(w->off); free(w->len);
     memset(w, 0, sizeof *w);
 }
@@ -58,9 +61,10 @@ static int words_split(const char *orig, Words *w)
     for (size_t i = 0; i < n; i++)
         if (word_byte((unsigned char)s[i]) && (i == 0 || !word_byte((unsigned char)s[i - 1]))) cnt++;
     w->text = (char *)malloc(n + 1);
+    w->tcap = w->text ? n + 1 : 0;
     w->off = (size_t *)malloc((cnt + 1) * sizeof(size_t));
     w->len = (size_t *)malloc((cnt + 1) * sizeof(size_t));
-    if (!w->text || !w->off || !w->len) { words_free(w); free(norm); return 0; }
+    if (!w->text || !w->off || !w->len) { words_free(w); secure_zero(norm, n + 1); free(norm); return 0; }
     size_t o = 0;
     for (size_t i = 0; i < n;) {
         if (!word_byte((unsigned char)s[i])) { i++; continue; }
@@ -76,6 +80,7 @@ static int words_split(const char *orig, Words *w)
     }
     w->text[o] = '\0';
     ok = 1;
+    secure_zero(norm, n + 1);
     free(norm);
     return ok;
 }
@@ -159,8 +164,9 @@ VoicePhrase voice_phrase_match(const char *transcript)
     Words w;
     if (!words_split(transcript, &w)) return VPH_NONE;
     VoicePhrase res = VPH_NONE;
+    char all[160], rest[160];
+    all[0] = rest[0] = '\0';
     if (w.n >= 1 && w.n <= 6) {
-        char all[160], rest[160];
         if (join_words(&w, 0, w.n, all, sizeof all)) {
             const char *p = all;
             for (const char *const *l = LEAD; *l; l++) {
@@ -177,6 +183,8 @@ VoicePhrase voice_phrase_match(const char *transcript)
             else if (in_list(CONTINUE_PHRASES, rest)) res = VPH_CONTINUE;
         }
     }
+    secure_zero(all, sizeof all);
+    secure_zero(rest, sizeof rest);
     words_free(&w);
     return res;
 }

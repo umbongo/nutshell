@@ -1,6 +1,7 @@
 #include "voice_speak.h"
 
 #include "markdown.h"
+#include "secure_zero.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,8 +21,14 @@ static void buf_put(Buf *b, const char *s, size_t n)
     if (b->len + n + 1 > b->cap) {
         size_t nc = b->cap ? b->cap : 256;
         while (nc < b->len + n + 1) nc *= 2;
-        char *np = (char *)realloc(b->p, nc);
+        /* not realloc: the old block would be freed unwiped (it holds the reply's words) */
+        char *np = (char *)malloc(nc);
         if (!np) { b->oom = 1; return; }
+        if (b->p) {
+            memcpy(np, b->p, b->len + 1);
+            secure_zero(b->p, b->cap);
+            free(b->p);
+        }
         b->p = np;
         b->cap = nc;
     }
@@ -206,18 +213,39 @@ static int is_sep_row(const char *s, size_t n, int above_has_pipe)
     return dash && (has_pipe(s, n) || above_has_pipe);
 }
 
-/* Fence run at the start of s (up to 3 spaces of indent): returns the run
- * length (>= 3) and sets *ch, else 0. */
-static size_t fence_run(const char *s, size_t n, char *ch)
+/* A list marker at s[i] ("-", "*", "+", or digits then "." or ")", then a blank):
+ * the index of the first byte after it and its blanks, else i. */
+static size_t after_list_marker(const char *s, size_t n, size_t i)
+{
+    size_t k = i;
+    if (k < n && (s[k] == '-' || s[k] == '*' || s[k] == '+')) {
+        k++;
+    } else {
+        while (k < n && s[k] >= '0' && s[k] <= '9') k++;
+        if (k == i || k >= n || (s[k] != '.' && s[k] != ')')) return i;
+        k++;
+    }
+    if (k >= n || (s[k] != ' ' && s[k] != '\t')) return i;
+    while (k < n && (s[k] == ' ' || s[k] == '\t')) k++;
+    return k;
+}
+
+/* Fence run at the start of s after any leading blanks (an indent of four or more
+ * spaces, or a tab, under a list item is still a fence) and one list marker: returns
+ * the run length (>= 3), sets *ch and, when at is given, the index where the run
+ * starts; else 0. */
+static size_t fence_run(const char *s, size_t n, char *ch, size_t *at)
 {
     size_t i = 0;
-    while (i < n && i < 3 && s[i] == ' ') i++;
+    while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+    i = after_list_marker(s, n, i);
     if (i >= n || (s[i] != '`' && s[i] != '~')) return 0;
     char c = s[i];
     size_t k = i;
     while (k < n && s[k] == c) k++;
     if (k - i < 3) return 0;
     *ch = c;
+    if (at) *at = i;
     return k - i;
 }
 
@@ -256,8 +284,16 @@ char *voice_speak_text(const char *markdown)
         if (ql + 1 > linecap) {
             size_t nc = linecap ? linecap : 256;
             while (nc < ql + 1) nc *= 2;
-            char *nl = (char *)realloc(line, nc);
-            if (!nl) { free(src); free(line); free(out.p); return NULL; }
+            char *nl = (char *)malloc(nc);
+            if (!nl) {
+                secure_zero(src, strlen(src) + 1); free(src);
+                if (line) secure_zero(line, linecap);
+                free(line);
+                if (out.p) secure_zero(out.p, out.cap);
+                free(out.p);
+                return NULL;
+            }
+            if (line) { secure_zero(line, linecap); free(line); }
             line = nl;
             linecap = nc;
         }
@@ -267,12 +303,11 @@ char *voice_speak_text(const char *markdown)
 
         /* fences: ``` or ~~~, closed by the same char, at least as long */
         char rc = 0;
-        size_t run = fence_run(line, ql, &rc);
+        size_t at = 0;
+        size_t run = fence_run(line, ql, &rc, &at);
         if (in_fence) {
             if (run >= flen && rc == fch) {
-                size_t k = 0;
-                while (k < ql && line[k] == ' ') k++;
-                k += run;
+                size_t k = at + run;
                 while (k < ql && (line[k] == ' ' || line[k] == '\t')) k++;
                 if (k == ql) in_fence = 0;
             }
@@ -342,13 +377,15 @@ char *voice_speak_text(const char *markdown)
             break;
         }
     }
+    secure_zero(src, strlen(src) + 1);
     free(src);
+    if (line) secure_zero(line, linecap);
     free(line);
-    if (out.oom) { free(out.p); return NULL; }
+    if (out.oom) { if (out.p) secure_zero(out.p, out.cap); free(out.p); return NULL; }
 
     /* collapse whitespace, trim */
     char *res = (char *)malloc(out.len + 1);
-    if (!res) { free(out.p); return NULL; }
+    if (!res) { secure_zero(out.p, out.cap); free(out.p); return NULL; }
     size_t o = 0;
     int pend = 0;
     for (size_t i = 0; i < out.len; i++) {
@@ -358,6 +395,7 @@ char *voice_speak_text(const char *markdown)
         res[o++] = out.p[i];
     }
     res[o] = '\0';
+    secure_zero(out.p, out.cap);
     free(out.p);
     return res;
 }
