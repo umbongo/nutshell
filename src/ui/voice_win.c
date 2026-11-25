@@ -11,6 +11,7 @@
 #include "voice_ledger.h"
 #include "voice_live.h"
 #include "voice_live_win.h"
+#include "voice_lock_win.h"
 #include "voice_ptt.h"
 #include "voice_stt.h"
 #include "voice_stt_win.h"
@@ -404,6 +405,7 @@ static void post_step(void)
         free_transcript();
         g_token = 0;
         g_live = 0;
+        voice_lock_unregister(g_main);
         if (g_ui != AIV_IDLE) set_ui(AIV_IDLE, NULL);
     } else if (g_live && g_dict.state == VDS_FINISHING && g_ui != AIV_TRANSCRIBING) {
         /* The mic stopped: whatever the link, the last words (or the fallback) are awaited. */
@@ -454,6 +456,7 @@ static void start_recording(void)
     voice_ptt_set_cap(&g_ptt, g_live ? VOICE_LIVE_CAP_MS : 0);
     if (!g_live && voice_live_model_invalid(s))   /* typed an invalid live model name */
         g_note_invalid_model = 1;
+    (void)voice_lock_register(g_main);   /* a session lock ends the recording; 0 is no hard failure */
     dict_event(VDE_START, g_live, (s && s->voice_auto_send && draft == 0) ? 1 : 0);
 }
 
@@ -560,6 +563,14 @@ void voice_on_deactivate(void)
     if (g_live && g_dict.state != VDS_IDLE) dict_event(VDE_END_SOFT, 0, 0);
 }
 
+void voice_on_session_change(WPARAM wp)
+{
+    if (!voice_lock_is_lock_event(wp)) return;
+    /* Dictation: a lock ends the recording softly (what was heard is kept). Task 13
+     * adds the conversation (VCE_END, VCX_LOCK). */
+    if (g_audio_up && g_dict.state != VDS_IDLE) dict_event(VDE_END_SOFT, 0, 0);
+}
+
 void voice_mic_clicked(void)
 {
     if (!g_audio_up) return;
@@ -610,6 +621,7 @@ static void stop_everything(void)
     release_upload();
     g_token = 0;
     g_live = 0;
+    voice_lock_unregister(g_main);
     ai_chat_voice_lock_typing(ui_ai_panel(), 0);
     ptt_reset();
 }

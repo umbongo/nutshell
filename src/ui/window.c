@@ -5472,6 +5472,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             voice_on_chat_changed_msg();
             return 0;
 
+        case WM_WTSSESSION_CHANGE:
+            voice_on_session_change(wParam);
+            break;   /* on to DefWindowProc */
+
         case WM_SELF_REPORT:
             /* Hidden --self-report=<path> (spec section 6): the record is
              * complete once WM_STARTUP_CONNECT has run. A failed write is

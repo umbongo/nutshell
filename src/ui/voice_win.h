@@ -27,6 +27,10 @@ int  voice_pump_filter(const MSG *m);
 /* WM_ACTIVATEAPP(FALSE) or WM_ENABLE(FALSE): end a recording (VE_DEACTIVATE). */
 void voice_on_deactivate(void);
 
+/* WM_WTSSESSION_CHANGE from window.c's WndProc: a lock ends the dictation recording
+ * softly (and, from Task 13, the conversation). Any other change is ignored. */
+void voice_on_session_change(WPARAM wp);
+
 /* WM_TIMER with VOICE_TIMER_ID. */
 void voice_on_timer(void);
 

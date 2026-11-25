@@ -127,6 +127,8 @@ int test_voice_stt_gate_off_before_send_sends_nothing(void);
 int test_voice_stt_counts_one_open_per_upload(void);
 int test_voice_stt_long_transcript_delivered_whole(void);
 int test_voice_net_counts(void);
+int test_voice_lock_register_balances(void);
+int test_voice_lock_is_lock_event(void);
 int test_voice_ws_gate_off(void);
 int test_voice_ws_echo(void);
 int test_voice_ws_fragmented(void);
@@ -474,6 +476,8 @@ int main(int argc, char **argv)
     failed += test_voice_stt_counts_one_open_per_upload();
     failed += test_voice_stt_long_transcript_delivered_whole();
     failed += test_voice_net_counts();
+    failed += test_voice_lock_register_balances();
+    failed += test_voice_lock_is_lock_event();
     failed += test_voice_ws_gate_off();
     failed += test_voice_ws_echo();
     failed += test_voice_ws_fragmented();
