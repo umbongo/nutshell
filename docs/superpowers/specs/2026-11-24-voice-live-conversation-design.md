@@ -2189,6 +2189,61 @@ version of this subsection; the rest supersede it.
   (`src/core/voice_stt.c:14`).
 - This goes on the notes' todo; it is not PR 3's work.
 
+### Found at build time (PR 3, 2026-11-25)
+
+- **The capture:** not yet taken (plan Task 0 is open). The Mistral parser and fetch are built
+  against the SDK's shape with provisional fixtures
+  (`tests/fixtures/voice_tts/provisional_mistral_*.sse`); the capture gate stays open (R33).
+- **Counts (item 14):** 69 settings keys (`CFG_KEYS_MAX` 96), `NOTICE_ITEMS_MAX` 24,
+  `winhttp.def` 17 entries (no new entry).
+- **`IAudioRenderClient` IID:** `F294ACFC-3146-4483-A7BF-ADDCA7C260E2`, copied locally as
+  `VA_IID_IAudioRenderClient` from MinGW's `audioclient.h:887`.
+- **Rulings as built, with each departure:**
+  - Task 6 render client: pending close, flush and conversation end keep queue order through a
+    sequence number in a 16-entry array (plus one overflow slot per kind), not "applied after
+    draining"; gain belongs to the current owner and every `render_open` starts at 100 %; a
+    reply whose end is reached while the client is stopped gets PLAY_DONE after the fill.
+  - Task 1: the URL help label is "Speech base URL:" (duplicate-label test); `tts_api_key` is
+    registered for debug-log scrubbing; `load_secret` takes a per-secret buffer size; the
+    bound-key blob budget is about 1,019 of `CFG_BLOB_MAX` 1,024.
+  - Task 2: a binding too long for its buffer is "" (never matches); non-JSON SSE data fails
+    only with no event name or a known name (R28: unknown events ignored), and a done event with
+    non-JSON data fails; `"error": null` is ignored; `TEST_SKIP` after a failed assertion
+    reports a failure; `TEST_SKIP_PART` serves mid-test Wine skips; `VoiceAisEv` carries an
+    unknown event's name for logging; when the speech key is shared with speech-to-text and
+    that key is empty the message is "Enter a speech-to-text API key" (main session's ruling); a
+    Mistral chat cannot share its key with speech (`voice_stt_use_ai_reason` does not offer
+    Mistral).
+  - Task 12: `voice_wavs_out_max(n)` is n/2 + 1 (a carried partial frame); a too-small output
+    cap is an error; the feed that finds a second WAV header returns 0 samples.
+  - Task 13: the Ending budget is set in `do_submit`, the single submit path;
+    `test_vconv_ending_watchdog_keeps_silence_clock` replaced and `test_vconv_ending_watchdog`
+    trimmed.
+  - Task 5: the stream POST fails closed if the redirect policy is refused; `recv_ms <= 0` is
+    rejected; a refused `WinHttpSetTimeouts` is an error; the speech-to-text request header
+    buffer is wiped.
+  - Task 7a: each speak has its own render id and its worker messages a job serial; a chunk
+    that fails mid-stream stays incomplete so the resume offset falls inside it; a reply always
+    ends with VTT_DONE or VTT_ERROR; text past the chunk cap ends in VTT_ERROR; posting
+    VAI_EXITED is the worker's last access to its job.
+  - Task 8b: `speak_reply` stamps `g_reply_at = now` and `g_spoken_end_at = now - 2001` instead
+    of zeroing them (a zero opens both classifier windows after about 24.8 days of uptime on
+    32-bit long); the external-send sites are Retry's two exits (only on a real launch), the
+    plain Send branch and the suggestion chips; a parked end event wins over later ones.
+  - Task 8a: the router asks `voice_ais_owns(token)`; an AI start failure at conversation start
+    does not fall back until a reply is spoken; a fatal error while not playing still writes
+    the note once; the fallback logs hr and fatal/passing.
+  - Task 9: a typed speech key is dropped (asked for again) when the provider or URL changes
+    its binding (R43's cost).
+  - Task 10: the self-report prints `voice-resources`; `selftest-wine` has the `ai` mode.
+  - Task 7b: a NULL request body maps to HR_RESOLVE (fatal); Mistral asks for wav (R25's
+    default).
+  - Speech-to-text upload (main session's ruling): never follows a redirect, fails closed if
+    the policy is refused, and reports "Redirect refused (HTTP n)".
+- **Test counts at the end of PR 3's code (v1.3.0):** 4615 native on `automaton` (libssh2 stub;
+  3 skipped, the Mistral capture fixtures), 253 `wintest` (6 skipped: 5 Wine WinHTTP limits and
+  the capture fixture).
+
 ## 17. Critique (2026-11-24, claude-fable-5-2 high)
 
 Each finding in one line, then the main session's disposition.
