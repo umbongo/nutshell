@@ -405,12 +405,11 @@ void voice_tts_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
 void voice_tts_reap(unsigned token, unsigned gen)
 {
     TtsCtx *c = find(token);
-    if (c == NULL || c->gen != gen) return;   /* stale: not the context that exited */
-    EnterCriticalSection(&c->cs);
-    const int exited = c->exited;
-    LeaveCriticalSection(&c->cs);
-    if (!exited) return;
-    voice_tts_quit(token, INFINITE);          /* exited: the join is immediate */
+    if (c == NULL || c->gen != gen) return;   /* stale or unknown: not the context that exited */
+    /* A matching gen means this context's VTT_EXITED was posted, so its thread is
+     * past its last COM call. It may not have set `exited` yet: quit's bounded
+     * wait then detaches and the thread frees itself. */
+    voice_tts_quit(token, 1000);
 }
 
 void voice_tts_stop(unsigned token)

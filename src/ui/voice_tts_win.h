@@ -66,11 +66,12 @@ void voice_tts_volume(unsigned token, int percent);
 void voice_tts_quit(unsigned token, unsigned wait_ms);
 
 /* The UI handles VTT_EXITED with voice_tts_reap(msg->token, msg->gen), never
- * voice_tts_quit: frees the context for `token` only when its generation matches
- * and its thread has exited; a stale or mismatched gen is a no-op, so a late
- * VTT_EXITED of a reaped-and-restarted token cannot kill the new context.
- * Releases VRES_SPVOICE when it frees. voice_tts_quit stays for deliberate
- * teardown. */
+ * voice_tts_quit: when the generation matches the context for `token`, it is torn
+ * down through the voice_tts_quit path (slot freed, bounded join, detach if the
+ * thread has not finished marking itself exited). A stale or mismatched gen, or
+ * an unknown token, is a no-op, so a late VTT_EXITED of a reaped-and-restarted
+ * token cannot kill the new context. Releases VRES_SPVOICE. voice_tts_quit
+ * stays for deliberate teardown. */
 void voice_tts_reap(unsigned token, unsigned gen);
 
 int  voice_tts_running(void);   /* 1 while any speech thread is held */
