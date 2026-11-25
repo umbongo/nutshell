@@ -1157,4 +1157,35 @@ int test_vconv_win_parked_end_wins(void)
     TEST_END();
 }
 
+/* A reply with nothing to say (empty speech text) stamps its times and fails before speaking, so the
+ * previous reply is still the last thing spoken. Within 2 s of that reply's end its own words heard
+ * back would be an echo; once the new reply has stamped its times the window is closed, and the words
+ * are the user's (sent as a turn). */
+int test_vconv_win_old_echo_not_matched_while_new_reply_loads(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    char said[600];
+    snprintf(said, sizeof said, "%s", F.speak_text);   /* reply A's speech text */
+    tts_msg(VTT_DONE, F.speak_id, 0);                  /* A ended just now */
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    to_working();
+    chat_finishes("");                                 /* B: nothing to say, fails before speaking */
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    ASSERT_EQ(F.send_turn, 2);
+    aud_event(VLN_TURN_START);
+    live_msg(VLE_READY, "", NULL);
+    aud_event(VLN_TURN_END);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    live_msg(VLE_DONE, "", said);                      /* A's words, heard back inside 2 s of its end */
+    ASSERT_EQ(F.send_turn, 3);                         /* not an echo: sent as the user's turn */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
 #endif /* _WIN32 */

@@ -207,6 +207,7 @@ int test_vconv_win_notice_kept_if_ended_first(void);
 int test_vconv_win_end_never_dropped(void);
 int test_vconv_win_progress_throttled(void);
 int test_vconv_win_parked_end_wins(void);
+int test_vconv_win_old_echo_not_matched_while_new_reply_loads(void);
 int test_voice_ws_gate_off(void);
 int test_voice_ws_echo(void);
 int test_voice_ws_fragmented(void);
@@ -633,6 +634,7 @@ int main(int argc, char **argv)
     failed += test_vconv_win_end_never_dropped();
     failed += test_vconv_win_progress_throttled();
     failed += test_vconv_win_parked_end_wins();
+    failed += test_vconv_win_old_echo_not_matched_while_new_reply_loads();
     failed += test_voice_ws_gate_off();
     failed += test_voice_ws_echo();
     failed += test_voice_ws_fragmented();
