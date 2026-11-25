@@ -313,10 +313,10 @@ static DWORD WINAPI tts_thread(LPVOID arg)
             }
             if (text != NULL) { secure_zero(text, tlen + 1); free(text); }
         } else if (w == WAIT_OBJECT_0 + 1) {
-            if (pump_events(c, v, &reply) && c->auto_quit) running = 0;
-            /* A manual-reset notify event stays set until it is waited on: a zero-timeout wait
-             * resets it, or this loop would spin on an event whose queue is empty. */
+            /* Reset the manual-reset notify event BEFORE draining: an event queued after the
+             * drain then re-signals it, where a reset after the drain would swallow its signal. */
             (void)ISpVoice_WaitForNotifyEvent(v, 0);
+            if (pump_events(c, v, &reply) && c->auto_quit) running = 0;
         } else {
             running = 0;
         }

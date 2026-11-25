@@ -780,9 +780,11 @@ int test_voice_audio_conv_end_turn(void)
     cv_collect(&g2, 5000, 1);
     ASSERT_NOT_NULL(g2.turn);
     ASSERT_TRUE(cv_has(&g2, VLN_TURN_END));
-    ASSERT_TRUE(g2.turn->pcm.n >= (size_t)20 * CV_WIN);   /* the speech so far, kept */
-    ASSERT_EQ((int)g2.turn->token, (int)CV_TOKEN);
-    voice_audio_free_capture(g2.turn);
+    if (g2.turn) {
+        ASSERT_TRUE(g2.turn->pcm.n >= (size_t)20 * CV_WIN);   /* the speech so far, kept */
+        ASSERT_EQ((int)g2.turn->token, (int)CV_TOKEN);
+        voice_audio_free_capture(g2.turn);
+    }
     /* the quiet tail: the listener is out of the turn, so it makes no second end for it */
     voice_audio_test_conv_ingest(CV_TOKEN, s + (CV_LEAD + CV_SPEECH) * CV_WIN, CV_TAIL * CV_WIN);
     CvGot g3;
@@ -882,8 +884,10 @@ int test_voice_audio_conv_mode_listen_keeps_cutin_turn(void)
     ASSERT_NOT_NULL(g2.turn);                          /* the turn ended normally, audio intact */
     ASSERT_TRUE(cv_has(&g2, VLN_TURN_END));
     ASSERT_FALSE(cv_has(&g2, VLN_TURN_ABANDON));
-    ASSERT_TRUE(g2.turn->pcm.n >= (size_t)20 * CV_WIN);
-    voice_audio_free_capture(g2.turn);
+    if (g2.turn) {
+        ASSERT_TRUE(g2.turn->pcm.n >= (size_t)20 * CV_WIN);
+        voice_audio_free_capture(g2.turn);
+    }
     voice_audio_conv_end(CV_TOKEN);
     va_end_test(w);
     TEST_END();

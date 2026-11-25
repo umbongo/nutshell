@@ -103,10 +103,11 @@ typedef struct {
 #define VOICE_CONV_HELD_MAX_MS     30000
 /* Watchdogs for a state that waits on an event that may never come (a lost end, a lost
  * transcript, a lost speech-done). Hearing: the listener's own turn cap is 120 s, plus 10 s.
- * Ending: the upload and the recogniser for a 120 s turn, 90 s. Speaking: a very long reply
+ * Ending: longer than the upload's own timeouts (88 s send plus 72 s receive for a 120 s
+ * turn, plus a retry), 180 s. Speaking: a very long reply
  * read aloud, 10 minutes. On expiry the conversation goes back to Listening. */
 #define VOICE_CONV_HEARING_MAX_MS  130000
-#define VOICE_CONV_ENDING_MAX_MS   90000
+#define VOICE_CONV_ENDING_MAX_MS   180000
 #define VOICE_CONV_SPEAKING_MAX_MS 600000
 void         voice_conv_init(VoiceConv *c);
 VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsigned long now);
