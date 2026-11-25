@@ -769,6 +769,13 @@ Open, in priority order:
       list between a send and its reply can make the conversation skip the reply; the failed
       post of a conversation turn (`va_post` now frees it) has no test, the seam cannot make
       `PostMessage` fail.
+      (s) From the Opus re-review of those fixes (2026-11-25), not built: the "I couldn't
+      send that" phrase after a refused turn still restarts the 3-minute silence clock
+      (`on_sent` reaches Speaking through `enter_speaking`, which clears `local_speech`), so
+      with the chat full a noisy room keeps the microphone open; set `local_speech = 1` on
+      the refusal path. A local repeat that is paused and resumed also restarts it.
+      `voice_echo.c:204` and `:208` compare tick counts without a wrap-safe subtraction (a
+      conversation spanning the 49.7-day wrap only).
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
