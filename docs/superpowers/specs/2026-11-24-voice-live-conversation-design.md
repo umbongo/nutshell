@@ -1893,8 +1893,9 @@ check pending*. "Measured here" means a test or command on `automaton`;
     Working; the 3-second idle poll starts only after the chat has been seen
     busy for the turn (with a 10-second fallback for a chat that never shows
     busy).
-27. *Typing lock.* `voice_conv_is_typing_locked()` is true only while the state
-    is Hearing (Listening, Working, Paused, Speaking and the rest leave the box
+27. *Typing lock.* `voice_conv_is_typing_locked()` is true while a turn is
+    open: Hearing, Ending, and Speaking while an echo-cancellation cut-in
+    candidate is open (Listening, Working, Paused and the rest leave the box
     free). It was renamed from the plan's `voice_conv_typing_locked(void)`,
     which clashed with the core function of the same name. A typed Send while
     Listening with no speech heard is a typed message (it resets the round cap)
@@ -1922,9 +1923,12 @@ check pending*. "Measured here" means a test or command on `automaton`;
 - **Key mode greyed whole** in Conversation mode: a single combo item cannot be
   greyed, so the whole Hold choice combo is.
 - **Held replies and phrases.** A reply, a held "went wrong" phrase or an
-  approval announcement held while Paused is spoken on resume only if under
-  30 s old (strict); a card raised while Paused is recorded and announced once
-  on resume. A typed Send while Paused is accepted and drops any held reply.
+  held "went wrong" phrase held while Paused is spoken on resume only if
+  under 30 s old (strict). A card raised while Paused is recorded and announced
+  once on resume with no age limit: the card stays on screen, and the spoken
+  line is only a cue (§5.4 gives the 30 s rule for replies; the code keeps it
+  for replies and the held phrase). A pause that begins while an approval
+  announcement is being spoken cuts it off; it is not repeated. A typed Send while Paused is accepted and drops any held reply.
   A notice open for longer than 30 s therefore loses the held reply.
 - **Silence clock.** The 3-minute clock restarts when Listening resumes after
   Speaking (a long command or a long reply must not end the conversation) and
@@ -1948,12 +1952,30 @@ check pending*. "Measured here" means a test or command on `automaton`;
   Play sample (`--ui-demo=settings-voice`). `settings.c` is not in the
   `wintest` build, so the layout has no automated test: the Mode and greying
   logic is tested through a pure helper (`voice_mode_enables`) and the layout is
-  a hand check. Play sample stops the conversation's speech first; it does
-  nothing, silently, if Enable voice and Conversation are ticked but not yet
-  saved.
+  a hand check. Play sample does not end the conversation: Settings is modal, so
+  the conversation is Paused and its speech already stopped; the button then
+  speaks the sample. It does nothing, silently, if Enable voice and Conversation
+  are ticked but not yet saved. Voice off and shutdown quit the sample's context
+  too.
 - **Win+L** ends a dictation or conversation recording through
   `WTSRegisterSessionNotification` (delay-loaded `wtsapi32.dll`, registered
-  only while a recording or conversation runs).
+  only while a recording or conversation runs). **An RDP or console disconnect
+  (`WTS_REMOTE_DISCONNECT`, `WTS_CONSOLE_DISCONNECT`) counts as a lock** (main
+  session's ruling after the final review, fail safe: nobody is at the
+  microphone), for dictation and conversation alike; the note still reads
+  "Windows was locked".
+- **Final review fixes (2026-11-25).** A cut-in's turn is owned by the listener:
+  the controller's `VCE_CUT` sends no mode command, and the audio thread's
+  mode command for LISTEN is a no-op while the listener is already in a turn
+  (it used to wipe it). A mode command that does wipe an open turn, and an
+  end-turn with none open, post `VLN_TURN_ABANDON` so the controller never
+  waits for audio that cannot come. Hearing (130 s), Ending (90 s) and
+  Speaking (10 min) have watchdogs back to Listening. The resume after a
+  modal dialog is posted (`WM_VOICE_ACTIVATION`) so Settings' apply runs first.
+  A turn or reply for a changed chat ends the conversation instead of being
+  sent or read. The voice key works with the focus outside the panel while a
+  conversation runs. Every reply starts at full volume (the cut and each
+  speech reset the duck).
 - **Not exercised by any test:** the real ops table and the routing in
   `voice_win.c`, `window.c` and `ai_chat*.c`. They compile clean under MinGW
   with `-Werror` and the extra flags, but no `wintest` links them.

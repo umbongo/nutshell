@@ -728,6 +728,15 @@ Open, in priority order:
       (o) Follow-ups noted in the build, not built: Play sample has no help entry; a
       notice raised for a launch is lost if the conversation ends before the handler runs;
       the echo estimate's and detector's deferred minors are in the live spec §16.
+      (p) From the final whole-branch review (2026-11-25), not built, no code: keeping the
+      British-voice notice open for more than 30 s loses the held reply (the first reply of a
+      first conversation); the cheat sheet's width check skips the `SC_VOICE` rows and the
+      voice row is now much longer, so eyeball `--ui-demo=shortcuts`; `test_vspeak_long_reply`
+      checks chunk sizes only and cannot detect non-linear time; `test_vconv_win_off_mid_reply`
+      uses the fake ops table, so the real speech thread's join on voice off is a hand check.
+      The final review's fixes (a cut-in's turn, the watchdogs, an RDP or console disconnect
+      counting as a lock, the posted resume after a dialog, the key with focus outside the
+      panel, a changed chat, full volume after a cut-in) each want a Windows hand check too.
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
