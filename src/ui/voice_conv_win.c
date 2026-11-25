@@ -679,7 +679,10 @@ static void apply(VoiceConvOut o)
     if (a & VCA_CLOSE_LINK) close_link();
     if (a & VCA_LOCK_REG) (void)g_ops->lock_reg();
     if (a & VCA_ENGINE_START) {
-        (void)start_best();
+        /* Nothing is spoken yet: an AI start that fails waits for begin_speak, which falls back
+         * with the header when there is something to read. */
+        g_tts_alive = 0;
+        (void)start_context(want_engine());
     }
     if (a & VCA_CLOSE_CAPTURE) close_capture();
     if (a & VCA_OPEN_CAPTURE) open_capture();
@@ -1025,27 +1028,37 @@ void voice_conv_on_stt(VoiceSttResult *r)
     pump();
 }
 
+/* R37: a setting that cannot work writes the note once per conversation and keeps this
+ * conversation on Windows speech. */
+static void ai_turn_off(long hr)
+{
+    char reason[200], resolve_err[160], text[320];
+    if (g_ai_off) return;
+    resolve_err[0] = '\0';
+    if (hr == VOICE_AIS_HR_RESOLVE && g_ops->ai_resolve_error
+        && !g_ops->ai_resolve_error(resolve_err, sizeof resolve_err))
+        resolve_err[0] = '\0';
+    voice_ais_failure_reason(hr, resolve_err, reason, sizeof reason);
+    snprintf(text, sizeof text, "AI speech is off for this conversation: %s. "
+             "Replies are read with Windows speech.", reason);
+    g_ai_off = 1;
+    note(text);
+}
+
 /* An AI speech failure for the current reply (R10, R15, R37): quits the AI context and reads the
  * rest of the reply, from the failure's offset, with Windows speech. A setting that cannot work
  * writes the note once and keeps this conversation on Windows speech; a passing failure shows the
  * header and the next reply tries AI speech again. */
 static void ai_fallback(const VoiceTtsMsg *m)
 {
-    char reason[200], resolve_err[160], text[320];
     char *rest = g_spoken ? dup_str(g_spoken) : NULL;
     const int was_ducked = g_ducked;
     const int is_reply = g_cur_is_reply;
     size_t from = m->offset;
+    DLOG(DLOG_AI, DLOG_WARN, 0, "voice.ais_fallback", "hr=%ld %s", m->hr,
+         voice_ais_failure_fatal(m->hr) ? "fatal" : "passing");   /* R15: no content */
     if (voice_ais_failure_fatal(m->hr)) {
-        resolve_err[0] = '\0';
-        if (m->hr == VOICE_AIS_HR_RESOLVE && g_ops->ai_resolve_error
-            && !g_ops->ai_resolve_error(resolve_err, sizeof resolve_err))
-            resolve_err[0] = '\0';
-        voice_ais_failure_reason(m->hr, resolve_err, reason, sizeof reason);
-        snprintf(text, sizeof text, "AI speech is off for this conversation: %s. "
-                 "Replies are read with Windows speech.", reason);
-        g_ai_off = 1;
-        note(text);
+        ai_turn_off(m->hr);
     } else {
         header_raw(HDR_AI_FAILED);
     }
@@ -1106,6 +1119,8 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
             ai_fallback(m);
             break;
         }
+        if (g_tts_alive && g_tts_engine == VOICE_SPEECH_AI && voice_ais_failure_fatal(m->hr))
+            ai_turn_off(m->hr);   /* the error came after the speech stopped: the rule still holds */
         if (g_tts_alive) g_ops->tts_quit(g_tts_token);
         g_tts_alive = 0;
         mark_not_playing(0);

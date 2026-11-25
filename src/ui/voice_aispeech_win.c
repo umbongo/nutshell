@@ -14,7 +14,7 @@
 #include "voice_speak.h"
 #include "secure_zero.h"
 
-#define AIS_MAX_CTX      2
+#define AIS_MAX_CTX      VOICE_AIS_TIMER_COUNT
 #define AIS_MAX_CHUNKS   2048
 #define AIS_QUEUE_LIMIT_MS 20000
 #define AIS_GEN_BASE     0x40000000u   /* apart from the SAPI engine's generations */

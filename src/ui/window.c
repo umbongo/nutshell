@@ -5383,7 +5383,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 voice_on_timer();
             } else if (wParam == VOICE_CONV_TIMER_ID) {
                 voice_on_conv_timer();
-            } else if (wParam >= VOICE_AIS_TIMER_BASE && wParam < VOICE_AIS_TIMER_BASE + 2) {
+            } else if (wParam >= VOICE_AIS_TIMER_BASE && wParam < VOICE_AIS_TIMER_BASE + VOICE_AIS_TIMER_COUNT) {
                 voice_on_ais_timer(wParam);
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();

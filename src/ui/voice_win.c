@@ -946,11 +946,13 @@ static int rc_notice_voice(const char *voice_name)
  * woman's voice is installed; names the voice replies will use. */
 static int rc_notice_due(char *name, size_t cap)
 {
-    const Settings *s = ui_current_settings();
-    const size_t n = voice_voices_list(g_rc_voices, VOICE_INFO_MAX);
-    int using_auto;
-    const int idx = rc_voice_index(s, n, &using_auto);
+    const Settings *s;
+    size_t n;
+    int using_auto, idx;
     if (rc_speech_engine() == VOICE_SPEECH_AI) return 0;   /* the notice is for Windows speech only */
+    s = ui_current_settings();
+    n = voice_voices_list(g_rc_voices, VOICE_INFO_MAX);
+    idx = rc_voice_index(s, n, &using_auto);
     if (!voice_notice_due(g_rc_voices, n, idx, using_auto, g_rc_notice_shown)) return 0;
     if (idx >= 0) voice_display_name(&g_rc_voices[idx], name, cap);
     else snprintf(name, cap, "%s", "the Windows default voice");

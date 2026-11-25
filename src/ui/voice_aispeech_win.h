@@ -39,6 +39,7 @@ typedef struct { unsigned token, reply_id, chunk; VoiceAisKind kind;
 
 #define VOICE_AIS_SAMPLE_TOKEN 0x7FFFFFF2u
 #define VOICE_AIS_TIMER_BASE   0x56F4      /* + slot 0 or 1: the done guard of each context */
+#define VOICE_AIS_TIMER_COUNT  2           /* slots: the conversation's and the Play sample's */
 #define VOICE_AIS_DONE_GUARD_MS 2000
 
 /* One chunk's fetch, run on the worker thread: push decoded 24 kHz mono PCM16 through push()
