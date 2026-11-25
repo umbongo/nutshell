@@ -761,6 +761,7 @@ int test_voice_audio_conv_end_turn(void)
     cv_collect(&g0, 300, 0);
     ASSERT_TRUE(g0.turn == NULL);
     ASSERT_TRUE(!cv_has(&g0, VLN_TURN_END));
+    ASSERT_TRUE(cv_has(&g0, VLN_TURN_ABANDON));   /* the controller waiting for the audio is told */
     size_t part = (size_t)(CV_LEAD + 20) * CV_WIN;
     voice_audio_test_conv_ingest(CV_TOKEN, s, part);
     CvGot g;
@@ -846,6 +847,43 @@ int test_voice_audio_conv_hold_wipes(void)
     ASSERT_TRUE(cv_has(&g, VLN_TURN_START));
     ASSERT_NULL(g.turn);                       /* the turn was wiped, never posted */
     ASSERT_FALSE(cv_has(&g, VLN_TURN_END));
+    ASSERT_TRUE(cv_has(&g, VLN_TURN_ABANDON)); /* and the controller is told, not left waiting */
+    voice_audio_conv_end(CV_TOKEN);
+    va_end_test(w);
+    TEST_END();
+}
+
+/* A cut-in's turn survives the mode command the controller may send after it: the listener has
+ * already moved itself to LISTEN with the turn carrying on, so voice_audio_conv_mode(LISTEN)
+ * is nothing (it used to wipe the turn silently and leave the controller Hearing for ever). */
+int test_voice_audio_conv_mode_listen_keeps_cutin_turn(void)
+{
+    TEST_BEGIN();
+    static int16_t s[CV_TOTAL];
+    cv_build(s);
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_test_conv_open(CV_TOKEN, CV_PAUSE_MS);
+    voice_audio_test_conv_ingest(CV_TOKEN, s, (size_t)CV_LEAD * CV_WIN);   /* the floor */
+    voice_audio_conv_mode(CV_TOKEN, VLM_SPEAK_AEC);
+    voice_audio_test_conv_ingest(CV_TOKEN, s + CV_LEAD * CV_WIN, (size_t)25 * CV_WIN);
+    CvGot g;
+    memset(&g, 0, sizeof g);
+    cv_collect(&g, 1500, 0);
+    ASSERT_TRUE(cv_has(&g, VLN_CUT));
+    ASSERT_TRUE(cv_index(&g, VLN_TURN_START) >= 0);
+    voice_audio_conv_mode(CV_TOKEN, VLM_LISTEN);       /* what the glue sent after the cut */
+    voice_audio_test_conv_ingest(CV_TOKEN, s + (CV_LEAD + CV_SPEECH) * CV_WIN, CV_TAIL * CV_WIN);
+    CvGot g2;
+    memset(&g2, 0, sizeof g2);
+    cv_collect(&g2, 5000, 1);
+    ASSERT_NOT_NULL(g2.turn);                          /* the turn ended normally, audio intact */
+    ASSERT_TRUE(cv_has(&g2, VLN_TURN_END));
+    ASSERT_FALSE(cv_has(&g2, VLN_TURN_ABANDON));
+    ASSERT_TRUE(g2.turn->pcm.n >= (size_t)20 * CV_WIN);
+    voice_audio_free_capture(g2.turn);
     voice_audio_conv_end(CV_TOKEN);
     va_end_test(w);
     TEST_END();

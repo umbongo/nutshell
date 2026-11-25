@@ -796,8 +796,15 @@ static int va_conv_is(const VaState *st, unsigned token)
 static void va_conv_set_mode(VaState *st, unsigned token, VoiceListenMode m)
 {
     if (!va_conv_is(st, token)) return;
-    voice_listen_set_mode(&st->conv->listen, m);   /* abandons a turn in progress, silently */
-    va_conv_wipe_turn(st->conv);                   /* so the audio held for it goes too */
+    VaConv *cv = st->conv;
+    /* A cut-in has already moved the listener to LISTEN with the turn carrying on: the
+     * controller's mode command for the same mode must not wipe that turn. */
+    if (m == VLM_LISTEN && cv->listen.mode == VLM_LISTEN && voice_ep_in_turn(&cv->listen.ep))
+        return;
+    const int wiped = cv->in_turn;
+    voice_listen_set_mode(&cv->listen, m);         /* abandons a turn in progress, silently */
+    va_conv_wipe_turn(cv);                         /* so the audio held for it goes too */
+    if (wiped) va_conv_post_event(st, VLN_TURN_ABANDON);   /* the controller must not wait for it */
 }
 
 static void va_conv_attach(VaState *st, unsigned token, unsigned live_token)
@@ -817,10 +824,14 @@ static void va_conv_end(VaState *st, unsigned token)
 
 /* The turn ends now, exactly as the endpointer's pause would end it: TURN_END, the live
  * session's end after the last samples, the audio posted. The listener is then reset so it
- * makes no second end for the same turn. Nothing when no turn is open or the token is stale. */
+ * makes no second end for the same turn. A stale token does nothing; with no turn open the controller is told VLN_TURN_ABANDON. */
 static void va_conv_end_turn(VaState *st, unsigned token)
 {
-    if (!va_conv_is(st, token) || !st->conv->in_turn) return;
+    if (!va_conv_is(st, token)) return;
+    if (!st->conv->in_turn) {            /* nothing to end: the controller must not wait for audio */
+        va_conv_post_event(st, VLN_TURN_ABANDON);
+        return;
+    }
     va_conv_post_event(st, VLN_TURN_END);
     va_conv_turn_done(st);
     voice_listen_set_mode(&st->conv->listen, st->conv->listen.mode);   /* out of the turn */

@@ -94,12 +94,20 @@ typedef struct {
     int held_phrase;
     int card;                     /* a card raised while paused: VoiceCardKind + 1, 0 none */
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
+    unsigned long state_at;       /* when the state last changed (the watchdogs' clock) */
 } VoiceConv;
 #define VOICE_CONV_FINAL_WAIT_MS   3000
 #define VOICE_CONV_IDLE_POLL_MS    1000
 #define VOICE_CONV_IDLE_SAFETY_MS  3000
 #define VOICE_CONV_SILENCE_END_MS  180000
 #define VOICE_CONV_HELD_MAX_MS     30000
+/* Watchdogs for a state that waits on an event that may never come (a lost end, a lost
+ * transcript, a lost speech-done). Hearing: the listener's own turn cap is 120 s, plus 10 s.
+ * Ending: the upload and the recogniser for a 120 s turn, 90 s. Speaking: a very long reply
+ * read aloud, 10 minutes. On expiry the conversation goes back to Listening. */
+#define VOICE_CONV_HEARING_MAX_MS  130000
+#define VOICE_CONV_ENDING_MAX_MS   90000
+#define VOICE_CONV_SPEAKING_MAX_MS 600000
 void         voice_conv_init(VoiceConv *c);
 VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsigned long now);
 long         voice_conv_next_deadline(const VoiceConv *c, unsigned long now); /* ms or -1 */

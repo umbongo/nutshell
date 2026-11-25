@@ -106,7 +106,7 @@ int test_vconv_full_cycle_batch(void)
     ASSERT_TRUE(has(o, VCA_MODE_HOLD | VCA_SUBMIT_BATCH));
     ASSERT_FALSE(o.actions & VCA_END_TURN_AUDIO);
     ASSERT_EQ(o.header, VCH_TRANSCRIBING);
-    ASSERT_EQ(voice_conv_next_deadline(&c, 100), -1);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 100), VOICE_CONV_ENDING_MAX_MS);
     o = run(&c, VCE_BATCH_OK, 0, 0, 500);
     ASSERT_EQ(o.actions, 0u);
     o = run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, 510);
@@ -218,7 +218,7 @@ int test_vconv_final_wait_falls_back(void)
     ASSERT_TRUE(has(o, VCA_SUBMIT_BATCH | VCA_CLOSE_LINK));
     ASSERT_EQ(o.header, VCH_LIVE_STOPPED);
     ASSERT_EQ(c.state, VCS_ENDING);
-    ASSERT_EQ(voice_conv_next_deadline(&c, 4000), -1);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 4000), VOICE_CONV_ENDING_MAX_MS - 3000);
     o = run(&c, VCE_TICK, 0, 0, 9000);
     ASSERT_EQ(o.actions, 0u);
     run(&c, VCE_BATCH_OK, 0, 0, 5000);
@@ -741,7 +741,7 @@ int test_vconv_link_failed_while_hearing(void)
     o = run(&c, VCE_TURN_END, 0, 0, 300);
     ASSERT_TRUE(has(o, VCA_SUBMIT_BATCH | VCA_MODE_HOLD));
     ASSERT_FALSE(o.actions & VCA_END_TURN_AUDIO);
-    ASSERT_EQ(voice_conv_next_deadline(&c, 300), -1);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 300), VOICE_CONV_ENDING_MAX_MS);
     run(&c, VCE_BATCH_OK, 0, 0, 400);
     run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, 410);
     run(&c, VCE_SENT, VSS_SENT, 0, 420);
@@ -859,7 +859,7 @@ int test_vconv_held_reply_spoken_under_30s(void)
     VoiceConv c; VoiceConvOut o;
     goto_state(&c, VCS_WORKING, 1);
     o = run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 2000);
-    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(o.actions, (unsigned)VCA_STOP_SPEECH);   /* an approval phrase being spoken stops */
     ASSERT_EQ(o.header, VCH_PAUSED_BG);
     o = run(&c, VCE_CHAT_IDLE, 1, 0, 5000);
     ASSERT_TRUE(has(o, VCA_HOLD_REPLY));
@@ -969,7 +969,7 @@ int test_vconv_working_continues_while_paused(void)
     VoiceConv c; VoiceConvOut o;
     goto_state(&c, VCS_WORKING, 1);
     o = run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, 2000);
-    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(o.actions, (unsigned)VCA_STOP_SPEECH);
     ASSERT_EQ(c.state, VCS_WORKING);
     run(&c, VCE_CHAT_IDLE, 1, 0, 3000);
     ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
@@ -1304,6 +1304,102 @@ int test_vconv_typed_send_while_paused(void)
     ASSERT_EQ(c.state, VCS_LISTENING);
     ASSERT_EQ(voice_ledger_count(VRES_CAPTURE), 0);
     run(&c, VCE_PRESS, 0, 0, 400);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+/* The cut-in's mode change is the listener's own (it moves itself to LISTEN with the turn
+ * carrying on); the machine must not send a mode command that would wipe that turn. */
+int test_vconv_cut_sends_no_mode(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_state(&c, VCS_SPEAKING, 1);
+    run(&c, VCE_DUCK, 0, 0, 5000);
+    o = run(&c, VCE_CUT, 0, 0, 5200);
+    ASSERT_EQ(c.state, VCS_HEARING);
+    ASSERT_FALSE(o.actions & (VCA_MODE_LISTEN | VCA_MODE_SPEAK | VCA_MODE_HOLD));
+    run(&c, VCE_PRESS, 0, 0, 5300);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+/* A Hearing with no turn event ever coming (a lost end) does not hold the mic for ever. */
+int test_vconv_hearing_watchdog(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t0;
+    long left;
+    t0 = goto_state(&c, VCS_HEARING, 1);
+    left = voice_conv_next_deadline(&c, t0);
+    ASSERT_TRUE(left > 0 && left <= VOICE_CONV_HEARING_MAX_MS);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_HEARING_MAX_MS - 100).actions, 0u);
+    ASSERT_EQ(c.state, VCS_HEARING);
+    o = run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_HEARING_MAX_MS + 100);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_DROP_TURN | VCA_UNLOCK_TYPING | VCA_CLOSE_LINK | VCA_MODE_LISTEN));
+    ASSERT_EQ(o.header, VCH_LISTENING);
+    ASSERT_FALSE(voice_conv_typing_locked(&c));
+    run(&c, VCE_PRESS, 0, 0, t0 + VOICE_CONV_HEARING_MAX_MS + 200);
+    ASSERT_TRUE(clean());
+    /* a cut-in Hearing with no turn (half-duplex, TURN_START lost) has the same limit */
+    t0 = goto_state(&c, VCS_SPEAKING, 0);
+    run(&c, VCE_CUT, 0, 0, t0 + 100);
+    ASSERT_EQ(c.state, VCS_HEARING);
+    ASSERT_TRUE(voice_conv_next_deadline(&c, t0 + 100) > 0);
+    o = run(&c, VCE_TICK, 0, 0, t0 + 100 + VOICE_CONV_HEARING_MAX_MS + 1);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    run(&c, VCE_PRESS, 0, 0, t0 + 200 + VOICE_CONV_HEARING_MAX_MS);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+/* A batch Ending whose audio or transcript never arrives gives up. */
+int test_vconv_ending_watchdog(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t0 = goto_state(&c, VCS_ENDING, 0);
+    long left = voice_conv_next_deadline(&c, t0);
+    ASSERT_TRUE(left > 0 && left <= VOICE_CONV_ENDING_MAX_MS);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS - 100).actions, 0u);
+    ASSERT_EQ(c.state, VCS_ENDING);
+    o = run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 100);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_DROP_TURN | VCA_CANCEL_BATCH | VCA_UNLOCK_TYPING | VCA_MODE_LISTEN));
+    ASSERT_EQ(o.header, VCH_DIDNT_CATCH);
+    run(&c, VCE_PRESS, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 200);
+    ASSERT_TRUE(clean());
+    /* live: the 3 s final wait comes first, the watchdog still bounds the whole Ending */
+    t0 = goto_state(&c, VCS_ENDING, 1);
+    left = voice_conv_next_deadline(&c, t0);
+    ASSERT_TRUE(left > 0 && left <= VOICE_CONV_FINAL_WAIT_MS);
+    run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_FINAL_WAIT_MS + 10);   /* falls back to batch */
+    ASSERT_EQ(c.state, VCS_ENDING);
+    left = voice_conv_next_deadline(&c, t0 + VOICE_CONV_FINAL_WAIT_MS + 10);
+    ASSERT_TRUE(left > 0);
+    o = run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 100);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    run(&c, VCE_PRESS, 0, 0, t0 + VOICE_CONV_ENDING_MAX_MS + 200);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+/* A lost VTT_DONE does not leave the capture in speak mode for ever. */
+int test_vconv_speaking_watchdog(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t0 = goto_state(&c, VCS_SPEAKING, 1);
+    long left = voice_conv_next_deadline(&c, t0);
+    ASSERT_TRUE(left > 0 && left <= VOICE_CONV_SPEAKING_MAX_MS);
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_SPEAKING_MAX_MS - 100).actions, 0u);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    o = run(&c, VCE_TICK, 0, 0, t0 + VOICE_CONV_SPEAKING_MAX_MS + 100);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_STOP_SPEECH | VCA_MODE_LISTEN | VCA_SEND_CAPTION));
+    run(&c, VCE_PRESS, 0, 0, t0 + VOICE_CONV_SPEAKING_MAX_MS + 200);
     ASSERT_TRUE(clean());
     TEST_END();
 }

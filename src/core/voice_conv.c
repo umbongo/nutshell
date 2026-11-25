@@ -100,6 +100,14 @@ static VoiceConvOut enter_listening(VoiceConv *c, unsigned extra, VoiceConvHeade
     return out(extra | open_capture(c) | VCA_MODE_LISTEN, h);
 }
 
+/* enter_listening for a state that gave up waiting: the silence clock restarts. */
+static VoiceConvOut enter_listening_at(VoiceConv *c, unsigned extra, VoiceConvHeader h,
+                                       unsigned long now)
+{
+    c->idle_at = now;
+    return enter_listening(c, extra, h);
+}
+
 static void hold(VoiceConv *c, int continue_from, int phrase, unsigned long now)
 {
     c->held = 1;
@@ -265,7 +273,9 @@ static VoiceConvOut on_pause(VoiceConv *c, int reason, unsigned long now)
         break;
     case VCS_WORKING:
         c->pause = (VoiceConvPause)reason;
-        return out(0, pause_header(c));
+        /* an approval phrase being spoken is cut off (nothing is spoken while paused);
+         * the card stays on screen */
+        return out(VCA_STOP_SPEECH, pause_header(c));
     default:
         return none;
     }
@@ -303,7 +313,7 @@ static VoiceConvOut on_resume(VoiceConv *c, unsigned long now)
     return enter_listening(c, 0, VCH_LISTENING);
 }
 
-VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsigned long now)
+static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsigned long now)
 {
     VoiceConvOut none = out(0, VCH_NONE);
     VoiceConvState st = c->state;
@@ -453,9 +463,27 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
         return speaking_stopped(c, 0, c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE, now);
 
     case VCE_TICK:
+        if (st == VCS_HEARING) {
+            if (now - c->state_at >= VOICE_CONV_HEARING_MAX_MS) {
+                unsigned x = VCA_DROP_TURN | release_link(c) | release_typing(c);
+                c->turn = 0;
+                return enter_listening_at(c, x, VCH_LISTENING, now);
+            }
+            return none;
+        }
+        if (st == VCS_SPEAKING) {
+            if (now - c->state_at >= VOICE_CONV_SPEAKING_MAX_MS)
+                return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE, now);
+            return none;
+        }
         if (st == VCS_ENDING) {
             if (c->live && c->link && c->final_armed && now >= c->final_deadline)
                 return live_fallback(c);
+            if (now - c->state_at >= VOICE_CONV_ENDING_MAX_MS) {
+                c->sending = 0;
+                c->idle_at = now;
+                return ending_to_listening(c, VCA_DROP_TURN, VCH_DIDNT_CATCH);
+            }
             return none;
         }
         if (st == VCS_LISTENING) {
@@ -472,20 +500,39 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
     case VCE_CUT:
         if (st != VCS_SPEAKING) return none;
         c->state = VCS_HEARING;   /* the turn opens now (AEC) or at TURN_START (half-duplex) */
-        return out(VCA_STOP_SPEECH | VCA_MODE_LISTEN | release_caption(c), VCH_HEARING);
+        /* no mode command: the listener has moved itself to LISTEN with the turn carrying on,
+         * and a mode command would wipe that turn */
+        return out(VCA_STOP_SPEECH | VCA_UNDUCK | release_caption(c), VCH_HEARING);
 
     default:
         return none;
     }
 }
 
+VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsigned long now)
+{
+    const VoiceConvState before = c->state;
+    VoiceConvOut o = step_inner(c, ev, a, b, now);
+    if (c->state != before) c->state_at = now;
+    return o;
+}
+
 long voice_conv_next_deadline(const VoiceConv *c, unsigned long now)
 {
     long left;
     switch (c->state) {
+    case VCS_HEARING:
+        left = (long)(c->state_at + VOICE_CONV_HEARING_MAX_MS - now);
+        return left < 0 ? 0 : left;
+    case VCS_SPEAKING:
+        left = (long)(c->state_at + VOICE_CONV_SPEAKING_MAX_MS - now);
+        return left < 0 ? 0 : left;
     case VCS_ENDING:
-        if (!(c->live && c->link && c->final_armed)) return -1;
-        left = (long)(c->final_deadline - now);
+        left = (long)(c->state_at + VOICE_CONV_ENDING_MAX_MS - now);
+        if (c->live && c->link && c->final_armed) {
+            long f = (long)(c->final_deadline - now);
+            if (f < left) left = f;
+        }
         return left < 0 ? 0 : left;
     case VCS_WORKING:
         return VOICE_CONV_IDLE_POLL_MS;
