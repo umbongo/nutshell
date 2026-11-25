@@ -22,7 +22,6 @@
 #define CUE_DRAFT "Your text and what you say next will be sent after a pause."
 #define FALLBACK_FAILED \
     "The recording could not be transcribed again: the text in the box is what arrived live"
-#define LISTENING_TEXT "Listening\xE2\x80\xA6 speak, then pause to send"
 #define QMAX 24
 #define BUSY_FALLBACK_MS 10000ul
 #define CONV_TOKEN_BASE 0x800000u
@@ -46,6 +45,7 @@ static VoiceTranscript g_vt;
 static int g_vt_on;
 static VoiceCapture *g_turn_audio;          /* the finished turn's audio (fallback or batch) */
 static int g_batch_want;                    /* SUBMIT_BATCH is waiting for the turn's audio */
+static int g_audio_lost;                    /* the turn's audio can no longer arrive (abandoned, no memory) */
 static int g_turn_open_listener;            /* the listener's turn is open (TURN_START seen, no end yet) */
 static int g_err_note_done;                 /* a provider error or failure text was shown this turn */
 
@@ -168,6 +168,7 @@ static void turn_begin(void)
     free_transcript();
     g_batch_want = 0;
     g_err_note_done = 0;
+    g_audio_lost = 0;
     g_ops->live_begin();
     vt_init(&g_vt, 0, 0);   /* the real live_replace puts the separator in front itself */
     g_vt_on = 1;
@@ -310,7 +311,26 @@ static void submit_batch(void)
         do_submit();
         return;
     }
+    if (g_audio_lost) {   /* nothing to transcribe: the same as a failed transcription */
+        if (g_c.live) note(FALLBACK_FAILED);
+        enqueue(VCE_BATCH_FAIL, 0, 0);
+        return;
+    }
     g_batch_want = 1;     /* the audio arrives as VAM_CONV_TURN */
+}
+
+/* The turn's audio will never come (the listener abandoned the turn, or the audio thread ran out of
+ * memory for it): stop waiting for it, as a failed transcription does. A late VAM_CONV_TURN is dropped. */
+static void audio_lost(void)
+{
+    if (g_turn_audio) return;   /* it already arrived */
+    g_audio_lost = 1;
+    if (g_batch_want) {
+        g_batch_want = 0;
+        if (g_c.live) note(FALLBACK_FAILED);
+        enqueue(VCE_BATCH_FAIL, 0, 0);
+        pump();
+    }
 }
 
 static void cancel_batch(void)
@@ -491,7 +511,7 @@ void voice_conv_on_box_changed(void)
         return;
     if (strcmp(g_last_header, CUE_DRAFT) != 0 && strcmp(g_last_header, voice_conv_header_text(VCH_LISTENING)) != 0)
         return;
-    want = (g_ops->box_has_text && g_ops->box_has_text()) ? CUE_DRAFT : LISTENING_TEXT;
+    want = (g_ops->box_has_text && g_ops->box_has_text()) ? CUE_DRAFT : voice_conv_header_text(VCH_LISTENING);
     if (strcmp(want, g_last_header) == 0) return;
     snprintf(g_last_header, sizeof g_last_header, "%s", want);
     if (g_ops->header) g_ops->header(want);
@@ -515,7 +535,7 @@ static void reset_resources(void)
     wipe_turn_audio();
     wipe_free(&g_reply);
     wipe_free(&g_spoken);
-    g_batch_want = g_turn_open_listener = 0;
+    g_batch_want = g_turn_open_listener = g_audio_lost = 0;
     g_notice_pending = 0;
     g_cut = 0;
     g_playing = g_read_to_end = 0;
@@ -685,7 +705,7 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
         VoiceCapture *c = (VoiceCapture *)lp;
         if (!c) return;
         if (!ops_ready() || !voice_conv_running() || !tok_eq(c->token, g_cap_token)
-            || !g_cap_open || g_c.state != VCS_ENDING) {
+            || !g_cap_open || g_c.state != VCS_ENDING || g_audio_lost) {
             voice_audio_free_capture(c);   /* a stale or abandoned turn */
             return;
         }
@@ -708,10 +728,7 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
         const VoiceAudioErr e = VOICE_ERR_CODE(lp);
         if (!g_cap_open || !tok_eq(tok, g_cap_token)) return;   /* another capture's */
         if (e == VAE_NO_MEMORY) {   /* one turn was lost; the capture keeps running */
-            if (g_batch_want) {
-                g_batch_want = 0;
-                voice_conv_event(VCE_BATCH_FAIL, 0, 0);
-            }
+            if (g_c.state == VCS_ENDING) audio_lost();
             return;
         }
         /* The capture is gone (ended by another command, or the device failed). */
@@ -742,6 +759,7 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
                 break;
             case VLN_TURN_ABANDON:
                 g_turn_open_listener = 0;
+                if (g_c.state == VCS_ENDING) audio_lost();   /* the end-turn command lost the race */
                 voice_conv_event(VCE_TURN_ABANDON, 0, 0);
                 break;
             case VLN_DUCK:

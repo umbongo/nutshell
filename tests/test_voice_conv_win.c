@@ -736,4 +736,32 @@ int test_vconv_win_draft_cue_follows_the_box(void)
     TEST_END();
 }
 
+/* A turn's audio that can no longer arrive must not leave the conversation waiting in Ending. */
+int test_vconv_win_audio_lost_leaves_ending(void)
+{
+    TEST_BEGIN();
+    for (int how = 0; how < 3; how++) {   /* 0 abandon (batch), 1 no memory (batch), 2 no memory then link fails (live) */
+        HWND w = vc_begin();
+        const unsigned tok = hear_then_send(how == 2);
+        voice_conv_event(VCE_SEND, 0, 0);
+        ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+        F.note[0] = '\0';
+        if (how == 0) aud_event(VLN_TURN_ABANDON);          /* the listener's abandon beat the end-turn command */
+        else voice_conv_on_audio(VAM_ERROR, VOICE_ERR_PACK(VAE_NO_MEMORY, tok));
+        if (how == 2) {
+            ASSERT_EQ(voice_conv_state(), VCS_ENDING);       /* the link may still deliver the words */
+            live_msg(VLE_CLOSED, "", NULL);                  /* no link, no audio: nothing to fall back to */
+        }
+        ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+        if (how == 2) ASSERT_STR_EQ(F.note, "The recording could not be transcribed again: the text in the box is what arrived live");
+        voice_conv_on_audio(VAM_CONV_TURN, (LPARAM)make_turn(tok));   /* a late turn is a no-op */
+        ASSERT_EQ(F.stt_submit, 0);
+        ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+        voice_conv_event(VCE_END, VCX_OFF, 0);
+        ASSERT_TRUE(voice_ledger_all_zero());
+        vc_end(w);
+    }
+    TEST_END();
+}
+
 #endif /* _WIN32 */

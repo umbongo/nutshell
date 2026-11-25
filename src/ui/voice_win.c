@@ -76,8 +76,7 @@ static AiVoiceUi g_ui = AIV_IDLE;  /* what the panel's mic/cue shows */
 int (*g_voice_filter)(const MSG *m);
 
 #define MSG_DIDNT_CATCH "Didn't catch that"
-#define VOICE_PRIVACY_TEXT \
-    "Windows may be blocking the microphone: Settings > Privacy & security > Microphone"
+#define VOICE_PRIVACY_TEXT voice_conv_device_text(VAE_ACCESS_DENIED)   /* one definition, in voice_conv_win.c */
 #define CUE_TRANSCRIBING "Transcribing\xE2\x80\xA6"
 #define LIVE_ERR_PREFIX "Live transcription error: "
 

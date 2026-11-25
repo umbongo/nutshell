@@ -155,6 +155,7 @@ int test_vconv_win_send_while_hearing_batch(void);
 int test_vconv_win_send_while_hearing_live_link_fails_to_fallback(void);
 int test_vconv_win_fallback_failed_note(void);
 int test_vconv_win_draft_cue_follows_the_box(void);
+int test_vconv_win_audio_lost_leaves_ending(void);
 int test_voice_ws_gate_off(void);
 int test_voice_ws_echo(void);
 int test_voice_ws_fragmented(void);
@@ -530,6 +531,7 @@ int main(int argc, char **argv)
     failed += test_vconv_win_send_while_hearing_live_link_fails_to_fallback();
     failed += test_vconv_win_fallback_failed_note();
     failed += test_vconv_win_draft_cue_follows_the_box();
+    failed += test_vconv_win_audio_lost_leaves_ending();
     failed += test_voice_ws_gate_off();
     failed += test_voice_ws_echo();
     failed += test_voice_ws_fragmented();
