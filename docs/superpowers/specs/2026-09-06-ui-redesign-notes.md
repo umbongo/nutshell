@@ -706,6 +706,15 @@ Open, in priority order:
       session.
 - [ ] The AI assistant cannot run queued commands while the session is inside tmux; they
       run only after tmux is closed (maintainer, 2026-11-25, *reported*, not investigated).
+- [ ] AI panel: find a way to stop the conversation becoming full (maintainer, 2026-11-25,
+      with a screenshot: "[conversation full: 1 tool call(s) not run; start a New Chat]" at
+      23.8k of 1000k tokens, mid-task, the model's last tool call dropped). The limit is the
+      message count, not the context: `AiConversation.messages` is a fixed array of
+      `AI_MAX_MESSAGES` (64, `src/core/ai_prompt.h`), and every guard in
+      `ai_conv_guard.h` and `ai_agentic.h` counts slots against it. Not designed yet;
+      candidates are a growable message list, or compacting or dropping the oldest turns
+      when the slots run low. `thinking_history` (`ai_chat_internal.h`) is sized by the
+      same constant.
 - [ ] Thinking view: each mode (collapsed, compact, extended, open) needs its own colour as
       it cycles; two of them are both green today (maintainer, 2026-11-25).
 - [ ] Thinking view: when a reasoning stream has ended and a new one begins, minimise the
