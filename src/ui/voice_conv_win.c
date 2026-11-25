@@ -53,7 +53,7 @@ static int g_audio_lost;                    /* the turn's audio can no longer ar
 static int g_turn_open_listener;            /* the listener's turn is open (TURN_START seen, no end yet) */
 static int g_err_note_done;                 /* a provider error or failure text was shown this turn */
 
-static unsigned g_since;                    /* message count just before the last send */
+static unsigned g_since;                    /* the message count at the last send's baseline */
 static int g_busy_seen;
 static unsigned long g_sent_tick;
 
@@ -195,6 +195,7 @@ static void drop_turn(void)
 
 static void enqueue(VoiceConvEvent ev, int a, int b)
 {
+    if (ev == VCE_END && g_pend_end) return;   /* an end is parked: it is the first, and it wins */
     if (g_qn < QMAX) {
         g_q[g_qn].ev = ev;
         g_q[g_qn].a = a;
@@ -501,6 +502,7 @@ static void speak_reply(void)
     g_cut = 0;
     /* A new reply has its own times: the last one's must not age a "carry on" out of the window or
      * into it. Stamped now rather than zero: a zero is "long ago" to the classifier's age test. */
+    g_read_to_end = 0;   /* the last reply's "read to the end" is not this one's */
     g_reply_at = now_ms();
     g_spoken_end_at = g_reply_at - VOICE_ECHO_AFTER_MS - 1ul;   /* outside the echo window */
     if (sp && sp[0]) {

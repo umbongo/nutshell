@@ -1001,6 +1001,10 @@ int test_vconv_win_external_send_unducks(void)
     TEST_END();
 }
 
+/* A reply's times belong to that reply. Conversation 1 speaks reply A to the end (its time is stamped),
+ * 6 minutes pass, and conversation 2's first reply B is held for the notice: B is loaded but not playing,
+ * so a cut-in stops nothing and nothing restamps the times. "carry on" is then judged against B's own
+ * times (CONTINUE); against A's stale ones it would be plain text. */
 int test_vconv_win_new_reply_resets_times(void)
 {
     TEST_BEGIN();
@@ -1008,24 +1012,29 @@ int test_vconv_win_new_reply_resets_times(void)
     voice_conv_start(1);
     voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
     to_speaking();
-    tts_msg(VTT_DONE, F.speak_id, 0);    /* reply A ended: its time is stamped */
-    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
-    voice_conv_test_advance(360000ul);   /* 6 minutes: more than the phrase window */
+    tts_msg(VTT_DONE, F.speak_id, 0);    /* reply A read to the end: its time is stamped */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_FALSE(voice_conv_running());
+    voice_conv_test_advance(360000ul);   /* 6 minutes: past the phrase window */
+
+    F.notice_due_first = 1;
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
     to_working();
-    chat_finishes(VC_REPLY_B);           /* the new reply loads and speaks */
+    const int speaks = F.tts_speak;
+    chat_finishes(VC_REPLY_B);           /* held for the notice: loaded, not playing */
     ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
-    const unsigned id_b = F.speak_id;
-    tts_msg(VTT_WORD, id_b, 40);
-    aud_event(VLN_CUT);
+    ASSERT_EQ(F.tts_speak, speaks);
+    aud_event(VLN_CUT);                  /* the user talks over the held reply */
+    ASSERT_EQ(voice_conv_state(), VCS_HEARING);
     aud_event(VLN_TURN_START);
     live_msg(VLE_READY, "", NULL);
     aud_event(VLN_TURN_END);
     ASSERT_EQ(voice_conv_state(), VCS_ENDING);
-    const int speaks = F.tts_speak;
-    live_msg(VLE_DONE, "", "carry on");  /* judged against the new reply's times only */
+    live_msg(VLE_DONE, "", "carry on");  /* judged against B's times only */
     ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
-    ASSERT_EQ(F.tts_speak, speaks + 1);
-    ASSERT_EQ((int)F.speak_from, 40);
+    ASSERT_EQ(F.tts_speak, speaks + 1);  /* CONTINUE: B is spoken */
+    ASSERT_TRUE(strstr(F.speak_text, "second answer") != NULL);
     ASSERT_EQ(F.send_turn, 2);           /* "carry on" was not sent as a turn */
     voice_conv_event(VCE_END, VCX_OFF, 0);
     ASSERT_TRUE(voice_ledger_all_zero());
@@ -1046,6 +1055,33 @@ int test_vconv_win_progress_keeps_long_reply(void)
         voice_conv_on_timer();
         ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
     }
+    /* a word of an older reply is no progress: 10 minutes after the last real one, Speaking ends */
+    voice_conv_test_advance(590000ul);
+    tts_msg(VTT_WORD, id + 50, 5);
+    voice_conv_test_advance(11000ul);
+    voice_conv_on_timer();
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* Progress is fed at most once a second: a second word 0.5 s after the first does not move the
+ * watchdog, so Speaking still ends 10 minutes after the first. */
+int test_vconv_win_progress_throttled(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    const unsigned id = F.speak_id;
+    tts_msg(VTT_WORD, id, 5);
+    voice_conv_test_advance(500ul);
+    tts_msg(VTT_WORD, id, 9);            /* inside the second: not fed */
+    voice_conv_test_advance(599600ul);
+    voice_conv_on_timer();
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
     voice_conv_event(VCE_END, VCX_OFF, 0);
     ASSERT_TRUE(voice_ledger_all_zero());
     vc_end(w);
@@ -1086,14 +1122,37 @@ int test_vconv_win_end_never_dropped(void)
     HWND w = vc_begin();
     voice_conv_start(0);
     to_speaking();
+    F.note[0] = '\0';
     for (int i = 0; i < 30; i++) voice_conv_test_queue(VCE_TICK, 0, 0);   /* the queue is full */
     voice_conv_test_queue(VCE_END, VCX_OFF, 0);                           /* the end must survive */
     voice_conv_test_queue(VCE_END, VCX_SETTINGS, 0);                      /* the first end wins */
     voice_conv_test_pump();
     ASSERT_EQ(voice_conv_state(), VCS_IDLE);
     ASSERT_FALSE(voice_conv_running());
+    ASSERT_TRUE(strstr(F.note, "settings changed") == NULL);   /* it was the OFF end that ran */
     ASSERT_TRUE(voice_ledger_all_zero());
     ASSERT_EQ(voice_ledger_underflow(), 0);
+    vc_end(w);
+    TEST_END();
+}
+
+/* While an end is parked, a later end (here the one a send raises when the chat moved, which finds
+ * room in the queue the pump has begun to drain) does not jump ahead of it: the first end wins. */
+int test_vconv_win_parked_end_wins(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    F.chat_differs = 1;
+    F.note[0] = '\0';
+    voice_conv_test_queue(VCE_SEND, 0, 0);                    /* its send raises END(CHAT_CHANGED) */
+    for (int i = 0; i < 23; i++) voice_conv_test_queue(VCE_TICK, 0, 0);   /* the queue is full */
+    voice_conv_test_queue(VCE_END, VCX_OFF, 0);               /* parked */
+    voice_conv_test_pump();
+    ASSERT_EQ(voice_conv_state(), VCS_IDLE);
+    ASSERT_TRUE(strstr(F.note, "chat changed") == NULL);      /* the parked OFF end ran first */
+    ASSERT_EQ(F.send_turn, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
     vc_end(w);
     TEST_END();
 }

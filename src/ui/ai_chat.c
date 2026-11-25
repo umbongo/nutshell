@@ -1178,7 +1178,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                      * waiting behind this one must not be stranded; the call
                      * is a no-op while the relaunch's stream is busy. */
                     ai_chat_maybe_start_next_batch(d);
-                    voice_on_external_send();   /* R23: Retry is a user launch (cancel-batch exit) */
+                    /* R23: Retry is a user launch; only when a turn really started (a launch
+                     * that failed leaves the conversation where it was). */
+                    if (ACTIVE_BUSY(d) || d->dispatch_active)
+                        voice_on_external_send();
                     return 0;
                 }
 
@@ -1202,8 +1205,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                 /* Re-launch stream */
                 ai_chat_start_indicator(d, "retrying");
-                ai_chat_launch_stream_thread(d, "retry");
-                voice_on_external_send();   /* R23: Retry is a user launch (relaunch exit) */
+                if (ai_chat_launch_stream_thread(d, "retry"))
+                    voice_on_external_send();   /* R23: Retry is a user launch (relaunch exit) */
                 return 0;
             }
 
