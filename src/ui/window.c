@@ -47,6 +47,7 @@
 #include "voice_gate.h"
 #include "settings_layout.h"
 #include "voice_win.h"
+#include "voice_conv_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
@@ -2712,6 +2713,7 @@ static void create_demo_session(HWND hwnd)
 
 static void hide_ai_panel(HWND parent) {
     if (!g_hwndAiChat || !IsWindow(g_hwndAiChat)) return;
+    voice_on_panel_closed();   /* a conversation ends with its panel */
     if (g_ai_docked) {
         g_ai_last_width = g_ai_panel_width;
         /* Focus goes back to the terminal as the close STARTS, not when the
@@ -2753,6 +2755,7 @@ static void on_ai_clicked(void) {
         } else {
             /* Floating toggle */
             if (IsWindowVisible(g_hwndAiChat)) {
+                voice_on_panel_closed();   /* a conversation ends with its panel */
                 ai_panel_release_focus(parent, "toggle_floating");
                 ShowWindow(g_hwndAiChat, SW_HIDE);
             } else {
@@ -2837,6 +2840,11 @@ static void ai_feature_on(HWND hwnd)
 HWND ui_ai_panel(void)
 {
     return (g_hwndAiChat && IsWindow(g_hwndAiChat)) ? g_hwndAiChat : NULL;
+}
+
+const ThemeColors *ui_current_theme(void)
+{
+    return g_theme;
 }
 
 const Settings *ui_current_settings(void)
@@ -5370,6 +5378,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 SetWindowTextA(hwnd, APP_TITLE);
             } else if (wParam == VOICE_TIMER_ID) {
                 voice_on_timer();
+            } else if (wParam == VOICE_CONV_TIMER_ID) {
+                voice_on_conv_timer();
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
             } else if (wParam == ANIM_TIMER_ID) {
@@ -5470,6 +5480,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_VOICE_CHAT:
             voice_on_chat_changed_msg();
+            return 0;
+
+        case WM_VOICE_TTS:
+            voice_on_tts(lParam);
+            return 0;
+
+        case WM_VOICE_TURN_IDLE:
+            voice_on_turn_idle();
+            return 0;
+
+        case WM_VOICE_CARD:
+            voice_on_card(wParam);
+            return 0;
+
+        case WM_VOICE_NOTICE:
+            voice_on_notice();
             return 0;
 
         case WM_WTSSESSION_CHANGE:
@@ -6222,8 +6248,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_ACTIVATEAPP:
         case WM_ENABLE:
             /* Losing activation, or a modal dialog disabling this window,
-             * ends a push-to-talk recording. */
+             * ends a push-to-talk recording; a conversation pauses (and resumes
+             * when either comes back). */
             if (!wParam) voice_on_deactivate();
+            voice_on_activation();
             break;
 
         case WM_NCACTIVATE: {

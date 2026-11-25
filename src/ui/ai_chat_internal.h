@@ -433,6 +433,7 @@ typedef struct {
     char voice_cue[128];        /* UTF-8 placeholder painted in the empty input */
     char voice_status[256];     /* the transient text last put in context_label */
     int voice_typing_locked;    /* a live recording runs: the input swallows typing, paste, cut, undo */
+    double voice_level;         /* conversation: the mic level (0.001..1) that sets the pulse's swing; 0 = not following one */
     NsRect header_tip;          /* where the header status tooltip tool sits (0 = none) */
     NsHover mic_hover;
     int mic_hover_tracking;

@@ -294,8 +294,7 @@ static void do_submit(void)
     if (g_ops->stt_submit(g_turn_audio, g_stt_token)) {
         g_stt_open = 1;
     } else {
-        if (!g_c.live) note("The recording could not be sent");
-        enqueue(VCE_BATCH_FAIL, 0, 0);
+        enqueue(VCE_BATCH_FAIL, 0, 0);   /* the op says why */
     }
     wipe_turn_audio();   /* the upload holds its own copy */
 }
@@ -658,8 +657,7 @@ void voice_conv_start(int live)
 {
     if (!ops_ready() || voice_conv_running()) return;
     reset_resources();
-    g_notice_checked = 0;
-    g_aec = -1;
+    g_notice_checked = 0;   /* g_aec keeps the last report for the Settings page */
     g_since = g_ops->msg_count();
     voice_conv_event(VCE_START, live ? 1 : 0, 0);
 }

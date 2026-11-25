@@ -287,5 +287,10 @@ void ai_chat_voice_cancel_work(HWND panel);
 /* The Send button shows Stop (1) or Send (0) while the chat is idle. */
 void ai_chat_voice_send_caption(HWND panel, int stop);
 
+/* The mic button's pulse follows the microphone level during a conversation: frac 0..1
+ * (voice_meter_frac of the peak) sets how deep the pulse swings; the pulse itself is the
+ * existing ns_motion cycle. A frac below 0 or a call with the mic idle clears it (the dictation swing). */
+void ai_chat_voice_set_level(HWND panel, double frac);
+
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */

@@ -1,11 +1,13 @@
 #include "voice_win.h"
 
 #include "ai_chat.h"
+#include "notice_dlg.h"
 #include "opt_feature.h"
 #include "secure_zero.h"
 #include "settings_dlg.h"
 #include "voice_audio_win.h"
 #include "voice_config.h"
+#include "voice_conv_win.h"
 #include "voice_dict.h"
 #include "voice_gate.h"
 #include "voice_ledger.h"
@@ -16,6 +18,9 @@
 #include "voice_stt.h"
 #include "voice_stt_win.h"
 #include "voice_transcript.h"
+#include "voice_tts_win.h"
+#include "voice_voices.h"
+#include "voice_voices_win.h"
 #include "wav.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,11 +93,18 @@ static int tok_eq(unsigned a, unsigned b)
 
 static void dict_event(VoiceDictEvent ev, int a, int b);
 
+static int conv_mode(const Settings *s)
+{
+    return s && s->voice_mode == VOICE_MODE_CONVERSATION;
+}
+
 static void ptt_reset(void)
 {
     const Settings *s = ui_current_settings();
-    voice_ptt_init(&g_ptt, s ? s->voice_ptt_mode : VOICE_MODE_TOGGLE,
-                   s ? s->voice_mic_delay_ms : VOICE_MIC_DELAY_DEFAULT);
+    /* Conversation: the key always toggles, with no Mic start delay. */
+    if (conv_mode(s)) voice_ptt_init(&g_ptt, VOICE_MODE_TOGGLE, 0);
+    else voice_ptt_init(&g_ptt, s ? s->voice_ptt_mode : VOICE_MODE_TOGGLE,
+                        s ? s->voice_mic_delay_ms : VOICE_MIC_DELAY_DEFAULT);
     if (g_main) KillTimer(g_main, VOICE_TIMER_ID);
 }
 
@@ -406,6 +418,10 @@ static void post_step(void)
         g_token = 0;
         g_live = 0;
         voice_lock_unregister(g_main);
+        /* A batch recording ended softly (a session lock) discards its capture with no
+         * VAM_CAPTURED to follow: the key machine must leave recording here, or the next
+         * press would stop a recording that is not there. */
+        ptt_end_capture();
         if (g_ui != AIV_IDLE) set_ui(AIV_IDLE, NULL);
     } else if (g_live && g_dict.state == VDS_FINISHING && g_ui != AIV_TRANSCRIBING) {
         /* The mic stopped: whatever the link, the last words (or the fallback) are awaited. */
@@ -460,11 +476,36 @@ static void start_recording(void)
     dict_event(VDE_START, g_live, (s && s->voice_auto_send && draft == 0) ? 1 : 0);
 }
 
+static VoiceBinding g_conv_bind;   /* the panel state the conversation started in */
+
+/* A clean key press or mic click in conversation mode: start, or end a running one. The
+ * busy and no-session checks already ran (the key machine's busy flag). */
+static void conv_press(void)
+{
+    const Settings *s = ui_current_settings();
+    VoiceLiveTarget t;
+    if (voice_conv_running()) {
+        voice_conv_event(VCE_PRESS, 0, 0);
+        return;
+    }
+    if (!s || !g_audio_up) return;
+    voice_live_reap(0);
+    g_digest = voice_settings_digest(s);
+    ai_chat_voice_binding(ui_ai_panel(), &g_conv_bind);
+    voice_conv_start(voice_live_resolve(s, &t));
+}
+
 static void act(VoiceStep st, VoiceEvent ev)
 {
     HWND panel = ui_ai_panel();
     switch (st.action) {
     case VA_OPEN:
+        if (conv_mode(ui_current_settings())) {
+            /* Every clean press yields VA_OPEN: the key machine leaves recording at once. */
+            voice_ptt_capture_ended(&g_ptt, 0);
+            conv_press();
+            break;
+        }
         g_start_latched = (ev == VE_MIC_CLICK);
         start_recording();
         break;
@@ -489,9 +530,12 @@ static void act(VoiceStep st, VoiceEvent ev)
 static VoiceStep step_now(VoiceEvent ev, int in_panel)
 {
     HWND panel = ui_ai_panel();
-    VoiceStep st = voice_ptt_step(&g_ptt, ev, now_ms(), in_panel,
-                                  ai_chat_voice_busy(panel) || g_dict.state != VDS_IDLE
-                                  || g_capturing || no_session(panel));
+    /* A running conversation is never "busy": a press ends it. */
+    const int busy = (conv_mode(ui_current_settings()) && voice_conv_running())
+                     ? 0
+                     : (ai_chat_voice_busy(panel) || g_dict.state != VDS_IDLE
+                        || g_capturing || no_session(panel));
+    VoiceStep st = voice_ptt_step(&g_ptt, ev, now_ms(), in_panel, busy);
     act(st, ev);
     arm_timer();
     return st;
@@ -537,6 +581,12 @@ int voice_pump_filter(const MSG *m)
         dict_event(VDE_ESCAPE, 0, 0);
         return 1;
     }
+    if (in == VI_ESCAPE && conv_mode(s) && voice_conv_running()) {
+        /* Escape in the panel ends the turn or the conversation; out of it, it goes to the terminal. */
+        if (!in_panel) return 0;
+        voice_conv_event(VCE_ESCAPE, 0, 0);
+        return 1;
+    }
     VoiceStep st = step_now(ev, in_panel);
 
     if (in == VI_ESCAPE) return st.consume;
@@ -569,6 +619,7 @@ void voice_on_session_change(WPARAM wp)
     /* Dictation: a lock ends the recording softly (what was heard is kept). Task 13
      * adds the conversation (VCE_END, VCX_LOCK). */
     if (g_audio_up && g_dict.state != VDS_IDLE) dict_event(VDE_END_SOFT, 0, 0);
+    if (g_audio_up && voice_conv_running()) voice_conv_event(VCE_END, VCX_LOCK, 0);
 }
 
 void voice_mic_clicked(void)
@@ -579,6 +630,21 @@ void voice_mic_clicked(void)
 
 int voice_send_pressed(void)
 {
+    if (g_audio_up && voice_conv_running()) {
+        switch (voice_conv_state()) {
+        case VCS_LISTENING:
+        case VCS_HEARING:
+            voice_conv_event(VCE_SEND, 0, 0);
+            return 1;
+        case VCS_SPEAKING:           /* Send shows Stop while the reply is spoken */
+            voice_conv_event(VCE_STOP, 0, 0);
+            return 1;
+        case VCS_ENDING:             /* the turn is being sent already */
+            return 1;
+        default:
+            return 0;                /* Working: a typed send is the chat's own business */
+        }
+    }
     if (!g_audio_up || g_dict.state == VDS_IDLE) return 0;
     g_send_pressed = 1;
     dict_event(VDE_SEND, 0, 0);
@@ -587,13 +653,14 @@ int voice_send_pressed(void)
 
 void voice_on_chat_stop(void)
 {
-    /* Task 13: the conversation controller ends its turn here. */
+    /* The Stop already cancelled the work: the conversation ends its turn. */
+    if (g_audio_up && voice_conv_running()) voice_conv_event(VCE_STOP, 0, 0);
 }
 
 void voice_on_chat_changed(void)
 {
     /* Called from inside ai_chat: only a post, never a synchronous re-entry. */
-    if (g_main && g_audio_up && g_dict.state != VDS_IDLE)
+    if (g_main && g_audio_up && (g_dict.state != VDS_IDLE || voice_conv_running()))
         PostMessage(g_main, WM_VOICE_CHAT, 0, 0);
 }
 
@@ -601,10 +668,273 @@ void voice_on_chat_changed_msg(void)
 {
     /* A batch recording keeps today's rule: dropped at delivery when the
      * binding changed. A live one writes into the box as it goes, so it ends. */
+    if (g_audio_up && voice_conv_running()) {
+        VoiceBinding cnow;
+        ai_chat_voice_binding(ui_ai_panel(), &cnow);
+        if (!voice_binding_same(&g_conv_bind, &cnow)) voice_conv_event(VCE_END, VCX_CHAT_CHANGED, 0);
+        return;
+    }
     if (!g_audio_up || g_dict.state == VDS_IDLE || !g_live) return;
     VoiceBinding now;
     ai_chat_voice_binding(ui_ai_panel(), &now);
     if (!voice_binding_same(&g_bind, &now)) dict_event(VDE_END_SOFT, 0, 0);
+}
+
+
+/* ---- The conversation's real ops (voice_conv_win.h): each calls the module it names ---- */
+
+static int g_rc_cap_open;
+static unsigned g_rc_cap_token;
+static int g_rc_upload_open;
+static size_t g_rc_draft_end;      /* the box end when the turn began, in the control's own units */
+static int g_rc_need_sep;          /* a space must separate the draft from the words */
+static int g_rc_words;             /* the turn wrote words into the box */
+static int g_rc_notice_shown;      /* the British-voice notice was shown this launch */
+static VoiceInfo g_rc_voices[VOICE_INFO_MAX];
+
+static int rc_cap_begin(unsigned token)
+{
+    const Settings *s = ui_current_settings();
+    if (!g_audio_up || !s) return 0;
+    voice_ledger_acquire(VRES_CAPTURE);
+    if (!voice_audio_conv_begin(s->voice_input_device, token, (double)s->voice_mic_gain_db,
+                                s->voice_pause_ms)) {
+        voice_ledger_release(VRES_CAPTURE);
+        return 0;
+    }
+    g_rc_cap_open = 1;
+    g_rc_cap_token = token;
+    return 1;
+}
+
+static void rc_cap_end(unsigned token)
+{
+    if (!g_rc_cap_open || !tok_eq(token, g_rc_cap_token)) return;
+    g_rc_cap_open = 0;
+    if (g_audio_up) voice_audio_conv_end(token);
+    voice_ledger_release(VRES_CAPTURE);
+}
+
+static void rc_cap_mode(unsigned token, VoiceListenMode m)
+{
+    if (g_audio_up) voice_audio_conv_mode(token, m);
+}
+
+static void rc_cap_attach_live(unsigned token, unsigned live_token)
+{
+    if (g_audio_up) voice_audio_conv_attach_live(token, live_token);
+}
+
+static int rc_link_start(unsigned live_token)
+{
+    const Settings *s = ui_current_settings();
+    VoiceLiveTarget t;
+    char err[200] = "";
+    if (!s || !voice_live_resolve(s, &t)) return 0;
+    t.gate_rms = 0;   /* the listener already gated the turn: every window is speech */
+    return voice_live_start(g_main, &t, t.key_from_chat ? s->ai_api_key : s->stt_api_key,
+                            live_token, err, sizeof(err));
+}
+
+static void rc_link_close(unsigned live_token)
+{
+    voice_live_close(live_token);   /* its threads wake the UI when they exit: it reaps then */
+}
+
+static int rc_stt_submit(VoiceCapture *turn, unsigned token)
+{
+    const Settings *s = ui_current_settings();
+    char err[300] = "";
+    unsigned char *wav = NULL;
+    size_t n = 0;
+    if (turn) wav = pcm_to_wav(&turn->pcm, WAV_RATE, &n);
+    if (!wav) {
+        ai_chat_voice_status(ui_ai_panel(), "Not enough memory to send the recording", 1);
+        return 0;
+    }
+    if (s && voice_stt_submit(g_main, s, wav, n, token, err, sizeof(err))) {
+        voice_ledger_acquire(VRES_STT_UPLOAD);   /* the worker took the WAV */
+        g_rc_upload_open = 1;
+        return 1;
+    }
+    ai_chat_voice_status(ui_ai_panel(), err[0] ? err : "The recording could not be sent", 1);
+    return 0;
+}
+
+static void rc_stt_cancel(unsigned token)
+{
+    (void)token;
+    if (!g_rc_upload_open) return;
+    g_rc_upload_open = 0;
+    voice_stt_cancel_all();   /* a finished upload joins at once; a running one is cancelled */
+    voice_ledger_release(VRES_STT_UPLOAD);
+}
+
+/* The saved voice when installed, else Automatic's choice, else "" (the system default). */
+static int rc_voice_index(const Settings *s, size_t n, int *using_auto)
+{
+    int idx = -1;
+    *using_auto = 1;
+    if (s && s->voice_windows_voice[0]) {
+        idx = voice_find_saved(g_rc_voices, n, s->voice_windows_voice);
+        if (idx >= 0) *using_auto = 0;
+    }
+    return idx >= 0 ? idx : voice_choose_auto(g_rc_voices, n);
+}
+
+static int rc_tts_start(unsigned token)
+{
+    const Settings *s = ui_current_settings();
+    const size_t n = voice_voices_list(g_rc_voices, VOICE_INFO_MAX);
+    int using_auto;
+    const int idx = rc_voice_index(s, n, &using_auto);
+    return voice_tts_start(g_main, token, idx >= 0 ? g_rc_voices[idx].id : "");
+}
+
+static void rc_tts_speak(unsigned token, unsigned id, const char *text, size_t from)
+{
+    voice_tts_speak(token, id, text, from);
+}
+
+static void rc_tts_stop(unsigned token) { voice_tts_stop(token); }
+static void rc_tts_volume(unsigned token, int percent) { voice_tts_volume(token, percent); }
+static void rc_tts_quit(unsigned token) { voice_tts_quit(token, 3000); }
+static int rc_lock_reg(void) { return voice_lock_register(g_main); }
+static void rc_lock_unreg(void) { voice_lock_unregister(g_main); }
+
+static VoiceSendStatus rc_send_turn(int voice_turn)
+{
+    return ai_chat_voice_send_turn(ui_ai_panel(), voice_turn);
+}
+
+static unsigned rc_msg_count(void) { return ai_chat_voice_msg_count(ui_ai_panel()); }
+
+static int rc_reply(unsigned since, char **text, int *is_error)
+{
+    return ai_chat_voice_reply(ui_ai_panel(), since, text, is_error);
+}
+
+static int rc_chat_idle(void) { return ai_chat_voice_idle(ui_ai_panel()); }
+static void rc_cancel_work(void) { ai_chat_voice_cancel_work(ui_ai_panel()); }
+static void rc_note(const char *text) { ai_chat_voice_status(ui_ai_panel(), text, 1); }
+
+static void rc_header(const char *text)
+{
+    set_ui(AIV_RECORDING, text);   /* the recording look for the whole conversation; the cue is the header */
+}
+
+static void rc_live_begin(void)
+{
+    int sep = 0;
+    g_rc_draft_end = ai_chat_voice_live_begin(ui_ai_panel(), &sep);
+    g_rc_need_sep = sep;
+    g_rc_words = 0;
+}
+
+/* Replace the turn's words after the draft: one space between them when the draft needs it. */
+static void rc_live_replace(const char *text)
+{
+    const size_t n = strlen(text);
+    char *buf = (char *)malloc(n + 2);
+    if (!buf) return;
+    const int sep = g_rc_need_sep && n > 0;
+    if (sep) buf[0] = ' ';
+    memcpy(buf + (sep ? 1 : 0), text, n + 1);
+    (void)ai_chat_voice_live_replace(ui_ai_panel(), g_rc_draft_end, buf);
+    g_rc_words = n > 0;
+    secure_zero(buf, n + 2);
+    free(buf);
+}
+
+static void rc_drop_words(void)
+{
+    if (g_rc_words) (void)ai_chat_voice_live_replace(ui_ai_panel(), g_rc_draft_end, "");
+    g_rc_words = 0;
+}
+
+static void rc_lock_typing(int on) { ai_chat_voice_lock_typing(ui_ai_panel(), on); }
+static void rc_send_caption(int stop) { ai_chat_voice_send_caption(ui_ai_panel(), stop); }
+
+static void rc_mic_ui(int on)
+{
+    if (on) set_ui(AIV_RECORDING, "");
+    else set_ui(AIV_IDLE, NULL);
+}
+
+static int rc_box_has_text(void) { return ai_chat_voice_box_has_text(ui_ai_panel()); }
+
+static int rc_notice_voice(const char *voice_name)
+{
+    g_rc_notice_shown = 1;
+    return notice_dlg_msg(g_main, NOTICE_MSG_VOICE_BRITISH, voice_name, ui_current_theme());
+}
+
+/* 1 when Automatic is in use, the notice has not been shown this launch and no English (UK)
+ * woman's voice is installed; names the voice replies will use. */
+static int rc_notice_due(char *name, size_t cap)
+{
+    const Settings *s = ui_current_settings();
+    const size_t n = voice_voices_list(g_rc_voices, VOICE_INFO_MAX);
+    int using_auto;
+    const int idx = rc_voice_index(s, n, &using_auto);
+    if (!voice_notice_due(g_rc_voices, n, idx, using_auto, g_rc_notice_shown)) return 0;
+    if (idx >= 0) voice_display_name(&g_rc_voices[idx], name, cap);
+    else snprintf(name, cap, "%s", "the Windows default voice");
+    return 1;
+}
+
+static void rc_level(double frac) { ai_chat_voice_set_level(ui_ai_panel(), frac); }
+
+static const VoiceConvOps k_conv_ops = {
+    rc_cap_begin, rc_cap_end, rc_cap_mode, rc_cap_attach_live,
+    rc_link_start, rc_link_close,
+    rc_stt_submit, rc_stt_cancel,
+    rc_tts_start, rc_tts_speak, rc_tts_stop, rc_tts_volume, rc_tts_quit,
+    rc_lock_reg, rc_lock_unreg,
+    rc_send_turn, rc_msg_count, rc_reply, rc_chat_idle, rc_cancel_work,
+    rc_note, rc_header,
+    rc_live_begin, rc_live_replace, rc_drop_words, rc_lock_typing, rc_send_caption, rc_mic_ui,
+    rc_box_has_text, rc_notice_voice,
+    rc_notice_due, rc_level, NULL
+};
+
+/* What window.c and the panel route to the conversation (each is a no-op with none running). */
+void voice_on_activation(void)
+{
+    if (g_audio_up) voice_conv_on_activation();
+}
+
+void voice_on_tts(LPARAM lp)
+{
+    VoiceTtsMsg *m = (VoiceTtsMsg *)lp;
+    if (!m) return;
+    voice_conv_on_tts(m);
+    free(m);
+}
+
+void voice_on_turn_idle(void)
+{
+    if (g_audio_up) voice_conv_on_turn_idle();
+}
+
+void voice_on_card(WPARAM kind)
+{
+    if (g_audio_up) voice_conv_on_card((int)kind);
+}
+
+void voice_on_notice(void)
+{
+    if (g_audio_up) voice_conv_on_notice();
+}
+
+void voice_on_conv_timer(void)
+{
+    if (g_audio_up) voice_conv_on_timer();
+}
+
+void voice_on_panel_closed(void)
+{
+    if (g_audio_up && voice_conv_running()) voice_conv_event(VCE_END, VCX_PANEL_CLOSED, 0);
 }
 
 /* Back to nothing recording and nothing uploading, whatever state it was in. */
@@ -632,6 +962,7 @@ void voice_feature_apply(HWND main)
     int on = (s != NULL) ? opt_feature_active(s, OPT_VOICE) : 0;
     voice_gate_set_enabled(on);
     if (main) g_main = main;
+    voice_conv_attach(g_main, &k_conv_ops);
     if (on) {
         /* Idempotent: it is called more than once at startup. */
         if (!g_audio_up && voice_audio_start(main)) g_audio_up = 1;
@@ -639,12 +970,15 @@ void voice_feature_apply(HWND main)
             /* A voice setting changed under a running recording: end it, whatever it was. */
             if (g_dict.state != VDS_IDLE && s && voice_settings_digest(s) != g_digest)
                 dict_event(VDE_END_HARD, 0, 0);
+            if (voice_conv_running() && s && voice_settings_digest(s) != g_digest)
+                voice_conv_event(VCE_END, VCX_SETTINGS, 0);
             if (g_ptt.state == VS_IDLE && !g_capturing) ptt_reset();   /* new key/mode/delay */
             g_voice_filter = voice_pump_filter;
             ai_chat_voice_attach(ui_ai_panel(), 1);
         }
     } else {
         g_voice_filter = NULL;
+        voice_conv_event(VCE_END, VCX_OFF, 0);   /* capture ended, speech quit, link closed, lock unregistered */
         stop_everything();
         voice_stt_cancel_all();   /* an upload in flight is cancelled and joined */
         voice_live_reap(3000);    /* closes and joins every live session */
@@ -660,6 +994,7 @@ void voice_feature_shutdown(void)
 {
     voice_gate_set_enabled(0);
     g_voice_filter = NULL;
+    voice_conv_event(VCE_END, VCX_OFF, 0);
     stop_everything();
     voice_stt_cancel_all();
     voice_live_reap(3000);
@@ -756,6 +1091,21 @@ void voice_on_audio_msg(WPARAM wp, LPARAM lp)
         if (c) on_captured(c);
         return;
     }
+    /* The conversation's capture: its events, finished turns, opening report and level (the
+     * glue frees a turn nobody wants). */
+    if (wp == VAM_CONV_OPENED || wp == VAM_CONV_EVENT || wp == VAM_CONV_TURN) {
+        voice_conv_on_audio((UINT)wp, lp);
+        return;
+    }
+    if (wp == VAM_LEVEL && voice_conv_running()) {
+        voice_conv_on_audio((UINT)wp, lp);
+        return;
+    }
+    if (wp == VAM_ERROR && voice_conv_running() && voice_conv_capture_token() != 0
+        && tok_eq(VOICE_ERR_TOKEN(lp), voice_conv_capture_token())) {
+        voice_conv_on_audio((UINT)wp, lp);
+        return;
+    }
     if (wp == VAM_ERROR) {
         const VoiceAudioErr err = VOICE_ERR_CODE(lp);
         const VoiceErrRoute route = voice_err_route(VOICE_ERR_TOKEN(lp), g_cap_token,
@@ -774,6 +1124,10 @@ void voice_on_stt(LPARAM lp)
 {
     VoiceSttResult *r = (VoiceSttResult *)lp;
     if (!r) return;
+    if (g_audio_up && voice_conv_running()) {
+        voice_conv_on_stt(r);   /* takes it (a stale one is freed there) */
+        return;
+    }
     if (!g_audio_up || !g_upload_open || r->token != g_upload_token) {
         voice_stt_result_free(r);   /* stale (cancelled), or voice went off meanwhile */
         return;
@@ -833,6 +1187,11 @@ void voice_on_live(LPARAM lp)
     VoiceLiveMsg *m = (VoiceLiveMsg *)lp;
     voice_live_reap(0);   /* join the sessions that have ended */
     if (!m) return;
+    if (g_audio_up && voice_conv_running()) {
+        voice_conv_on_live(m);   /* the glue drops what is not for the current turn */
+        voice_live_msg_free(m);
+        return;
+    }
     if (!g_audio_up || !g_live || !g_link_open || g_dict.state == VDS_IDLE
         || !tok_eq(m->token, g_link_token) || !tok_eq(m->token, g_token)) {
         voice_live_msg_free(m);   /* another recording's, or one already closed */

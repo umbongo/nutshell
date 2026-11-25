@@ -2299,6 +2299,7 @@ next_coalesce:;
         /* Losing activation, or a modal dialog disabling the (undocked)
          * panel, ends a push-to-talk recording. */
         if (!wParam) voice_on_deactivate();
+        voice_on_activation();   /* a conversation pauses or resumes */
         break;
 
     case WM_CLOSE:

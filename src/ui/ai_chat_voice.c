@@ -125,6 +125,7 @@ void ai_chat_voice_attach(HWND panel, int on)
     DestroyWindow(d->hMicBtn);
     d->hMicBtn = NULL;
     d->voice_ui = AIV_IDLE;
+    d->voice_level = 0.0;
     d->voice_cue[0] = '\0';
     ai_chat_header_invalidate(d);   /* the cue was shown in the header */
     d->anim.count = 0;   /* drop the pulse */
@@ -137,10 +138,12 @@ void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8)
 {
     AiChatData *d = panel_data(panel);
     if (!d) return;
+    const AiVoiceUi was = d->voice_ui;
     d->voice_ui = st;
+    if (st != AIV_RECORDING) d->voice_level = 0.0;
     snprintf(d->voice_cue, sizeof(d->voice_cue), "%s",
              (st != AIV_IDLE && cue_utf8) ? cue_utf8 : "");
-    if (st == AIV_RECORDING && !ns_reduced_motion()) {
+    if (st == AIV_RECORDING && was != AIV_RECORDING && !ns_reduced_motion()) {   /* a header change keeps the cycle */
         ns_anim_list_add(&d->anim, ANIM_VOICE_PULSE, (unsigned long)GetTickCount(),
                          VOICE_PULSE_MS);
         SetTimer(panel, TIMER_MOTION, MOTION_TICK_MS, NULL);
@@ -151,6 +154,20 @@ void ai_chat_voice_set_ui(HWND panel, AiVoiceUi st, const char *cue_utf8)
     }
     if (d->hInput) InvalidateRect(d->hInput, NULL, TRUE);
     ai_chat_header_invalidate(d);   /* the cue shows in the header too */
+}
+
+void ai_chat_voice_set_level(HWND panel, double frac)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d) return;
+    if (d->voice_ui != AIV_RECORDING || !(frac >= 0.0)) frac = 0.0;   /* 0 = not following a level */
+    else if (frac < 0.001) frac = 0.001;
+    if (frac > 1.0) frac = 1.0;
+    const double was = d->voice_level;
+    d->voice_level = frac;
+    /* The pulse timer repaints at its own rate; only a visible change repaints here. */
+    if (d->hMicBtn && (frac - was > 0.04 || was - frac > 0.04))
+        InvalidateRect(d->hMicBtn, NULL, FALSE);
 }
 
 void ai_chat_voice_status(HWND panel, const char *text, int is_error)
@@ -355,6 +372,7 @@ void ai_chat_voice_on_destroy(AiChatData *d)
      * still land, nothing is sent). */
     d->voice_typing_locked = 0;
     if (d->voice_ui != AIV_IDLE) voice_on_deactivate();
+    voice_on_panel_closed();   /* a conversation ends with its panel */
 }
 
 /* ---- Conversation mode: what the chat tells the controller ---- */
@@ -573,7 +591,9 @@ void ai_chat_voice_draw_mic(AiChatData *d, LPDRAWITEMSTRUCT dis)
             float t = 1.0f;
             if (ns_anim_list_get(&d->anim, ANIM_VOICE_PULSE, (unsigned long)GetTickCount(), 0, &st))
                 t = (float)st.t;
-            alpha = 0.45f + 0.55f * (t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f);
+            /* The swing is fixed for dictation; in a conversation it follows the voice. */
+            const float swing = d->voice_level > 0.0 ? 0.20f + 0.35f * (float)d->voice_level : 0.55f;
+            alpha = (1.0f - swing) + swing * (t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f);
             if (alpha < 0.0f) alpha = 0.0f;
             if (alpha > 1.0f) alpha = 1.0f;
         }

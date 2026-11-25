@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include "../config/config.h"
+#include "ui_theme.h"
 
 /*
  * voice_win -- the voice feature's controller. It sets the voice gate and
@@ -41,6 +42,9 @@ void voice_mic_clicked(void);
 
 /* The live settings, owned by window.c; NULL before the config is loaded. */
 const Settings *ui_current_settings(void);
+
+/* The current theme (for the notice dialog); owned by window.c. */
+const ThemeColors *ui_current_theme(void);
 
 /* Bring the voice feature in line with the settings: sets the gate to
  * opt_feature_active(settings, OPT_VOICE), then starts (gate on) or stops
