@@ -223,7 +223,7 @@ static HRESULT select_voice(ISpVoice *v, const char *voice_id)
     if (voice_id == NULL || voice_id[0] == '\0') return S_OK;
     if (!MultiByteToWideChar(CP_UTF8, 0, voice_id, -1, wid, 256)) return E_INVALIDARG;
     ISpObjectToken *tok = NULL;
-    HRESULT hr = CoCreateInstance(&CLSID_SpObjectToken, NULL, CLSCTX_ALL, &IID_ISpObjectToken,
+    HRESULT hr = CoCreateInstance(&CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER, &IID_ISpObjectToken,
                                   (void **)&tok);
     if (FAILED(hr)) return hr;
     hr = ISpObjectToken_SetId(tok, NULL, wid, FALSE);
@@ -254,7 +254,7 @@ static DWORD WINAPI tts_thread(LPVOID arg)
 
     const int com = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
     dll_record_note("sapi.dll");   /* the only place SpVoice is created */
-    HRESULT hr = com ? CoCreateInstance(&CLSID_SpVoice, NULL, CLSCTX_ALL, &IID_ISpVoice, (void **)&v)
+    HRESULT hr = com ? CoCreateInstance(&CLSID_SpVoice, NULL, CLSCTX_INPROC_SERVER, &IID_ISpVoice, (void **)&v)
                      : (HRESULT)E_FAIL;
     HANDLE notify_h = NULL;
     if (SUCCEEDED(hr)) {
@@ -306,6 +306,7 @@ static DWORD WINAPI tts_thread(LPVOID arg)
             } else if (stop) {
                 purge(v);
                 reply_clear(&reply);
+                if (c->auto_quit) running = 0;   /* a stopped Play sample is done */
             }
             if (text != NULL) { secure_zero(text, tlen + 1); free(text); }
         } else if (w == WAIT_OBJECT_0 + 1) {
@@ -340,7 +341,14 @@ static TtsCtx *find(unsigned token)
 int voice_tts_start(HWND notify, unsigned token, const char *voice_id)
 {
     if (!voice_gate_on()) return 0;
-    if (find(token) != NULL) return 1;
+    TtsCtx *old = find(token);
+    if (old != NULL) {
+        EnterCriticalSection(&old->cs);
+        const int gone = old->exited;
+        LeaveCriticalSection(&old->cs);
+        if (!gone) return 1;
+        voice_tts_quit(token, 1000);   /* reap the exited one, then start afresh */
+    }
     int slot = -1;
     for (int i = 0; i < TTS_MAX_CTX; i++) if (g_ctx[i] == NULL) { slot = i; break; }
     if (slot < 0) return 0;
@@ -371,6 +379,10 @@ void voice_tts_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
 {
     TtsCtx *c = find(token);
     if (c == NULL || utf8 == NULL) return;
+    EnterCriticalSection(&c->cs);
+    const int gone = c->exited;
+    LeaveCriticalSection(&c->cs);
+    if (gone) { post(c, VTT_ERROR, reply_id, 0, (long)E_FAIL); return; }   /* never vanish silently */
     const size_t len = strlen(utf8);
     char *copy = (char *)malloc(len + 1);
     if (copy == NULL) return;

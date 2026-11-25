@@ -311,4 +311,87 @@ int test_voice_tts_sample_quits_itself(void)
     TEST_END();
 }
 
+int test_voice_voices_read_long_names(void)
+{
+    TEST_BEGIN();
+    RegDeleteTreeW(HKEY_CURRENT_USER, TT_ROOT);
+    /* a subkey name longer than the 127-char read buffer, sorting before a valid one */
+    wchar_t longsub[201];
+    for (int i = 0; i < 200; i++) longsub[i] = L'A';
+    longsub[200] = L'\0';
+    ASSERT_TRUE(make_token(L"Speech\\Voices\\Tokens", longsub, L"Long One", NULL, L"Female", L"809"));
+    ASSERT_TRUE(make_token(L"Speech\\Voices\\Tokens", L"TTS_Z", L"Test Zed", NULL, L"Female", L"809"));
+    VoiceInfo v[4];
+    memset(v, 0, sizeof(v));
+    size_t n = voice_voices_read(HKEY_CURRENT_USER, TT_ROOT L"\\Speech\\Voices\\Tokens", NULL, v, 4);
+    int zed = 0;
+    for (size_t i = 0; i < n; i++) if (strstr(v[i].id, "\\TTS_Z")) zed = 1;
+    ASSERT_EQ(zed, 1);   /* the long key is skipped, enumeration goes on */
+
+    /* a tokens path whose UTF-8 form does not fit the id: nothing listed, no wrong id */
+    wchar_t deep[400];
+    wchar_t pad[231];
+    for (int i = 0; i < 230; i++) pad[i] = L'p';
+    pad[230] = L'\0';
+    swprintf(deep, 400, L"%ls\\%ls\\Tokens", TT_ROOT, pad);
+    wchar_t keyp[500];
+    swprintf(keyp, 500, L"%ls\\X", deep);
+    HKEY k;
+    ASSERT_TRUE(RegCreateKeyExW(HKEY_CURRENT_USER, keyp, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL) == ERROR_SUCCESS);
+    RegCloseKey(k);
+    ASSERT_EQ((int)voice_voices_read(HKEY_CURRENT_USER, deep, NULL, v, 4), 0);
+
+    RegDeleteTreeW(HKEY_CURRENT_USER, TT_ROOT);
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\NutshellTest");
+    TEST_END();
+}
+
+int test_voice_tts_exited_context_restarts(void)
+{
+    TEST_BEGIN();
+    voice_ledger_reset();
+    HWND w = tt_window();
+    ASSERT_TRUE(w != NULL);
+    gates(1);
+    ASSERT_EQ(voice_tts_start(w, 21u, NULL), 1);
+    VoiceTtsMsg *m = wait_msg(21u, 1u << VTT_EXITED | 1u << VTT_READY, 5000);
+    ASSERT_TRUE(m != NULL);
+    const int exited = (m->kind == VTT_EXITED);
+    free(m);
+    if (!exited) {
+        printf("  SKIP: SAPI is present: no start-time exit to reuse\n");
+        voice_tts_quit(21u, 3000);
+    } else {
+        /* exited, not reaped: a speak must not vanish silently */
+        voice_tts_speak(21u, 5, "Hi there.", 0);
+        m = wait_msg(21u, 1u << VTT_ERROR | 1u << VTT_DONE, 2000);
+        ASSERT_TRUE(m != NULL);
+        ASSERT_EQ((int)m->reply_id, 5);
+        free(m);
+        /* a start over the exited, unreaped token restarts it: one ledger count, a new outcome */
+        drain();
+        ASSERT_EQ(voice_tts_start(w, 21u, NULL), 1);
+        ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 1);
+        m = wait_msg(21u, 1u << VTT_READY | 1u << VTT_ERROR, 5000);
+        ASSERT_TRUE(m != NULL);
+        free(m);
+        voice_tts_quit(21u, 3000);
+    }
+    ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+
+    /* a stopped Play sample ends and reports it */
+    ASSERT_EQ(voice_tts_sample(w, NULL), 1);
+    voice_tts_stop(VOICE_TTS_SAMPLE_TOKEN);
+    m = wait_msg(VOICE_TTS_SAMPLE_TOKEN, 1u << VTT_EXITED, 5000);
+    ASSERT_TRUE(m != NULL);
+    free(m);
+    voice_tts_quit(VOICE_TTS_SAMPLE_TOKEN, 3000);
+    ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
+    drain();
+    gates(0);
+    DestroyWindow(w);
+    TEST_END();
+}
+
 #endif /* _WIN32 */

@@ -34,10 +34,13 @@ static size_t read_tree(HKEY root, const char *root_name, const wchar_t *path, i
 
     char path8[200];
     to_utf8(path, path8, sizeof(path8));
+    if (path8[0] == '\0') { RegCloseKey(tokens); return n; }   /* would name the wrong key */
     for (DWORD i = 0; n < max; i++) {
         wchar_t sub[128];
         DWORD sublen = (DWORD)(sizeof(sub) / sizeof(sub[0]));
-        if (RegEnumKeyExW(tokens, i, sub, &sublen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) break;
+        const LONG er = RegEnumKeyExW(tokens, i, sub, &sublen, NULL, NULL, NULL, NULL);
+        if (er == ERROR_MORE_DATA) continue;   /* a name too long for us: skip it */
+        if (er != ERROR_SUCCESS) break;
 
         HKEY tk;
         if (RegOpenKeyExW(tokens, sub, 0, KEY_READ, &tk) != ERROR_SUCCESS) continue;

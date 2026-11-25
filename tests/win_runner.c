@@ -140,6 +140,8 @@ int test_voice_tts_gate_off(void);
 int test_voice_tts_start_quit_wine(void);
 int test_voice_tts_speak_events_wine(void);
 int test_voice_tts_sample_quits_itself(void);
+int test_voice_voices_read_long_names(void);
+int test_voice_tts_exited_context_restarts(void);
 int test_voice_ws_gate_off(void);
 int test_voice_ws_echo(void);
 int test_voice_ws_fragmented(void);
@@ -500,6 +502,8 @@ int main(int argc, char **argv)
     failed += test_voice_tts_start_quit_wine();
     failed += test_voice_tts_speak_events_wine();
     failed += test_voice_tts_sample_quits_itself();
+    failed += test_voice_voices_read_long_names();
+    failed += test_voice_tts_exited_context_restarts();
     failed += test_voice_ws_gate_off();
     failed += test_voice_ws_echo();
     failed += test_voice_ws_fragmented();
