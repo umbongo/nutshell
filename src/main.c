@@ -345,6 +345,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ui_set_startup_action(opts.action, opts.arg, opts.demo_state, opts.theme);
 
     ui_set_self_report(opts.self_report);
+    ui_set_self_report_sapi(opts.self_report[0] != '\0' && opts.self_report_sapi);
 
     start_debug_log();
 

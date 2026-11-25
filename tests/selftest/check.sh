@@ -1,5 +1,5 @@
 #!/bin/sh
-# check.sh <off|voiceoff|on> <report-file>
+# check.sh <off|voiceoff|on|conv|sapi> <report-file>
 # Asserts on the report nutshell.exe --self-report wrote. AI off: nothing of
 # the assistant was requested from Windows (winhttp.dll, riched20.dll and
 # msftedit.dll) and no `module: winhttp.dll` is loaded. AI on (the control):
@@ -8,6 +8,11 @@
 # Voice (needs the AI assistant): the "off" run has voice ticked in its config
 # and must still never have requested mmdevapi.dll; "voiceoff" (AI on, voice
 # off) neither; "on" (both on) must have requested mmdevapi.dll.
+# "on" (Dictation) and "conv" (Conversation, voice on) are idle launches: neither
+# sapi.dll (speech) nor wtsapi32.dll (session lock watch) is requested or mapped
+# until the feature is used; "conv" also requested mmdevapi.dll. "sapi" is the
+# control: --self-report-sapi holds an SpVoice, so sapi.dll is requested and
+# mapped (a SKIP when Wine cannot create one: `sapi-control: unavailable`).
 # Every mode: the report has a `voice-net-opens: N` line and N is 0 (all three are
 # idle launches).
 mode=$1
@@ -16,6 +21,13 @@ report=$2
 req() { grep -qixF "requested: $1" "$report"; }
 mod() { grep -qiF "module: $1" "$report"; }
 rc=0
+# an idle voice launch never asked for speech or the session-lock watcher
+no_speech() {
+    for d in sapi.dll wtsapi32.dll; do
+        if req "$d"; then echo "FAIL ($1): $d was requested"; rc=1; fi
+        if mod "$d"; then echo "FAIL ($1): $d is a loaded module"; rc=1; fi
+    done
+}
 # the voice opener's count is printed in every mode, and an idle launch (nothing
 # recorded or sent) has opened none
 if ! grep -qx 'voice-net-opens: [0-9][0-9]*' "$report"; then
@@ -52,8 +64,25 @@ on)
     # the enumerator was really created: Wine maps the module in (checked on
     # the "on" report of this run), so it is a loaded module as well
     mod mmdevapi.dll || { echo "FAIL (on): mmdevapi.dll is not a loaded module"; rc=1; }
+    no_speech on
     ;;
-*) echo "usage: check.sh off|voiceoff|on report"; exit 2 ;;
+conv)
+    for d in winhttp.dll riched20.dll msftedit.dll mmdevapi.dll; do
+        req "$d" || { echo "FAIL (conv): $d was not requested"; rc=1; }
+    done
+    mod mmdevapi.dll || { echo "FAIL (conv): mmdevapi.dll is not a loaded module"; rc=1; }
+    no_speech conv
+    ;;
+sapi)
+    if grep -qx 'sapi-control: unavailable' "$report"; then
+        echo "SKIP (sapi): Wine cannot create SpVoice (sapi-control: unavailable); the Windows hand check carries the claim"
+        exit 0
+    fi
+    grep -qx 'sapi-control: held' "$report" || { echo "FAIL (sapi): no 'sapi-control: held|unavailable' line"; rc=1; }
+    req sapi.dll || { echo "FAIL (sapi): sapi.dll was not requested"; rc=1; }
+    mod sapi.dll || { echo "FAIL (sapi): sapi.dll is not a loaded module"; rc=1; }
+    ;;
+*) echo "usage: check.sh off|voiceoff|on|conv|sapi report"; exit 2 ;;
 esac
 [ $rc -eq 0 ] && echo "PASS ($mode): $(grep -ci '^requested: ' "$report") requested, $(grep -ci '^module: ' "$report") modules"
 exit $rc

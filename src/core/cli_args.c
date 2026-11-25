@@ -91,6 +91,9 @@ void cli_parse(int argc, char **argv, CliOptions *out)
                            a + 14); /* past "--self-report=" */
             report_seen = 1;
             continue; /* a modifier, like --theme */
+        } else if (strcmp(a, "--self-report-sapi") == 0) {
+            out->self_report_sapi = 1;
+            continue; /* a modifier of --self-report; inert without it */
         } else if (flag_eq(a, "--local", "--local")) {
             act = CLI_CONNECT_LOCAL;
         } else if (flag_eq(a, "-sn", "--session-name")) {

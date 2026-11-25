@@ -453,7 +453,7 @@ selftest-wine: $(TARGET)
 		echo "[skip] selftest-wine needs wine and xvfb-run"; \
 	else \
 		set -e; \
-		for m in off voiceoff on; do \
+		for m in off voiceoff on conv sapi; do \
 			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
 			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
 			case $$m in \
@@ -462,9 +462,11 @@ selftest-wine: $(TARGET)
 					|| { echo "FAIL: the off config does not tick voice (the sed matched nothing)"; exit 1; } ;; \
 			voiceoff) cp tests/selftest/nutshell-ai-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			on) cp tests/selftest/nutshell-voice-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			conv|sapi) cp tests/selftest/nutshell-voice-conv.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			esac; \
+			extra=; [ $$m = sapi ] && extra=--self-report-sapi; \
 			( cd $(SELFTEST_DIR)/$$m && WINEPREFIX=$(SELFTEST_PREFIX) WINEDEBUG=-all \
-				timeout 120 xvfb-run -a wine nutshell.exe -nc --self-report=report.txt ); \
+				timeout 120 xvfb-run -a wine nutshell.exe -nc --self-report=report.txt $$extra ); \
 			sh tests/selftest/check.sh $$m $(SELFTEST_DIR)/$$m/report.txt; \
 		done; \
 	fi

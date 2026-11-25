@@ -5,6 +5,7 @@
  * be added to all four, and this test says so. */
 #include "test_framework.h"
 #include "config.h"
+#include "voice_config.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +54,7 @@ int test_selftest_configs_complete(void)
         "tests/selftest/nutshell-ai-off.config",
         "tests/selftest/nutshell-ai-on.config",
         "tests/selftest/nutshell-voice-on.config",
+        "tests/selftest/nutshell-voice-conv.config",
     };
     for (size_t f = 0; f < sizeof files / sizeof files[0]; f++) {
         char *t = slurp(files[f]);
@@ -84,5 +86,40 @@ int test_selftest_configs_complete(void)
         ASSERT_TRUE(has_ps_key(ps, "voice_defaults_rev"));
     }
     free(ps_all);
+    TEST_END();
+}
+
+/* The conversation selftest config really parses to voice on + Conversation
+ * (a typo in "voice_mode" would fall back to Dictation and the `conv` and
+ * `sapi` modes would silently test the wrong thing). The voice-on config is
+ * the control: it stays Dictation. */
+int test_selftest_conv_config_mode(void)
+{
+    TEST_BEGIN();
+    static const struct { const char *src; int mode; } cases[] = {
+        { "tests/selftest/nutshell-voice-conv.config", VOICE_MODE_CONVERSATION },
+        { "tests/selftest/nutshell-voice-on.config",   VOICE_MODE_DICTATION },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        char *t = slurp(cases[i].src);
+        ASSERT_NOT_NULL(t);
+        if (!t) continue;
+        /* load a copy: a load may re-save the file */
+        char tmp[256];
+        snprintf(tmp, sizeof tmp, "%s/selftest_conv_%zu.config", TEST_TMP_DIR, i);
+        FILE *f = test_fopen_private(tmp);
+        ASSERT_NOT_NULL(f);
+        if (f) { fwrite(t, 1, strlen(t), f); fclose(f); }
+        free(t);
+        Config *c = config_load(tmp);
+        ASSERT_NOT_NULL(c);
+        if (c) {
+            ASSERT_TRUE(c->settings.voice_enabled);
+            ASSERT_TRUE(c->settings.ai_enabled);
+            ASSERT_EQ(c->settings.voice_mode, cases[i].mode);
+            config_free(c);
+        }
+        remove(tmp);
+    }
     TEST_END();
 }

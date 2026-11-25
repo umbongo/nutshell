@@ -48,6 +48,7 @@
 #include "settings_layout.h"
 #include "voice_win.h"
 #include "voice_conv_win.h"
+#include "voice_tts_win.h"
 #include "winhttp_open.h"
 #include "thinking_mode.h"
 #include "ai_chat_testable.h"
@@ -553,6 +554,7 @@ static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
 static char g_startup_theme[CLI_THEME_MAX];
 static char g_self_report_path[CLI_REPORT_MAX];
 static int  g_self_report_failed;
+static int  g_self_report_sapi;       /* --self-report-sapi */
 static HWND g_hwndAiChat = NULL;
 static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
@@ -5516,8 +5518,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * (bounded) so the record is complete. Nothing waits with voice off. */
             if (voice_gate_on())
                 (void)voice_audio_wait_ready(5000);
-            if (!ns_self_report_write(g_self_report_path))
+            /* --self-report-sapi: the one constructor creates an SpVoice and
+             * holds it while the report is written, so sapi.dll is requested
+             * and mapped. Voice off: nothing is created (hold returns 0). A
+             * report that carries `sapi-control: unavailable` tells check.sh
+             * Wine could not create the object. */
+            int sapi_state = -1;   /* -1 not asked, 0 unavailable, 1 held */
+            if (g_self_report_sapi && voice_gate_on())
+                sapi_state = voice_tts_selftest_hold();
+            if (!ns_self_report_write(g_self_report_path, sapi_state))
                 g_self_report_failed = 1;
+            if (sapi_state == 1) voice_tts_selftest_release();
             PostMessage(hwnd, WM_CLOSE, 0, 0);
             return 0;
 
@@ -6586,6 +6597,11 @@ void ui_set_self_report(const char *path)
 {
     (void)snprintf(g_self_report_path, sizeof(g_self_report_path), "%s",
                    path ? path : "");
+}
+
+void ui_set_self_report_sapi(int on)
+{
+    g_self_report_sapi = on ? 1 : 0;
 }
 
 int ui_self_report_failed(void)

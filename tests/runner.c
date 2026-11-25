@@ -559,6 +559,7 @@ int test_cli_local_with_theme_is_error(void);
 int test_cli_local_not_matched_by_prefix(void);
 int test_cli_usage_text_mentions_local(void);
 int test_cli_self_report_with_run(void);
+int test_cli_self_report_sapi_flag(void);
 int test_cli_self_report_with_no_connect(void);
 int test_cli_self_report_equals_form_only(void);
 int test_cli_self_report_rejected_with_ui_demo(void);
@@ -3882,6 +3883,7 @@ int test_voice_conv_settings_notice_lines(void);
 int test_voice_conv_settings_digest(void);
 int test_voice_conv_auto_send_unchanged(void);
 int test_selftest_configs_complete(void);
+int test_selftest_conv_config_mode(void);
 int test_voice_config_load_defaults_and_saved_choices(void);
 /* test_voice_lang.c */
 int test_voice_lang_table_order(void);
@@ -5453,6 +5455,7 @@ int main(void) {
     failed += test_cli_local_not_matched_by_prefix();
     failed += test_cli_usage_text_mentions_local();
     failed += test_cli_self_report_with_run();
+    failed += test_cli_self_report_sapi_flag();
     failed += test_cli_self_report_with_no_connect();
     failed += test_cli_self_report_equals_form_only();
     failed += test_cli_self_report_rejected_with_ui_demo();
@@ -8577,6 +8580,7 @@ int main(void) {
     failed += test_voice_conv_settings_digest();
     failed += test_voice_conv_auto_send_unchanged();
     failed += test_selftest_configs_complete();
+    failed += test_selftest_conv_config_mode();
     failed += test_voice_lang_table_order();
     failed += test_voice_lang_find();
     failed += test_voice_lang_parse_other();
