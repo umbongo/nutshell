@@ -207,7 +207,7 @@ static VoiceConvOut on_sent(VoiceConv *c, int status, unsigned long now)
         o = enter_speaking(c, VCA_SPEAK_PHRASE, VCPH_NOT_SENT, 0);
         o.actions |= a;
         /* a refusal's phrase is not a Stop-caption moment */
-        if (o.actions & VCA_STOP_CAPTION) { o.actions &= ~VCA_STOP_CAPTION; c->stopcap = 0; }
+        if (o.actions & VCA_STOP_CAPTION) { o.actions &= ~(unsigned)VCA_STOP_CAPTION; c->stopcap = 0; }
         o.note = status == VSS_BUSY ? VCN_BUSY : status == VSS_NO_SESSION ? VCN_NO_SESSION
                : status == VSS_FULL ? VCN_FULL : VCN_LAUNCH;
         return o;
