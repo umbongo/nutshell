@@ -238,7 +238,7 @@ static int looks_like_unknown_blob(const char *s)
  * isn't encrypted at all -- so it needs the same migration re-save). */
 static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
                          char *preserved_out, size_t preserved_cap,
-                         int *out_migrated)
+                         int *out_migrated, size_t tmp_cap)
 {
     plain_out[0] = '\0';
     preserved_out[0] = '\0';
@@ -248,8 +248,9 @@ static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
     }
 
     if (crypto_is_dpapi(raw)) {
-        char tmp[CFG_STR_MAX * 2 + 2];
-        if (crypto_decrypt_dpapi(raw, tmp, sizeof(tmp)) == CRYPTO_OK) {
+        char tmp[CFG_STR_MAX * 2 + 2];   /* tmp_cap, at most this, bounds the plaintext */
+        if (tmp_cap > sizeof(tmp)) tmp_cap = sizeof(tmp);
+        if (crypto_decrypt_dpapi(raw, tmp, tmp_cap) == CRYPTO_OK) {
             field_copy(plain_out, plain_cap, tmp);
         } else {
             preserve_blob_or_drop(raw, preserved_out, preserved_cap);
@@ -259,8 +260,9 @@ static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
     }
 
     if (crypto_is_encrypted(raw)) {
-        char tmp[CFG_STR_MAX * 2 + 2];
-        if (crypto_decrypt(raw, tmp, sizeof(tmp)) == CRYPTO_OK) {
+        char tmp[CFG_STR_MAX * 2 + 2];   /* tmp_cap, at most this, bounds the plaintext */
+        if (tmp_cap > sizeof(tmp)) tmp_cap = sizeof(tmp);
+        if (crypto_decrypt(raw, tmp, tmp_cap) == CRYPTO_OK) {
             field_copy(plain_out, plain_cap, tmp);
             if (out_migrated) *out_migrated = 1;
         } else {
@@ -344,7 +346,13 @@ static void split_bound_key(const char *plain, char *binding_out, size_t binding
 
 /* secret_prepare() for the speech key: encrypts "<binding>\n<key>" through a
  * stack buffer that is wiped. An empty key stores nothing new (the preserved
- * blob, if any, is written back). */
+ * blob, if any, is written back).
+ *
+ * Blob budget: the longest plaintext is 255 + 1 + 255 = 511 bytes (512 after
+ * AES-CBC padding). A Win10/11 DPAPI blob with the "Nutshell secret"
+ * description is about 756 raw bytes, 1,009 in base64, plus the 10-byte
+ * "$dpapi$v1$" prefix: about 1,019 of CFG_BLOB_MAX's 1,024. Widening
+ * tts_api_key or tts_api_key_for needs CFG_BLOB_MAX raised. */
 static int tts_secret_prepare(const Settings *s, char *out, size_t out_cap)
 {
     if (s->tts_api_key[0] == '\0')
@@ -851,7 +859,7 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         if ((sv = json_obj_str(jset, "ai_api_key"))) {
             load_secret(sv, s->ai_api_key, sizeof(s->ai_api_key),
                         s->ai_api_key_enc_preserved, sizeof(s->ai_api_key_enc_preserved),
-                        &migrated);
+                        &migrated, CFG_STR_MAX);
         }
         if ((sv = json_obj_str(jset, "ai_system_notes"))) {
             field_copy(s->ai_system_notes, sizeof(s->ai_system_notes), sv);
@@ -1015,7 +1023,7 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         if ((sv = json_obj_str(jset, "stt_api_key"))) {
             load_secret(sv, s->stt_api_key, sizeof(s->stt_api_key),
                         s->stt_api_key_enc_preserved, sizeof(s->stt_api_key_enc_preserved),
-                        &migrated);
+                        &migrated, CFG_STR_MAX);
         }
         if ((sv = json_obj_str(jset, "voice_input_device"))) {
             field_copy(s->voice_input_device, sizeof(s->voice_input_device), sv);
@@ -1050,7 +1058,7 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
             char bound[CFG_STR_MAX * 2 + 2];
             load_secret(sv, bound, sizeof(bound),
                         s->tts_api_key_enc_preserved, sizeof(s->tts_api_key_enc_preserved),
-                        &migrated);
+                        &migrated, sizeof(bound));
             split_bound_key(bound, s->tts_api_key_for, sizeof(s->tts_api_key_for),
                             s->tts_api_key, sizeof(s->tts_api_key));
             secure_zero(bound, sizeof(bound));
@@ -1161,7 +1169,7 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
             if ((sv = json_obj_str(jp, "password"))) {
                 load_secret(sv, pr->password, sizeof(pr->password),
                             pr->password_enc_preserved, sizeof(pr->password_enc_preserved),
-                            &migrated);
+                            &migrated, CFG_STR_MAX);
             }
             if ((sv = json_obj_str(jp, "key_path"))) {
                 field_copy(pr->key_path, sizeof(pr->key_path), sv);

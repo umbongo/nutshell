@@ -1759,3 +1759,49 @@ int test_voice_ais_digest(void)
     ASSERT_TRUE(voice_settings_digest(&c1) != voice_settings_digest(&c2));
     TEST_END();
 }
+
+int test_voice_ais_long_stt_blob_preserved_not_truncated(void)
+{
+    TEST_BEGIN();
+    fake_dpapi_set_identity(0x11);
+    char plain[301];
+    memset(plain, 'k', 300);
+    plain[300] = '\0';
+    char enc[1024];
+    ASSERT_EQ(crypto_encrypt_dpapi(plain, enc, sizeof enc), CRYPTO_OK);
+    char json[2048];
+    snprintf(json, sizeof json,
+             "{\"settings\": {\"font\": \"Consolas\", \"stt_api_key\": \"%s\"}, \"profiles\": []}", enc);
+    ASSERT_TRUE(vcfg_write(json));
+    Config *c = config_load(VCFG);
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_STR_EQ(c->settings.stt_api_key, "");
+        ASSERT_STR_EQ(c->settings.stt_api_key_enc_preserved, enc);
+        config_free(c);
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_ais_empty_key_drops_binding(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    snprintf(cfg->settings.tts_api_key_for, sizeof cfg->settings.tts_api_key_for, "mistral");
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (txt) { ASSERT_TRUE(strstr(txt, "\"tts_api_key\": \"\"") != NULL); free(txt); }
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_STR_EQ(l->settings.tts_api_key, "");
+        ASSERT_STR_EQ(l->settings.tts_api_key_for, "");
+        config_free(l);
+    }
+    remove(VCFG);
+    TEST_END();
+}

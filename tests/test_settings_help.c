@@ -685,12 +685,16 @@ int test_settings_help_every_id_in_settings_c(void) {
     const SettingsHelp *tab = settings_help_table(&count);
     ASSERT_NOT_NULL(tab);
     for (size_t i = 0; tab != NULL && i < count; i++) {
-        /* The four PR 2 voice ids get their controls in the Settings UI task
-         * (Task 14 of the conversation plan); remove this skip then. */
-        if (tab[i].id == SH_VOICE_MODE || tab[i].id == SH_VOICE_PAUSE
-            || tab[i].id == SH_VOICE_WIN_VOICE || tab[i].id == SH_VOICE_WIN_VOICE_NAME
-            || (tab[i].id >= SH_VOICE_SPEECH && tab[i].id <= SH_VOICE_PLAY_SAMPLE))
+        /* Ids whose controls a later Settings UI task adds. Once settings.c
+         * names one, its skip must go: no skip can rot silently. */
+        int skipped = tab[i].id == SH_VOICE_WIN_VOICE_NAME
+            || (tab[i].id >= SH_VOICE_SPEECH && tab[i].id <= SH_VOICE_PLAY_SAMPLE);
+        if (skipped) {
+            int named = has_identifier(src, tab[i].name);
+            if (named) printf("  %s is now in settings.c: remove its skip\n", tab[i].name);
+            ASSERT_TRUE(!named);
             continue;
+        }
         int found = has_identifier(src, tab[i].name);
         if (!found) printf("  src/ui/settings.c never names %s\n", tab[i].name);
         ASSERT_TRUE(found);
