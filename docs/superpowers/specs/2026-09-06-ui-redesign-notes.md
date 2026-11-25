@@ -737,6 +737,19 @@ Open, in priority order:
       The final review's fixes (a cut-in's turn, the watchdogs, an RDP or console disconnect
       counting as a lock, the posted resume after a dialog, the key with focus outside the
       panel, a changed chat, full volume after a cut-in) each want a Windows hand check too.
+      (q) Follow-ups from the re-review of those fixes, not built: a spoken reply longer than
+      10 minutes is cut silently by the Speaking watchdog ("continue" resumes it; refreshing
+      the clock on each spoken word would avoid it); a Hearing or Ending watchdog expiry
+      restarts the 3-minute silence clock, against the rule that a failed turn must not, so
+      with uploads hanging a noisy room can keep a conversation alive; a list item or
+      indented line that starts with a one-line triple-backtick span opens a fence and the
+      rest of the reply is not read (fails closed); after a pause cuts an approval
+      announcement the header returns to "Working..." although a card waits, and the
+      announcement is not repeated; Settings is destroyed before its owner is re-enabled, so
+      Windows may activate another application for a moment and the conversation would show
+      "Paused ... in the background" until the user clicks back (unverified, hand check); the
+      note shown when an RDP or console disconnect ends recording still reads "Windows was
+      locked".
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a

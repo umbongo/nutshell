@@ -1922,8 +1922,7 @@ check pending*. "Measured here" means a test or command on `automaton`;
   optional; one setting row if it is wanted.
 - **Key mode greyed whole** in Conversation mode: a single combo item cannot be
   greyed, so the whole Hold choice combo is.
-- **Held replies and phrases.** A reply, a held "went wrong" phrase or an
-  held "went wrong" phrase held while Paused is spoken on resume only if
+- **Held replies and phrases.** A reply or a "went wrong" phrase held while Paused is spoken on resume only if
   under 30 s old (strict). A card raised while Paused is recorded and announced
   once on resume with no age limit: the card stays on screen, and the spoken
   line is only a cue (§5.4 gives the 30 s rule for replies; the code keeps it
@@ -1969,7 +1968,7 @@ check pending*. "Measured here" means a test or command on `automaton`;
   mode command for LISTEN is a no-op while the listener is already in a turn
   (it used to wipe it). A mode command that does wipe an open turn, and an
   end-turn with none open, post `VLN_TURN_ABANDON` so the controller never
-  waits for audio that cannot come. Hearing (130 s), Ending (90 s) and
+  waits for audio that cannot come. Hearing (130 s), Ending (180 s, longer than the upload's own timeouts) and
   Speaking (10 min) have watchdogs back to Listening. The resume after a
   modal dialog is posted (`WM_VOICE_ACTIVATION`) so Settings' apply runs first.
   A turn or reply for a changed chat ends the conversation instead of being
@@ -1979,8 +1978,8 @@ check pending*. "Measured here" means a test or command on `automaton`;
 - **Not exercised by any test:** the real ops table and the routing in
   `voice_win.c`, `window.c` and `ai_chat*.c`. They compile clean under MinGW
   with `-Werror` and the extra flags, but no `wintest` links them.
-- **Test counts at the end of PR 2's code:** 4519 native on `automaton` (libssh2
-  stub), 170 `wintest`.
+- **Test counts at the end of PR 2's code:** 4525 native on `automaton` (libssh2
+  stub), 173 `wintest` (after the final review fixes).
 
 ## 17. Critique (2026-11-24, claude-fable-5-2 high)
 
