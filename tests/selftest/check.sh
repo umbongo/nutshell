@@ -12,7 +12,8 @@
 # sapi.dll (speech) nor wtsapi32.dll (session lock watch) is requested or mapped
 # until the feature is used; "conv" also requested mmdevapi.dll. "sapi" is the
 # control: --self-report-sapi holds an SpVoice, so sapi.dll is requested and
-# mapped (a SKIP when Wine cannot create one: `sapi-control: unavailable`).
+# mapped, asserted even when `sapi-control: unavailable` (Wine has a partial
+# SAPI); SKIP only when it is unavailable and sapi.dll was never requested.
 # Every mode: the report has a `voice-net-opens: N` line and N is 0 (all three are
 # idle launches).
 mode=$1
@@ -74,13 +75,21 @@ conv)
     no_speech conv
     ;;
 sapi)
-    if grep -qx 'sapi-control: unavailable' "$report"; then
-        echo "SKIP (sapi): Wine cannot create SpVoice (sapi-control: unavailable); the Windows hand check carries the claim"
+    unavailable=0
+    grep -qx 'sapi-control: unavailable' "$report" && unavailable=1
+    if [ $unavailable -eq 1 ] && ! req sapi.dll; then
+        echo "SKIP (sapi): sapi.dll was never requested and sapi-control: unavailable; the Windows hand check carries the claim"
         exit 0
     fi
-    grep -qx 'sapi-control: held' "$report" || { echo "FAIL (sapi): no 'sapi-control: held|unavailable' line"; rc=1; }
+    if [ $unavailable -eq 0 ]; then
+        grep -qx 'sapi-control: held' "$report" || { echo "FAIL (sapi): no 'sapi-control: held|unavailable' line"; rc=1; }
+    fi
     req sapi.dll || { echo "FAIL (sapi): sapi.dll was not requested"; rc=1; }
     mod sapi.dll || { echo "FAIL (sapi): sapi.dll is not a loaded module"; rc=1; }
+    if req wtsapi32.dll || mod wtsapi32.dll; then echo "FAIL (sapi): wtsapi32.dll was loaded"; rc=1; fi
+    if [ $unavailable -eq 1 ] && [ $rc -eq 0 ]; then
+        echo "note (sapi): sapi-control: unavailable (this Wine has a partial SAPI: SpVoice is created but SetInterest/SetNotifyWin32Event fail); the DLL lines were asserted"
+    fi
     ;;
 *) echo "usage: check.sh off|voiceoff|on|conv|sapi report"; exit 2 ;;
 esac
