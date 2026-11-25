@@ -4207,6 +4207,7 @@ int test_notice_plain_text(void);
 int test_notice_launch_save_wanted(void);
 int test_notice_msg_table_matches_todays_boxes(void);
 int test_notice_msg_every_id_has_title_and_text(void);
+int test_notice_msg_voice_british_names_the_voice(void);
 int test_notice_msg_session_not_found_formats_name(void);
 int test_notice_msg_text_args(void);
 int test_notice_msg_title_args(void);
@@ -9703,6 +9704,7 @@ int main(void) {
         failed += test_notice_launch_save_wanted();
         failed += test_notice_msg_table_matches_todays_boxes();
         failed += test_notice_msg_every_id_has_title_and_text();
+        failed += test_notice_msg_voice_british_names_the_voice();
         failed += test_notice_msg_session_not_found_formats_name();
         failed += test_notice_msg_text_args();
         failed += test_notice_msg_title_args();

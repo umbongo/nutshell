@@ -378,6 +378,22 @@ int test_notice_msg_table_matches_todays_boxes(void)
     TEST_END();
 }
 
+int test_notice_msg_voice_british_names_the_voice(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_VOICE_BRITISH, "Microsoft Zira"), 1);
+    ASSERT_EQ(n.tone, NOTICE_INFO);
+    ASSERT_TRUE(n.title[0] != 0);
+    ASSERT_STR_EQ(n.opening,
+        "Windows has no British English woman's voice installed, so replies use "
+        "Microsoft Zira. To get one, add English (United Kingdom) under Windows "
+        "Settings > Time & language > Speech, or choose AI speech in Settings > Voice.");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_VOICE_BRITISH, "50%s %d"), 1);
+    ASSERT_TRUE(strstr(n.opening, "replies use 50%s %d. To get one") != NULL);
+    TEST_END();
+}
+
 int test_notice_msg_every_id_has_title_and_text(void)
 {
     TEST_BEGIN();
