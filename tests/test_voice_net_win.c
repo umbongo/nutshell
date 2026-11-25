@@ -62,8 +62,11 @@ static int sink_cb(const char *d, size_t n, void *u)
 {
     Sink *s = (Sink *)u;
     if (s->n + n > s->cap) {
-        s->cap = (s->n + n) * 2;
-        s->p = (unsigned char *)realloc(s->p, s->cap);
+        size_t cap = (s->n + n) * 2;
+        unsigned char *np = (unsigned char *)realloc(s->p, cap);
+        if (!np) return 1;                      /* abort the stream */
+        s->p = np;
+        s->cap = cap;
     }
     memcpy(s->p + s->n, d, n);
     s->n += n;
@@ -296,9 +299,107 @@ int test_ai_stream_ex_null_session(void)
     int rc = ai_http_post_stream_ex(NULL, "http://127.0.0.1:1/", NULL, "{}", 2, 1000,
                                     sink_cb, &sk, &status, err, sizeof(err), NULL);
     ASSERT_EQ(rc, -1);
+    ASSERT_EQ(status, 0);
     ASSERT_STR_EQ(err, "No session");
     ASSERT_EQ((int)sk.n, 0);
     sink_free(&sk);
+    TEST_END();
+}
+
+int test_ai_stream_ex_policy_refused(void)
+{
+    TEST_BEGIN();
+    tts_gates(1);
+    voice_net_test_reset_count();
+    HttpLoop *h = hl_start(HLS_WAV, NULL);
+    ASSERT_NOT_NULL(h);
+    if (h) {
+        Sink sk;
+        memset(&sk, 0, sizeof(sk));
+        int status = 0;
+        char err[256];
+        ai_http_test_fail_redirect_policy(1);
+        int rc = tts_post(hl_port(h), &sk, &status, err, sizeof(err), NULL);
+        ai_http_test_fail_redirect_policy(0);
+        ASSERT_EQ(rc, -1);
+        ASSERT_TRUE(strstr(err, "WinHTTP redirect policy refused") != NULL);
+        ASSERT_EQ(status, 0);
+        ASSERT_EQ((int)sk.n, 0);
+        Sleep(100);
+        ASSERT_EQ(hl_requests(h), 0);                    /* nothing was sent */
+        ASSERT_EQ((int)voice_net_open_count(), 1);
+        sink_free(&sk);
+        hl_stop(h);
+    }
+    tts_gates(0);
+    TEST_END();
+}
+
+int test_ai_stream_ex_bad_recv_timeout(void)
+{
+    TEST_BEGIN();
+    tts_gates(1);
+    HttpLoop *h = hl_start(HLS_WAV, NULL);
+    ASSERT_NOT_NULL(h);
+    if (h) {
+        char url[64];
+        snprintf(url, sizeof(url), "http://127.0.0.1:%d/v1/audio/speech", hl_port(h));
+        static const int bad[2] = { 0, -5 };
+        for (int i = 0; i < 2; i++) {
+            Sink sk;
+            memset(&sk, 0, sizeof(sk));
+            int status = 0;
+            char err[256];
+            HINTERNET s = voice_net_open(VNK_TTS);
+            ASSERT_TRUE(s != NULL);
+            if (!s) continue;
+            int rc = ai_http_post_stream_ex(s, url, NULL, "{}", 2, bad[i], sink_cb, &sk,
+                                            &status, err, sizeof(err), NULL);
+            WinHttpCloseHandle(s);
+            ASSERT_EQ(rc, -1);
+            ASSERT_TRUE(err[0] != '\0');
+            ASSERT_EQ((int)sk.n, 0);
+            sink_free(&sk);
+        }
+        Sleep(100);
+        ASSERT_EQ(hl_requests(h), 0);
+        hl_stop(h);
+    }
+    tts_gates(0);
+    TEST_END();
+}
+
+int test_ai_stream_ex_session_kept(void)
+{
+    TEST_BEGIN();
+    tts_gates(1);
+    voice_net_test_reset_count();
+    HlAudio a = { 1, 0, 0.1, NULL };
+    HttpLoop *h = hl_start(HLS_WAV, &a);
+    ASSERT_NOT_NULL(h);
+    HINTERNET s = voice_net_open(VNK_TTS);
+    ASSERT_TRUE(s != NULL);
+    if (h && s) {
+        char url[64];
+        snprintf(url, sizeof(url), "http://127.0.0.1:%d/v1/audio/speech", hl_port(h));
+        for (int i = 0; i < 2; i++) {                    /* the same session, twice */
+            Sink sk;
+            memset(&sk, 0, sizeof(sk));
+            int status = 0;
+            char err[256];
+            int rc = ai_http_post_stream_ex(s, url, NULL, "{}", 2, 5000, sink_cb, &sk,
+                                            &status, err, sizeof(err), NULL);
+            ASSERT_EQ(rc, 0);
+            ASSERT_EQ(status, 200);
+            ASSERT_TRUE(sk.n > 64);
+            sink_free(&sk);
+        }
+        ASSERT_EQ(hl_requests(h), 2);
+        ASSERT_EQ((int)voice_net_open_count(), 1);
+    }
+    if (s) WinHttpCloseHandle(s);
+    hl_stop(h);
+    tts_gates(0);
     TEST_END();
 }
 

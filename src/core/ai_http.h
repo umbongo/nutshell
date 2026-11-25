@@ -114,6 +114,10 @@ int ai_http_post_stream_ex(void *session, const char *url, const char * const *h
                            int *status_out, char *error, size_t error_size,
                            AiNetCancel *nc);
 
+/* TEST-ONLY seam: while on, the redirect-policy option of ai_http_post_stream_ex is
+ * reported as refused (a no-op off Windows). */
+void ai_http_test_fail_redirect_policy(int on);
+
 /* Free the response body. Safe to call with NULL body. */
 void ai_http_response_free(AiHttpResponse *resp);
 

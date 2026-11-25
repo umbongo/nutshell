@@ -196,6 +196,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
                 WinHttpAddRequestHeaders(hRequest, hdr_w, (DWORD)-1,
                                          WINHTTP_ADDREQ_FLAG_ADD);
             }
+            secure_zero(hdr_w, sizeof(hdr_w));   /* it may hold a bearer key */
         }
     }
 
@@ -279,6 +280,13 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
     return 0;
 }
 
+static volatile LONG g_fail_redirect_policy;
+
+void ai_http_test_fail_redirect_policy(int on)
+{
+    InterlockedExchange(&g_fail_redirect_policy, on ? 1 : 0);
+}
+
 /* session NULL: opens (and closes) its own with the 5 minute streaming timeouts and
  * follows redirects as WinHTTP does; a caller's session (the _ex variant) is never
  * closed here, gets 10/10/30 s/recv_ms and a request that never follows a redirect. */
@@ -305,6 +313,11 @@ static int ai_http_post_stream_impl(void *session, int recv_ms,
         return -1;
     }
 
+    if (!own && recv_ms <= 0) {     /* a speech worker never blocks unbounded */
+        if (error) snprintf(error, error_size, "Invalid receive timeout");
+        return -1;
+    }
+
     HINTERNET hSession = own ? ns_winhttp_open(NULL) : (HINTERNET)session;
     if (!hSession) {
         if (error) snprintf(error, error_size, "WinHttpOpen failed: %lu",
@@ -312,10 +325,13 @@ static int ai_http_post_stream_impl(void *session, int recv_ms,
         return -1;
     }
 
-    if (own)    /* Streaming can take a long time — 5 min receive timeout */
+    if (own) {  /* Streaming can take a long time — 5 min receive timeout */
         WinHttpSetTimeouts(hSession, 0, 60000, 30000, 300000);
-    else
-        WinHttpSetTimeouts(hSession, 10000, 10000, 30000, recv_ms);
+    } else if (!WinHttpSetTimeouts(hSession, 10000, 10000, 30000, recv_ms)) {
+        if (error) snprintf(error, error_size, "WinHttpSetTimeouts failed: %lu",
+                            GetLastError());
+        return -1;
+    }
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
     if (!hConnect) {
@@ -338,8 +354,18 @@ static int ai_http_post_stream_impl(void *session, int recv_ms,
         return -1;
     }
     if (!own) {
+        /* Fail closed: a request under the default policy would follow a redirect
+         * and re-send the Authorization header. Nothing has been sent yet. */
         DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
-        WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy));
+        BOOL ok = !g_fail_redirect_policy &&
+                  WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy));
+        if (!ok) {
+            if (error) snprintf(error, error_size, "WinHTTP redirect policy refused: %lu",
+                                GetLastError());
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return -1;
+        }
     }
     if (req_arm(hRequest, nc) != 0) {
         if (error) snprintf(error, error_size, "cancelled");
@@ -456,6 +482,7 @@ static int ai_http_post_stream_impl(void *session, int recv_ms,
     if (ret != 0 && error && error_size > 0)
         snprintf(error, error_size, "connection lost during reply");
 
+    secure_zero(chunk_buf, sizeof(chunk_buf));   /* it carried speech audio */
     req_close(hRequest, nc);
     WinHttpCloseHandle(hConnect);
     sess_close(hSession, own);
@@ -758,6 +785,8 @@ int ai_http_post_stream(const char *url, const char * const *headers,
         snprintf(error, error_size, "HTTP not available on this platform");
     return -1;
 }
+
+void ai_http_test_fail_redirect_policy(int on) { (void)on; }
 
 int ai_http_post_stream_ex(void *session, const char *url, const char * const *headers,
                            const char *body, size_t body_len, int recv_ms,

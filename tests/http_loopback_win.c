@@ -336,7 +336,12 @@ void hl_stop(HttpLoop *h)
 {
     if (!h) return;
     InterlockedExchange(&h->stop, 1);
-    WaitForSingleObject(h->thread, INFINITE);
+    if (WaitForSingleObject(h->thread, 5000) != WAIT_OBJECT_0) {
+        /* A server thread that will not stop would hang the whole run: say so, and end it. */
+        printf("[FAIL] http_loopback: the server thread did not stop within 5 s\n");
+        fflush(stdout);
+        ExitProcess(1);
+    }
     CloseHandle(h->thread);
     closesocket(h->ls);
     free(h->body);
