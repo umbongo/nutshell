@@ -150,9 +150,8 @@ int test_ai_nc_fire_wakes_blocked_winhttp_call(void)
 {
     TEST_BEGIN();
     if (running_under_wine()) {
-        printf("  [SKIP] Wine does not abort a synchronous WinHTTP call on handle close;"
-               " runs on a Windows host only\n");
-        TEST_END();
+        TEST_SKIP("Wine does not abort a synchronous WinHTTP call on handle close;"
+                  " runs on a Windows host only");
     }
     WSADATA wd;
     WSAStartup(MAKEWORD(2, 2), &wd);
