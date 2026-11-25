@@ -201,11 +201,10 @@ VoiceTurnClass voice_turn_classify(const char *transcript, const VoiceReplyCtx *
     if (!r) return VTC_TEXT;
 
     if (r->spoken) {
-        int window = r->playing || now < r->spoken_end_at
-                     || now - r->spoken_end_at <= VOICE_ECHO_AFTER_MS;
+        int window = r->playing || (long)(now - r->spoken_end_at) <= VOICE_ECHO_AFTER_MS;
         if (window && voice_echo_match(r->spoken, transcript)) return VTC_ECHO;
     }
-    if (r->reply && (now < r->reply_at || now - r->reply_at <= VOICE_PHRASE_MAX_AGE_MS)
+    if (r->reply && (long)(now - r->reply_at) <= VOICE_PHRASE_MAX_AGE_MS
         && !voice_speak_ends_with_question(r->reply)) {
         VoicePhrase ph = voice_phrase_match(transcript);
         if (ph == VPH_REPEAT) return VTC_REPEAT;

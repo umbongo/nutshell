@@ -185,3 +185,28 @@ int test_vecho_curly_apostrophe_nbsp_emdash(void)
     ASSERT_EQ(voice_echo_match("the disk\xC2\xA0" "is\xE2\x80\x94" "full and healthy now", "the disk is full and healthy now"), 1);
     TEST_END();
 }
+
+/* The echo window survives the tick counter wrapping (32 bits on Windows). */
+int test_vturn_echo_window_tick_wrap(void)
+{
+    TEST_BEGIN();
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.spoken = "the C drive has 120 GB free";
+    r.spoken_end_at = (unsigned long)-500;
+    ASSERT_EQ(voice_turn_classify("120 GB free", &r, 1000), VTC_ECHO);   /* 1500 ms after */
+    ASSERT_EQ(voice_turn_classify("120 GB free", &r, 2600), VTC_TEXT);   /* 3100 ms after */
+    TEST_END();
+}
+
+int test_vturn_phrase_age_tick_wrap(void)
+{
+    TEST_BEGIN();
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.reply = "The disk is fine.";
+    r.reply_at = (unsigned long)-100000;
+    ASSERT_EQ(voice_turn_classify("repeat that", &r, 100000), VTC_REPEAT);   /* 200 s after */
+    ASSERT_EQ(voice_turn_classify("repeat that", &r, 250000), VTC_TEXT);     /* 350 s after */
+    TEST_END();
+}

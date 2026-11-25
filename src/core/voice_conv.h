@@ -46,6 +46,8 @@ typedef enum {
     VCE_SPEECH_DONE,  /* what was being spoken was read to the end */
     VCE_SPEECH_FAILED,/* speech could not start */
     VCE_END,          /* a = VoiceConvEnd */
+    VCE_EXTERNAL_SEND,/* the box was sent from outside the conversation (typed, a command) */
+    VCE_SPEECH_PROGRESS, /* the speech advanced (a sentence began or ended) */
     VCE_TICK
 } VoiceConvEvent;
 enum {  /* action bits */
@@ -73,7 +75,7 @@ enum {  /* action bits */
 typedef enum { VCH_NONE = 0, VCH_LISTENING, VCH_HEARING, VCH_SENDING, VCH_TRANSCRIBING,
                VCH_WORKING, VCH_SPEAKING, VCH_PAUSED_BG, VCH_PAUSED_DIALOG, VCH_APPROVAL,
                VCH_DIDNT_CATCH, VCH_IGNORED_ECHO, VCH_REPEATING, VCH_CARRYING_ON,
-               VCH_LIVE_UNAVAILABLE, VCH_LIVE_STOPPED } VoiceConvHeader;
+               VCH_LIVE_UNAVAILABLE, VCH_LIVE_STOPPED, VCH_AI_FAILED } VoiceConvHeader;
 typedef enum { VCN_NONE = 0, VCN_END_SETTINGS, VCN_END_LOCK, VCN_END_SILENCE, VCN_END_CHAT,
                VCN_BUSY, VCN_NO_SESSION, VCN_FULL, VCN_LAUNCH, VCN_NO_SPEECH } VoiceConvNote;
 typedef enum { VCPH_NONE = 0, VCPH_APPROVE_COMMAND, VCPH_APPROVE_WRITE, VCPH_APPROVE_OTHER,
@@ -93,6 +95,7 @@ typedef struct {
     int speaking_reply;           /* SPEAKING a reply (1) or a phrase (0) */
     int held, held_continue;      /* a held reply (held_phrase: the WENT_WRONG phrase) */
     int held_phrase;
+    int held_local;               /* the held speech was a local repeat or continue */
     int card;                     /* a card raised while paused: VoiceCardKind + 1, 0 none */
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
     unsigned long state_at;       /* when the state last changed (the watchdogs' clock) */
