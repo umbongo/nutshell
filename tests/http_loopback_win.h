@@ -29,7 +29,8 @@ enum {
     HLS_422,
     HLS_429,
     HLS_HANG,           /* reads the request, never answers (until hl_stop) */
-    HLS_302             /* answers every request with a 302 to another path */
+    HLS_302,            /* answers every request with a 302 to another path */
+    HLS_307             /* the same with a 307 (a POST would be re-sent to the new path) */
 };
 
 typedef struct {

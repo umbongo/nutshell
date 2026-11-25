@@ -269,6 +269,12 @@ static void answer(HttpLoop *h, SOCKET c)
         send_head(c, "302 Found", "text/plain", loc, 0);
         break;
     }
+    case HLS_307: {
+        char loc[96];
+        snprintf(loc, sizeof(loc), "Location: http://127.0.0.1:%d/elsewhere\r\n", h->port);
+        send_head(c, "307 Temporary Redirect", "text/plain", loc, 0);
+        break;
+    }
     case HLS_HANG:
         while (!h->stop) Sleep(20);
         break;

@@ -403,4 +403,83 @@ int test_ai_stream_ex_session_kept(void)
     TEST_END();
 }
 
+/* The speech-to-text upload (a caller's session through ai_http_post_ct_ex) never follows a
+ * redirect: the bearer key would be re-sent to wherever the server points. */
+static int stt_upload(int port, AiHttpResponse *resp)
+{
+    char url[64];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/v1/audio/transcriptions", port);
+    static const char *hdrs[] = { "Authorization: Bearer test-key-0000", NULL };
+    static const char body[] = "--b\r\nx\r\n--b--\r\n";
+    HINTERNET s = voice_net_open(VNK_STT_UPLOAD);
+    if (!s) return -2;
+    int rc = ai_http_post_ct_ex(s, url, hdrs, "multipart/form-data; boundary=b", body,
+                                sizeof(body) - 1, 5000, 5000, resp, NULL);
+    WinHttpCloseHandle(s);
+    return rc;
+}
+
+int test_stt_upload_no_redirect(void)
+{
+    TEST_BEGIN();
+    tts_gates(1);
+    HttpLoop *h = hl_start(HLS_307, NULL);
+    ASSERT_NOT_NULL(h);
+    if (h) {
+        AiHttpResponse resp;
+        int rc = stt_upload(hl_port(h), &resp);
+        ASSERT_EQ(rc, -1);
+        ASSERT_EQ(resp.status_code, 307);
+        ASSERT_TRUE(resp.error[0] != '\0');             /* it says so: never an empty error */
+        ASSERT_TRUE(strstr(resp.error, "307") != NULL);
+        Sleep(100);                                      /* a re-sent request would be in by now */
+        ASSERT_EQ(hl_requests(h), 1);
+        ai_http_response_free(&resp);
+        hl_stop(h);
+    }
+    tts_gates(0);
+    TEST_END();
+}
+
+int test_stt_upload_policy_refused(void)
+{
+    TEST_BEGIN();
+    tts_gates(1);
+    HttpLoop *h = hl_start(HLS_WAV, NULL);
+    ASSERT_NOT_NULL(h);
+    if (h) {
+        AiHttpResponse resp;
+        ai_http_test_fail_redirect_policy(1);
+        int rc = stt_upload(hl_port(h), &resp);
+        ai_http_test_fail_redirect_policy(0);
+        ASSERT_EQ(rc, -1);
+        ASSERT_TRUE(strstr(resp.error, "redirect policy refused") != NULL);
+        ASSERT_EQ(hl_requests(h), 0);                    /* failed closed: nothing was sent */
+        ai_http_response_free(&resp);
+        hl_stop(h);
+    }
+    tts_gates(0);
+    TEST_END();
+}
+
+/* The upload still works when nothing redirects, and keeps its key. */
+int test_stt_upload_plain_still_works(void)
+{
+    TEST_BEGIN();
+    tts_gates(1);
+    HttpLoop *h = hl_start(HLS_401, NULL);
+    ASSERT_NOT_NULL(h);
+    if (h) {
+        AiHttpResponse resp;
+        int rc = stt_upload(hl_port(h), &resp);
+        ASSERT_EQ(rc, 0);                                /* an ordinary status stays an ordinary reply */
+        ASSERT_EQ(resp.status_code, 401);
+        ASSERT_TRUE(strstr(hl_request_head(h), "Authorization: Bearer test-key-0000") != NULL);
+        ai_http_response_free(&resp);
+        hl_stop(h);
+    }
+    tts_gates(0);
+    TEST_END();
+}
+
 #endif /* _WIN32 */

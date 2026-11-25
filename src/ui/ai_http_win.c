@@ -102,6 +102,13 @@ static void sess_close(HINTERNET s, int own)
     if (own) WinHttpCloseHandle(s);
 }
 
+static volatile LONG g_fail_redirect_policy;
+
+void ai_http_test_fail_redirect_policy(int on)
+{
+    InterlockedExchange(&g_fail_redirect_policy, on ? 1 : 0);
+}
+
 static int ai_http_post_impl(const char *url, const char * const *headers,
                              const char *content_type,
                              const char *body, size_t body_len,
@@ -139,7 +146,12 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         return -1;
     }
 
-    WinHttpSetTimeouts(hSession, to->resolve, to->connect, to->send, to->recv);
+    if (!WinHttpSetTimeouts(hSession, to->resolve, to->connect, to->send, to->recv)) {
+        snprintf(resp->error, sizeof(resp->error), "WinHttpSetTimeouts failed: %lu",
+                 GetLastError());
+        sess_close(hSession, own);
+        return -1;
+    }
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
     if (!hConnect) {
@@ -160,6 +172,21 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         WinHttpCloseHandle(hConnect);
         sess_close(hSession, own);
         return -1;
+    }
+    if (!own) {
+        /* A caller's session carries a bearer key (the voice opener's): never follow a
+         * redirect, which would re-send it to wherever the server points. Fail closed:
+         * nothing has been sent yet. */
+        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        BOOL ok = !g_fail_redirect_policy &&
+                  WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy));
+        if (!ok) {
+            snprintf(resp->error, sizeof(resp->error), "WinHTTP redirect policy refused: %lu",
+                     GetLastError());
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return -1;
+        }
     }
     if (req_arm(hRequest, nc) != 0) {
         snprintf(resp->error, sizeof(resp->error), "cancelled");
@@ -229,6 +256,16 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
         WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
     resp->status_code = (int)status;
 
+    if (!own && status >= 300 && status < 400) {
+        /* The redirect was not followed (policy above): an error that says so, not a reply. */
+        snprintf(resp->error, sizeof(resp->error), "Redirect refused (HTTP %lu)",
+                 (unsigned long)status);
+        req_close(hRequest, nc);
+        WinHttpCloseHandle(hConnect);
+        sess_close(hSession, own);
+        return -1;
+    }
+
     /* Read response body */
     size_t total = 0;
     size_t cap = 4096;
@@ -278,13 +315,6 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
     WinHttpCloseHandle(hConnect);
     sess_close(hSession, own);
     return 0;
-}
-
-static volatile LONG g_fail_redirect_policy;
-
-void ai_http_test_fail_redirect_policy(int on)
-{
-    InterlockedExchange(&g_fail_redirect_policy, on ? 1 : 0);
 }
 
 /* session NULL: opens (and closes) its own with the 5 minute streaming timeouts and
