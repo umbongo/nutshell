@@ -155,7 +155,7 @@ WIN_ONLY_TESTS = tests/test_winhttp_open_win.c tests/test_icons.c tests/test_loc
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
                  tests/test_pw_reveal_win.c tests/test_telnet_io_win.c \
                  tests/test_ns_tip_win.c tests/test_settings_label_win.c \
-                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_stt_win.c tests/test_voice_net_win.c tests/test_voice_ptt_win.c tests/test_voice_ws_win.c tests/test_voice_live_win.c tests/test_voice_lock_win.c tests/test_voice_tts_win.c tests/ws_loopback_win.c tests/test_ns_slider_win.c tests/test_ns_draw_level_meter_win.c
+                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_stt_win.c tests/test_voice_net_win.c tests/test_voice_ptt_win.c tests/test_voice_ws_win.c tests/test_voice_live_win.c tests/test_voice_lock_win.c tests/test_voice_tts_win.c tests/test_voice_conv_win.c tests/ws_loopback_win.c tests/test_ns_slider_win.c tests/test_ns_draw_level_meter_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -322,6 +322,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/voice_live_win.c src/core/voice_live.c src/core/voice_resample.c src/core/voice_sgate.c src/core/voice_ledger.c tests/test_voice_live_win.c src/ui/voice_lock_win.c tests/test_voice_lock_win.c \
                    src/ui/ns_slider.c src/core/ns_slider_math.c tests/test_ns_slider_win.c src/core/voice_level.c tests/test_ns_draw_level_meter_win.c \
                    src/ui/voice_tts_win.c src/ui/voice_voices_win.c src/core/voice_speak.c src/core/voice_voices.c tests/test_voice_tts_win.c \
+                   src/ui/voice_conv_win.c src/core/voice_conv.c src/core/voice_echo.c src/core/voice_transcript.c tests/test_voice_conv_win.c \
                    tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \

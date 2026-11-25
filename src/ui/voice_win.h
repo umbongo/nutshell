@@ -15,6 +15,8 @@
 /* A main-window timer id window.c does not use: the one-shot that ends the
  * Mic start delay or the 60 s cap. */
 #define VOICE_TIMER_ID 0x56F1
+/* The conversation controller's one-shot timer is VOICE_CONV_TIMER_ID (0x56F2), in
+ * voice_conv_win.h. */
 
 /* The AI panel (docked or not), or NULL; owned by window.c. */
 HWND ui_ai_panel(void);
@@ -84,8 +86,21 @@ int voice_send_pressed(void);
  * conversation runs. window.c routes them (Task 13). */
 #define WM_VOICE_TURN_IDLE (WM_APP + 0x45)
 #define WM_VOICE_CARD      (WM_APP + 0x46)
+/* Posted by the conversation glue when the first spoken reply of a launch needs the
+ * "no British voice" notice; the handler shows it (the dialog pauses the conversation). */
+#define WM_VOICE_NOTICE    (WM_APP + 0x47)
 
 /* The Send/Stop handler's Stop branch ran: a conversation ends its turn. */
 void voice_on_chat_stop(void);
+
+/* Conversation mode: window.c and the panel route these (each is a no-op with no
+ * conversation running). */
+void voice_on_activation(void);          /* WM_ACTIVATEAPP / WM_ENABLE, both directions */
+void voice_on_tts(LPARAM lp);            /* WM_VOICE_TTS: lParam is a VoiceTtsMsg the receiver frees */
+void voice_on_turn_idle(void);           /* WM_VOICE_TURN_IDLE */
+void voice_on_card(WPARAM kind);         /* WM_VOICE_CARD */
+void voice_on_notice(void);              /* WM_VOICE_NOTICE */
+void voice_on_conv_timer(void);          /* WM_TIMER with VOICE_CONV_TIMER_ID */
+void voice_on_panel_closed(void);        /* the AI panel was hidden or destroyed */
 
 #endif /* NUTSHELL_VOICE_WIN_H */
