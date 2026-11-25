@@ -918,8 +918,8 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
   **(spec author's call of that condition)**, the shared notice dialog (not a
   `MessageBox`) says: "Windows has no British English woman's voice
   installed, so replies use <voice>. To get one, add English (United Kingdom)
-  under Windows Settings > Time & language > Speech, or choose AI speech in
-  Settings > Voice." The dialog is modal, so the conversation is Paused while
+  under Windows Settings > Time & language > Speech." (The clause "or choose
+  AI speech in Settings > Voice" is added with AI speech in PR 3.) The dialog is modal, so the conversation is Paused while
   it shows and the reply is held (§5.4); it is spoken when the dialog closes.
   The Voice page shows the same fact. Verify the Windows Settings path on
   Windows 10 and 11.
@@ -1250,7 +1250,7 @@ Each wording is the **spec author's call**, except where marked:
 The notice dialog, once per launch (critique round 2; main session's call):
 "Windows has no British English woman's voice installed, so replies use
 <voice>. To get one, add English (United Kingdom) under Windows Settings >
-Time & language > Speech, or choose AI speech in Settings > Voice."
+Time & language > Speech." (PR 3 adds "or choose AI speech in Settings > Voice".)
 
 Settings > Voice lines: "Live text as you speak needs OpenAI or Mistral";
 the English (UK) voices line (§8.3); "Your microphone reports no echo
@@ -1975,6 +1975,17 @@ check pending*. "Measured here" means a test or command on `automaton`;
   sent or read. The voice key works with the focus outside the panel while a
   conversation runs. Every reply starts at full volume (the cut and each
   speech reset the duck).
+- **Opus review fixes (2026-11-25).** A speech thread that reports an error stays
+  in its loop (no `VTT_EXITED`), so the glue quits it on `VTT_ERROR` for the
+  current reply (an older reply's error is ignored) and voice off and shutdown
+  quit every speech context (`voice_tts_quit_all`). A dialog that disables only
+  the undocked AI panel pauses the conversation (`dialog_open` op; the panel's
+  `WM_ENABLE` TRUE posts its resume). The speak mode is recomputed from each
+  new capture's echo-cancellation report. A local repeat or continue does not
+  restart the 3-minute silence clock (§5.6: from the last turn sent). Deadlines
+  compare as signed differences so the 32-bit tick wrap is safe. Not fixed:
+  a send that bypasses `voice_send_pressed` (Retry) does not take the
+  conversation to Working (notes, Open list).
 - **Not exercised by any test:** the real ops table and the routing in
   `voice_win.c`, `window.c` and `ai_chat*.c`. They compile clean under MinGW
   with `-Werror` and the extra flags, but no `wintest` links them.

@@ -750,6 +750,25 @@ Open, in priority order:
       "Paused ... in the background" until the user clicks back (unverified, hand check); the
       note shown when an RDP or console disconnect ends recording still reads "Windows was
       locked".
+      (r) From the two Opus reviews of the whole branch (2026-11-25), not built: Retry (and any
+      other send that does not go through `voice_send_pressed`) leaves a running conversation
+      Listening with the microphone open while the chat works, and its reply is not spoken
+      (spec 5.2 closes the capture while Working): it needs an "external send" event for the
+      controller (Listening to Working, capture closed, the reply baseline taken), not a
+      patch; Enter while a reply is being spoken stops the speech instead of sending the typed
+      text (Send shows Stop), against spec 5.1 "sent with Enter as normal": the maintainer
+      decides; `voice_audio_conv_end` and `voice_audio_conv_mode` go through `va_push_raw`,
+      which drops the command if `realloc` fails, so under memory exhaustion the glue believes
+      the capture closed while the device stays open (a close that cannot fail: a token field
+      under the queue lock); the glue's event queue drops events past 24 silently, a `VCE_END`
+      included (not reachable today, at most about 3 per step); hand checks: the ducking
+      opt-out is set on the default render session after the capture client is initialised
+      (Microsoft's guidance applies it to the communications stream's session before it
+      opens), so do other apps and the reply duck?; the speech thread's CPU during an idle
+      conversation (the SAPI notify event's reset mode); whether trimming the chat's message
+      list between a send and its reply can make the conversation skip the reply; the failed
+      post of a conversation turn (`va_post` now frees it) has no test, the seam cannot make
+      `PostMessage` fail.
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
