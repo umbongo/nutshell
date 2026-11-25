@@ -165,6 +165,59 @@ int test_vais_unknown_provider(void)
     TEST_END();
 }
 
+/* R43: a key typed for one binding is not kept once the page's binding differs, and the
+ * saved key is then not offered for the new binding. */
+int test_vais_key_rebind(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char typed[CFG_STR_MAX], now[CFG_STR_MAX], err[200];
+    base_settings(&s);
+    voice_ais_binding(&s, typed, sizeof typed);
+    ASSERT_STR_EQ(typed, "mistral");
+    /* unchanged binding: kept */
+    voice_ais_binding(&s, now, sizeof now);
+    ASSERT_EQ(voice_ais_key_still_bound(typed, now), 1);
+    /* the exact scenario: key typed under Mistral, provider then Custom with a URL */
+    snprintf(s.tts_api_key, sizeof s.tts_api_key, "KEY");
+    snprintf(s.tts_api_key_for, sizeof s.tts_api_key_for, "%s", typed);
+    set_custom(&s, "http://some-host:8880/v1", "kokoro", "bf_emma");
+    voice_ais_binding(&s, now, sizeof now);
+    ASSERT_TRUE(strcmp(now, typed) != 0);
+    ASSERT_EQ(voice_ais_key_still_bound(typed, now), 0);
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);   /* custom needs no key */
+    ASSERT_STR_EQ(voice_ais_key(&s, &t), "");                   /* not offered to the new host */
+    /* typed for custom host A, URL now host B: not kept */
+    char a[CFG_STR_MAX];
+    set_custom(&s, "http://host-a/v1", "kokoro", "bf_emma");
+    voice_ais_binding(&s, a, sizeof a);
+    set_custom(&s, "http://host-b/v1", "kokoro", "bf_emma");
+    voice_ais_binding(&s, now, sizeof now);
+    ASSERT_EQ(voice_ais_key_still_bound(a, now), 0);
+    ASSERT_EQ(voice_ais_key_still_bound(NULL, now), 0);
+    ASSERT_EQ(voice_ais_key_still_bound(a, NULL), 0);
+    TEST_END();
+}
+
+/* voice_ais_resolve fills t->host before a later error (the Settings privacy line reads it). */
+int test_vais_resolve_host_on_error(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200];
+    base_settings(&s);
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);   /* Mistral without a key */
+    ASSERT_STR_EQ(err, "Enter a speech API key");
+    ASSERT_STR_EQ(t.host, "api.mistral.ai");
+    set_custom(&s, "http://some-host:8880/v1", "", "bf_emma");   /* Custom without a model */
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+    ASSERT_STR_EQ(err, "Enter the speech model your server uses");
+    ASSERT_STR_EQ(t.host, "some-host:8880");
+    TEST_END();
+}
+
 int test_vais_key_shared(void)
 {
     TEST_BEGIN();

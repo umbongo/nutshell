@@ -47,12 +47,19 @@ typedef struct {
  * the voice your server uses" and, when the provider needs a key and
  * voice_ais_key() gives "", "Enter a speech API key". An empty model or voice takes
  * Mistral's default; Custom has none. */
+/* t->host (and t->provider, url, model, voice) are filled before a later error such as a
+ * missing model or key, so the Settings privacy line can name the host even then. */
 int  voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t cap);
 
 /* The provider binding of the speech key: "mistral", "custom <normalised base>" or
  * "" (unknown provider, an unusable Custom base, or a binding that does not fit
  * cap, in which case "" and never a cut string). Bindings are compared whole. */
 void voice_ais_binding(const Settings *s, char *out, size_t cap);
+
+/* R43, the Settings page: a key typed while the page's binding was typed_for is still the
+ * user's for the binding now on the page only when the two are equal; otherwise it is not
+ * kept (and never rebound), and the key is asked for again. NULL is never kept. */
+int  voice_ais_key_still_bound(const char *typed_for, const char *now);
 
 /* The key the speech provider shares with the effective speech-to-text target: its
  * own key (VAIS_KEY_CHAT when it reads the AI assistant's, else VAIS_KEY_STT) when

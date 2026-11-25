@@ -120,6 +120,11 @@ const char *voice_ais_key(const Settings *s, const VoiceAisTarget *t)
     return s->tts_api_key;
 }
 
+int voice_ais_key_still_bound(const char *typed_for, const char *now)
+{
+    return typed_for && now && strcmp(typed_for, now) == 0;
+}
+
 int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t cap)
 {
     if (!s || !t) return 0;

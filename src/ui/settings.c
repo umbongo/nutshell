@@ -264,8 +264,7 @@ typedef struct {
     int      voice_uk_installed;  /* a British English woman's voice is installed */
     int      voice_tts_key_touched; /* the user edited the speech key this session (R43) */
     int      voice_tts_key_setting; /* the page itself is setting the key edit's text */
-    const VoiceAisProvider *voice_ais_seeded; /* provider the voice/model lists were last seeded from */
-    int      voice_ais_seeded_set;
+    char     voice_tts_key_bound[CFG_STR_MAX]; /* the page binding when the key was last typed (R43) */
     HWND     hVoiceLiveNote;      /* dim "Live text as you speak needs OpenAI or Mistral" */
     SettingsCtrl *ctrl_voice_live;       /* the Live model row (OpenAI or Mistral) */
     SettingsCtrl *ctrl_voice_live_note;  /* the note in the same slot otherwise */
@@ -301,7 +300,7 @@ static void ai_enable_sync(SettingsDlgData *d);
 static void voice_enable_sync(SettingsDlgData *d);
 static void voice_test_apply(SettingsDlgData *d, VoiceTestEvent ev);
 static void voice_test_note(SettingsDlgData *d, const char *text);
-static void voice_page_read(SettingsDlgData *d, Settings *s, int for_save);
+static void voice_page_read(SettingsDlgData *d, Settings *s);
 
 /* The open Settings dialog that listens for WM_VOICE_AUDIO (UI thread only). */
 static SettingsDlgData *g_voice_dlg;
@@ -1130,8 +1129,6 @@ static void voice_ais_seed(SettingsDlgData *d, const char *voice_txt, const char
     if (!cv || !cm) return;
     SendMessage(cv, CB_RESETCONTENT, 0, 0);
     SendMessage(cm, CB_RESETCONTENT, 0, 0);
-    d->voice_ais_seeded = p;
-    d->voice_ais_seeded_set = 1;
     if (!p) {
         if (voice_txt) SetWindowText(cv, voice_txt);
         if (model_txt) SetWindowText(cm, model_txt);
@@ -1155,7 +1152,7 @@ static Settings *voice_page_copy(SettingsDlgData *d)
     Settings *c = (Settings *)malloc(sizeof(*c));
     if (!c) return NULL;
     *c = d->cfg->settings;
-    voice_page_read(d, c, 0);
+    voice_page_read(d, c);
     return c;
 }
 
@@ -1260,7 +1257,6 @@ static void voice_play_sample(SettingsDlgData *d)
         voice_page_free(c);
         return;
     }
-    voice_test_note(d, "");
     (void)voice_tts_sample(owner, voice_win_chosen_id(d));
 }
 
@@ -1690,7 +1686,8 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
         if (d && d->theme) {
             HWND hCtl = (HWND)lParam;
             if ((d->hUrlWarn && hCtl == d->hUrlWarn) ||
-                (d->hVoiceUrlWarn && hCtl == d->hVoiceUrlWarn)) {
+                (d->hVoiceUrlWarn && hCtl == d->hVoiceUrlWarn) ||
+                (d->hVoiceTtsWarn && hCtl == d->hVoiceTtsWarn)) {
                 SetTextColor((HDC)wParam, theme_cr(ns_tokens()->warning.base));
                 SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
                 return (LRESULT)d->hBrBgPrimary;
@@ -1704,7 +1701,7 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
                        hCtl == d->hCtxHint || hCtl == d->hToolTimeoutNote ||
                        hCtl == d->hToolRoundsNote ||
                        hCtl == d->hVoiceBlock || hCtl == d->hVoiceAiNote ||
-                       hCtl == d->hVoiceLangHint);
+                       hCtl == d->hVoiceLangHint || hCtl == d->hVoicePrivacy);
             for (int di = 0; di < d->n_dbg_dim && !dim; di++)
                 dim = (hCtl == d->hDbgDim[di]);
             SetTextColor((HDC)wParam,
@@ -2087,13 +2084,12 @@ static int keep_entry(SettingsHelpId id, BOOL parsed_ok, UINT v, int current)
                                   (h->flags & SH_F_ZERO_MEANS_NEVER) != 0, current);
 }
 
-/* The Voice page's values, read into *s. for_save is 0 for a throw-away copy (Play
- * sample, the shared-key check): the same values, nothing else differs. */
-static void voice_page_read(SettingsDlgData *d, Settings *s, int for_save)
+/* The Voice page's values, read into *s (Save, and the throw-away copy of Play
+ * sample and the shared-key check). */
+static void voice_page_read(SettingsDlgData *d, Settings *s)
 {
     BOOL ok;
     UINT v;
-    (void)for_save;
     /* Voice page. Enable voice is saved as ticked (the assistant's
      * own switch is applied by voice_feature_apply: it needs both). */
     s->voice_enabled = (IsDlgButtonChecked(d->hPage, IDC_VOICE_ENABLE)
@@ -2245,6 +2241,13 @@ static void voice_page_read(SettingsDlgData *d, Settings *s, int for_save)
         }
         /* The speech key is rebound to the provider on the page only when the user
          * edited it this session (R43); a stale preserved blob goes with a new key. */
+        /* A key typed for another binding than the page has now is dropped, not rebound. */
+        if (d->voice_tts_key_touched) {
+            char now[CFG_STR_MAX];
+            voice_ais_binding(s, now, sizeof(now));
+            if (!voice_ais_key_still_bound(d->voice_tts_key_bound, now))
+                d->voice_tts_key_touched = 0;
+        }
         if (d->voice_tts_key_touched) {
             GetDlgItemText(d->hPage, IDC_VOICE_TTS_KEY, s->tts_api_key, (int)sizeof(s->tts_api_key));
             voice_ais_binding(s, s->tts_api_key_for, sizeof(s->tts_api_key_for));
@@ -3542,33 +3545,33 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             break;
 
         case IDC_VOICE_SPEECH:
-            if (d && HIWORD(wParam) == CBN_SELCHANGE) {
-                voice_enable_sync(d);
-                relayout(hwnd, d);
-                InvalidateRect(d->hPage, NULL, TRUE);
-            }
+            if (d && HIWORD(wParam) == CBN_SELCHANGE)
+                voice_enable_sync(d);   /* relays out when a row comes or goes */
             break;
 
         case IDC_VOICE_TTS_PROVIDER:
             if (d && HIWORD(wParam) == CBN_SELCHANGE) {
                 voice_ais_seed(d, NULL, NULL);   /* the new provider's default first (R16) */
                 voice_enable_sync(d);
-                relayout(hwnd, d);
-                InvalidateRect(d->hPage, NULL, TRUE);
             }
             break;
 
         case IDC_VOICE_TTS_URL:
-            if (d && HIWORD(wParam) == EN_CHANGE) {
+            if (d && HIWORD(wParam) == EN_CHANGE)
                 voice_enable_sync(d);
-                relayout(hwnd, d);
-                InvalidateRect(d->hPage, NULL, TRUE);
-            }
             break;
 
         case IDC_VOICE_TTS_KEY:
-            if (d && HIWORD(wParam) == EN_CHANGE && !d->voice_tts_key_setting)
-                d->voice_tts_key_touched = 1;   /* only a key the user typed is rebound at Save (R43) */
+            if (d && HIWORD(wParam) == EN_CHANGE && !d->voice_tts_key_setting) {
+                /* Only a key the user typed is rebound at Save, to the binding it was typed
+                 * for (R43). */
+                Settings *c = voice_page_copy(d);
+                if (c) {
+                    voice_ais_binding(c, d->voice_tts_key_bound, sizeof(d->voice_tts_key_bound));
+                    d->voice_tts_key_touched = 1;
+                    voice_page_free(c);
+                }
+            }
             break;
 
         case IDC_AI_REFRESH:
@@ -3874,7 +3877,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             s->ai_tool_auto_rounds =
                 keep_entry(SH_AI_TOOL_ROUNDS, ok, v, s->ai_tool_auto_rounds);
 
-            voice_page_read(d, s, 1);
+            voice_page_read(d, s);
 
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)

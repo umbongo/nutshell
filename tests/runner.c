@@ -3023,6 +3023,8 @@ int test_vais_provider_table(void);
 int test_vais_resolve_mistral_defaults(void);
 int test_vais_resolve_custom(void);
 int test_vais_unknown_provider(void);
+int test_vais_key_rebind(void);
+int test_vais_resolve_host_on_error(void);
 int test_vais_key_shared(void);
 int test_vais_key_not_shared(void);
 int test_vais_key_binding(void);
@@ -8694,6 +8696,8 @@ int main(void) {
     failed += test_vais_resolve_mistral_defaults();
     failed += test_vais_resolve_custom();
     failed += test_vais_unknown_provider();
+    failed += test_vais_key_rebind();
+    failed += test_vais_resolve_host_on_error();
     failed += test_vais_key_shared();
     failed += test_vais_key_not_shared();
     failed += test_vais_key_binding();
