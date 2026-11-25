@@ -708,6 +708,10 @@ Open, in priority order:
       run only after tmux is closed (maintainer, 2026-11-25, *reported*, not investigated).
 - [ ] Thinking view: each mode (collapsed, compact, extended, open) needs its own colour as
       it cycles; two of them are both green today (maintainer, 2026-11-25).
+- [ ] Thinking view: when a reasoning stream has ended and a new one begins, minimise the
+      earlier one so it stops taking screen space; streaming the reasoning live stays as it
+      is. The user can reopen an earlier stream to read it, and a thinking box opened by
+      hand stays open until it is closed by hand (maintainer, 2026-11-25).
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
