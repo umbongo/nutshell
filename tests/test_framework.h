@@ -48,6 +48,7 @@ static inline FILE *test_fopen_private(const char *path)
 
 extern int _tf_failed;
 extern int _tf_run;
+extern int _tf_skipped;
 
 #define TEST_BEGIN() int _tf_local_fail = 0; printf("[RUN ] %s\n", __func__)
 
@@ -62,6 +63,17 @@ extern int _tf_run;
             _tf_failed++; \
             return 1; \
         } \
+    } while(0)
+
+/* A test that cannot run here (a missing capture fixture, a Wine limitation)
+ * says so, is counted in the runner's summary, and ends as not failed. Never
+ * a silent pass. Use it where TEST_END() would be: it returns from the test. */
+#define TEST_SKIP(reason) \
+    do { \
+        printf("  [SKIP] %s: %s\n", __func__, (reason)); \
+        _tf_run++; \
+        _tf_skipped++; \
+        return 0; \
     } while(0)
 
 #define ASSERT_TRUE(cond) if (!(cond)) { printf("  Assertion failed: %s\n", #cond); _tf_local_fail = 1; }

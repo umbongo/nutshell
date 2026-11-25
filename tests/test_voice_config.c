@@ -1781,6 +1781,7 @@ int test_voice_ais_long_stt_blob_preserved_not_truncated(void)
         config_free(c);
     }
     remove(VCFG);
+    fake_dpapi_set_identity(0x42);
     TEST_END();
 }
 

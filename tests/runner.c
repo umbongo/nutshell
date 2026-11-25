@@ -6,6 +6,7 @@
 
 int _tf_failed = 0;
 int _tf_run = 0;
+int _tf_skipped = 0;
 
 /* Forward declarations from test files */
 /* test_vector.c */
@@ -3015,6 +3016,37 @@ int test_base64_padding_2bytes(void);
 int test_base64_padding_3bytes(void);
 int test_base64_small_buffer(void);
 int test_base64_binary(void);
+int test_base64_decode_roundtrip(void);
+
+/* test_voice_aispeech.c */
+int test_vais_provider_table(void);
+int test_vais_resolve_mistral_defaults(void);
+int test_vais_resolve_custom(void);
+int test_vais_unknown_provider(void);
+int test_vais_key_shared(void);
+int test_vais_key_not_shared(void);
+int test_vais_key_binding(void);
+int test_vais_binding_too_long_never_matches(void);
+int test_vais_body_mistral(void);
+int test_vais_body_openai_shape(void);
+int test_vais_body_escapes(void);
+int test_vais_brackets_neutralised(void);
+int test_vais_body_rejects_crlf(void);
+int test_vais_failure_classes(void);
+int test_vais_failure_reasons(void);
+int test_vais_sse_audio_delta(void);
+int test_vais_sse_type_only(void);
+int test_vais_sse_done_and_error(void);
+int test_vais_sse_done_without_audio(void);
+int test_vais_sse_split_lines(void);
+int test_vais_sse_bad_base64(void);
+int test_vais_sse_capture_wav(void);
+int test_vais_sse_capture_pcm(void);
+int test_vais_sse_capture_error(void);
+int test_vais_offset_complete(void);
+int test_vais_offset_estimate(void);
+int test_vais_offset_utf8(void);
+int test_framework_skip_counts(void);
 
 /* test_key_encode.c */
 int test_key_arrows_unmodified_normal(void);
@@ -5223,6 +5255,7 @@ int main(void) {
     failed += test_base64_padding_3bytes();
     failed += test_base64_small_buffer();
     failed += test_base64_binary();
+    failed += test_base64_decode_roundtrip();
 
     printf("\n--- Key Encode ---\n");
     failed += test_key_arrows_unmodified_normal();
@@ -8631,6 +8664,35 @@ int main(void) {
     failed += test_voice_ais_digest();
     failed += test_voice_ais_long_stt_blob_preserved_not_truncated();
     failed += test_voice_ais_empty_key_drops_binding();
+    printf("\n--- Voice AI speech ---\n");
+    failed += test_vais_provider_table();
+    failed += test_vais_resolve_mistral_defaults();
+    failed += test_vais_resolve_custom();
+    failed += test_vais_unknown_provider();
+    failed += test_vais_key_shared();
+    failed += test_vais_key_not_shared();
+    failed += test_vais_key_binding();
+    failed += test_vais_binding_too_long_never_matches();
+    failed += test_vais_body_mistral();
+    failed += test_vais_body_openai_shape();
+    failed += test_vais_body_escapes();
+    failed += test_vais_brackets_neutralised();
+    failed += test_vais_body_rejects_crlf();
+    failed += test_vais_failure_classes();
+    failed += test_vais_failure_reasons();
+    failed += test_vais_sse_audio_delta();
+    failed += test_vais_sse_type_only();
+    failed += test_vais_sse_done_and_error();
+    failed += test_vais_sse_done_without_audio();
+    failed += test_vais_sse_split_lines();
+    failed += test_vais_sse_bad_base64();
+    failed += test_vais_sse_capture_wav();
+    failed += test_vais_sse_capture_pcm();
+    failed += test_vais_sse_capture_error();
+    failed += test_vais_offset_complete();
+    failed += test_vais_offset_estimate();
+    failed += test_vais_offset_utf8();
+    failed += test_framework_skip_counts();
     failed += test_dlog_configure_registers_the_tts_key_as_a_secret();
     failed += test_settings_help_play_sample();
     failed += test_selftest_configs_complete();
@@ -9857,6 +9919,6 @@ int main(void) {
         failed += test_launch_tools_json_matches_runcmd_predicate();
     }
 
-    printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
+    printf("\nTests Run: %d, Failed: %d, Skipped: %d\n", _tf_run, _tf_failed, _tf_skipped);
     return failed > 0;
 }

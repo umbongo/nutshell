@@ -13,6 +13,7 @@
 
 int _tf_failed = 0;
 int _tf_run    = 0;
+int _tf_skipped = 0;
 
 /* test_icons.c */
 int test_icons_all_render_non_empty(void);
@@ -604,7 +605,7 @@ int main(int argc, char **argv)
         _tf_failed += pty_failed;
     }
 
-    printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
+    printf("\nTests Run: %d, Failed: %d, Skipped: %d\n", _tf_run, _tf_failed, _tf_skipped);
     return failed ? 1 : 0;
 }
 
