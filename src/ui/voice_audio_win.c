@@ -107,7 +107,9 @@ static size_t va_cap_samples(int cap_ms)
 typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH, VC_SET_GAIN,
                VC_CONV_BEGIN, VC_CONV_MODE, VC_CONV_ATTACH, VC_CONV_END, VC_CONV_END_TURN,
                VC_TEST_CONV_OPEN, VC_TEST_CONV_INGEST,
-               VC_R_OPEN, VC_R_DATA, VC_R_END, VC_R_FLUSH, VC_R_GAIN, VC_R_CLOSE } VaCmdKind;
+               VC_R_OPEN, VC_R_DATA, VC_R_END, VC_R_FLUSH, VC_R_GAIN, VC_R_CLOSE,
+               /* a failed unlosable push, replayed at its place in the queue (va_pop makes these) */
+               VC_P_CONV_END, VC_P_FLUSH, VC_P_CLOSE } VaCmdKind;
 typedef struct {
     VaCmdKind kind;
     char      id[256];
@@ -126,6 +128,7 @@ typedef struct {
 /* Everything one audio thread uses lives in its own context, so a thread
  * that outlives voice_audio_stop() (wedged in a driver call) can never touch
  * the next thread's state. The thread and the owner free it between them. */
+#define VA_PEND_MAX 16
 typedef struct VaCtx VaCtx;
 typedef struct { const IMMNotificationClientVtbl *lpVtbl; VaCtx *ctx; } VaNotify;
 struct VaCtx {
@@ -138,12 +141,17 @@ struct VaCtx {
     VaNotify         nc;
     int              exited;     /* under g_cs: the thread is done with ctx */
     int              orphaned;   /* under g_cs: stop() gave up waiting */
-    /* Commands whose push failed (notes item (r)): recorded here under qcs, applied by the thread
-     * after it drains the queue, so an end or a close cannot be lost. Until then the token's
-     * later commands are ignored (the end was meant to come first). */
-    int              pend_conv_end;  unsigned pend_conv_end_tok;
-    int              pend_flush;     unsigned pend_flush_tok, pend_flush_min;
-    int              pend_close;     unsigned pend_close_tok;
+    /* Commands whose push failed (notes item (r)): conv_end, render_flush, render_close. Each is
+     * recorded here under qcs with `seq`, the number of commands pushed before it, and replayed
+     * by va_pop as soon as the thread has popped that many: the queue's FIFO order is kept, so
+     * the command can neither be lost nor undo what was queued after it. The array is part of
+     * the context (no allocation at failure time). If it is full, the newest entry goes to the
+     * overflow slot of its kind (the last one of a kind wins), which va_pop replays first at
+     * the start of the next drain instead of dropping it. */
+    unsigned         pushed, popped;   /* under qcs: commands enqueued / popped (wrap-safe compares) */
+    struct { unsigned seq; VaCmdKind kind; unsigned token, min; } pend[VA_PEND_MAX];
+    int              npend;
+    struct { int used; unsigned token, min; } ovf[3];   /* VC_P_CONV_END, VC_P_FLUSH, VC_P_CLOSE */
 };
 
 static VaCtx           *g_ctx;
@@ -224,9 +232,8 @@ static const IMMNotificationClientVtbl g_nc_vtbl = {
 
 /* The render client (AI speech), one owner token (R7). Audio thread only. */
 typedef struct {
-    int           open, started, null_sink, has_gain;
+    int           open, started, null_sink;
     unsigned      token;
-    int           gain_pct;
     VoicePlayQ   *q;
     IAudioClient *client;
     IAudioRenderClient *rc;
@@ -1067,7 +1074,7 @@ static void va_r_stop(VaRender *r)
     r->have_pos = 0;
 }
 
-/* Releases everything (the play queue wiped). The gain setting is kept for the next open. */
+/* Releases everything (the play queue wiped). A gain dies with its owner: every open is 100 %. */
 static void va_r_close(VaState *st)
 {
     VaRender *r = &st->r;
@@ -1207,6 +1214,10 @@ static void va_r_service(VaState *st, ULONGLONG now, int ev_fired)
     if (!va_r_fill(r, pad, &wrote)) { va_r_error(st, VAE_DEVICE_LOST); return; }
     pad += (UINT32)wrote;
     if (!r->started && wrote > 0 && !va_r_start(st, now)) { va_r_error(st, VAE_DEVICE_LOST); return; }
+    if (!r->started && r->nends > 0) {   /* ends reached with nothing playing: padding is 0 by definition */
+        for (int i = 0; i < r->nends; i++) va_r_post_msg(st, VAM_PLAY_DONE, r->ends[i], 1);
+        r->nends = 0;
+    }
 
     if (r->started && r->have_pos && now - r->t_last_post >= VA_R_POST_MS) {
         r->t_last_post = now;
@@ -1301,7 +1312,6 @@ static void va_r_open(VaState *st, unsigned token)
         va_post(st->ctx, VAM_RENDER_ERROR, VOICE_ERR_PACK(err, token));
         return;
     }
-    if (r->has_gain) voice_playq_set_gain(r->q, r->gain_pct);
     r->open = 1;
     va_r_update_ms(r);
     va_post(st->ctx, VAM_RENDER_OPENED, VOICE_ERR_PACK(0, token));
@@ -1310,27 +1320,6 @@ static void va_r_open(VaState *st, unsigned token)
 static int va_r_is(const VaState *st, unsigned token)
 {
     return st->r.open && va_token_eq(st->r.token, token);
-}
-
-/* A queued flush or close for this token has not been applied yet: what follows it must not run. */
-static int va_r_blocked(VaCtx *cx, unsigned token, int has_reply, unsigned reply)
-{
-    int b = 0;
-    EnterCriticalSection(&cx->qcs);
-    if (cx->pend_close && va_token_eq(cx->pend_close_tok, token)) b = 1;
-    if (cx->pend_flush && va_token_eq(cx->pend_flush_tok, token) && has_reply &&
-        (int)(reply - cx->pend_flush_min) < 0) b = 1;
-    LeaveCriticalSection(&cx->qcs);
-    return b;
-}
-
-static int va_conv_blocked(VaCtx *cx, unsigned token)
-{
-    int b;
-    EnterCriticalSection(&cx->qcs);
-    b = cx->pend_conv_end && va_token_eq(cx->pend_conv_end_tok, token);
-    LeaveCriticalSection(&cx->qcs);
-    return b;
 }
 
 static void va_r_flush(VaState *st, unsigned token, unsigned min_reply)
@@ -1351,8 +1340,7 @@ static void va_r_command(VaState *st, VaCmd *c)
         va_r_open(st, c->token);
         break;
     case VC_R_DATA:
-        if (va_r_is(st, c->token) && c->data &&
-            !va_r_blocked(st->ctx, c->token, 1, c->token2)) {
+        if (va_r_is(st, c->token) && c->data) {
             int16_t *d = c->data;
             size_t n = c->n;
             c->data = NULL;                              /* the queue owns it (wipes it when it drops it) */
@@ -1360,18 +1348,14 @@ static void va_r_command(VaState *st, VaCmd *c)
         }
         break;
     case VC_R_END:
-        if (va_r_is(st, c->token) && !va_r_blocked(st->ctx, c->token, 1, c->token2))
+        if (va_r_is(st, c->token))
             voice_playq_end(r->q, c->token2);
         break;
     case VC_R_FLUSH:
         va_r_flush(st, c->token, c->token2);
         break;
-    case VC_R_GAIN:
-        if (!va_r_blocked(st->ctx, c->token, 0, 0)) {
-            r->gain_pct = c->gain_db;
-            r->has_gain = 1;
-            if (va_r_is(st, c->token)) voice_playq_set_gain(r->q, c->gain_db);
-        }
+    case VC_R_GAIN:      /* the owner's only: a stale or closed token changes nothing */
+        if (va_r_is(st, c->token)) voice_playq_set_gain(r->q, c->gain_db);
         break;
     case VC_R_CLOSE:
         if (va_r_is(st, c->token)) va_r_close(st);
@@ -1381,31 +1365,35 @@ static void va_r_command(VaState *st, VaCmd *c)
     }
 }
 
-/* Applies the commands whose push failed, after the queue is drained. */
-static void va_apply_pend(VaState *st)
-{
-    VaCtx *cx = st->ctx;
-    int ce, fl, cl;
-    unsigned ct, ft, fm, clt;
-    EnterCriticalSection(&cx->qcs);
-    if (cx->hold) { LeaveCriticalSection(&cx->qcs); return; }
-    ce = cx->pend_conv_end; ct = cx->pend_conv_end_tok; cx->pend_conv_end = 0;
-    fl = cx->pend_flush; ft = cx->pend_flush_tok; fm = cx->pend_flush_min; cx->pend_flush = 0;
-    cl = cx->pend_close; clt = cx->pend_close_tok; cx->pend_close = 0;
-    LeaveCriticalSection(&cx->qcs);
-    if (ce) va_conv_end(st, ct);
-    if (fl) va_r_flush(st, ft, fm);
-    if (cl && va_r_is(st, clt)) va_r_close(st);
-}
-
+/* The next command in queue order: an overflowed pending command first, then a pending one
+ * whose turn has come (every command pushed before it has been popped), else the queue head. */
 static int va_pop(VaCtx *cx, VaCmd *out)
 {
     int got = 0;
     EnterCriticalSection(&cx->qcs);
-    if (cx->qn > 0 && !cx->hold) {
+    for (int k = 0; k < 3 && !got; k++) {
+        if (!cx->ovf[k].used) continue;
+        memset(out, 0, sizeof(*out));
+        out->kind = (VaCmdKind)(VC_P_CONV_END + k);
+        out->token = cx->ovf[k].token;
+        out->token2 = cx->ovf[k].min;
+        cx->ovf[k].used = 0;
+        got = 1;
+    }
+    if (!got && cx->npend > 0 && (int)(cx->popped - cx->pend[0].seq) >= 0) {
+        memset(out, 0, sizeof(*out));
+        out->kind = cx->pend[0].kind;
+        out->token = cx->pend[0].token;
+        out->token2 = cx->pend[0].min;
+        memmove(&cx->pend[0], &cx->pend[1], (size_t)(cx->npend - 1) * sizeof(cx->pend[0]));
+        cx->npend--;
+        got = 1;
+    }
+    if (!got && cx->qn > 0 && !cx->hold) {
         *out = cx->q[0];
         memmove(&cx->q[0], &cx->q[1], (size_t)(cx->qn - 1) * sizeof(VaCmd));
         cx->qn--;
+        cx->popped++;
         got = 1;
     }
     LeaveCriticalSection(&cx->qcs);
@@ -1454,15 +1442,18 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_WATCH: va_watch(&st, c.flag); break;
             case VC_SET_GAIN: va_set_gain(&st, c.gain_db); break;
             case VC_CONV_BEGIN:  va_conv_begin(&st, &c); break;
-            case VC_CONV_MODE:   if (!va_conv_blocked(cx, c.token)) va_conv_set_mode(&st, c.token, (VoiceListenMode)c.flag); break;
-            case VC_CONV_ATTACH: if (!va_conv_blocked(cx, c.token)) va_conv_attach(&st, c.token, c.token2); break;
+            case VC_CONV_MODE:   va_conv_set_mode(&st, c.token, (VoiceListenMode)c.flag); break;
+            case VC_CONV_ATTACH: va_conv_attach(&st, c.token, c.token2); break;
             case VC_CONV_END:    va_conv_end(&st, c.token); break;
-            case VC_CONV_END_TURN: if (!va_conv_blocked(cx, c.token)) va_conv_end_turn(&st, c.token); break;
+            case VC_CONV_END_TURN: va_conv_end_turn(&st, c.token); break;
+            case VC_P_CONV_END:  va_conv_end(&st, c.token); break;
+            case VC_P_FLUSH:     va_r_flush(&st, c.token, c.token2); break;
+            case VC_P_CLOSE:     if (va_r_is(&st, c.token)) va_r_close(&st); break;
             case VC_TEST_CONV_OPEN:
                 st.conv = va_conv_new(&st, c.token, c.pause_ms, 0);
                 break;
             case VC_TEST_CONV_INGEST:
-                if (va_conv_is(&st, c.token) && c.data && !va_conv_blocked(cx, c.token))
+                if (va_conv_is(&st, c.token) && c.data)
                     va_ingest(&st, c.data, c.n);
                 break;
             case VC_R_OPEN: case VC_R_DATA: case VC_R_END: case VC_R_FLUSH: case VC_R_GAIN:
@@ -1472,7 +1463,6 @@ static DWORD WINAPI va_thread(LPVOID arg)
             }
             if (c.data) { secure_zero(c.data, c.n * sizeof(int16_t)); free(c.data); }
         }
-        va_apply_pend(&st);
         if (st.r.open) {
             /* The render event may have been taken by a wait that returned another handle. */
             int rev = fired == st.r.ev ||
@@ -1611,6 +1601,7 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag, int g
         c->gain_db = gain_db;
         c->cap_ms = cap_ms;
         c->live = live;
+        cx->pushed++;
     }
     LeaveCriticalSection(&cx->qcs);
     SetEvent(cx->wake);
@@ -1728,10 +1719,32 @@ static int va_push_raw(const VaCmd *c)
         VaCmd *nq = (VaCmd *)realloc(cx->q, (size_t)ncap * sizeof(VaCmd));
         if (nq) { cx->q = nq; cx->qcap = ncap; }
     }
-    if (cx->qn < cx->qcap) { cx->q[cx->qn++] = *c; ok = 1; }
+    if (cx->qn < cx->qcap) { cx->q[cx->qn++] = *c; cx->pushed++; ok = 1; }
     LeaveCriticalSection(&cx->qcs);
     if (ok) SetEvent(cx->wake);
     return ok;
+}
+
+/* Records a failed unlosable push at its place in the queue (see VaCtx::pend). */
+static void va_pend_add(VaCmdKind kind, unsigned token, unsigned min)
+{
+    VaCtx *cx = g_ctx;
+    if (!cx) return;
+    EnterCriticalSection(&cx->qcs);
+    if (cx->npend < VA_PEND_MAX) {
+        cx->pend[cx->npend].seq = cx->pushed;
+        cx->pend[cx->npend].kind = kind;
+        cx->pend[cx->npend].token = token;
+        cx->pend[cx->npend].min = min;
+        cx->npend++;
+    } else {                              /* full: the overflow slot of its kind, replayed first next drain */
+        int k = (int)(kind - VC_P_CONV_END);
+        cx->ovf[k].used = 1;
+        cx->ovf[k].token = token;
+        cx->ovf[k].min = min;
+    }
+    LeaveCriticalSection(&cx->qcs);
+    SetEvent(cx->wake);
 }
 
 int voice_audio_conv_begin(const char *id, unsigned token, double gain_db, int pause_ms)
@@ -1784,15 +1797,7 @@ void voice_audio_conv_end(unsigned token)
     memset(&c, 0, sizeof(c));
     c.kind = VC_CONV_END;
     c.token = token;
-    if (!va_push_raw(&c)) {              /* cannot be lost: the thread applies it after its drain */
-        VaCtx *cx = g_ctx;
-        if (!cx) return;
-        EnterCriticalSection(&cx->qcs);
-        cx->pend_conv_end = 1;
-        cx->pend_conv_end_tok = token;
-        LeaveCriticalSection(&cx->qcs);
-        SetEvent(cx->wake);
-    }
+    if (!va_push_raw(&c)) va_pend_add(VC_P_CONV_END, token, 0);   /* cannot be lost */
 }
 
 /* TEST-ONLY seams (wintest), never called by product code: a conversation state with no
@@ -1866,21 +1871,7 @@ void voice_audio_render_flush(unsigned token, unsigned min_reply)
     c.kind = VC_R_FLUSH;
     c.token = token;
     c.token2 = min_reply;
-    if (!va_push_raw(&c)) {              /* cannot be lost */
-        VaCtx *cx = g_ctx;
-        if (!cx) return;
-        EnterCriticalSection(&cx->qcs);
-        if (cx->pend_flush && va_token_eq(cx->pend_flush_tok, token) &&
-            (int)(min_reply - cx->pend_flush_min) <= 0) {
-            /* the one already recorded is at least as late */
-        } else {
-            cx->pend_flush = 1;
-            cx->pend_flush_tok = token;
-            cx->pend_flush_min = min_reply;
-        }
-        LeaveCriticalSection(&cx->qcs);
-        SetEvent(cx->wake);
-    }
+    if (!va_push_raw(&c)) va_pend_add(VC_P_FLUSH, token, min_reply);   /* cannot be lost */
 }
 
 void voice_audio_render_close(unsigned token)
@@ -1889,15 +1880,7 @@ void voice_audio_render_close(unsigned token)
     memset(&c, 0, sizeof(c));
     c.kind = VC_R_CLOSE;
     c.token = token;
-    if (!va_push_raw(&c)) {              /* cannot be lost */
-        VaCtx *cx = g_ctx;
-        if (!cx) return;
-        EnterCriticalSection(&cx->qcs);
-        cx->pend_close = 1;
-        cx->pend_close_tok = token;
-        LeaveCriticalSection(&cx->qcs);
-        SetEvent(cx->wake);
-    }
+    if (!va_push_raw(&c)) va_pend_add(VC_P_CLOSE, token, 0);   /* cannot be lost */
 }
 
 long voice_audio_render_queued_ms(void) { return (long)g_r_ms; }

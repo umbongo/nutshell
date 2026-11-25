@@ -112,6 +112,9 @@ void voice_audio_test_conv_ingest(unsigned token, const int16_t *s, size_t n);
  * thread, fed from a VoicePlayQ. Every call is a queued command under the caller's token; a
  * stale token is ignored. The resource ledger is the caller's business (UI thread). */
 typedef struct { unsigned token, reply_id, chunk; uint64_t frames_in_chunk; } VoiceRenderMsg;
+/* One client, one owner: gain belongs to the current owner only. render_gain from a token that
+ * does not own the open client is ignored, and every render_open starts at 100 %, so a caller
+ * ducks AFTER its open (Task 7 sends its gain after render_open, never before). */
 int  voice_audio_render_open(unsigned token);       /* push; 1 queued, 0 no thread */
 int  voice_audio_render_data(unsigned token, unsigned reply_id, unsigned chunk,
                              int16_t *s, size_t n);  /* takes s on 1; 0: caller still owns s */

@@ -205,8 +205,20 @@ int test_voice_render_gain(void)
     ASSERT_EQ(voice_audio_render_data(VR_TOKEN, 2, 0, s2, 2400), 1);
     Sleep(300);
     pk = voice_audio_test_render_peak();
-    ASSERT_TRUE(pk >= 3400 && pk <= 3800);
+    ASSERT_TRUE(pk >= 3400 && pk <= 3800);        /* the stale gain(100) did not undo the duck */
+    /* gain belongs to the owner: the next owner starts at 100 %, a non-owner's gain is ignored */
     voice_audio_render_close(VR_TOKEN);
+    voice_audio_render_gain(VR_TOKEN, 18);        /* closed owner: ignored, must not be remembered */
+    ASSERT_EQ(voice_audio_render_open(VR_TOKEN + 2), 1);
+    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_OPENED), 3000, &wp, &lp), 1);
+    (void)voice_audio_test_render_peak();
+    int16_t *s3 = vr_samples(2400, 20000);
+    ASSERT_NOT_NULL(s3);
+    ASSERT_EQ(voice_audio_render_data(VR_TOKEN + 2, 3, 0, s3, 2400), 1);
+    Sleep(300);
+    pk = voice_audio_test_render_peak();
+    ASSERT_TRUE(pk >= 19900);                     /* full scale, no leaked duck */
+    voice_audio_render_close(VR_TOKEN + 2);
     vr_end(w);
     TEST_END();
 }
@@ -251,14 +263,20 @@ int test_voice_render_real_wine(void)
     WPARAM wp = 0; LPARAM lp = 0;
     ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_OPENED) | VRBIT(VAM_RENDER_ERROR), 3000, &wp, &lp), 1);
     if (wp == VAM_RENDER_OPENED) {
+        printf("[real_wine] OPENED on the real WASAPI render path\n");
         int16_t *s = vr_samples(4800, 3000);            /* 0.2 s */
         ASSERT_NOT_NULL(s);
         ASSERT_EQ(voice_audio_render_data(VR_TOKEN, 1, 0, s, 4800), 1);
         voice_audio_render_end(VR_TOKEN, 1);
         ASSERT_EQ(vr_wait(VRBIT(VAM_PLAY_DONE) | VRBIT(VAM_RENDER_ERROR), 3000, &wp, &lp), 1);
-        if (wp == VAM_PLAY_DONE) free((void *)lp);
-        else ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), (int)VR_TOKEN);
+        if (wp == VAM_PLAY_DONE) { printf("[real_wine] PLAY_DONE\n"); free((void *)lp); }
+        else {
+            printf("[real_wine] after OPENED: VAM_RENDER_ERROR code %d\n", (int)VOICE_ERR_CODE(lp));
+            ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), (int)VR_TOKEN);
+        }
     } else {
+        printf("[real_wine] VAM_RENDER_ERROR code %d (1 NO_DEVICE, 3 OPEN_FAILED, 4 COM_FAILED)\n",
+               (int)VOICE_ERR_CODE(lp));
         ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), (int)VR_TOKEN);
         ASSERT_TRUE(VOICE_ERR_CODE(lp) == VAE_NO_DEVICE || VOICE_ERR_CODE(lp) == VAE_OPEN_FAILED ||
                     VOICE_ERR_CODE(lp) == VAE_COM_FAILED);
@@ -349,9 +367,11 @@ int test_voice_audio_close_cannot_be_lost(void)
     ASSERT_EQ(voice_audio_render_data(VR_TOKEN, 2, 0, d2, 2400), 1);
     Sleep(300);
     ASSERT_EQ((int)voice_audio_test_render_frames(2), 0);
+    ASSERT_EQ((int)voice_audio_render_queued_ms(), 0);   /* the pending close was applied */
     /* a flush that fails to push is applied too: reply 1 is dropped after it */
     ASSERT_EQ(voice_audio_render_open(VR_TOKEN + 1), 1);
-    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_OPENED), 3000, &wp, &lp), 1);
+    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_OPENED) | VRBIT(VAM_RENDER_ERROR), 3000, &wp, &lp), 1);
+    ASSERT_EQ((int)wp, (int)VAM_RENDER_OPENED);          /* no PREEMPTED for the closed token */
     voice_audio_test_fail_push(1);
     voice_audio_render_flush(VR_TOKEN + 1, 5);
     int16_t *d3 = vr_samples(2400, 5000);
@@ -365,6 +385,124 @@ int test_voice_audio_close_cannot_be_lost(void)
     Sleep(300);
     ASSERT_EQ((int)voice_audio_test_render_frames(5), 2400);
     voice_audio_render_close(VR_TOKEN + 1);
+    vr_end(w);
+    TEST_END();
+}
+
+/* The reply id of the next VAM_PLAY_DONE within ms (the message freed), -1 for none, -2 for an error first. */
+static int vr_wait_done(DWORD ms)
+{
+    WPARAM wp = 0; LPARAM lp = 0;
+    if (!vr_wait(VRBIT(VAM_PLAY_DONE) | VRBIT(VAM_RENDER_ERROR), ms, &wp, &lp)) return -1;
+    if (wp != VAM_PLAY_DONE) return -2;
+    int id = (int)((VoiceRenderMsg *)lp)->reply_id;
+    free((void *)lp);
+    return id;
+}
+
+/* I1: a reply whose end is reached while the client is stopped still gets its DONE. */
+int test_voice_render_end_without_data_done(void)
+{
+    TEST_BEGIN();
+    HWND w = vr_begin(1);
+    ASSERT_NOT_NULL(w);
+    ASSERT_EQ(voice_audio_render_open(VR_TOKEN), 1);
+    WPARAM wp = 0; LPARAM lp = 0;
+    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_OPENED), 3000, &wp, &lp), 1);
+    voice_audio_render_end(VR_TOKEN, 1);                 /* no frames at all */
+    ASSERT_EQ(vr_wait_done(500), 1);
+    /* a reply played out (R6 stop), then an empty one */
+    int16_t *s = vr_samples(2400, 4000);
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ(voice_audio_render_data(VR_TOKEN, 2, 0, s, 2400), 1);
+    voice_audio_render_end(VR_TOKEN, 2);
+    ASSERT_EQ(vr_wait_done(3000), 2);
+    Sleep(100);
+    voice_audio_render_end(VR_TOKEN, 3);
+    ASSERT_EQ(vr_wait_done(500), 3);
+    voice_audio_render_close(VR_TOKEN);
+    vr_end(w);
+    TEST_END();
+}
+
+/* I3: a command whose push failed keeps its place in the queue. Each case queues a burst
+ * behind voice_audio_test_hold, with no sleeps between its pushes. */
+static int vr_open_wait(unsigned token)
+{
+    WPARAM wp = 0; LPARAM lp = 0;
+    return voice_audio_render_open(token) == 1 &&
+           vr_wait(VRBIT(VAM_RENDER_OPENED), 3000, &wp, &lp) == 1;
+}
+
+int test_voice_render_pending_keeps_order(void)
+{
+    TEST_BEGIN();
+    HWND w = vr_begin(1);
+    ASSERT_NOT_NULL(w);
+    WPARAM wp = 0; LPARAM lp = 0;
+
+    /* a. failed flush(T, 5), then reply 5's data and end: reply 5 plays and its DONE arrives */
+    ASSERT_EQ(vr_open_wait(VR_TOKEN), 1);
+    voice_audio_test_hold(1);
+    voice_audio_test_fail_push(1);
+    voice_audio_render_flush(VR_TOKEN, 5);
+    int16_t *a = vr_samples(2400, 4000);
+    ASSERT_NOT_NULL(a);
+    ASSERT_EQ(voice_audio_render_data(VR_TOKEN, 5, 0, a, 2400), 1);
+    voice_audio_render_end(VR_TOKEN, 5);
+    voice_audio_test_hold(0);
+    ASSERT_EQ(vr_wait_done(3000), 5);
+    ASSERT_EQ((int)voice_audio_test_render_frames(5), 2400);
+
+    /* b. failed close(T), then open(T): OPENED arrives, later data plays, no error for T */
+    voice_audio_test_hold(1);
+    voice_audio_test_fail_push(1);
+    voice_audio_render_close(VR_TOKEN);
+    ASSERT_EQ(voice_audio_render_open(VR_TOKEN), 1);
+    voice_audio_test_hold(0);
+    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_OPENED) | VRBIT(VAM_RENDER_ERROR), 3000, &wp, &lp), 1);
+    ASSERT_EQ((int)wp, (int)VAM_RENDER_OPENED);
+    int16_t *b = vr_samples(2400, 4000);
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(voice_audio_render_data(VR_TOKEN, 7, 0, b, 2400), 1);
+    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_ERROR), 400, &wp, &lp), 0);
+    ASSERT_EQ((int)voice_audio_test_render_frames(7), 2400);
+
+    /* c. failed close(A), then open(B): A gets no PREEMPTED (A is a live owner here) */
+    ASSERT_EQ(vr_open_wait(VR_TOKEN), 1);
+    voice_audio_test_hold(1);
+    voice_audio_test_fail_push(1);
+    voice_audio_render_close(VR_TOKEN);
+    ASSERT_EQ(voice_audio_render_open(VR_TOKEN + 1), 1);
+    voice_audio_test_hold(0);
+    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_OPENED) | VRBIT(VAM_RENDER_ERROR), 3000, &wp, &lp), 1);
+    ASSERT_EQ((int)wp, (int)VAM_RENDER_OPENED);
+    ASSERT_EQ((int)VOICE_ERR_TOKEN(lp), (int)(VR_TOKEN + 1));
+    ASSERT_EQ(vr_wait(VRBIT(VAM_RENDER_ERROR), 300, &wp, &lp), 0);
+    voice_audio_render_close(VR_TOKEN + 1);
+    vr_end(w);
+    TEST_END();
+}
+
+int test_voice_audio_conv_end_then_same_token_open(void)
+{
+    TEST_BEGIN();
+    static int16_t s[VR_TOTAL];
+    vr_quiet(s, VR_LEAD);
+    vr_speech(s + VR_LEAD * VR_WIN, VR_SPEECH);
+    vr_quiet(s + (VR_LEAD + VR_SPEECH) * VR_WIN, VR_TAIL);
+    HWND w = vr_begin(1);
+    ASSERT_NOT_NULL(w);
+    voice_audio_test_conv_open(0x333, VR_PAUSE_MS);
+    Sleep(50);
+    voice_audio_test_hold(1);
+    voice_audio_test_fail_push(1);
+    voice_audio_conv_end(0x333);
+    voice_audio_test_conv_open(0x333, VR_PAUSE_MS);      /* the new conversation, same token */
+    voice_audio_test_conv_ingest(0x333, s, VR_TOTAL);
+    voice_audio_test_hold(0);
+    ASSERT_TRUE(vr_conv_events(1000) > 0);
+    voice_audio_conv_end(0x333);
     vr_end(w);
     TEST_END();
 }
