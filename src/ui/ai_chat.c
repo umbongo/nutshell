@@ -708,29 +708,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
-            if (d && d->dispatch_active) {
-                /* Stopping a batch by hand is an attended round. Marked
-                 * before the cancel so its continue message resets the
-                 * unattended-round count; reset directly as well, since a
-                 * cancel that sends no continue message would not. */
-                if (d->active_state) {
-                    CmdBatch *running = cmd_batch_find(
-                        &d->active_state->batches, d->dispatch_batch_id);
-                    if (running) running->user_acted = 1;
-                }
-                ai_chat_dispatch_cancel(d, "[command queue stopped]", 1,
-                                        runcmd_path_plan(RUNCMD_PATH_STOP).cause);
-                ai_rounds_user_message(d->active_state);
-                if (d->hChatList)
-                    chat_listview_scroll_to_bottom(d->hChatList);
-            } else if (d && ACTIVE_BUSY(d)) {
-                ai_chat_cancel_active_stream(d);
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                    "[cancelled]");
-                if (d->hChatList) {
-                    chat_listview_invalidate(d->hChatList);
-                    chat_listview_scroll_to_bottom(d->hChatList);
-                }
+            if (d && (d->dispatch_active || ACTIVE_BUSY(d))) {
+                ai_chat_stop_work(d);
+                voice_on_chat_stop();   /* a conversation ends its turn */
             } else if (voice_send_pressed()) {
                 /* A dictation recording is running or finishing: voice took the
                  * Send (it ends the recording, then sends once the words are in). */
@@ -1919,6 +1899,9 @@ next_coalesce:;
                      * the session (rule 5). */
                     if (d->hChatList)
                         chat_listview_reset_cmd_expand(d->hChatList);
+                    /* A card waits for the user: a conversation announces it
+                     * (a run_command batch is a command card too). */
+                    ai_chat_voice_card_posted(d, NULL);
                 }
                 ai_chat_relayout(d);
                 /* A reply finishing is not a user action: only move
@@ -1951,6 +1934,7 @@ next_coalesce:;
                 d->stream_ai_item->dirty = 1;
             }
             d->stream_ai_item = NULL;
+            if (src) src->last_turn_error = 1;   /* a conversation says so, not the stale reply */
             if (text) {
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                 text);
@@ -1980,8 +1964,10 @@ next_coalesce:;
          * commands still waiting to run, start it now (rule 3's "queued,
          * runs next"). No-op if the dispatcher is already busy or another
          * stream is in flight. */
-        if (src == d->active_state)
+        if (src == d->active_state) {
             ai_chat_maybe_start_next_batch(d);
+            ai_chat_voice_turn_check(d);   /* after the possible relaunch */
+        }
         return 0;
     }
 

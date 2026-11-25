@@ -109,6 +109,7 @@ static void launch_failed(AiChatData *d, const char *why)
     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, why);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
     ai_chat_update_context_bar(d);
+    ai_chat_voice_turn_check(d);   /* nothing runs now: a conversation may go on */
 }
 
 static int ctx_buffers_ensure(AiChatData *d);
@@ -116,20 +117,20 @@ static int ctx_buffers_ensure(AiChatData *d);
 /* Build an AiStream from the current AiChatData state -- its own copies of
  * the key, provider, request body, tool registry and conversation -- and
  * launch the background thread on it. Sets active_state->busy = 1. */
-void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
+int ai_chat_launch_stream_thread(AiChatData *d, const char *src)
 {
-    if (!d || !d->active_state) return;
+    if (!d || !d->active_state) return 0;
 
     /* The buffers the system prompt and the terminal text are built in. */
     if (!ctx_buffers_ensure(d)) {
         launch_failed(d, "[out of memory starting the AI request]");
-        return;
+        return 0;
     }
 
     AiStream *s = ai_stream_new();
     if (!s) {
         launch_failed(d, "[out of memory starting the AI request]");
-        return;
+        return 0;
     }
     s->post_target = (uintptr_t)d->hwnd;
     snprintf(s->src, sizeof(s->src), "%s", src ? src : "user");
@@ -160,7 +161,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         if (!launch_reg) {
             ai_stream_discard(s);
             launch_failed(d, "[out of memory starting the AI request]");
-            return;
+            return 0;
         }
         *launch_reg = d->tool_registry;
         if (offers_runcmd) runcmd_register(launch_reg);
@@ -184,7 +185,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
             free(launch_reg);
             ai_stream_discard(s);
             launch_failed(d, "[out of memory starting the AI request]");
-            return;
+            return 0;
         }
     }
 
@@ -206,7 +207,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         free(launch_reg);
         ai_stream_discard(s);
         launch_failed(d, "[out of memory starting the AI request]");
-        return;
+        return 0;
     }
     /* The meter adds the snapshot the request really carries: the copy's (a
      * copy that cannot allocate one carries none, and the launch's body is
@@ -229,7 +230,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         free(launch_reg);
         ai_stream_discard(s);
         launch_failed(d, ai_body_failure_text(&d->conv));
-        return;
+        return 0;
     }
 
     if (use_tools) {
@@ -281,14 +282,14 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
             s->has_tools && s->tools_json[0] ? s->tools_json : NULL);
         ai_stream_discard(s);
         launch_failed(d, why);
-        return;
+        return 0;
     }
     {
         char json_err[256] = "";
         if (!json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
             ai_stream_discard(s);
             launch_failed(d, json_err[0] ? json_err : "JSON build failed");
-            return;
+            return 0;
         }
     }
 
@@ -301,7 +302,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     if (ai_stream_table_add(&d->streams, s, d->active_state) != 0) {
         ai_stream_discard(s);
         launch_failed(d, "[too many AI replies in progress]");
-        return;
+        return 0;
     }
     unsigned stream_id = s->id;
 
@@ -315,7 +316,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         ai_stream_release(s);
         ai_stream_table_finish(&d->streams, stream_id);
         launch_failed(d, "[could not start the AI request thread]");
-        return;
+        return 0;
     }
     thread_join_add(&g_stream_threads, hThread);   /* full list: closed, still safe as an orphan */
     s = NULL;   /* the thread may free it from here on; only the id is ours */
@@ -378,6 +379,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         SetWindowTextW(d->hSendBtn, L"\x25A0"); /* ■ solid square = stop */
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
+    return 1;
 }
 
 /* Wait-only: every stream's cancel token is fired when the stream is orphaned
@@ -566,17 +568,22 @@ char *ai_chat_input_text_utf8(HWND hInput)
     return input_text_utf8(hInput);
 }
 
-void ai_chat_send_user_message(AiChatData *d)
+/* Send the input box as a user turn. voice_turn 1 (conversation mode) leaves the
+ * Auto-approve round count alone (ai_rounds_on_send); a typed send resets it. The
+ * return says what happened, for the conversation glue; the chat behaves as it
+ * always did (a refused send keeps the text in the box, a launch failure has added
+ * the message and cleared the box). */
+VoiceSendStatus ai_chat_send_user_message_ex(AiChatData *d, int voice_turn)
 {
     /* Pending command batches: a card never blocks the input (rule 1) --
      * only a streaming reply or an active dispatcher does, same as the
      * IDC_CHAT_SEND handler's Send/Stop toggle already enforces for the
      * primary UI path. */
-    if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
-        return;
+    if (!d || !d->active_state) return VSS_NO_SESSION;
+    if (d->active_state->busy || d->dispatch_active) return VSS_BUSY;
 
     char *input = input_text_utf8(d->hInput);
-    if (!input) return;
+    if (!input) return VSS_EMPTY;
     /* The text as read: the prefix strip below shortens the string, but the
      * bytes past the new end still hold the original, so the wipes cover
      * this length. */
@@ -596,7 +603,7 @@ void ai_chat_send_user_message(AiChatData *d)
     if (input[0] == '\0') {
         secure_zero(input, input_len);
         free(input);
-        return;
+        return VSS_EMPTY;
     }
 
     /* Room for the typed message and its reply (spec decision 24), checked on
@@ -620,12 +627,13 @@ void ai_chat_send_user_message(AiChatData *d)
         /* Nothing launched: an approved batch waiting must not be stranded
          * (a no-op while a dispatch runs or a stream is busy). */
         ai_chat_maybe_start_next_batch(d);
-        return;
+        return VSS_FULL;
     }
 
     /* The user is talking again: the unattended-round count starts over
      * (guard-rails spec 2026-11-04 section 1). */
-    ai_rounds_user_message(d->active_state);
+    ai_rounds_on_send(d->active_state, voice_turn);
+    d->active_state->last_turn_error = 0;
     ai_tool_rounds_reset(d->active_state);   /* ... and so are the tool rounds */
 
     SetWindowText(d->hInput, "");
@@ -668,7 +676,7 @@ void ai_chat_send_user_message(AiChatData *d)
     d->stream_display_start = -1;
     ai_chat_start_indicator(d, "thinking");
 
-    ai_chat_launch_stream_thread(d, "user");
+    const int launched = ai_chat_launch_stream_thread(d, "user");
 
     /* The finish above starts no next batch (a request was to follow). When
      * the launch failed, an approved batch waiting behind the one that ended
@@ -681,6 +689,45 @@ void ai_chat_send_user_message(AiChatData *d)
 
     secure_zero(input, input_len);
     free(input);
+    return launched ? VSS_SENT : VSS_LAUNCH_FAILED;
+}
+
+void ai_chat_send_user_message(AiChatData *d)
+{
+    (void)ai_chat_send_user_message_ex(d, 0);
+}
+
+/* The Stop branch of the Send/Stop button: cancel a running dispatch (a stop by
+ * hand is an attended round) or the streaming reply. The caller adds
+ * voice_on_chat_stop() when a person pressed the button. */
+void ai_chat_stop_work(AiChatData *d)
+{
+    if (!d) return;
+    if (d->dispatch_active) {
+        /* Stopping a batch by hand is an attended round. Marked
+         * before the cancel so its continue message resets the
+         * unattended-round count; reset directly as well, since a
+         * cancel that sends no continue message would not. */
+        if (d->active_state) {
+            CmdBatch *running = cmd_batch_find(
+                &d->active_state->batches, d->dispatch_batch_id);
+            if (running) running->user_acted = 1;
+        }
+        ai_chat_dispatch_cancel(d, "[command queue stopped]", 1,
+                                runcmd_path_plan(RUNCMD_PATH_STOP).cause);
+        ai_rounds_user_message(d->active_state);
+        if (d->hChatList)
+            chat_listview_scroll_to_bottom(d->hChatList);
+    } else if (ACTIVE_BUSY(d)) {
+        ai_chat_cancel_active_stream(d);
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            "[cancelled]");
+        if (d->hChatList) {
+            chat_listview_invalidate(d->hChatList);
+            chat_listview_scroll_to_bottom(d->hChatList);
+        }
+    }
+    ai_chat_voice_turn_check(d);
 }
 
 /* Send a follow-up user turn after a batch finishes running and launch a

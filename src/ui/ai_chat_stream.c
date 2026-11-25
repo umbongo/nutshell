@@ -69,6 +69,7 @@ static int stream_post_tool_decide(AiStream *s, unsigned gen, int loop_iter,
     m->loop_iter = loop_iter;
     m->kind = kind;
     m->safety = safety;
+    snprintf(m->name, sizeof(m->name), "%s", call->name);
     /* -1 (a web_fetch without a url) still fills a row the user can read. */
     /* The Details cap is CMD_NOTE_MAX, the size of the approval entry's note
      * it is copied into: ai_tool_card_text cuts on an escape boundary, and

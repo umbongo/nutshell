@@ -574,6 +574,11 @@ int voice_send_pressed(void)
     return 1;
 }
 
+void voice_on_chat_stop(void)
+{
+    /* Task 13: the conversation controller ends its turn here. */
+}
+
 void voice_on_chat_changed(void)
 {
     /* Called from inside ai_chat: only a post, never a synchronous re-entry. */

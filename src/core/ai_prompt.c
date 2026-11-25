@@ -2989,6 +2989,11 @@ void ai_rounds_user_message(AiSessionState *s)
     if (s) s->auto_rounds = 0;
 }
 
+void ai_rounds_on_send(AiSessionState *s, int voice_turn)
+{
+    if (s && !voice_turn) s->auto_rounds = 0;
+}
+
 void ai_rounds_continue(AiSessionState *s, int unattended)
 {
     if (!s) return;

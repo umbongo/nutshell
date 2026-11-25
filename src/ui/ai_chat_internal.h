@@ -504,6 +504,7 @@ typedef struct {
     int        loop_iter, kind;
     ToolSafety safety;
     char       row[256], detail[1024];
+    char       name[AI_TOOL_NAME_MAX];   /* the tool's name: voice_card_kind() */
 } AiToolDecideMsg;
 
 /* Status-line hover/hit ids for ns_hover: 0..3 the four cells, 4 the
@@ -635,7 +636,7 @@ void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state);
 void ai_chat_register_tools(AiChatData *d, const char *search_provider,
                             const char *search_url, int max_search_results,
                             int web_fetch_enabled);
-void ai_chat_launch_stream_thread(AiChatData *d, const char *src);
+int  ai_chat_launch_stream_thread(AiChatData *d, const char *src);   /* 1 launched, 0 failed (a status row says why) */
 /* `keep_free`: the slots the flush of the owner's queued notes leaves free: 1
  * where a launch follows the abort (Retry: runcmd_cause_keep_free of RETRY),
  * 0 otherwise (Stop, New Chat, a closed session, the reaper, WM_DESTROY). */
@@ -644,6 +645,7 @@ void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state,
 void ai_chat_drain_stream_messages(HWND hwnd);
 void ai_chat_cancel_active_stream(AiChatData *d);
 void ai_chat_send_user_message(AiChatData *d);
+VoiceSendStatus ai_chat_send_user_message_ex(AiChatData *d, int voice_turn);
 void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
                                    int unattended);
 /* Relaunch from a conversation that now ends on a run_command results turn: no
@@ -706,6 +708,9 @@ void ai_chat_voice_paint_cue(AiChatData *d, HWND edit);
 void ai_chat_voice_timer(AiChatData *d, UINT_PTR id);
 void ai_chat_voice_on_destroy(AiChatData *d);
 void ai_chat_voice_busy_changed(AiChatData *d);
+void ai_chat_voice_turn_check(AiChatData *d);   /* posts WM_VOICE_TURN_IDLE when the chat is idle */
+void ai_chat_voice_card_posted(AiChatData *d, const char *tool_name);   /* WM_VOICE_CARD; NULL = [EXEC] batch */
+void ai_chat_stop_work(AiChatData *d);   /* the Stop branch of the Send/Stop button */
 unsigned ai_chat_next_gen(void);   /* process-wide, never 0, never repeats */
 LRESULT CALLBACK ai_chat_mic_subclass(HWND hwnd, UINT msg, WPARAM wParam,
                                       LPARAM lParam, UINT_PTR uIdSubclass,

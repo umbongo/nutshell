@@ -876,6 +876,8 @@ typedef struct {
                                    * user) -- guards against re-seeding an
                                    * explicit choice on a later session switch */
     int activity_phase;          /* ActivityPhase saved on session switch */
+    int last_turn_error;         /* 1 when the last turn ended in an error reply (voice
+                                  * conversation reads it); cleared by each send */
     int auto_rounds;             /* consecutive unattended continue rounds
                                    * since the user last spoke or acted
                                    * (ai_rounds_*() below); 0 at creation */
@@ -908,6 +910,11 @@ void ai_session_discard(AiSessionState *st);
 
 /* The user typed a message: auto_rounds = 0. NULL-safe. */
 void ai_rounds_user_message(AiSessionState *s);
+
+/* A message is being sent: a typed one (voice_turn 0) resets auto_rounds as
+ * ai_rounds_user_message() does; a voice turn (conversation mode, non-zero)
+ * leaves it, so the Auto-approve cap is not defeated by speaking. NULL-safe. */
+void ai_rounds_on_send(AiSessionState *s, int voice_turn);
 
 /* A continue message is being sent after a finished batch: auto_rounds += 1
  * when that batch ran `unattended` (non-zero), else auto_rounds = 0.

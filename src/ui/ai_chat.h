@@ -8,6 +8,7 @@
 #include "ai_prompt.h"
 #include "chat_approval.h"
 #include "voice_ptt.h"
+#include "voice_conv.h"
 
 /* Initialize the AI assist window class. Call once at startup. */
 void ai_chat_init(HINSTANCE hInstance);
@@ -261,6 +262,30 @@ void ai_chat_voice_lock_typing(HWND panel, int on);
 /* Send the box now (ai_chat_send_user_message) unless the assistant is busy: then
  * 0 and a status note that the words stay in the box. 1 when the send was started. */
 int  ai_chat_voice_send_box(HWND panel);
+
+/* ---- Conversation mode (voice_win.c's controller drives these) ---- */
+
+/* Send the box as a turn: voice_turn 1 keeps the Auto-approve round count (a typed
+ * send resets it). Never sets focus, never posts; VSS_* says what happened. */
+VoiceSendStatus ai_chat_voice_send_turn(HWND panel, int voice_turn);
+
+/* The conversation's message count: the glue takes it just before a send. */
+unsigned ai_chat_voice_msg_count(HWND panel);
+
+/* The displayed text (commands removed, as the chat shows it) of the last assistant
+ * message with index >= since, malloc'd into *text (the caller secure_zero()s and
+ * frees). Returns 1 when it has non-whitespace prose. *is_error is 1 when the turn
+ * ended in an error reply. */
+int  ai_chat_voice_reply(HWND panel, unsigned since, char **text, int *is_error);
+
+/* 1 when nothing streams, no dispatch runs and no card waits for the user. */
+int  ai_chat_voice_idle(HWND panel);
+
+/* Exactly what the Stop branch of the Send/Stop button does (no voice_on_chat_stop). */
+void ai_chat_voice_cancel_work(HWND panel);
+
+/* The Send button shows Stop (1) or Send (0) while the chat is idle. */
+void ai_chat_voice_send_caption(HWND panel, int stop);
 
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */

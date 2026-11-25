@@ -74,4 +74,14 @@ void voice_on_chat_changed_msg(void);
  * recording and sends once the words are in); the handler then returns without sending. */
 int voice_send_pressed(void);
 
+/* Posted to the main window by ai_chat when the chat is idle (nothing streaming, no
+ * dispatch, no card waiting for the user), and when a card needing the user appears
+ * (wParam = VoiceCardKind). The controller re-checks and ignores both when no
+ * conversation runs. window.c routes them (Task 13). */
+#define WM_VOICE_TURN_IDLE (WM_APP + 0x45)
+#define WM_VOICE_CARD      (WM_APP + 0x46)
+
+/* The Send/Stop handler's Stop branch ran: a conversation ends its turn. */
+void voice_on_chat_stop(void);
+
 #endif /* NUTSHELL_VOICE_WIN_H */

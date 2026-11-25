@@ -2841,6 +2841,9 @@ int test_ai_session_discard_twice_is_safe(void);
 
 /* test_ai_rounds.c */
 int test_ai_rounds_user_message_resets(void);
+int test_ai_rounds_voice_turn_keeps_count(void);
+int test_ai_rounds_typed_turn_resets(void);
+int test_ai_rounds_stop_resets(void);
 int test_ai_rounds_continue_unattended_counts(void);
 int test_ai_rounds_continue_attended_resets(void);
 int test_ai_rounds_three_rounds_then_paused(void);
@@ -7547,6 +7550,9 @@ int main(void) {
     failed += test_ai_session_discard_keeps_platform();
     failed += test_ai_session_discard_twice_is_safe();
     failed += test_ai_rounds_user_message_resets();
+    failed += test_ai_rounds_voice_turn_keeps_count();
+    failed += test_ai_rounds_typed_turn_resets();
+    failed += test_ai_rounds_stop_resets();
     failed += test_ai_rounds_continue_unattended_counts();
     failed += test_ai_rounds_continue_attended_resets();
     failed += test_ai_rounds_three_rounds_then_paused();

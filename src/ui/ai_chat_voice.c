@@ -357,9 +357,126 @@ void ai_chat_voice_on_destroy(AiChatData *d)
     if (d->voice_ui != AIV_IDLE) voice_on_deactivate();
 }
 
+/* ---- Conversation mode: what the chat tells the controller ---- */
+
+static HWND main_window_of(const AiChatData *d)
+{
+    if (!d || !d->hwnd) return NULL;
+    HWND root = GetAncestor(d->hwnd, GA_ROOT);
+    return root && root != d->hwnd ? root : GetParent(d->hwnd);
+}
+
+/* No card waits for the user: an unsettled command batch whose queue still needs a
+ * decision (a held-only batch counts: busy_of() sees pending entries only). */
+static int card_waiting(const AiChatData *d)
+{
+    if (!d->active_state) return 0;
+    const CmdBatchSet *bs = &d->active_state->batches;
+    for (int i = 0; i < bs->count; i++) {
+        const CmdBatch *b = bs->b[i];
+        if (!cmd_batch_is_tool(b) && !b->settled && chat_approval_needs_user(&b->q))
+            return 1;
+    }
+    return 0;
+}
+
+static int idle_of(const AiChatData *d)
+{
+    return d && d->active_state && !busy_of(d) && !card_waiting(d);
+}
+
+/* Post "the chat is idle" to the main window; the controller re-checks with
+ * ai_chat_voice_idle() and ignores it when no conversation runs. Never a direct call. */
+static void voice_turn_check(AiChatData *d)
+{
+    if (!idle_of(d)) return;
+    HWND main = main_window_of(d);
+    if (main) PostMessage(main, WM_VOICE_TURN_IDLE, 0, 0);
+}
+
+void ai_chat_voice_turn_check(AiChatData *d)
+{
+    voice_turn_check(d);
+}
+
+void ai_chat_voice_card_posted(AiChatData *d, const char *tool_name)
+{
+    HWND main = main_window_of(d);
+    if (main)
+        PostMessage(main, WM_VOICE_CARD, (WPARAM)voice_card_kind(tool_name), 0);
+}
+
 void ai_chat_voice_busy_changed(AiChatData *d)
 {
     if (d && d->hMicBtn) InvalidateRect(d->hMicBtn, NULL, FALSE);
+    voice_turn_check(d);
+}
+
+VoiceSendStatus ai_chat_voice_send_turn(HWND panel, int voice_turn)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d) return VSS_NO_SESSION;
+    return ai_chat_send_user_message_ex(d, voice_turn);
+}
+
+unsigned ai_chat_voice_msg_count(HWND panel)
+{
+    const AiChatData *d = panel_data(panel);
+    return d && d->conv.msg_count > 0 ? (unsigned)d->conv.msg_count : 0;
+}
+
+int ai_chat_voice_reply(HWND panel, unsigned since, char **text, int *is_error)
+{
+    if (text) *text = NULL;
+    if (is_error) *is_error = 0;
+    const AiChatData *d = panel_data(panel);
+    if (!d || !text) return 0;
+    if (is_error && d->active_state) *is_error = d->active_state->last_turn_error ? 1 : 0;
+    for (int i = d->conv.msg_count - 1; i >= 0 && (unsigned)i >= since; i--) {
+        if (d->conv.messages[i].role != AI_ROLE_ASSISTANT) continue;
+        const char *full = ai_msg_content(&d->conv.messages[i]);
+        if (!full) return 0;
+        const size_t cap = strlen(full) + 1;
+        char *out = (char *)malloc(cap);
+        if (!out) return 0;
+        out[0] = '\0';
+        /* As the chat shows it: only the text before the first live [EXEC]. */
+        if (ai_response_split(full, out, cap, NULL, 0) <= 0)
+            memcpy(out, full, cap);
+        int prose = 0;
+        for (const char *p = out; *p; p++)
+            if ((unsigned char)*p > ' ') { prose = 1; break; }
+        if (!prose) {
+            secure_zero(out, cap);
+            free(out);
+            return 0;
+        }
+        *text = out;
+        return 1;
+    }
+    return 0;
+}
+
+int ai_chat_voice_idle(HWND panel)
+{
+    return idle_of(panel_data(panel));
+}
+
+void ai_chat_voice_cancel_work(HWND panel)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d) return;
+    if (d->dispatch_active || ACTIVE_BUSY(d)) ai_chat_stop_work(d);
+}
+
+void ai_chat_voice_send_caption(HWND panel, int stop)
+{
+    AiChatData *d = panel_data(panel);
+    if (!d || !d->hSendBtn) return;
+    if (!stop && busy_of(d)) return;   /* a working chat keeps its Stop */
+    if (stop) SetWindowTextW(d->hSendBtn, L"\x25A0");   /* the same square the launch sets */
+    else SetWindowText(d->hSendBtn, ">");
+    InvalidateRect(d->hSendBtn, NULL, TRUE);
 }
 
 /* ---- The painted pieces ---- */
