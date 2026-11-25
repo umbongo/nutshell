@@ -25,7 +25,7 @@
  * touch is guarded by g_lock. */
 typedef struct AisJob {
     struct AisJob *next;
-    unsigned token, reply_id, serial;
+    unsigned token, rid, serial;   /* rid: the engine's render id of this speak */
     HWND notify;
     HANDLE thread;                 /* NULL once closed (joined or given up on) */
     char *text, *key;              /* the worker's copies, wiped at its end */
@@ -34,7 +34,7 @@ typedef struct AisJob {
     size_t n;
     VoiceAisTarget target;
     VoiceAisFetch fetch;
-    int dead, cancel, ended;       /* under g_lock */
+    int dead, cancel;              /* under g_lock */
     unsigned cur_chunk;            /* under g_lock */
     uint64_t chunk_frames;         /* frames pushed for cur_chunk, under g_lock */
     int push_failed;               /* render_data refused a block, under g_lock */
@@ -47,7 +47,10 @@ typedef struct {
     int auto_quit, holding, volume;
     /* the reply being spoken (UI side) */
     int speaking;
-    unsigned reply_id;
+    unsigned reply_id;             /* the caller's, used only in posts to it */
+    unsigned rid;                  /* the engine's, monotone per context: render calls and VAM_* */
+    int truncated;                 /* text beyond the chunk cap was not queued */
+    size_t trunc_at;               /* the first unspoken byte */
     char *text;
     size_t text_len, from;
     size_t *starts, *lens;
@@ -72,11 +75,13 @@ static int g_lock_ready;
 static unsigned g_serial;
 static unsigned g_gen = AIS_GEN_BASE;
 static VoiceAisFetch g_fetch;
+static size_t g_max_chunks = AIS_MAX_CHUNKS;
 
 static void lock(void)   { EnterCriticalSection(&g_lock); }
 static void unlock(void) { LeaveCriticalSection(&g_lock); }
 
 void voice_ais_set_fetch(VoiceAisFetch f) { g_fetch = f; }
+void voice_ais_test_max_chunks(size_t n) { g_max_chunks = n ? n : AIS_MAX_CHUNKS; }
 
 /* ---- small helpers ---- */
 
@@ -128,6 +133,7 @@ static void reply_clear(AisCtx *c)
     c->failed = 0; c->fail_chunk = 0; c->fail_hr = 0;
     c->worker_exited = 0; c->pos_valid = 0; c->pos_chunk = 0; c->pos_frames = 0;
     c->last_off = 0;
+    c->truncated = 0; c->trunc_at = 0;
 }
 
 static void cancel_jobs(unsigned token)
@@ -204,7 +210,8 @@ static void wpost(const AisJob *j, VoiceAisKind kind, unsigned chunk, uint64_t f
     VoiceAisMsg *m = (VoiceAisMsg *)calloc(1, sizeof(*m));
     if (m == NULL) return;
     m->token = j->token;
-    m->reply_id = j->reply_id;
+    m->reply_id = j->rid;
+    m->serial = j->serial;
     m->chunk = chunk;
     m->kind = kind;
     m->frames = frames;
@@ -226,7 +233,7 @@ static int ais_push(void *job, const int16_t *s, size_t n)
             int16_t *buf = (int16_t *)malloc(n * sizeof(int16_t));
             if (buf != NULL) {
                 memcpy(buf, s, n * sizeof(int16_t));
-                if (voice_audio_render_data(j->token, j->reply_id, j->cur_chunk, buf, n) == 1) {
+                if (voice_audio_render_data(j->token, j->rid, j->cur_chunk, buf, n) == 1) {
                     j->chunk_frames += n;
                     ok = 1;
                 } else {
@@ -281,7 +288,7 @@ static DWORD WINAPI ais_worker(LPVOID arg)
         if (hr != 0) {
             /* FAILED first, then the end: the UI sees the failure before the end plays out. */
             wpost(j, VAI_FAILED, (unsigned)k, frames, hr);
-            voice_audio_render_end(j->token, j->reply_id);
+            voice_audio_render_end(j->token, j->rid);
             failed = 1;
         } else {
             wpost(j, VAI_CHUNK_DONE, (unsigned)k, frames, 0);
@@ -290,17 +297,16 @@ static DWORD WINAPI ais_worker(LPVOID arg)
     }
     if (!failed && !stopped) {
         lock();
-        if (!j->dead && !j->cancel) voice_audio_render_end(j->token, j->reply_id);
+        if (!j->dead && !j->cancel) voice_audio_render_end(j->token, j->rid);
         unlock();
     }
 
     if (j->text != NULL) { secure_zero(j->text, j->text_len + 1); free(j->text); j->text = NULL; }
     if (j->key != NULL) { secure_zero(j->key, strlen(j->key) + 1); free(j->key); j->key = NULL; }
     lock();
-    wpost(j, VAI_EXITED, 0, j->serial, 0);   /* the one post that ignores the flags */
-    j->ended = 1;
-    unlock();
-    return 0;   /* j may be freed by the UI from here on: never touched again */
+    wpost(j, VAI_EXITED, 0, 0, 0);   /* the one post that ignores the flags; the last access to j */
+    unlock();                        /* g_lock is the engine's, not the job's */
+    return 0;                        /* j may be freed by the UI from here on: never touched again */
 }
 
 /* ---- contexts ---- */
@@ -349,7 +355,7 @@ void voice_ais_stop(unsigned token)
     AisCtx *c = ctx_find(token);
     if (c == NULL) return;
     cancel_jobs(token);
-    if (c->holding) voice_audio_render_flush(token, c->reply_id + 1u);
+    if (c->holding) voice_audio_render_flush(token, c->rid + 1u);
     kill_guard(c);
     c->speaking = 0;
 }
@@ -360,16 +366,22 @@ void voice_ais_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
     AisCtx *c = ctx_find(token);
     if (c == NULL || utf8 == NULL) return;
 
+    /* The engine's own monotone render id: the caller's reply id when it is ahead of the last
+     * one, else the next one up, so a re-speak under the same id can never match the first
+     * speak's audio or messages, and the play queue's min_reply drops anything older. */
+    const unsigned rid = (int)(reply_id - c->rid) > 0 ? reply_id : c->rid + 1u;
     cancel_jobs(token);                       /* the old worker's cancel */
-    if (c->holding) voice_audio_render_flush(token, reply_id);
+    if (c->holding) voice_audio_render_flush(token, rid);
     kill_guard(c);
     c->speaking = 0;
     reply_clear(c);
     c->reply_id = reply_id;
+    c->rid = rid;
 
     const size_t len = strlen(utf8);
     if (from > len) from = len;
     c->from = from;
+    c->last_off = from;                       /* M4: a word is posted only when the offset moves */
 
     if (t == NULL || t->url[0] == '\0') {
         post_result(c, VTT_ERROR, from, VOICE_AIS_HR_RESOLVE);
@@ -377,7 +389,7 @@ void voice_ais_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
     }
 
     char *text = (char *)malloc(len + 1);
-    const size_t cap = len + 1 < AIS_MAX_CHUNKS ? len + 1 : AIS_MAX_CHUNKS;
+    const size_t cap = len + 1 < g_max_chunks ? len + 1 : g_max_chunks;
     size_t *starts = (size_t *)calloc(cap, sizeof(size_t));
     size_t *lens = (size_t *)calloc(cap, sizeof(size_t));
     size_t n = 0;
@@ -392,6 +404,12 @@ void voice_ais_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
         if (alloc_ok) post_result(c, VTT_DONE, from, 0);                  /* nothing speakable */
         else post_result(c, VTT_ERROR, from, VOICE_AIS_HR_DEVICE);        /* out of memory */
         return;
+    }
+
+    if (n == cap && cap == g_max_chunks) {      /* the cap may have cut the text */
+        size_t e = starts[n - 1] + lens[n - 1];
+        while (e < len && (text[e] == ' ' || text[e] == '\n' || text[e] == '\r' || text[e] == '\t')) e++;
+        if (e < len) { c->truncated = 1; c->trunc_at = starts[n - 1] + lens[n - 1]; }
     }
 
     /* The render client, when this context does not hold it (R35). */
@@ -434,7 +452,7 @@ void voice_ais_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
     j->target = *t;
     j->fetch = g_fetch;
     j->token = token;
-    j->reply_id = reply_id;
+    j->rid = rid;
     j->notify = c->notify;
     j->serial = ++g_serial;
 
@@ -543,10 +561,21 @@ static void finish_reply(AisCtx *c)
     if (!c->speaking) return;
     c->speaking = 0;
     kill_guard(c);
-    if (c->failed)
+    if (c->failed) {
         post_result(c, VTT_ERROR, cur_offset(c, (long)c->fail_chunk), c->fail_hr);
-    else if (c->chunks_done == c->n)
-        post_result(c, VTT_DONE, 0, 0);
+    } else if (c->chunks_done == c->n) {
+        if (c->truncated)     /* the chunk cap cut the text: never reported as read */
+            post_result(c, VTT_ERROR, c->trunc_at < c->last_off ? c->last_off : c->trunc_at,
+                        VOICE_AIS_HR_STREAM);
+        else
+            post_result(c, VTT_DONE, 0, 0);
+    } else {
+        /* A chunk's completion was lost: end the reply with an error at the first chunk not
+         * confirmed, never in silence. */
+        size_t k = 0;
+        while (k < c->n && c->complete[k]) k++;
+        post_result(c, VTT_ERROR, cur_offset(c, (long)k), VOICE_AIS_HR_STREAM);
+    }
 }
 
 void voice_ais_on_audio(UINT kind, LPARAM lp)
@@ -555,7 +584,7 @@ void voice_ais_on_audio(UINT kind, LPARAM lp)
         VoiceRenderMsg *m = (VoiceRenderMsg *)lp;
         if (m == NULL) return;
         AisCtx *c = ctx_find(m->token);
-        if (c != NULL && c->speaking && m->reply_id == c->reply_id) {
+        if (c != NULL && c->speaking && m->reply_id == c->rid) {
             const int progress = !c->pos_valid || c->pos_chunk != m->chunk ||
                                  c->pos_frames != m->frames_in_chunk;
             if (kind == VAM_PLAYED || m->frames_in_chunk > 0 || !c->pos_valid) {
@@ -565,9 +594,11 @@ void voice_ais_on_audio(UINT kind, LPARAM lp)
             }
             if (kind == VAM_PLAYED) {
                 if (progress && m->chunk < c->n) {
-                    size_t off = cur_offset(c, -1);
-                    c->last_off = off;
-                    post_tts(c, VTT_WORD, c->reply_id, off, 0);
+                    const size_t off = cur_offset(c, -1);
+                    if (off != c->last_off) {
+                        c->last_off = off;
+                        post_tts(c, VTT_WORD, c->reply_id, off, 0);
+                    }
                 }
                 if (progress && c->worker_exited) arm_guard(c);   /* R30: re-armed on progress */
             } else {
@@ -597,24 +628,26 @@ void voice_ais_on_msg(VoiceAisMsg *m)
     AisCtx *c = ctx_find(m->token);
     if (m->kind == VAI_EXITED) {
         AisJob *j = g_jobs;
-        while (j != NULL && j->serial != (unsigned)m->frames) j = j->next;
+        while (j != NULL && j->serial != m->serial) j = j->next;
         if (j == NULL) return;                 /* joined by a quit already */
         const unsigned serial = j->serial;
         job_reap(j, 3000);
-        if (c != NULL && c->serial == serial && c->speaking && c->reply_id == m->reply_id) {
+        if (c != NULL && c->serial == serial && c->speaking) {
             c->worker_exited = 1;
             arm_guard(c);                     /* R30: armed once the worker has finished */
         }
         return;
     }
-    if (c == NULL || !c->speaking || m->reply_id != c->reply_id || m->chunk >= c->n) return;
+    /* Only the current speak's worker counts: a cancelled earlier speak's late messages carry
+     * another serial. */
+    if (c == NULL || !c->speaking || m->serial != c->serial || m->chunk >= c->n) return;
     if (m->kind == VAI_CHUNK_DONE) {
+        if (!c->complete[m->chunk]) { c->complete[m->chunk] = 1; c->chunks_done++; }
         c->totals[m->chunk] = m->frames;
-        c->complete[m->chunk] = 1;
-        c->chunks_done++;
     } else if (m->kind == VAI_FAILED) {
+        /* complete stays 0: the failed chunk's audio is only part of its text, so R9's
+         * estimate (1,600 frames per byte) maps the played frames, not the proportion. */
         c->totals[m->chunk] = m->frames;
-        c->complete[m->chunk] = 1;
         c->failed = 1;
         c->fail_chunk = m->chunk;
         c->fail_hr = m->hr;

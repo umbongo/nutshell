@@ -18,6 +18,7 @@
 #include "voice_gate.h"
 #include "ai_gate.h"
 #include "voice_ledger.h"
+#include "voice_speak.h"
 
 #define VA_TOKEN 0x00321u
 #define VA_TOKEN_B 0x00777u
@@ -106,6 +107,7 @@ static unsigned g_last_chunk;
 static uint64_t g_last_frames;
 static int g_have_prog;
 static int g_ais_seen[8];
+static int g_drop_chunk_done;     /* the pump loses CHUNK_DONE messages, as OOM could */
 
 static void va_free_audio(const MSG *m)
 {
@@ -136,7 +138,7 @@ static void va_pump(DWORD ms)
             } else if (msg.message == WM_VOICE_AIS) {
                 VoiceAisMsg *m = (VoiceAisMsg *)msg.lParam;
                 if ((int)m->kind >= 0 && (int)m->kind < 8) g_ais_seen[m->kind]++;
-                voice_ais_on_msg(m);
+                if (!(g_drop_chunk_done && m->kind == VAI_CHUNK_DONE)) voice_ais_on_msg(m);
                 free(m);
             } else if (msg.message == WM_VOICE_TTS) {
                 VoiceTtsMsg *m = (VoiceTtsMsg *)msg.lParam;
@@ -216,6 +218,7 @@ static HWND va_begin(void)
     fk_reset();
     g_nlog = 0; g_played = 0; g_have_prog = 0; g_progress_tick = 0;
     memset(g_ais_seen, 0, sizeof(g_ais_seen));
+    g_drop_chunk_done = 0;
     voice_ledger_reset();
     voice_ais_set_fetch(fake_fetch);
     return w;
@@ -226,6 +229,7 @@ static void va_end(HWND w)
     voice_ais_quit_all(2000);
     va_pump(50);
     voice_ais_set_fetch(NULL);
+    voice_ais_test_max_chunks(0);
     voice_audio_stop();
     voice_audio_test_render_null(0);
     va_gates(0);
@@ -288,11 +292,11 @@ int test_voice_ais_fake_done(void)
     for (int i = 0; i < g_nlog; i++) {
         if (g_log[i].kind != VTT_WORD || g_log[i].reply != 1) continue;
         words++;
-        if (g_log[i].offset < last) nondecr = 0;
+        if (g_log[i].offset <= last && words > 1) nondecr = 0;   /* M4: only a changed offset is posted */
         last = g_log[i].offset;
         if (g_log[i].offset >= 5) past_two = 1;   /* "Two" starts at byte 5 */
     }
-    ASSERT_TRUE(words >= 2);
+    ASSERT_TRUE(words >= 1);
     ASSERT_EQ(nondecr, 1);
     ASSERT_EQ(past_two, 1);
     ASSERT_EQ(va_count(VTT_DONE, 1) == 1 && va_find(VTT_DONE, 1) > 0, 1);
@@ -398,7 +402,7 @@ int test_voice_ais_gain_survives_open(void)
     voice_ais_speak(VA_TOKEN, 1, "One. Two.", 0, &t, "key");
     ASSERT_EQ(va_wait_end(1, 6000), 1);
     const int pk = voice_audio_test_render_peak();
-    ASSERT_TRUE(pk >= 1620 && pk <= 1980);   /* 18 % +- 1 of 10000 */
+    ASSERT_TRUE(pk >= 1700 && pk <= 1900);   /* 18 % +- 1 of 10000 */
     voice_ais_quit(VA_TOKEN, 3000);
     ASSERT_EQ(voice_ledger_all_zero(), 1);
     va_end(w);
@@ -431,7 +435,7 @@ int test_voice_ais_reopen_after_preempt(void)
     ASSERT_EQ(va_wait_end(2, 6000), 1);
     ASSERT_EQ(va_count(VTT_DONE, 2), 1);
     const int pk = voice_audio_test_render_peak();
-    ASSERT_TRUE(pk >= 1620 && pk <= 1980);               /* the gain was re-sent */
+    ASSERT_TRUE(pk >= 1700 && pk <= 1900);               /* the gain was re-sent */
     voice_ais_quit(VA_TOKEN, 3000);
     ASSERT_EQ(voice_ledger_all_zero(), 1);
     va_end(w);
@@ -515,8 +519,10 @@ int test_voice_ais_dead_worker_never_pushes(void)
     end = GetTickCount64() + 5000;
     while (g_fk.running && GetTickCount64() < end) va_pump(10);
     ASSERT_EQ((int)g_fk.running, 0);
-    ASSERT_TRUE(g_fk.refused >= 1);        /* every further push returned 0 */
-    va_pump(200);
+        va_pump(200);
+    /* render_close already dropped the audio, so the frame count alone proves little (M2):
+     * the fetch's own refused-push count is the evidence. Its first refused push ends it. */
+    ASSERT_EQ((int)g_fk.refused, 1);
     ASSERT_EQ((int)voice_audio_test_render_frames(7), (int)f0);
     ASSERT_TRUE(va_wait_ledger(VRES_SPEECH_REQ, 0, 3000));   /* released by its VAI_EXITED */
     ASSERT_EQ(g_ais_seen[VAI_EXITED], 1);
@@ -572,6 +578,158 @@ int test_voice_ais_sample_self_quits(void)
     ASSERT_EQ(voice_ais_owns(VOICE_AIS_SAMPLE_TOKEN), 0);
     ASSERT_EQ(voice_ledger_all_zero(), 1);
     ASSERT_EQ(voice_ledger_underflow(), 0);
+    va_end(w);
+    TEST_END();
+}
+
+/* ---- fix round 1 ---- */
+
+static void va_two_sentences(char *text, size_t cap, size_t *second)
+{
+    char sent[200];
+    sent[0] = '\0';
+    for (int i = 0; i < 28; i++) strcat(sent, "abcd ");
+    strcat(sent, "end.");
+    snprintf(text, cap, "%s %s", sent, sent);
+    if (second) *second = strlen(sent) + 1;
+}
+
+/* I1: a lost CHUNK_DONE must still end the reply with a terminal message. */
+int test_voice_ais_lost_chunk_done_still_ends(void)
+{
+    TEST_BEGIN();
+    HWND w = va_begin();
+    ASSERT_NOT_NULL(w);
+    VoiceAisTarget t = va_target();
+    g_drop_chunk_done = 1;
+    ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+    voice_ais_speak(VA_TOKEN, 1, "One. Two.", 0, &t, "key");
+    ASSERT_EQ(va_wait_end(1, 6000), 1);
+    ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+    const int i = va_find(VTT_ERROR, 1);
+    ASSERT_TRUE(i >= 0);
+    if (i >= 0) ASSERT_EQ((int)g_log[i].hr, (int)VOICE_AIS_HR_STREAM);
+    voice_ais_quit(VA_TOKEN, 3000);
+    ASSERT_EQ(voice_ledger_all_zero(), 1);
+    va_end(w);
+    TEST_END();
+}
+
+/* I2: a chunk that failed after part of it was pushed resumes inside it, not at its end. */
+int test_voice_ais_partial_chunk_failure_offset(void)
+{
+    TEST_BEGIN();
+    HWND w = va_begin();
+    ASSERT_NOT_NULL(w);
+    VoiceAisTarget t = va_target();
+    char text[400];
+    va_two_sentences(text, sizeof(text), NULL);
+    text[144] = '\0';                      /* one chunk of 144 bytes */
+    g_fk.frames = 24000;                   /* 1 s: about 15 bytes of it at the estimate */
+    g_fk.ret = VOICE_AIS_HR_NET;
+    ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+    voice_ais_speak(VA_TOKEN, 1, text, 0, &t, "key");
+    ASSERT_EQ(va_wait_end(1, 8000), 1);
+    const int i = va_find(VTT_ERROR, 1);
+    ASSERT_TRUE(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)g_log[i].hr, (int)VOICE_AIS_HR_NET);
+        ASSERT_TRUE(g_log[i].offset > 0 && g_log[i].offset < 72);
+    }
+    voice_ais_quit(VA_TOKEN, 3000);
+    ASSERT_EQ(voice_ledger_all_zero(), 1);
+    va_end(w);
+    TEST_END();
+}
+
+/* I3: a re-speak under the same reply id is not confused with the first speak's messages. */
+int test_voice_ais_same_reply_id_respeak(void)
+{
+    TEST_BEGIN();
+    HWND w = va_begin();
+    ASSERT_NOT_NULL(w);
+    VoiceAisTarget t = va_target();
+    char text[400];
+    va_two_sentences(text, sizeof(text), NULL);
+    ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+    voice_ais_speak(VA_TOKEN, 5, "One. Two.", 0, &t, "key");   /* one chunk */
+    ULONGLONG end = GetTickCount64() + 5000;
+    while ((g_fk.calls < 1 || g_fk.running) && GetTickCount64() < end) Sleep(5);
+    Sleep(150);                            /* its CHUNK_DONE is posted, not yet pumped */
+    ASSERT_EQ((int)g_fk.calls, 1);
+    voice_ais_speak(VA_TOKEN, 5, text, 2, &t, "key");          /* two chunks, same id */
+    ASSERT_EQ(va_wait_end(5, 8000), 1);
+    va_pump(300);
+    ASSERT_EQ(va_count(VTT_DONE, 5), 1);
+    ASSERT_EQ(va_count(VTT_ERROR, 5), 0);
+    ASSERT_EQ((int)g_fk.calls, 3);
+    size_t last = 0;
+    int ok = 1;
+    for (int i = 0; i < g_nlog; i++) {
+        if (g_log[i].kind != VTT_WORD) continue;
+        if (g_log[i].offset < last) ok = 0;
+        if (g_log[i].offset > strlen(text)) ok = 0;
+        last = g_log[i].offset;
+    }
+    ASSERT_EQ(ok, 1);
+    voice_ais_quit(VA_TOKEN, 3000);
+    ASSERT_EQ(voice_ledger_all_zero(), 1);
+    va_end(w);
+    TEST_END();
+}
+
+/* M3: text beyond the chunk cap is never reported as read. */
+int test_voice_ais_chunk_cap_is_an_error(void)
+{
+    TEST_BEGIN();
+    HWND w = va_begin();
+    ASSERT_NOT_NULL(w);
+    VoiceAisTarget t = va_target();
+    char text[1900], sent[601];
+    memset(sent, 'a', 599);
+    for (int i = 4; i < 599; i += 5) sent[i] = ' ';
+    sent[599] = '.'; sent[600] = '\0';
+    snprintf(text, sizeof(text), "%s %s %s", sent, sent, sent);
+    size_t starts[8], lens[8];
+    const size_t all = voice_speak_chunks(text, 0, starts, lens, 8);
+    ASSERT_TRUE(all > 2);
+    voice_ais_test_max_chunks(2);
+    ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+    voice_ais_speak(VA_TOKEN, 1, text, 0, &t, "key");
+    ASSERT_EQ(va_wait_end(1, 8000), 1);
+    ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+    const int i = va_find(VTT_ERROR, 1);
+    ASSERT_TRUE(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)g_log[i].hr, (int)VOICE_AIS_HR_STREAM);
+        ASSERT_EQ((int)g_log[i].offset, (int)(starts[1] + lens[1]));
+    }
+    voice_ais_quit(VA_TOKEN, 3000);
+    ASSERT_EQ(voice_ledger_all_zero(), 1);
+    va_end(w);
+    TEST_END();
+}
+
+/* M5: quit_all with the conversation and the sample both alive and speaking. */
+int test_voice_ais_quit_all_two_contexts(void)
+{
+    TEST_BEGIN();
+    HWND w = va_begin();
+    ASSERT_NOT_NULL(w);
+    VoiceAisTarget t = va_target();
+    g_fk.frames = 72000;
+    g_fk.sleep_ms = 10;
+    ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+    voice_ais_speak(VA_TOKEN, 1, "One. Two.", 0, &t, "key");
+    ASSERT_EQ(voice_ais_sample(w, &t, "key"), 1);
+    ASSERT_EQ(voice_ais_running(), 2);
+    va_wait_played(2, 5000);
+    voice_ais_quit_all(3000);
+    ASSERT_EQ(voice_ais_running(), 0);
+    ASSERT_EQ(voice_ledger_all_zero(), 1);
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+    va_pump(300);
+    ASSERT_EQ(voice_ledger_all_zero(), 1);
     va_end(w);
     TEST_END();
 }

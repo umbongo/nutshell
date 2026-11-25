@@ -31,9 +31,11 @@
 #define WM_VOICE_AIS (WM_APP + 0x49)      /* lParam = VoiceAisMsg*, receiver frees */
 typedef enum { VAI_CHUNK_DONE = 1, VAI_FAILED, VAI_EXITED } VoiceAisKind;
 /* CHUNK_DONE: chunk and its total frames. FAILED: chunk, hr, and the frames it did push.
- * EXITED: the worker has finished; `frames` carries its serial (not a frame count). */
+ * EXITED: the worker has finished. `serial` is the posting job's; the UI drops a message whose
+ * serial is not its context's current one (a cancelled earlier speak). `reply_id` is the
+ * engine's internal render id of that speak, not the caller's reply id. */
 typedef struct { unsigned token, reply_id, chunk; VoiceAisKind kind;
-                 uint64_t frames; long hr; } VoiceAisMsg;
+                 uint64_t frames; long hr; unsigned serial; } VoiceAisMsg;
 
 #define VOICE_AIS_SAMPLE_TOKEN 0x7FFFFFF2u
 #define VOICE_AIS_TIMER_BASE   0x56F4      /* + slot 0 or 1: the done guard of each context */
@@ -71,5 +73,8 @@ void voice_ais_on_timer(UINT_PTR id);
 
 /* 7b installs the real fetch; tests install fakes; NULL = none (every speak fails NET). */
 void voice_ais_set_fetch(VoiceAisFetch f);
+
+/* TEST-ONLY seam, never product code: the cap on chunks per reply (0 restores the default). */
+void voice_ais_test_max_chunks(size_t n);
 
 #endif /* NUTSHELL_VOICE_AISPEECH_WIN_H */
