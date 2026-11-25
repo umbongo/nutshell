@@ -108,9 +108,10 @@ modes** **(maintainer)**:
   idle.
 - Voice spec §5 to §7, spoken replies: AI speech keeps that spec's G3, its own
   provider setting (§8.4). What changes: it speaks in conversation mode only,
-  not behind a speaker toggle; the providers are Mistral, Groq and Custom (an
+  not behind a speaker toggle; the providers are Mistral and Custom (an
   OpenAI-compatible `/audio/speech`), with OpenAI not offered (its speech
-  models shut down on 2027-01-06) and Gemini's speech not in this design; and
+  models shut down on 2027-01-06), Groq cut (Preview, 100 requests a day) and
+  Gemini's speech not in this design; and
   the key is shared with speech-to-text when both use the same provider
   **(critique round 2; provider set amended 2026-11-25, §16 "Decisions of
   2026-11-25: AI speech provider")**.
@@ -639,7 +640,7 @@ superseded **(main session, with the critiques' additions)**:
 |---|---|---|---|
 | OpenAI | yes, WebSocket | live | no: every `/audio/speech` model shuts down on 2027-01-06; a Custom URL pointed at it works until then (amended 2026-11-25) |
 | Mistral | yes, WebSocket | live | yes, `voxtral-mini-tts-3-0`, the default (amended 2026-11-25) |
-| Groq | no, batch after stop | batch per turn | yes, `canopylabs/orpheus-v1-english` (Preview, 200 characters a request) (amended 2026-11-25) |
+| Groq | no, batch after stop | batch per turn | no: Orpheus is Preview, 10 requests a minute and 100 a day (cut 2026-11-25, §17 round 3) |
 | Gemini | no (Gemini Live later) | batch per turn | no |
 | Custom | no | batch per turn | yes, an OpenAI-compatible `/audio/speech` |
 
@@ -822,7 +823,7 @@ pseudo-live mode is a later item (§15).
 - **PR 3: Nutshell's own render client**, for AI speech's PCM: WASAPI render
   in shared mode on the default output (`eRender`, `eConsole`), 24 kHz mono
   16-bit with auto-convert, event-driven, on the audio thread. A play queue of
-  PCM chunks, each with a map from its bytes to characters of the spoken text
+  PCM chunks, each with a map from its audio bytes to byte offsets of the spoken text
   (§10); the audio thread reports bytes played (`VAM_PLAYED`, say). A software
   gain for the duck. Stop drops the queue and flushes the buffer
   (`IAudioClient_Stop` + `Reset`). It opens with the first reply and closes at
@@ -863,7 +864,8 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
 - The extractor is pure code in `src/core`, built on `md_blocks.c`.
 - Chunking as in voice spec §5: the first chunk one or two sentences (about
   200 characters) so speech starts quickly, later chunks up to about 1,000
-  characters, always at sentence ends. The next chunk is prepared while the
+  characters, always at sentence ends (bytes of UTF-8, as built; amended
+  2026-11-25). The next chunk is prepared while the
   current one plays.
 - The text sent for speech is logged only through `DLOG_CONTENT`.
 
@@ -933,75 +935,103 @@ PR 2 builds Windows speech (§8.1 to §8.3, §8.5); PR 3 adds AI speech (§8.4)
 
 ### 8.4 AI speech (PR 3)
 
-**Amended 2026-11-25** (maintainer's decision, §16 "Decisions of 2026-11-25:
-AI speech provider"). AI speech uses providers with a real text-to-speech
-endpoint. OpenAI is not offered, because its speech models shut down on
-2027-01-06. Its replacement is a conversational model on the Realtime API,
-which was designed for this PR, critiqued and rejected. The first text of
-this section (OpenAI `gpt-4o-mini-tts`, `pcm`, voice `coral`) is in git
-history before this amendment.
+**Amended 2026-11-25** (maintainer's decision, then critique round 3; §16 "Decisions of
+2026-11-25: AI speech provider", §17 round 3). AI speech uses providers with a real
+text-to-speech endpoint: **Mistral and Custom**.
+- OpenAI is not offered: its speech models shut down on 2027-01-06. Its replacement is a
+  conversational model on the Realtime API, which was designed for this PR, critiqued and
+  rejected.
+- Groq was offered and then cut: Orpheus is a Preview model, limited to 10 requests a minute
+  and 100 a day.
 
-- **Its own provider setting**, as the voice spec's G3 says **(critique
-  round 2, replacing the main session's "uses the voice provider's key,
-  OpenAI only")**:
-  - **Speech provider** (amended):
-    - **Mistral**, the default: `POST https://api.mistral.ai/v1/audio/speech`,
-      model `voxtral-mini-tts-3-0`, streamed as server-sent events.
-    - **Groq**: `POST https://api.groq.com/openai/v1/audio/speech`, model
-      `canopylabs/orpheus-v1-english`. It is OpenAI-compatible, in Preview, and
-      takes at most 200 characters a request.
-    - **Custom**: an OpenAI-compatible server. Its Base URL gives
-      `{base}/audio/speech`, normalised by `voice_base_url_normalise`, with
-      the existing clear-text-URL warning.
-  - Key: when the speech provider is the same as the effective speech-to-text
-    provider (Mistral with Mistral, Groq with Groq, Custom with the same base
-    URL), that key is reused and no second key is asked for. Otherwise the
-    speech key is its own DPAPI secret, `tts_api_key` with its
+The first text of this section (OpenAI `gpt-4o-mini-tts`, `pcm`, voice `coral`) is in git
+history.
+
+- **Its own provider setting**, as the voice spec's G3 says **(critique round 2, replacing the
+  main session's "uses the voice provider's key, OpenAI only")**:
+  - Speech provider:
+    - **Mistral**, the default: `POST https://api.mistral.ai/v1/audio/speech`, model
+      `voxtral-mini-tts-3-0`, streamed as server-sent events.
+    - **Custom**: an OpenAI-compatible server. Its Base URL gives `{base}/audio/speech`,
+      normalised by `voice_base_url_normalise`. Plain `http://` is allowed, with the
+      clear-text warning, as for speech-to-text.
+    - Any other provider id, `openai` and `gemini` included, is an error (§8.5); it is never
+      replaced by Mistral.
+  - **Key.** When the speech provider is the same as the effective speech-to-text provider
+    (Mistral with Mistral; Custom with the same base URL), that key is reused and no second
+    key is asked for. Otherwise the speech key is its own DPAPI secret, `tts_api_key` with its
     `*_enc_preserved` twin, as voice spec §7 defined it.
+    - The saved key is **bound to the provider it was entered for**. The encrypted value holds
+      the provider (`mistral`, or `custom` and the normalised base URL) before the key.
+    - A key whose provider no longer matches the setting is not used: there is then no key,
+      which §8.5 reports.
+    - A Custom server may need no key (a local Kokoro server, say).
+  - **Privacy.** With AI speech selected, the Voice page shows the dim line "Each spoken
+    reply's text is sent to <host>." The Base URL help says that the reply text and the key
+    go to that server, and that `http://` is not encrypted.
   - The §2 supersede list records what differs from the voice spec.
-- **Requests** (amended). Every request asks for `wav`, the one format each
-  provider offers and the only one Groq offers. Nutshell reads the WAV header
-  as it streams (16-bit or 32-bit float, mono or stereo, any rate from 8 to
-  48 kHz) and converts the audio to 24 kHz mono PCM16 for its own play queue
-  (§7.4). That conversion is pure code in `src/core`. Each request is opened
-  through `voice_net_open` (§6.5), and each chunk of §8.1 is one request; with
-  Groq the chunks are at most 200 bytes.
-  - Mistral: JSON `model`, `input`, `voice_id`, `response_format: "wav"` and
-    `stream: true`. The reply is server-sent events: `speech.audio.delta`
-    carries base64 `audio_data`, and `speech.audio.done` ends it. Mistral has
-    no style instructions at launch, so the accent comes from the voice.
-  - Groq and Custom: JSON `model`, `voice`, `input` and
-    `response_format: "wav"`. The body streams as raw bytes. Custom adds
-    `instructions` when the style is not empty.
+- **Requests.** Each chunk of §8.1 is one request, at sentence ends as in §8.1, opened through
+  `voice_net_open` (§6.5).
+  - Mistral: JSON `model`, `input`, `voice_id`, `response_format` and `stream: true`, sent
+    with `Accept: text/event-stream`. Mistral refuses unknown fields with HTTP 422.
+    - The reply is server-sent events, read through the existing `sse_line` splitter. Their
+      shape, from Mistral's SDK: `event: speech.audio.delta` with data
+      `{"type": "speech.audio.delta", "audio_data": "<base64>"}`, then `speech.audio.done`
+      with `usage`.
+    - The raw frames are captured on the maintainer's machine before the PR is marked ready
+      (§14, "Task 0" of the plan). Until then the parser's fixtures are provisional.
+  - Custom: JSON `model`, `voice`, `input` and `response_format: "wav"`, plus `instructions`
+    only when the user typed a style. The body streams as raw bytes.
+  - **Audio accepted.** Exactly 24,000 Hz, 16-bit or 32-bit float, mono or stereo (stereo is
+    down-mixed).
+    - Mistral's audio is mono at 24 kHz; Kokoro-FastAPI's is 24 kHz 16-bit.
+    - Nothing is resampled: any other rate or format is the failure "unsupported audio format"
+      (§8.5).
+    - WAV is read as it streams; sizes of 0 or `0xFFFFFFFF` mean "until the end".
+    - Mistral is asked for `wav`, or for `pcm` (float32) if the capture shows one WAV header
+      per delta.
+  - **Reply text in brackets.** In the text sent to a provider, `[` and `]` become `(` and
+    `)`, so a reply cannot steer the voice with bracketed cues. This is byte for byte, so
+    every offset still matches.
 - Settings **(main session; values amended)**:
-  - "AI voice": an editable combo seeded per provider.
-    - The default is empty: the provider's default.
-    - For Mistral the default is `gb_jane_neutral`. It is the British English
-      voice of Mistral's own streaming example; Mary, Sky and Harriet are its
-      other English (UK) women's voices.
-    - For Groq it is `autumn`. Groq's six voices state no accent.
+  - "AI voice": an editable combo seeded per provider. Empty means the provider's default.
+    - Mistral: `voice_1787` (Mary, English (UK), female), to be confirmed by the capture.
+      Also seeded: `voice_1786` (Sky), `voice_590` (Harriet) and `gb_jane_neutral` (Jane,
+      English (UK), a Voxtral 2 preset that Voxtral 3 still accepts).
     - Custom has no default.
-  - "AI speech model": an editable combo seeded per provider. Empty means the
-    provider's default; Custom has none.
-  - "Accent and style": free text, default "Speak as an English woman with a
-    standard British accent (received pronunciation), clear and natural."
-    It is sent only to a Custom server (as `instructions`), which may ignore
-    it.
-- Bytes played map to characters in proportion within the chunk (§10).
-- Prices (2026-11-25): Mistral $16 per 1M characters. Groq $22 per 1M
-  characters.
+  - "AI speech model": an editable combo. Mistral: `voxtral-mini-tts-3-0` (the deprecated
+    Voxtral 2 model `voxtral-mini-tts-2603` is not offered). Custom has no default.
+  - "Accent and style": free text, empty by default. It is enabled for Custom only and sent
+    as `instructions` only when not empty. Mistral takes the accent from the voice.
+- Bytes played map to byte offsets of the text in proportion within the chunk (§10).
+- Price (2026-11-25): Mistral $16 per 1M characters.
 
 ### 8.5 Speech fallback
 
-- AI speech fails for a reply (network, HTTP error, unavailable): the rest of
-  that reply is read with Windows speech, and the header says "AI speech
-  failed: using Windows speech" **(spec author's call)**. The next reply tries
-  AI speech again. (PR 3.) A speech setting that cannot be used counts as a
-  failure in the same way: a missing key, a Custom server with no model or
-  voice, or audio Nutshell cannot read (amended 2026-11-25).
-- Windows speech cannot start (no voice, SAPI error): the reply is not read,
-  a note in the chat says "Could not speak the reply: it is on screen", and
-  listening resumes **(spec author's call)**. The conversation does not end.
+- **AI speech fails for a reply in a passing way** (a network error, HTTP 429 or 5xx, the
+  device lost):
+  - the rest of that reply is read with Windows speech, and the header says "AI speech failed:
+    using Windows speech" **(spec author's call)**;
+  - the next reply tries AI speech again.
+- **AI speech cannot work as set up** (amended 2026-11-25, critique round 3). The causes:
+  - a setting that does not resolve (no key, a key bound to another provider, an unknown
+    provider, a Custom server with no URL, model or voice);
+  - HTTP 401, 403, 404 or 422;
+  - audio Nutshell cannot read ("unsupported audio format").
+
+  The reply is read with Windows speech. Once per conversation a chat note says "AI speech is
+  off for this conversation: <reason>. Replies are read with Windows speech." AI speech is
+  not tried again until the next conversation.
+- **What fails a reply.** Besides an HTTP or network error, each of these counts (critique
+  round 3):
+  - a chunk that produced no audio;
+  - a stream that ends before its audio began;
+  - a server-sent-event line too long to read;
+  - a second WAV header in the middle of a stream;
+  - a `done` event with no audio.
+- **Windows speech cannot start** (no voice, SAPI error): the reply is not read, a note in the
+  chat says "Could not speak the reply: it is on screen", and listening resumes **(spec
+  author's call)**. The conversation does not end.
 
 ## 9. Echo cancellation and cutting in
 
@@ -1084,7 +1114,7 @@ that does not reach stage 2 is not sent.
 assistant, not local commands"; matcher widened in round 2)**:
 - Nutshell records how far the spoken reply got:
   - Windows speech: the word-boundary event of the last word spoken.
-  - AI speech (PR 3): bytes played, mapped to characters in proportion within
+  - AI speech (PR 3): bytes played, mapped to byte offsets in proportion within
     the chunk.
 - **A short repeat or continue phrase is handled by Nutshell**, with no model
   turn. The phrases: "repeat", "repeat that", "say that again", "again",
@@ -1165,11 +1195,17 @@ New keys (`Settings`, loaded and saved in `loader.c`, each with a
 
 ### 11.3 PR 3
 
-- Under Conversation: Speech (Windows speech / AI speech), then Speech
-  provider (Mistral / Groq / Custom, amended 2026-11-25), Base URL (Custom
-  only), API key (shown only when it is not shared with speech-to-text, §8.4),
-  AI voice, AI speech model and Accent and style (multi-line edit, enabled for
-  Custom only, amended 2026-11-25). Greyed while Speech is Windows speech.
+- **The rows.** Under Conversation (amended 2026-11-25):
+  - Speech (Windows speech / AI speech);
+  - Speech provider (Mistral / Custom);
+  - Base URL (Custom only);
+  - API key (shown only when it is not shared with speech-to-text, §8.4);
+  - AI voice;
+  - AI speech model;
+  - Accent and style (multi-line edit, enabled for Custom only);
+  - the dim line "Each spoken reply's text is sent to <host>".
+
+  All of them are greyed while Speech is Windows speech.
 
 | Key | Default | Notice line |
 |---|---|---|
@@ -1177,9 +1213,12 @@ New keys (`Settings`, loaded and saved in `loader.c`, each with a
 | `voice_tts_provider` | `"mistral"` (amended 2026-11-25) | Voice: speech provider — Mistral |
 | `voice_tts_url` | empty | Voice: speech URL — none |
 | `tts_api_key` (and `tts_api_key_enc_preserved`) | empty | Voice: speech API key — none; the speech-to-text key is used when the provider is the same |
-| `voice_ai_voice` | empty, the provider's default (amended 2026-11-25) | Voice: AI voice — the provider's default (for Mistral, Jane, British English) |
+| `voice_ai_voice` | empty, the provider's default (amended 2026-11-25) | Voice: AI voice — the provider's default (for Mistral, Mary, British English) |
 | `voice_ai_tts_model` | empty, the provider's default (amended 2026-11-25) | Voice: AI speech model — the provider's default |
-| `voice_ai_style` | the text in §8.4 | Voice: accent and style — an English woman with a standard British accent |
+| `voice_ai_style` | empty (amended 2026-11-25) | Voice: accent and style — none |
+
+The provider the key belongs to is held inside the encrypted `tts_api_key` value (§8.4), not
+under a key of its own, so PR 3 still adds seven notice lines.
 
 ### 11.4 All three
 
@@ -1270,10 +1309,11 @@ Each wording is the **spec author's call**, except where marked:
 | Conversation ended by a settings change (critique round 2) | chat | Conversation ended: the voice settings changed |
 | Conversation ended by lock | chat | Conversation ended: Windows was locked |
 | Conversation ended by silence | chat | Conversation ended: nothing said for 3 minutes |
-| Conversation ended because a turn could not be transcribed within 180 s (amended 2026-11-25) | chat | Conversation ended: the last turn could not be transcribed |
+| Conversation ended because a turn did not finish by its deadline, max(180 s, its upload budget plus 10 s) (amended 2026-11-25) | chat | Conversation ended: the last turn took too long |
 | Conversation ended by a chat change | chat | Conversation ended: the chat changed |
 | Repeat or continue handled | header | Repeating / Carrying on |
 | AI speech failed (PR 3) | header | AI speech failed: using Windows speech |
+| AI speech cannot work as set up (PR 3, amended 2026-11-25) | chat, once per conversation | AI speech is off for this conversation: <reason>. Replies are read with Windows speech. |
 | No speech at all | chat | Could not speak the reply: it is on screen |
 | Device lost, privacy block, no microphone | chat | today's texts |
 | Start refused | header | today's `voice_busy_text` |
@@ -1283,7 +1323,8 @@ The notice dialog, once per launch (critique round 2; main session's call):
 <voice>. To get one, add English (United Kingdom) under Windows Settings >
 Time & language > Speech." (PR 3 adds "or choose AI speech in Settings > Voice".)
 
-Settings > Voice lines: "Live text as you speak needs OpenAI or Mistral";
+Settings > Voice lines: "Each spoken reply's text is sent to <host>." (PR 3,
+amended 2026-11-25); "Live text as you speak needs OpenAI or Mistral";
 the English (UK) voices line (§8.3); "Your microphone reports no echo
 cancellation: a headset works best"; "Windows may lower other sounds during a
 conversation. To stop that: Control Panel > Sound > Communications > Do
@@ -1338,7 +1379,7 @@ critiques' additions)**:
 - The speakable-text extractor: Markdown stripped, code blocks and tables
   replaced once each, link text without URL, inline code, thinking skipped,
   a reply that is only code.
-- The sentence chunker against the 200 and 1,000 character targets.
+- The sentence chunker against the 200 and 1,000 byte targets.
 - The cut-off mapping: SAPI word offsets; proportional bytes (PR 3).
 - The repeat and continue matcher: each phrase; each polite form; case and
   punctuation; 7 words never matching; a phrase inside a longer request never
@@ -1360,6 +1401,9 @@ critiques' additions)**:
   switch is new; the `k_setting_keys` table against a saved file;
   `voice_auto_send` unchanged; the shared-key rule for AI speech.
 - Shortcuts and README block.
+- PR 3 (amended 2026-11-25): the WAV stream decoder and Mistral's event
+  parser, each failure case of §8.5 with its own test, and the fuzz targets
+  `fuzz_wavstream` and `fuzz_aisse` with seeds in `make fuzz-run`.
 
 **`wintest` (Wine on `automaton`, and on Windows)**:
 - The WebSocket client against a loopback WebSocket server written in the
@@ -1436,11 +1480,13 @@ list and the control)**:
     (the mic indicator off while the card waits); the round cap needing an
     on-screen approval after voice turns; Alt+Tab and Settings pausing;
     Win+L; 3 minutes without a turn; the self-report and the SAPI control.
-- PR 3 (amended 2026-11-25): AI speech with Mistral (the default voice
-  `gb_jane_neutral`, and the English (UK) voices Mary, Sky and Harriet),
-  with Groq, and with a custom server (Kokoro-FastAPI, say); the shared and
-  separate keys; the fallback to Windows speech; the WAV formats and rates
-  each one returns; price checks.
+- PR 3 (amended 2026-11-25): before the PR is marked ready, the maintainer's
+  Mistral capture ("Task 0" of the plan: two streams and one forced error,
+  committed as fixtures that replace the provisional ones). Then AI speech
+  with Mistral (the default voice `voice_1787`, Mary; Sky, Harriet, Jane) and
+  with a custom server (Kokoro-FastAPI); the shared, separate and rebound
+  keys; the passing fallback and the once-per-conversation note; the privacy
+  line; price checks.
 
 ## 15. Delivery
 
@@ -1465,7 +1511,7 @@ Three code pull requests, in order, each with its own version bump and build
    lock, the resource ledger and the loaded-module self-report of §12; the
    PR 2 rows of §13 and §14.
 3. **PR 3, "AI speech"**: the PR 3 half of §7.4 (Nutshell's own render
-   client, play queue and byte-to-character map); §8.4 (its own provider
+   client, play queue and byte-to-offset map); §8.4 (its own provider
    setting and key) and the AI half of §8.5; §11.3; the PR 3 rows of §12,
    §13 and §14.
 
@@ -1478,12 +1524,16 @@ Later, outside this design (todo) **(main session, plus the last three
 spec author's)**:
 - Gemini Live (`gemini-3.5-transcribe-live`, BidiGenerateContent WebSocket,
   en-GB supported, 10-minute sessions).
-- Mistral (Voxtral) TTS as a further AI speech provider.
+- Groq Orpheus as an AI speech provider, once it leaves Preview (cut from PR 3,
+  2026-11-25).
+- OpenAI speech over the Realtime API (designed and rejected for PR 3, §16).
+- Resampling for Custom servers that do not deliver 24 kHz (piper, say).
 - speexdsp as a fallback echo canceller for Windows 10 and devices without one.
 - Pseudo-live text for Groq and custom URLs by rolling re-transcription.
 - Spoken replies in dictation mode (voice spec §5's speaker toggle), built on
   §8 rather than voice spec §5's design.
-- Groq's and Gemini's speech as AI speech providers (voice spec §6).
+- Gemini's speech as an AI speech provider (voice spec §6; its API is not
+  `/audio/speech`).
 - A spoken "stop" while the assistant works.
 
 Already filed, not in this design: an Other... choice for the push-to-talk
@@ -2031,95 +2081,112 @@ check pending*. "Measured here" means a test or command on `automaton`;
 ### Decisions of 2026-11-25: AI speech provider
 
 **The shutdown.** Checked on the deprecations page on 2026-11-25.
-- `tts-1`, `tts-1-hd` and `gpt-4o-mini-tts` (with `-2025-03-20` and
-  `-2025-12-15`) were noticed on 2026-10-01 and shut down on **2027-01-06**.
-  The named replacement is `gpt-realtime-2.1-mini`.
-- OpenAI's text-to-speech guide says: "Migrate to `gpt-realtime-2.1-mini`
-  using the Realtime API" and "`gpt-realtime-2.1-mini` isn't a supported model
-  for `/v1/audio/speech`".
-- `/v1/audio/speech` itself is not listed as deprecated, but it has no OpenAI
-  model after that date.
+- `tts-1`, `tts-1-hd` and `gpt-4o-mini-tts` (with `-2025-03-20` and `-2025-12-15`) were
+  noticed on 2026-10-01 and shut down on **2027-01-06**. The named replacement is
+  `gpt-realtime-2.1-mini`.
+- OpenAI's text-to-speech guide says: "Migrate to `gpt-realtime-2.1-mini` using the Realtime
+  API" and "`gpt-realtime-2.1-mini` isn't a supported model for `/v1/audio/speech`".
+- `/v1/audio/speech` itself is not deprecated, but it has no OpenAI model after that date.
 
 Sources: `developers.openai.com/api/docs/deprecations.md`,
 `developers.openai.com/api/docs/guides/text-to-speech.md` and
 `developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create.md`.
 
-**Realtime speech was designed, critiqued and rejected.** The maintainer first
-chose to build OpenAI speech on the Realtime API in PR 3. That amendment is
-commit `f79e110` (branch `docs/voice-realtime-speech-spec`, its own §16
-subsection "Decision of 2026-11-25: AI speech over the Realtime API"). A
-critique by `claude-fable-5-2` (effort high) found it unsound:
-1. A conversational model is not a reader, and the only check that it read the
-   text word for word was its own transcript. OpenAI's reference calls that
-   transcript "model-generated", and it can differ from the audio.
-2. The transcript matcher let substitutions through, so a changed word could
-   be played as verified.
-3. The rule that released audio only as far as it was verified was wrong in
-   both directions: it could play unverified audio, and it could stall
-   verified audio.
+**Realtime speech was designed, critiqued and rejected.** The maintainer first chose OpenAI
+speech on the Realtime API. That amendment is commit `f79e110` (branch
+`docs/voice-realtime-speech-spec`, its own §16 subsection). A `claude-fable-5-2` (high)
+critique found it unsound:
+1. The only check that a conversational model read the text word for word was its own
+   transcript. OpenAI's reference calls that transcript "model-generated", and it can differ
+   from the audio.
+2. The matcher let substitutions through.
+3. The rule that released audio only as far as it was verified was wrong in both directions.
 
 **The maintainer's decision (2026-11-25): "Real TTS provider instead".**
-- Build the planned `/audio/speech` design, aimed at providers whose endpoint
-  is a true text-to-speech model.
+- Build the `/audio/speech` design for providers with a true text-to-speech model.
 - No OpenAI AI speech after 2027-01-06, and no reading verifier.
-- Realtime speech is rejected for PR 3.
+
+A second `claude-fable-5-2` critique (of `8b86ecd`) returned "sound after changes". Its
+findings and the main session's rulings are §17 round 3. They cut Groq, removed the resampler,
+added the Mistral capture ("Task 0") and made the changes recorded below.
 
 **What the providers offer** (2026-11-25):
 
-| Provider | Endpoint | Model | Voices | Format | Streams | Price |
-|---|---|---|---|---|---|---|
-| Mistral (a speech-to-text provider already) | `https://api.mistral.ai/v1/audio/speech` | `voxtral-mini-tts-3-0` | 36 Voxtral 3 voices plus 30 Voxtral 2 ids. English (UK) women: Mary `voice_1787`, Sky `voice_1786`, Harriet `voice_590`, and `gb_jane_*` (Voxtral 2) | mp3 (default), wav, pcm, flac, opus. Mono, 24 kHz. Whether `pcm` is float32 or int16 is not stated by the current pages (an older page and Pipecat's client say float32) | yes: `stream: true`, server-sent events `speech.audio.delta` (`audio_data`, base64) and `speech.audio.done` | $16 per 1M characters |
-| Groq (a speech-to-text provider already) | `https://api.groq.com/openai/v1/audio/speech`, OpenAI-compatible | `canopylabs/orpheus-v1-english`, Preview | 6: autumn, diana, hannah (women), austin, daniel, troy (men); no accent stated | wav only (the model page). The API reference lists `sample_rate`, 8,000 to 48,000 Hz with a default of 48,000; not confirmed for this model | not stated | $22 per 1M characters; input at most 200 characters |
-| OpenAI | `https://api.openai.com/v1/audio/speech` | `gpt-4o-mini-tts` and the rest | 13 | pcm 24 kHz s16le, wav and more | yes, chunked | $12 per 1M audio tokens; **shuts down on 2027-01-06** |
-| Gemini, Anthropic, DeepSeek, Moonshot | no `/audio/speech` found | — | — | — | — | — |
-| Kokoro-FastAPI (local) | `{base}/v1/audio/speech` | `kokoro` | include `bf_emma` (English (UK)) | mp3, wav, opus, flac, aac, pcm; 24 kHz 16-bit mono (from its streaming example); a streamed WAV carries `0xFFFFFFFF` sizes | yes | free (self-hosted) |
-| openedai-speech (local) | `/v1/audio/speech` | `tts-1` (piper), `tts-1-hd` (xtts) | OpenAI's names | wav, pcm and more; piper 22,050 Hz, xtts 24,000 Hz (from its changelog) | yes | **archived on 2026-01-04** |
-| Speaches (local) | `/v1/audio/speech` | Kokoro ONNX | `af_heart` shown | mp3, wav; rate not stated | not stated | free |
+| Provider | Endpoint | Model | Voices | Audio | Streams | Price | In PR 3 |
+|---|---|---|---|---|---|---|---|
+| Mistral | `https://api.mistral.ai/v1/audio/speech` | `voxtral-mini-tts-3-0` (`voxtral-mini-tts-2603` is Voxtral 2, deprecated) | 36 Voxtral 3 and 30 Voxtral 2 presets. English (UK): Mary `voice_1787` (female), Sky `voice_1786`, Harriet `voice_590`, Jane `gb_jane_*` (Voxtral 2, "still accepted" by Voxtral 3) | mp3, wav, pcm, flac, opus; mono 24 kHz; `pcm` is float32 LE | `stream: true`: server-sent events | $16 per 1M characters | **yes, the default** |
+| Groq | `https://api.groq.com/openai/v1/audio/speech` | `canopylabs/orpheus-v1-english`, Preview | 6, no accent stated | wav only, 200 characters a request | not stated | $22 per 1M characters | **no (cut)**: 10 requests a minute, 100 a day; Preview models "should not be used in production" |
+| OpenAI | `https://api.openai.com/v1/audio/speech` | `gpt-4o-mini-tts` and the rest | 13 | pcm 24 kHz s16le, wav | yes | $12 per 1M audio tokens | **no**: shuts down 2027-01-06 |
+| Gemini, Anthropic, DeepSeek, Moonshot | no `/audio/speech` found | — | — | — | — | — | no |
+| Kokoro-FastAPI (local) | `http://localhost:8880/v1`, no key by default | `kokoro` | `bf_emma` (English (UK)), `af_heart` and more | streamed WAV with `0xFFFFFFFF` sizes, 24 kHz s16 | yes | free | as Custom |
+| openedai-speech (local) | `/v1/audio/speech` | `tts-1` (piper), `tts-1-hd` (xtts) | OpenAI's names | piper 22,050 Hz (refused: not 24 kHz) | yes | archived 2026-01-04 | as Custom, xtts only |
 
-Sources:
-- `docs.mistral.ai/studio/audio/text-to-speech/generate-speech`,
-  `.../stream-speech`, `.../voices`,
-  `docs.mistral.ai/studio/audio/specs-and-limits/audio-formats` and `.../limits`;
-  `mistral.ai/news/voxtral-tts` for the price;
-  `reference-server.pipecat.ai/en/stable/_modules/pipecat/services/mistral/tts.html`
-  for the float32 `pcm` and 24 kHz.
-- `console.groq.com/docs/text-to-speech`, `.../text-to-speech/orpheus.md`,
-  `console.groq.com/docs/model/canopylabs/orpheus-v1-english` and
-  `console.groq.com/docs/api-reference`.
-- `aistudio.google.com/docs/openai`: no audio output.
-- `github.com/remsky/Kokoro-FastAPI`, `github.com/matatonic/openedai-speech`
-  and `speaches.ai/usage/text-to-speech/`.
+**Verified by the critique of `8b86ecd`:**
+- **Mistral's request fields** are `input`, `model`, `voice_id`, `response_format` and
+  `stream`. An unknown field gets HTTP 422 "Extra inputs are not permitted". Without
+  `stream`, the reply is JSON with base64 `audio_data`. Source:
+  `raw.githubusercontent.com/mistralai/client-python/main/src/mistralai/client/models/speechrequest.py`
+  and `.../speech.py`.
+- **Mistral's stream** in the SDK:
+  - `SpeechStreamAudioDelta { audio_data: str; type = "speech.audio.delta" }`;
+  - `SpeechStreamDone { usage; type = "speech.audio.done" }`;
+  - a wrapper `SpeechStreamEvents { event; data }` filled from the `event:` line;
+  - `Accept: text/event-stream`;
+  - no `[DONE]` sentinel.
+- **Mistral's audio** is mono 24 kHz
+  (`docs.mistral.ai/studio/audio/specs-and-limits/audio-formats`). Its `pcm` is float32 LE,
+  per Mistral's older speech page and the Pipecat and LiveKit clients.
+- **Mistral's voices** (`docs.mistral.ai/studio/audio/text-to-speech/voices`): Jane is English
+  (UK); `gb_jane_neutral` is a Voxtral 2 preset that Voxtral 3 "still accepts"; `voice_1787`
+  is Mary, English (UK), female. LiveKit's plugin refuses `voice_<n>` ids on
+  `voxtral-mini-tts-2603`.
+- **Groq's limits:** Orpheus allows 10 requests a minute and 100 a day (Groq's rate-limits
+  page), and Preview models "should not be used in production".
+- **Kokoro-FastAPI** (`github.com/remsky/Kokoro-FastAPI`): `http://localhost:8880/v1`, no key
+  by default, streamed WAV with `0xFFFFFFFF` sizes, 24 kHz s16.
 
-**Not verified:**
-- Mistral's `pcm` sample type, its input limit, and whether its WAV stream
-  starts with a header.
-- Whether Groq's `sample_rate` applies to Orpheus, whether Groq streams, and
-  its voices' accent.
-- LocalAI (its page did not load).
-- That Anthropic, DeepSeek and Moonshot have no speech endpoint (none was
-  found).
+**Earlier sources:**
+- `docs.mistral.ai/studio/audio/text-to-speech/generate-speech` and `.../stream-speech`;
+  `mistral.ai/news/voxtral-tts` (the price);
+  `reference-server.pipecat.ai/en/stable/_modules/pipecat/services/mistral/tts.html`.
+- `console.groq.com/docs/text-to-speech`, `.../orpheus.md` and
+  `console.groq.com/docs/model/canopylabs/orpheus-v1-english`.
+- `aistudio.google.com/docs/openai`.
+- `github.com/matatonic/openedai-speech` and `speaches.ai/usage/text-to-speech/`.
 
-**Rulings** (spec author's call unless marked):
-- `Ruling: the AI speech providers are Mistral, Groq and Custom; OpenAI is not a preset — a version shipped six weeks before its speech models shut down should not offer them, and Mistral and Groq are already speech-to-text providers here (one key can serve both) — cost if wrong: a user who wants OpenAI until 2027-01-06 enters it as Custom (https://api.openai.com/v1, gpt-4o-mini-tts, coral), which works until then.`
-- `Ruling: Mistral is the default speech provider — it is a true text-to-speech model with English (UK) women's voices (the maintainer's "english lady"), streams, costs less than Groq and is under no notice — cost if wrong: Speech itself still defaults to Windows speech, so the default provider matters only once AI speech is chosen; the page shows it.`
-- `Ruling: every request asks for wav, and Nutshell reads the header as it streams (16-bit or 32-bit float, mono or stereo, 8 to 48 kHz, sizes of 0 or 0xFFFFFFFF meaning "until the end") — it is the one format every provider offers (Groq offers nothing else), and it says its own sample type and rate where raw pcm does not (Mistral's is float32 on one page and unstated on another) — cost if wrong: a provider whose WAV is slower to first audio than pcm; the hand check measures it.`
-- `Ruling: the audio is converted in src/core to 24 kHz mono PCM16 (a streaming windowed-sinc resampler for any other rate, stereo averaged to mono), so PR 3's render client stays at 24 kHz and needs no follow-up — one tested conversion beats a render client reopened per format — cost if wrong: a little CPU on the worker thread for 22.05 or 48 kHz streams.`
-- `Ruling: Mistral's request is model, input, voice_id, response_format "wav" and stream true, read as server-sent events; no style is sent (Mistral: "Style instructions are not available at launch") — this follows Mistral's documented streaming shape — cost if wrong: if the envelope differs from the docs' event names, every reply falls back; the parser accepts audio_data in any event whose name or type ends in ".delta".`
-- `Ruling: the default Mistral voice is gb_jane_neutral, and the combo is seeded with gb_jane_neutral, voice_1787 (Mary), voice_1786 (Sky) and voice_590 (Harriet) — Jane is the English (UK) voice Mistral's own streaming example uses with voxtral-mini-tts-3-0; Mary, Sky and Harriet are its English (UK) women — cost if wrong: Jane's gender or accent is not stated for Voxtral 2 speakers; the maintainer picks another in the combo.`
-- `Ruling: Groq is offered with chunks of at most 200 bytes, no sample_rate field, and voice autumn by default — its documented limit is 200 characters, and sample_rate is not confirmed for Orpheus (the resampler takes its default 48 kHz) — cost if wrong: Groq is in Preview and may change; its voices may not sound British.`
-- `Ruling: Custom has no default model or voice; an empty one is a resolve error that falls back to Windows speech, and the page says which field is missing — compatible servers name them differently (kokoro, tts-1, bf_emma, alloy) — cost if wrong: one more field to fill in.`
-- `Ruling: the style is sent only to Custom (as instructions, when not empty and the model is not tts-1 or tts-1-hd), and its row is enabled only for Custom — Mistral takes no style and Groq takes only bracketed cues inside the text — cost if wrong: none; the accent comes from the voice for Mistral and Groq.`
-- `Ruling (spec owner, raised by the build): the Ending watchdog (180 s) ends the conversation with the note "Conversation ended: the last turn could not be transcribed", instead of returning to Listening — a turn stuck for 180 s means nothing was sent for at least 180 s, so the silence end would fire on the next tick with the wrong reason ("nothing said"), and restarting the silence clock was rejected (notes item (q): a failing turn must not keep a conversation alive) — cost if wrong: a conversation whose uploads hang ends after 3 minutes, as it would have anyway, but says why.`
+**Not verified by anyone.** These are what "Task 0", the maintainer's capture, settles:
+- the raw bytes of a Mistral event (whether `type` sits inside `data`);
+- one WAV header per stream or one per delta;
+- the delta sizes;
+- how an error in mid-stream is reported;
+- that `voice_1787` speaks as Mary.
+
+Also not verified: LocalAI (its page did not load), and that Anthropic, DeepSeek and Moonshot
+have no speech endpoint (none was found).
+
+**Rulings** (spec author's call unless marked). The first two are unchanged from the first
+version of this subsection; the rest supersede it.
+- `Ruling: the AI speech providers are Mistral and Custom; OpenAI is not a preset — a version shipped six weeks before its speech models shut down should not offer them — cost if wrong: an OpenAI user enters it as Custom, which works until 2027-01-06.`
+- `Ruling: Mistral is the default speech provider — a true text-to-speech model with English (UK) women's voices, streaming, under no notice — cost if wrong: Speech still defaults to Windows speech, so this matters only once AI speech is chosen.`
+- `Ruling (main session, critique round 3): Groq is cut — Orpheus is Preview, at 10 requests a minute and 100 a day, too few for a conversation — cost if wrong: Groq users wait for a later PR.`
+- `Ruling (main session, critique round 3): no resampler; exactly 24,000 Hz is accepted, 16-bit or float32, mono or stereo (down-mixed); anything else is "unsupported audio format" — Mistral and Kokoro both deliver 24 kHz, and conversion code with no user is cost without benefit — cost if wrong: a Custom server at 22,050 Hz (piper) cannot be used.`
+- `Ruling: every Custom request asks for wav, and Mistral is asked for wav unless the capture shows one header per delta, in which case pcm (float32, 24 kHz, mono) — wav describes itself; pcm is the fallback the capture can choose with a one-line change — cost if wrong: none beyond Task 0.`
+- `Ruling (main session, critique round 3): an unknown provider id, openai and gemini included, is a resolve error, never Mistral — a silent switch would send the text and key to a provider the user did not choose — cost if wrong: none.`
+- `Ruling (main session, critique round 3): a saved speech key is bound to its provider; the binding (mistral, or custom and the normalised base URL) is stored inside the encrypted tts_api_key value, before the key, so no new settings key or notice line is needed; a key whose binding does not match is not used — the smallest form that cannot send a key to a host it was not entered for — cost if wrong: changing the provider asks for the key again.`
+- `Ruling (main session, critique round 3): a setting that cannot work (resolve error, HTTP 401, 403, 404, 422, unsupported audio) gives one chat note per conversation and no more tries in it; network errors, 429 and 5xx keep the per-reply fallback — a broken setting must be said once, not hidden behind a header on every reply — cost if wrong: a 404 from a passing server fault turns AI speech off until the next conversation.`
+- `Ruling (main session, critique round 3): the style is empty by default and sent only to Custom when the user typed one — Mistral takes the accent from the voice, and Custom servers may refuse unknown instructions — cost if wrong: one default string.`
+- `Ruling (main session, critique round 3): the default Mistral voice is voice_1787 (Mary, English (UK), female), to be confirmed by Task 0; voxtral-mini-tts-2603 is not offered — Mary is a documented Voxtral 3 English (UK) woman; 2603 is deprecated and refuses voice_<n> ids — cost if wrong: the capture shows another voice is better, and the default changes before ready.`
+- `Ruling (main session, critique round 3): in the text sent to a provider, [ and ] become ( and ), byte for byte — a reply cannot steer the voice with bracketed cues, and the offsets stay valid — cost if wrong: a bracket reads as a parenthesis.`
+- `Ruling (main session, critique round 3, rejecting a finding as stated): plain http:// stays allowed for Custom, with the warning in the help, as speech-to-text allows it — a self-hosted server on the LAN is reached by name, so a private-address test would refuse it — cost if wrong: a user sends text and key in clear to a public http:// host despite the warning.`
+- `Ruling (spec owner, raised by the build; amended in critique round 3): the Ending deadline is max(180 s, this turn's upload budget plus 10 s); at the deadline the conversation ends with "Conversation ended: the last turn took too long", which is true for a live turn, a batch turn and a turn already handed over; the turn's audio is wiped without removing its words from the box — a turn stuck that long means nothing was sent, so the silence end would fire next with the wrong reason, and a long upload must get its own time — cost if wrong: a conversation whose uploads hang ends after the deadline, and says why.`
 
 **Found while checking, outside PR 3:**
-- `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` (with `-2025-12-15`),
-  `whisper-1` and `gpt-4o-transcribe-diarize` were noticed on 2026-08-26 and
-  shut down on **2027-02-26**. The replacement is `gpt-live-transcribe` or
-  `gpt-transcribe`.
-- `gpt-4o-mini-transcribe-2025-03-20` shuts down earlier, on 2027-01-20.
-- `gpt-4o-mini-transcribe` is the first, default entry of Nutshell's OpenAI
-  batch speech-to-text list (`src/core/voice_stt.c:14`), which PR 1's fallback
-  uses too.
+- `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` (with `-2025-12-15`), `whisper-1` and
+  `gpt-4o-transcribe-diarize` were noticed on 2026-08-26 and shut down on **2027-02-26**. The
+  replacement is `gpt-live-transcribe` or `gpt-transcribe`.
+- `gpt-4o-mini-transcribe-2025-03-20` shuts down on 2027-01-20.
+- `gpt-4o-mini-transcribe` is the default of Nutshell's OpenAI batch speech-to-text list
+  (`src/core/voice_stt.c:14`).
 - This goes on the notes' todo; it is not PR 3's work.
 
 ## 17. Critique (2026-11-24, claude-fable-5-2 high)
@@ -2233,3 +2300,71 @@ Each finding in one line, then the main session's disposition.
     latency and mid-utterance volume, Mistral's batch limit and closing after
     `transcription.done`, provider idle limits). — Accepted: each is a
     must-verify item with a fallback in §16.
+
+### Round 3 (2026-11-25, claude-fable-5-2 high, of `8b86ecd`: PR 3's AI speech providers)
+
+Verdict: "sound after changes". Each finding in one line, then the main session's disposition.
+
+1. Several failures were silent and treated as a quiet end: a chunk with no audio, a decoder not
+   past its header at the end, a skipped event line, a second WAV header, a `done` with no
+   audio. — Accepted: each one fails the reply and falls back, with a test for each (§8.5).
+2. Mistral's raw event bytes are known only from its SDK. — Accepted: the plan's "Task 0" is
+   the maintainer's capture of two streams and one forced error, saved as fixtures. The build
+   goes ahead against the SDK's shape with provisional fixtures, and the PR is not marked
+   ready until the captures replace them and the tests pass (§8.4, §14).
+3. Groq Orpheus is Preview, at 10 requests a minute and 100 a day. — Accepted: Groq is cut
+   from PR 3 (§6.1, §8.4, §15).
+4. The resampler had no user once Groq was cut. — Accepted: none is built. Exactly 24 kHz is
+   accepted, 16-bit or float32, mono or stereo; anything else is "unsupported audio format",
+   and `WAVE_FORMAT_EXTENSIBLE` only if the capture shows it (§8.4).
+5. The WAV and event parsers take untrusted bytes and had no fuzzing. — Accepted: fuzz targets
+   `fuzz_wavstream` and `fuzz_aisse`, with seeds, in `make fuzz-run` (§14).
+6. The done guard fired on a fixed delay and could cut a slow reply. — Accepted: it counts the
+   frames pushed per reply, re-arms on every play report, and fires only after 2 s with no
+   progress.
+7. A context that lost its render client (pre-empted or failed) did not reopen it, and a
+   pre-emption while silent was undefined. — Accepted: any speak opens the render client when
+   the context does not hold it, and resends the gain. A pre-emption while silent just
+   releases it, with a test.
+8. A worker detached after a bounded join could still push into the audio thread. —
+   Accepted: a per-worker dead flag under the engine's lock is checked before every push. The
+   ledger is released only when the thread ends, and `voice_audio_stop` runs only after the
+   engine has marked every worker dead.
+9. A broken setting (wrong key, missing model) fell back on every reply with only a header. —
+   Accepted: a resolve error or HTTP 401, 403, 404 or 422 gives one chat note per
+   conversation, and AI speech is not tried again in it. Network errors, 429 and 5xx keep the
+   per-reply fallback (§8.5, §13).
+10. An unknown provider was silently mapped to Mistral. — Accepted: it is a resolve error;
+    `openai` and `gemini` are unknown too (§8.4).
+11. The user is not told where the reply text goes. — Accepted: a dim line on the Voice page,
+    "Each spoken reply's text is sent to <host>", and Base URL help on the text, the key and
+    `http://` (§8.4, §11.3, §13).
+12. A reply could steer the voice with bracketed cues. — Accepted: `[` and `]` become `(` and
+    `)` in the text sent, byte for byte (§8.4).
+13. The style default and the `tts-1` rule assumed OpenAI. — Ruled: the style row stays,
+    enabled for Custom only, empty by default, sent only when typed. The `tts-1` rule, the
+    OpenAI seeds and the help about reaching OpenAI through Custom are dropped.
+14. `voxtral-mini-tts-2603` is deprecated Voxtral 2, and Jane is Voxtral 2. — Accepted: the
+    seed is removed, and the default Mistral voice is `voice_1787` (Mary), to be confirmed by
+    the capture (§8.4, §11.3).
+15. The Ending watchdog's 180 s can be shorter than a long upload's own timeouts, and its note
+    was false for a turn already sent. — Accepted: the deadline is max(180 s, the upload
+    budget plus 10 s), and the note is "Conversation ended: the last turn took too long". The
+    turn's audio is wiped without removing its words (§13, §16).
+16. The AI speech engine and the glue tasks were too large to review. — Accepted: each is split
+    in two in the plan.
+17. Two tests could not fail: a skip that passes silently, and an offsets check met by any
+    offset. — Accepted: a skip is printed and counted, and the offsets test needs one at or
+    past "Two".
+18. R10's wording of the handover bound was wrong. — Accepted: up to 20 s of queued audio plus
+    one chunk.
+19. The §15 "Later" list and several "characters" were out of date. — Accepted: fixed; offsets
+    and chunk sizes are bytes.
+20. A saved key could be sent to a provider it was not entered for. — Ruled: the key is bound
+    to its provider inside the encrypted value; a mismatch means no key, which finding 9
+    reports (§8.4).
+21. (No change.)
+22. Plain `http://` for Custom should be refused. — Rejected as stated: it stays allowed with
+    the warning (finding 11), as speech-to-text does today. A self-hosted server on the LAN is
+    reached by name, so a private-address test would refuse it. Cost if wrong: a user sends
+    text and key in clear to a public `http://` host despite the warning.

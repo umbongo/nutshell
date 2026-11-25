@@ -2,127 +2,123 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Revised 2026-11-25 for the maintainer's provider decision.** AI speech uses real
-text-to-speech providers: Mistral (the default), Groq, or a Custom OpenAI-compatible server.
-OpenAI is not a preset. The first version of this plan is commit `a3b012f`. Tasks 3, 4 and 6 are
-built and do not change.
+**Revision 3 (2026-11-25).**
+- Revision 2 (`8b86ecd`) was critiqued by `claude-fable-5-2` (high), with the verdict "sound
+  after changes". The main session ruled on every finding (spec §17 round 3), and this revision
+  applies them:
+  - Groq is cut, and there is no resampler.
+  - A maintainer capture, Task 0, gates the PR.
+  - Tasks 7 and 8 are split.
+- Revision 1 is `a3b012f`. Tasks 3, 4 and 6 are built and do not change.
 
 **Goal:** Let a conversation's replies be read by an AI voice.
-- The voice comes from a real text-to-speech endpoint, streamed as WAV.
-- Nutshell decodes and converts it in `src/core` to 24 kHz mono PCM16 and plays it through its
-  own WASAPI render client.
-- It has its own speech setting and key, cut-in ducking, and repeat/continue positions.
-- It falls back to Windows speech for the rest of a reply whenever AI speech fails.
+- The voice comes from a real text-to-speech endpoint: Mistral by default, or a Custom
+  OpenAI-compatible server.
+- The audio streams as WAV, or as Mistral's float32 PCM if the capture says so. It is decoded
+  in `src/core`, accepted only at 24 kHz, and played through Nutshell's own WASAPI render
+  client.
+- It has its own speech setting and a key bound to its provider.
+- It falls back to Windows speech for the rest of a reply when AI speech fails in passing.
+  When the setting cannot work, it says so once per conversation.
 
-**Architecture:** The pure parts go in `src/core` with native tests:
-- `voice_aispeech.c`: the provider table with two request shapes (Mistral's streamed
-  server-sent events, and OpenAI-compatible raw bytes); target resolution; the shared-key rule;
-  the request bodies; Mistral's event parser; the byte-to-text-offset map.
-- `voice_wavstream.c`: a streaming WAV decoder and an any-rate to 24 kHz resampler (new
-  Task 12).
-- `voice_playq.c`: the play queue (Task 3, built).
-- `voice_conv.c` and `voice_echo.c`: the conversation-machine follow-ups (Task 4, built, plus
-  new Task 13).
+**Architecture:** The pure parts go in `src/core` with native tests and fuzz targets:
+- `voice_aispeech.c`: the providers, target resolution, the shared and bound key, the request
+  bodies, Mistral's event parser, failure classes, and the offset map.
+- `voice_wavstream.c`: the WAV/PCM stream decoder.
+- `voice_playq.c` (built).
+- `voice_conv.c` (built, plus Task 13).
 
 The Win32 parts go in `src/ui`:
-- The render client on the existing audio thread (Task 6, built).
-- A streaming POST on a caller's session (`ai_http_post_stream_ex`).
-- The AI speech engine (`voice_aispeech_win.c`). It runs one worker per spoken text, its
-  requests go through `voice_net_open(VNK_TTS)`, and it posts the same `WM_VOICE_TTS` messages
-  SAPI does.
-- A speech router in the real ops table (`voice_win.c`).
-- The fallback itself, in `voice_conv_win.c`.
+- the render client (built);
+- `ai_http_post_stream_ex`;
+- the AI speech engine (`voice_aispeech_win.c`, in two tasks), which posts the same
+  `WM_VOICE_TTS` messages SAPI does;
+- the speech router in `voice_win.c`;
+- the fallback and the follow-ups in `voice_conv_win.c` (in two tasks).
 
-**Tech Stack:** C11, Win32 (MinGW cross-compile), WASAPI render (`IAudioRenderClient`), WinHTTP
-(delay-loaded, no new entry points), custom `test_framework.h`, Wine `wintest`,
+**Tech Stack:** C11, Win32 (MinGW cross-compile), WASAPI render, WinHTTP (delay-loaded, no new
+entry points), custom `test_framework.h`, Wine `wintest`, libFuzzer `make fuzz-run`,
 `make selftest-wine`.
 
-**Spec:** `docs/superpowers/specs/2026-11-24-voice-live-conversation-design.md` (the "live spec").
-- PR 3's scope is §15 item 3, as amended on 2026-11-25: §2's supersede line, the §6.1 table,
-  §8.4, §8.5, §11.3, §13 and §14's PR 3 hand checks.
-- The provider research, the rejected Realtime design and every provider ruling are in §16
-  "Decisions of 2026-11-25: AI speech provider". Read it before Tasks 1, 2, 7 and 12.
-- PR 1's and PR 2's build notes are in §16 "Found at build time".
+**Spec:** `docs/superpowers/specs/2026-11-24-voice-live-conversation-design.md`.
+- PR 3's scope is §15 item 3, as amended in §2, §6.1, §8.4, §8.5, §11.3, §13, §14 and §15.
+- Its record is §16 "Decisions of 2026-11-25: AI speech provider" and §17 round 3. Read both
+  before any task.
 
-## The provider decision (2026-11-25), in brief
+## Execution order
 
-OpenAI shuts down every `/audio/speech` model on 2027-01-06. Its replacement,
-`gpt-realtime-2.1-mini`, runs only on the Realtime API. A Realtime design (`f79e110`) was
-critiqued by Fable and rejected: a conversational model is checked only by its own
-"model-generated" transcript. The maintainer chose "Real TTS provider instead":
-- **Mistral** (`voxtral-mini-tts-3-0`, the default), streamed as server-sent events, with
-  English (UK) women's voices.
-- **Groq** (`canopylabs/orpheus-v1-english`, Preview), OpenAI-compatible, WAV only, 200
-  characters a request.
-- **Custom**, any OpenAI-compatible `/audio/speech` (Kokoro-FastAPI and the like).
-- OpenAI works only as a Custom URL, until its shutdown.
+The capture does not block anything. Everything that does not depend on it comes first:
 
-Every request asks for `wav`. The spec's §16 subsection has the facts, sources and rulings.
+1. **Task 0**, the maintainer's Mistral capture, which can run at any time.
+2. Tasks **1, 2, 12, 13, 5, 7a, 8b, 8a, 9, 10**.
+3. **7b**, the network path, whose Mistral half the capture finalises.
+4. **11**, gated on Task 0's fixtures.
+
+Tasks 3, 4 and 6 are built.
 
 ## Global Constraints
 
 - **Where to work:** worktree `/home/thomas/nutshell-wt/voice-ai-speech`, branch
-  `feat/voice-ai-speech` (main `58dbd00`, v1.2.99, plus Tasks 3, 4 and 6). Never touch
+  `feat/voice-ai-speech` (main `58dbd00` plus Tasks 3, 4 and 6, HEAD `31f9a20`). Never touch
   `~/nutshell` or another worktree. Do not push.
-- **Order of the remaining tasks:** 1, 2, 12, 13, 5, 7, 8, 9, 10, 11. Tasks 3, 4 and 6 are
-  built.
 - **Reviews** are by Opus or Fable only, never Sonnet or Haiku, and never by the model that
   wrote the code. Every Opus review's findings go to the maintainer before any is fixed.
-- **Version:** only Task 11 (the orchestrator) changes it. Bump `APP_VERSION` to `"1.3.0"` and
-  `APP_VERSION_BINARY` to `1,3,0,0` (the patch number never passes 99), update README's
-  `**Version**:` line, and commit `build/win/nutshell.exe`. No implementer task does any of this.
+- **Version:** only Task 11 changes it: `"1.3.0"` and `1,3,0,0` in `src/ui/resource.h`,
+  README's `**Version**:` line, and `build/win/nutshell.exe`.
 - **Test first.** A test that tells two states apart needs a fixture in which they differ.
+  - A test can always fail. A Wine or fixture skip uses `TEST_SKIP(reason)` (added by
+    Task 2), which prints `[SKIP]` and is counted in the runner's summary. Task 11 lists every
+    skip, and a capture-fixture skip blocks it.
 - **Line endings are preserved.**
   - CRLF: `src/config/loader.c`, `Makefile`, `src/core/ai_http.h` and `src/ui/ai_http_win.c`.
   - Every other file touched here is LF.
-  - Before each commit, `git diff --stat` and `git diff --stat --ignore-cr-at-eol` must agree.
-- **Portable logic goes in `src/core`**, because `src/ui` is not in the native build.
-  - New `src/core/*.c` files and native `tests/*.c` files are picked up by the Makefile's
-    wildcards. Every test function is declared and called in `tests/runner.c`.
-  - A Win32-only test is `tests/*_win.c`. It is listed in `WIN_ONLY_TESTS`, its sources go in
-    `WIN_TEST_SRCS`, and it is called from `tests/win_runner.c`.
+  - New fixtures and fuzz seeds are marked `binary` in `.gitattributes` (Task 2).
+  - Before each commit, `git diff --stat` and `git diff --stat --ignore-cr-at-eol` agree.
+- **Portable logic goes in `src/core`.** New `src/core/*.c` and native `tests/*.c` are picked
+  up by the wildcards; every test function is declared and called in `tests/runner.c`.
+  Win32-only tests are `tests/*_win.c`, in `WIN_ONLY_TESTS` and `WIN_TEST_SRCS`, called from
+  `tests/win_runner.c`.
 - **Both builds use `-Werror`.** MinGW adds `-Wpedantic -Wshadow -Wformat=2 -Wconversion`.
-  - Every task that touches `src/ui` also runs `make -j release` far enough to compile its
-    objects.
-  - Test baselines: 4,527 native before PR 3. After Tasks 3, 4 and 6, and before Task 6's fix
-    round, 4,547 native and 182 `wintest`.
+  - Every task that touches `src/ui` runs `make -j release` far enough to compile its objects.
+  - Baselines at `31f9a20`: 4,547 native and 185 `wintest`. Before PR 3: 4,527 native.
 - **Design-system rules (CLAUDE.md):**
   - no `RGB(` literal in `src/ui`;
   - use `ns_tokens()`, `ns_scale`, `ns_font`, the page's `make_*` helpers, `ns_motion` and
     `ns_hover`;
-  - no new `MessageBox`; notices go through `notice_dlg_*`.
+  - no new `MessageBox`.
 - **Optional-feature rule.** With voice off, AI off, Dictation mode, or a conversation that has
-  not spoken yet, nothing added here:
-  - opens a render client, starts a speech worker, or makes a speech request;
-  - asks for any DLL.
+  not spoken yet:
+  - no render client, no speech worker, no speech request;
+  - no DLL request.
 
-  One gate per entry point: `voice_ais_start` is the only AI speech context constructor, and
-  `voice_net_open` is the only voice network opener. Each refuses unless `voice_gate_on()`.
-  `sapi.dll` loads with AI speech only when a reply falls back to Windows speech.
-- **The resource ledger** (`src/core/voice_ledger.h`) is UI-thread only.
-  - `VRES_RENDER` is acquired once per AI speech context, when its one `render_open` is pushed.
-    It is released when `render_close` is pushed or a pre-emption is handled.
-  - `VRES_SPEECH_REQ` counts one per speech worker: acquired at its creation, released when it
-    is joined (or detached after a bounded wait).
-- **Content.** Spoken text, request bodies, audio and keys are `secure_zero`ed before free. Text
-  and bodies are logged only through `DLOG_CONTENT`. A request is logged by kind and HTTP status
-  only. The `Authorization` header buffer is wiped after the call.
-- **New window message:** `WM_VOICE_AIS (WM_APP + 0x49)`. 0x44 to 0x48 are taken; 0x48 is
-  `WM_VOICE_ACTIVATION`.
-- **Audio messages and errors** are those Task 6 built: `VAM_RENDER_OPENED`, `VAM_PLAYED`,
-  `VAM_PLAY_DONE`, `VAM_RENDER_ERROR` and `VAE_RENDER_PREEMPTED`.
-- **New control ids:** `IDC_VOICE_SPEECH 3121`, `IDC_VOICE_TTS_PROVIDER 3122`,
+  `voice_ais_start` is the only AI speech context constructor, and `voice_net_open` the only
+  voice network opener. Each refuses unless `voice_gate_on()`. `sapi.dll` loads with AI speech
+  only on a fallback.
+- **The resource ledger** is UI-thread only.
+  - `VRES_RENDER` is acquired whenever a context pushes `render_open` while not holding the
+    render client. It is released when the context pushes `render_close` or handles
+    `VAE_RENDER_PREEMPTED`.
+  - `VRES_SPEECH_REQ` counts one per worker thread. It is acquired at the worker's creation
+    and released only when that thread has ended (on `VAI_EXITED`).
+- **Content.** Spoken text, bodies, audio and keys are `secure_zero`ed before free. Text and
+  bodies are logged only through `DLOG_CONTENT`. A request is logged by kind and HTTP status
+  only, and the `Authorization` buffer is wiped after the call.
+- **Messages:**
+  - new: `WM_VOICE_AIS (WM_APP + 0x49)`;
+  - built (Task 6): `VAM_RENDER_OPENED`, `VAM_PLAYED`, `VAM_PLAY_DONE`, `VAM_RENDER_ERROR` and
+    `VAE_RENDER_PREEMPTED`.
+- **Control ids:** `IDC_VOICE_SPEECH 3121`, `IDC_VOICE_TTS_PROVIDER 3122`,
   `IDC_VOICE_TTS_URL 3123`, `IDC_VOICE_TTS_KEY 3124`, `IDC_VOICE_AI_VOICE 3125`,
-  `IDC_VOICE_AI_MODEL 3126` and `IDC_VOICE_AI_STYLE 3127`. Recheck that they are free before
-  use.
+  `IDC_VOICE_AI_MODEL 3126` and `IDC_VOICE_AI_STYLE 3127` (recheck that they are free).
 - **Copy fixed by the spec** (UTF-8; the dash is U+2014):
   - header: `AI speech failed: using Windows speech`
-  - chat note (Task 13): `Conversation ended: the last turn could not be transcribed`
-  - the notice dialog (once per launch, Windows speech only): `Windows has no British English
-    woman's voice installed, so replies use <voice>. To get one, add English (United Kingdom)
-    under Windows Settings > Time & language > Speech, or choose AI speech in Settings > Voice.`
-  - the default style: `Speak as an English woman with a standard British accent (received
-    pronunciation), clear and natural.`
+  - chat, once per conversation: `AI speech is off for this conversation: <reason>. Replies are
+    read with Windows speech.`
+  - chat (Task 13): `Conversation ended: the last turn took too long`
+  - Voice page: `Each spoken reply's text is sent to <host>.`
+  - the British-voice notice: `Windows has no British English woman's voice installed, so
+    replies use <voice>. To get one, add English (United Kingdom) under Windows Settings > Time
+    & language > Speech, or choose AI speech in Settings > Voice.`
   - Play sample: `Hello. This is how replies will sound.`
   - notice lines (label — value):
     - `Voice: speech` — `Windows speech`
@@ -130,243 +126,204 @@ Every request asks for `wav`. The spec's §16 subsection has the facts, sources 
     - `Voice: speech URL` — `none`
     - `Voice: speech API key` — `none; the speech-to-text key is used when the provider is the
       same`
-    - `Voice: AI voice` — `the provider's default (for Mistral, Jane, British English)`
+    - `Voice: AI voice` — `the provider's default (for Mistral, Mary, British English)`
     - `Voice: AI speech model` — `the provider's default`
-    - `Voice: accent and style` — `an English woman with a standard British accent`
-- **Numbers fixed here or by the spec:**
-  - The render format is 24,000 Hz mono PCM16; every stream is converted to it (Task 12).
-  - Accepted WAV: format 1 (16-bit) or 3 (32-bit float), or `WAVE_FORMAT_EXTENSIBLE` holding
-    either; 1 or 2 channels; 8,000 to 48,000 Hz.
-  - The duck is `VOICE_TTS_DUCK_PERCENT` (18).
-  - Chunks: the first about 200 bytes and later ones up to 1,000. For Groq every chunk is at
-    most 200 bytes.
-  - The render buffer is 100 ms. `VAM_PLAYED` comes every 100 ms while playing.
-  - The next chunk's request starts only when less than 20,000 ms of audio is queued.
+    - `Voice: accent and style` — `none`
+  - failure reasons (Task 2):
+    - `the speech provider refused the key (HTTP <n>)` for 401 and 403;
+    - `the speech model or voice was not found (HTTP 404)`;
+    - `the speech provider refused the request (HTTP 422)`;
+    - `unsupported audio format`;
+    - and the resolve errors of Task 2.
+- **Numbers:**
+  - Audio accepted: exactly 24,000 Hz; 16-bit or 32-bit float; 1 or 2 channels.
+  - The duck is 18 %.
+  - Chunks are `voice_speak_chunks` as built: the first about 200 bytes, later up to 1,000, at
+    sentence ends.
+  - The render buffer is 100 ms, with `VAM_PLAYED` every 100 ms.
+  - The next request waits until less than 20,000 ms of audio is queued.
+  - The done guard fires after 2,000 ms without progress.
   - Bounded joins wait 3,000 ms.
-- **Settings keys:** 62 before Task 1, 69 after it. `CFG_KEYS_MAX` is 96 and
-  `NOTICE_ITEMS_MAX` is 24. `winhttp.def` has 17 entries and this PR adds none.
+  - The Ending deadline is max(180,000 ms, upload budget + 10,000 ms).
+- **Settings keys:** 62, then 69 after Task 1. `CFG_KEYS_MAX` 96, `NOTICE_ITEMS_MAX` 24,
+  `winhttp.def` 17.
 
 ## Review Focus
 
-1. **A WAV stream split anywhere.** The header can be cut across callbacks, inside a chunk id,
-   inside a sample or a float, and inside a base64 group (Mistral). No sample may be shifted, and
-   a streamed size of `0xFFFFFFFF` means "until the end". Pinned by `test_vwav_split_everywhere`
-   (Task 12), `test_vais_sse_split_lines` (Task 2) and the loopback server's split writes in
-   `test_voice_ais_speak_done` (Task 7).
-2. **Old audio after a stop or a cut-in.** A worker that pushes one more block after the UI
-   flushed must not have it played. Pinned by `test_vplayq_flush_drops_late_data` (Task 3,
-   built) and `test_voice_ais_stop_then_speak_no_old_audio` (Task 7).
-3. **A network slower than real time.** An underrun mid-reply is not the reply's end. Pinned by
-   `test_vplayq_underrun_not_done` (Task 3, built).
-4. **AI speech failing on every reply** (a wrong key, a Groq model withdrawn from Preview, a
-   Mistral error event, a format Nutshell cannot read). Each reply falls back to Windows speech
-   from where it stopped, with no hang and the ledger at zero. Pinned by
-   `test_vconv_win_ai_fail_every_reply` (Task 8), `test_voice_ais_http_401` and
-   `test_voice_ais_sse_error_event` (Task 7), and `test_vwav_rejects_unsupported` (Task 12).
-5. **Voice switched off while the server never answers.** Teardown stays bounded. Pinned by
-   `test_voice_ais_quit_while_server_hangs` (Task 7). A reply full of quotes, newlines,
-   backslashes and non-ASCII text must make valid JSON in both body shapes: pinned by
-   `test_vais_body_escapes` (Task 2).
-
-## Rechecks, 2026-11-25
-
-The provider table, its sources and what could not be verified are in the spec's §16
-"Decisions of 2026-11-25: AI speech provider". In short:
-
-**Mistral.**
-- `POST https://api.mistral.ai/v1/audio/speech`, model `voxtral-mini-tts-3-0`.
-- Body fields: `voice_id`, `response_format` (mp3, wav, pcm, flac, opus) and `stream: true`.
-  The reply is server-sent events `speech.audio.delta` with base64 `audio_data`, then
-  `speech.audio.done`.
-- The audio is mono at 24 kHz. Whether `pcm` is float32 is not stated by the current pages.
-- English (UK) women's voices: `gb_jane_neutral`, Mary `voice_1787`, Sky `voice_1786` and
-  Harriet `voice_590`.
-- No style instructions. $16 per 1M characters. No input limit is stated.
-
-**Groq.**
-- `POST https://api.groq.com/openai/v1/audio/speech`, model `canopylabs/orpheus-v1-english`,
-  in Preview.
-- WAV only, at most 200 characters a request, $22 per 1M characters.
-- Six voices with no accent stated. `sample_rate` is in the API reference but not confirmed for
-  Orpheus. Whether it streams is not stated.
-
-**OpenAI.**
-- `tts-1`, `tts-1-hd` and `gpt-4o-mini-tts` (all snapshots) shut down on 2027-01-06.
-- Speech-to-text, outside PR 3:
-  - `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` (with `-2025-12-15`), `whisper-1` and
-    `gpt-4o-transcribe-diarize` shut down on **2027-02-26**, replaced by `gpt-transcribe` or
-    `gpt-live-transcribe`.
-  - `gpt-4o-mini-transcribe-2025-03-20` shuts down on 2027-01-20.
-  - Confirmed on `developers.openai.com/api/docs/deprecations.md`. Task 11 files it as a todo.
+1. **A stream split anywhere**: inside the WAV header, a sample, a float, a base64 group or an
+   event line. A second `RIFF…WAVE` in mid-stream is a failure. Pinned by
+   `test_vwav_split_everywhere` and `test_vwav_second_header_fails` (Task 12),
+   `test_vais_sse_split_lines` (Task 2), and `fuzz_wavstream` and `fuzz_aisse`.
+2. **Old audio after a stop or a cut-in.** Pinned by `test_vplayq_flush_drops_late_data`
+   (built), `test_voice_ais_stop_then_speak_no_old_audio` (Task 7a) and
+   `test_voice_ais_dead_worker_never_pushes` (Task 7a).
+3. **A slow network.** An underrun is not the end, and the done guard never cuts a reply still
+   making progress. Pinned by `test_vplayq_underrun_not_done` (built) and
+   `test_voice_ais_done_guard_waits_for_progress` (Task 7a).
+4. **A setting that cannot work** (a wrong key, a key bound to another provider, an unknown
+   provider, a 404 model, an unsupported format). One chat note per conversation, then
+   Windows speech without retrying; a 429 or a network error keeps falling back per reply.
+   Pinned by `test_vconv_win_ai_fatal_note_once` and `test_vconv_win_ai_passing_retries`
+   (Task 8a), and `test_vais_key_binding` (Task 2).
+5. **Teardown against a server that never answers**, and voice off with a worker detached.
+   Pinned by `test_voice_ais_quit_while_server_hangs` (Task 7b) and
+   `test_voice_ais_dead_worker_never_pushes` (Task 7a). A reply with quotes, newlines, brackets
+   and non-ASCII text makes a valid body with its brackets neutralised:
+   `test_vais_body_escapes` and `test_vais_brackets_neutralised` (Task 2).
 
 ## Rulings
 
-Each ruling below is `decision — why — cost if wrong`. "(revised)" marks a change from
-`a3b012f`. The provider rulings are recorded in the spec's §16 subsection, and R1 to R4, R25,
-R27 and R28 restate them.
+Each ruling is `decision — why — cost if wrong`. The provider rulings are also in the spec's
+§16. "(round 3)" marks a main-session ruling on the critique of `8b86ecd`.
 
-- **R1 (revised)** — The AI speech providers are Mistral (the default), Groq and Custom; OpenAI
-  is not a preset. A Custom URL of `https://api.openai.com/v1` with `gpt-4o-mini-tts` works
-  until 2027-01-06. — These are the maintainer's decision and the spec's rulings. — Cost if
-  wrong: see the spec.
-- **R2 (revised)** — The default voice is per provider. The setting `""` means the provider's
-  default: `gb_jane_neutral` for Mistral, `autumn` for Groq, and none for Custom (a resolve
-  error). The seeds are:
-  - Mistral: `gb_jane_neutral`, `voice_1787` (Mary), `voice_1786` (Sky), `voice_590` (Harriet).
-  - Groq: `autumn`, `diana`, `hannah`, `austin`, `daniel`, `troy`.
-  - Custom: `bf_emma`, `af_heart`, `alloy`, `coral`.
-
-  — Voice ids differ between providers, so one default cannot serve all of them. — Cost if
-  wrong: the maintainer picks another voice in the combo.
-- **R3 (revised)** — The default model is per provider: `voxtral-mini-tts-3-0` (seeds also
-  `voxtral-mini-tts-2603`) for Mistral, `canopylabs/orpheus-v1-english` for Groq, and none for
-  Custom (seeds `kokoro`, `tts-1`, `tts-1-hd`, `gpt-4o-mini-tts`). The style is sent only to
-  Custom, as `instructions`, when it is not empty and the model does not start with `tts-1`. —
-  Mistral takes no style, and Groq takes only cues inside the text. — Cost if wrong: none.
-- **R4 (revised)** — Two body shapes, both asking for `"response_format":"wav"`:
-  - `VAIS_SHAPE_MISTRAL`: `model`, `input`, `voice_id`, `"stream":true`.
-  - `VAIS_SHAPE_OPENAI` (Groq, Custom): `model`, `voice`, `input`, and `instructions` per R3.
-
-  No `sample_rate`, `speed` or `stream_format`. — Each body follows its provider's documented
-  fields, and fewer fields means fewer rejections. — Cost if wrong: one provider fails and falls
-  back, and the hand check shows which field.
-- **R5** — A speech request never follows a redirect, so the bearer key is never re-sent to
-  another host. — Cost if wrong: a server behind a redirect fails and falls back.
-- **R6** — The render client opens at the first speech of a context. It is stopped and reset
-  between texts, and released at the context's end. (Built in Task 6.)
-- **R7** — One render client with one owner token; a newer open pre-empts the old owner with
-  `VAE_RENDER_PREEMPTED`. (Built in Task 6.)
-- **R8** — One worker thread per spoken text, with its chunks' requests in sequence. The next
-  request waits until less than 20 s of audio is queued; a response is never stalled mid-body.
-  — Memory stays bounded with no server timeouts. — Cost if wrong: a gap between chunks on a
-  very slow link.
-- **R9** — The cut-off is in proportion to UTF-8 bytes within the chunk. A chunk still streaming
-  uses an estimate of 1,600 frames per byte. The result is snapped back to its word start on a
-  UTF-8 boundary. Byte offsets beat the spec's "characters" because every offset in the glue is
-  a byte offset. — Cost if wrong: a few words repeated or skipped.
-- **R10 (revised)** — Any failure lets what is queued play out, then posts `VTT_ERROR` with the
-  resume offset; the glue continues with Windows speech from there. A failure is: an HTTP status
-  other than 200, a transport error, a Mistral `error` event, a WAV Nutshell cannot read, or a
-  target that does not resolve (that one at once, at `from`). The next speech tries AI again.
-  A fallback never raises the British-voice notice. — No overlap and no lost words. — Cost if
-  wrong: up to 20 s of queued audio before the handover.
-- **R11** — Spoken phrases use the configured engine. — Cost if wrong: about 1 s of latency on
-  an announcement.
-- **R12** — Repeat re-synthesises; no audio is cached. — Cost if wrong: a second request.
-- **R13 (revised)** — The shared key is that of the effective speech-to-text target
-  (`voice_stt_resolve`) when its provider id equals the speech provider's id. For Custom the
-  two normalised base URLs must also be equal. The shared key is the target's own: `ai_api_key`
-  when `key_from_chat`, else `stt_api_key`. An unresolved STT target means a separate key.
-  While the key is shared its row is hidden, and a saved `tts_api_key` is kept. — This is spec
-  §8.4 for the new set (Mistral with Mistral, Groq with Groq). — Cost if wrong: a second key
-  prompt in an edge case.
-- **R14** — `voice_ai_style` is `char[1024]`. A missing key gives the default text; `""` means
-  no instructions.
-- **R15** — An AI speech failure shows the spec's header only, plus a debug log line with the
-  HTTP status or the decoder's error (no content). No chat note.
-- **R16 (revised)** — Row order in Conversation: Pause before sending, **Speech**, Windows voice
-  (and its two dim lines), the AI rows, Play sample, the echo line and the ducking line.
-  - Windows voice stays enabled, because the fallback uses it.
-  - The English (UK) line is hidden with AI speech.
-  - The style row is enabled only for Custom.
-  - Changing the provider reseeds the voice and model combos, with the provider default first;
-    that first entry is stored as `""`, as the speech-to-text model is.
-- **R17** — Play sample uses the page's unsaved values. The gate still requires voice saved on.
-- **R18** — The self-report gains `voice-resources: N` and the `ai` mode; there is no exe-level
-  speech control.
-- **R19** — No harness case for AI speech.
-- **R20** — The ops table: `tts_start(token, engine)` and an optional `speech_engine()`; the
-  real table routes by token.
-- **R21** — The duck is a software render gain within the 100 ms buffer. (Built in Task 6.)
-- **R22** — `VAM_PLAYED` and `VAM_PLAY_DONE` carry a malloc'd `VoiceRenderMsg`. (Built in
-  Task 6.)
-- **R23** — `VCE_EXTERNAL_SEND` is fed from Retry's two exits and any other launch Task 8's grep
-  finds. (The core half is built in Task 4.)
-- **R24** — The play position is the written position less the device padding, within the
-  current chunk. (Built in Task 6.)
-- **R25 (new)** — Every request asks for `wav`. A streaming decoder in `src/core` reads the
-  header (skipping `LIST` and other chunks before `data`) and ignores the `data` size: 0,
-  `0xFFFFFFFF` or a real one all mean "until the end of the body". — `wav` is the one format
-  every provider offers and the only one that says its sample type and rate; servers write
-  placeholder sizes. — Cost if wrong: a chunk after `data` would be played as noise (not seen
-  in text-to-speech servers).
-- **R26 (new)** — Conversion to 24 kHz mono PCM16 happens in `src/core` on the worker thread:
-  stereo averaged, float32 clamped and scaled, any rate from 8 to 48 kHz through a streaming
-  windowed-sinc resampler, and 24 kHz passed through unchanged. **The Task 6 render client needs
-  no follow-up task.** — One tested conversion, and the render client stays as built. — Cost if
-  wrong: CPU on the worker for 22.05 or 48 kHz streams (small next to the network).
-- **R27 (new)** — The chunker takes per-provider limits: `voice_speak_chunks_lim(text, from,
-  first_max, later_max, ...)`, with today's `voice_speak_chunks` as the 200/1,000 wrapper. Groq
-  is 200/200. — Groq's documented input limit is 200 characters. — Cost if wrong: Groq makes
-  about five times as many requests (each one is short).
-- **R28 (new)** — Mistral's stream is read as server-sent events through `sse_line`:
-  - An event whose `event:` name, or `"type"`, ends in `.delta` and whose data carries
-    `audio_data` is audio. `audio_data` is read with `json_scan_string`, because base64 can
-    exceed the tokenizer's 8,191-byte string cap.
-  - `.done` ends the stream.
-  - An `error` member or event is a failure.
-  - Unknown events are ignored and logged by name only.
-
-  — The docs name the events but show no raw envelope. — Cost if wrong: Mistral falls back on
-  every reply until the parser is fixed; the hand check shows it at once.
-- **R29 (new, spec owner)** — The Ending watchdog (180 s) ends the conversation with
-  `Conversation ended: the last turn could not be transcribed` (Task 13). — The spec's §16
-  ruling: otherwise the silence end fires on the next tick with the wrong reason. — Cost if
-  wrong: none beyond what the silence end did anyway.
-- **R30 (new, from the build)** — The done guard. When a worker has finished every chunk and no
-  `VAM_PLAY_DONE` arrives within `voice_audio_render_queued_ms()` at that moment plus 2,000 ms,
-  the reply counts as done. — `render_end` (like data and gain) is not among the commands that
-  survive running out of memory. — Cost if wrong: a reply ends up to 2 s early in a pathological
-  case.
-- **R31 (new, from the build)** — `voice_playq`'s position accumulates `frames_in_chunk` across
-  consecutive blocks of the same reply and chunk. Today it counts within a block. This is a
-  small change to `voice_playq.c` made in Task 7, with its own test. — A chunk arrives in many
-  network blocks; pushing a whole chunk as one block would lose streaming. — Cost if wrong:
-  none.
+- **R1** `Ruling: the AI speech providers are Mistral (the default) and Custom; OpenAI is not a preset, and Groq is cut (round 3) — OpenAI shuts down on 2027-01-06; Orpheus is Preview at 10 requests a minute and 100 a day — cost if wrong: OpenAI users use Custom until the shutdown; Groq users wait for a later PR.`
+- **R2** `Ruling (round 3): the default Mistral voice is voice_1787 (Mary, English (UK), female), to be confirmed by Task 0; the seeds are voice_1787, voice_1786 (Sky), voice_590 (Harriet) and gb_jane_neutral; Custom has no default voice, and its seeds are bf_emma and af_heart (Kokoro) — Mary is a documented Voxtral 3 English (UK) woman — cost if wrong: the default changes after the capture.`
+- **R3** `Ruling (round 3): the default Mistral model is voxtral-mini-tts-3-0, the only Mistral seed (voxtral-mini-tts-2603 is deprecated Voxtral 2); Custom has no default model, and its seed is kokoro; the style is empty by default, enabled for Custom only, and sent as instructions only when typed; no tts-1 rule and no OpenAI seeds — cost if wrong: one default string.`
+- **R4** `Ruling: Mistral's body is model, input, voice_id, response_format and stream:true, sent with Accept: text/event-stream; Custom's is model, voice, input and response_format "wav", plus instructions when typed; nothing else, because Mistral refuses unknown fields with 422 — cost if wrong: one provider fails, and the note names the status.`
+- **R5** `Ruling: a speech request never follows a redirect — the bearer key is never re-sent to another host — cost if wrong: a server behind a redirect fails.`
+- **R6 to R8** (unchanged; R6 and R7 built in Task 6):
+  - the render client opens at a context's first speech, stops between texts and is released
+    at the context's end;
+  - it has one owner, and pre-emption reports `VAE_RENDER_PREEMPTED`;
+  - there is one worker thread per spoken text, its next request waits below 20 s queued, and
+    a response is never stalled mid-body.
+- **R9** `Ruling: the cut-off is in proportion to UTF-8 bytes within the chunk (an estimate of 1,600 frames per byte while it streams), snapped back to its word start — every offset in the glue is a byte offset — cost if wrong: a few words repeated or skipped.`
+- **R10** `Ruling (wording corrected, round 3): a passing failure (network, 429, 5xx, a lost device, any stream failure of R32) lets what is queued play out (up to 20 s of audio plus one chunk), then posts VTT_ERROR with the resume offset; the glue reads on with Windows speech, and the next speech tries AI again; a fallback never raises the British-voice notice — no overlap and no lost words — cost if wrong: that much audio plays before the handover.`
+- **R11, R12** (unchanged): phrases use the configured engine; repeat re-synthesises.
+- **R13** `Ruling: the shared key is the effective speech-to-text target's own (ai_api_key when key_from_chat, else stt_api_key) when its provider id equals the speech provider's, and for Custom also its normalised base; an unresolved STT target means no sharing; while shared, the key row is hidden and a saved tts_api_key is kept — spec §8.4 — cost if wrong: a second key prompt.`
+- **R14** (unchanged): `voice_ai_style` is `char[1024]`; a missing key gives the default (now
+  empty), and `""` means no instructions.
+- **R15** `Ruling: a passing failure shows the header only; the debug log gets the status or decoder error, with no content — cost if wrong: none.`
+- **R16** `Ruling: rows in Conversation are Pause, Speech, Windows voice (and its lines), the AI rows, the privacy line, Play sample, the echo line and the ducking line; Windows voice stays enabled; the English (UK) line hides with AI speech; the style row is enabled for Custom only; a provider change reseeds voice and model, with the provider's default first and stored as "" — cost if wrong: a layout change.`
+- **R17 to R24** (unchanged):
+  - Play sample uses unsaved values;
+  - the self-report gains `voice-resources: N` and the `ai` mode;
+  - no harness case;
+  - `tts_start(token, engine)` plus an optional `speech_engine()`;
+  - the duck is a render gain (built);
+  - `VoiceRenderMsg` is malloc'd (built);
+  - `VCE_EXTERNAL_SEND` comes from Retry (the core half is built);
+  - the position is the written position less the padding (built).
+- **R25** `Ruling (round 3): Custom asks for wav; Mistral asks for wav unless Task 0 shows one WAV header per delta, in which case pcm, decoded as raw float32 24 kHz mono through the same decoder's raw mode; the WAV data size is ignored (read to the end) — wav describes itself, and pcm is a one-line switch — cost if wrong: none beyond Task 0.`
+- **R26** `Ruling (round 3): no resampler; exactly 24,000 Hz is accepted, 16-bit or float32, mono or stereo (averaged); WAVE_FORMAT_EXTENSIBLE only if the capture shows it; anything else fails the reply as "unsupported audio format", a setting that cannot work (R37); the Task 6 render client needs no follow-up — both supported servers deliver 24 kHz — cost if wrong: a 22,050 Hz Custom server cannot be used.`
+- **R27** — removed (round 3: the Groq chunk limit went with Groq).
+- **R28** `Ruling: Mistral's stream is read through sse_line; an event whose event: name or data "type" is speech.audio.delta carries audio_data, read with json_scan_string; speech.audio.done ends it; an error member or event fails it; unknown events are ignored and logged by name only — the SDK's shape (spec §16), to be checked against Task 0 — cost if wrong: the capture shows another envelope, and Task 7b's fixtures change.`
+- **R29** `Ruling (round 3): the Ending deadline is max(180 s, this turn's upload budget + 10 s), where the budget is twice the send plus receive timeouts of voice_stt_upload_timeouts (the one retry); at the deadline the conversation ends with "Conversation ended: the last turn took too long"; the turn's audio is wiped, its words stay — cost if wrong: a hung upload holds the conversation open a little longer.`
+- **R30** `Ruling (round 3): the done guard counts the frames pushed per reply in the engine; once the worker has finished, it is armed and re-armed on every VAM_PLAYED that shows progress, and fires (VTT_DONE when every chunk completed) only after 2,000 ms with none — render_end can be lost, and a fixed delay could cut a slow reply — cost if wrong: a lost end costs 2 s of silence.`
+- **R31** `Ruling: voice_playq's frames_in_chunk accumulates across consecutive blocks of the same reply and chunk (a small change to the built file, made in Task 7a with its own test) — a chunk arrives in many blocks — cost if wrong: none.`
+- **R32** `Ruling (round 3): besides HTTP and network errors, these fail a reply (passing, R10), each with a test: a chunk that produced 0 frames; a decoder not in VWS_DATA at the chunk's end; sse_line_skipped() > 0; a second RIFF....WAVE in mid-stream; a speech.audio.done with no audio before it — none of them may pass as a quiet, short reply — cost if wrong: a false failure falls back to Windows speech.`
+- **R33** `Ruling (round 3): Task 0 is the maintainer's Mistral capture (two streams, one forced error); the build does not wait for it; Task 2's parser and Task 7b's worker are built against the SDK's shape with fixtures named provisional_*; Task 11 has a hard gate: the PR is not marked ready until the captures are in, the provisional fixtures replaced, and the tests green against them — the raw bytes are unverified — cost if wrong: Task 7b reworks its Mistral half after the capture.`
+- **R34** `Ruling (round 3): fuzz targets fuzz_wavstream (Task 12) and fuzz_aisse (Task 2), each with at least 5 seeds under tests/fuzz/corpus/<name>/, in FUZZ_TARGETS so make fuzz-run replays them — both parse untrusted bytes — cost if wrong: none.`
+- **R35** `Ruling (round 3): any speak opens the render client when the context does not hold it (first speak, after a pre-emption, after a render error), acquiring VRES_RENDER and re-sending the gain when it is not 100; VAE_RENDER_PREEMPTED while not playing marks the context as not holding, releases VRES_RENDER and posts nothing; while playing, it is a passing failure at the current offset — cost if wrong: none.`
+- **R36** `Ruling (round 3): every worker has a dead flag under the engine's lock; the worker checks it, holding that lock, before every render push and every PostMessage, and stops when it is set; quit sets it before its bounded join and, on timeout, detaches the thread without releasing VRES_SPEECH_REQ, which is released only on that thread's VAI_EXITED; voice_feature_apply and shutdown call voice_ais_quit_all (which marks every worker dead under the lock) before voice_audio_stop, so no push can begin after the audio thread is asked to stop — cost if wrong: a wedged worker keeps one ledger count until it ends.`
+- **R37** `Ruling (round 3): a resolve error, HTTP 401, 403, 404, 422, or VOICE_AIS_HR_FORMAT is a setting that cannot work: the glue writes one chat note per conversation ("AI speech is off for this conversation: <reason>. Replies are read with Windows speech."), reads with Windows speech, and does not try AI speech again in that conversation; network errors, 429, 5xx, device loss and stream failures keep R10 — cost if wrong: a passing 404 turns AI speech off until the next conversation.`
+- **R38** `Ruling (round 3): an unknown provider id, openai and gemini included, is the resolve error "The speech provider is not known"; validation keeps the stored id; the page shows no provider selected, and Save keeps the id unless one is picked — cost if wrong: none.`
+- **R39** `Ruling (round 3): with AI speech selected the page shows a dim line, "Each spoken reply's text is sent to <host>." (api.mistral.ai, or the Custom URL's host); the Base URL help says the reply text and the key go to that server and http:// is not encrypted — cost if wrong: none.`
+- **R40** `Ruling (round 3): voice_ais_body maps [ to ( and ] to ) in the input it sends, byte for byte, so the offsets into the kept text stay valid; SAPI and the echo filter keep the original — cost if wrong: a bracket is spoken as a parenthesis.`
+- **R41** `Ruling (round 3): Task 7 is split into 7a (context, render, ledger, guard and dead flag, driven by a fake fetch) and 7b (the real fetch: HTTP, the two shapes, the decoder, failure classes); Task 8 into 8b (the PR 2 follow-ups) and 8a (the router, engine choice, fallback and the once-per-conversation note) — each half is one reviewable cycle — cost if wrong: none.`
+- **R42** `Ruling (round 3): no test passes silently; TEST_SKIP(reason) prints and counts; the Wine-only cancel test skips that way and must pass on Windows; the offsets test requires at least one VTT_WORD at or past the offset of "Two" — cost if wrong: none.`
+- **R43** `Ruling (round 3, the smallest form): a saved speech key is bound to its provider by storing "<binding>\n<key>" as the DPAPI plaintext of tts_api_key, where the binding is voice_ais_binding() ("mistral", or "custom " and the normalised base URL); it loads into the runtime fields tts_api_key and tts_api_key_for (no JSON key, so no new notice line); voice_ais_key returns "" when tts_api_key_for differs from the current binding, which R37 reports as "Enter a speech API key"; the page rebinds only a key the user edited — a key can never reach a host it was not entered for — cost if wrong: changing the provider asks for the key again.`
+- **R44** `Ruling (round 3, finding rejected as stated): plain http:// stays allowed for Custom, with R39's warning, as speech-to-text allows it — a LAN server is reached by name, and a private-address test would refuse it — cost if wrong: a user sends text and key in clear to a public http:// host despite the warning.`
 
 **Spec against the merged code, and which wins:**
-- §3's counts: the code (62 keys, 69 after Task 1).
-- §6.5's `VNK_TTS` "declared, unused": the spec (it becomes used).
-- The notice clause: the spec (added).
-- §10's "characters": the code (R9).
-- §16 item 7's render-client fallback for SAPI is not built.
+- §3's counts: the code.
+- `VNK_TTS` "unused": the spec.
+- The notice clause: the spec.
+- "Characters": the code (bytes). The spec has been corrected to match (round 3, finding 19).
+- §16 item 7's SAPI render-client fallback is not built.
 
-## Notes items (a) to (s) (`docs/superpowers/specs/2026-09-06-ui-redesign-notes.md`, "Conversation mode (PR 2 of live voice)")
+## Notes items (a) to (s)
 
 **Folded in:**
-- (r) Retry with the mic open: Task 4 (built) and Task 8.
-- (s) The refusal phrase and a paused local repeat restarting the silence clock: Task 4 (built).
-- (q) The Hearing and Ending watchdogs restarting the silence clock: Task 4 (built), and
-  Task 13 for the Ending watchdog's end.
-- (q) The 10-minute Speaking watchdog: Task 4 (built) and Task 8.
+- (r) Retry with the mic open: Task 4 (built) and Task 8b.
+- (s) The silence clock after a refusal phrase or a paused local repeat: Task 4 (built).
+- (q) The Hearing and Ending watchdogs restarting the silence clock: Task 4 (built) and
+  Task 13.
+- (q) The 10-minute Speaking watchdog: Task 4 (built) and Task 8b.
 - (s) The `voice_echo` tick wrap: Task 4 (built).
 - (r) A close lost when `realloc` fails: Task 6 (built).
-- (r) The event queue dropping `VCE_END`: Task 8.
+- (r) The event queue dropping `VCE_END`: Task 8b.
 - (o) Play sample's help: Task 1.
-- (o) The notice lost when the conversation ends first: Task 8.
+- (o) The notice lost when the conversation ends first: Task 8b.
 
-**Left out:**
-- Enter while a reply is spoken (the maintainer decides).
-- The RDP or console disconnect wording.
-- The one-line triple-backtick fence.
-- The header after a pause cuts an announcement.
-- Settings destroyed before its owner is re-enabled (a hand check).
-- Everything in (a) to (n) and (p), and the rest of (r): hand checks or "no code".
+**Left out:** Enter while a reply is spoken (the maintainer decides); the RDP wording; the
+one-line triple-backtick fence; the header after a paused announcement; Settings destroyed
+before its owner; and every hand check.
 
 ---
 
-### Task 1: The PR 3 settings, key, help, notice lines and digest
+### Task 0 (the maintainer's): capture Mistral's real stream
 
-**Status:** to build. Revised 2026-11-25 for the provider set.
+**Status:** the maintainer's, at any time before Task 11. Nothing waits for it except Task 11's
+gate (R33).
+
+**Where:**
+- Run from `~/nutshell-wt/voice-ai-speech` on `automaton`, in bash, with the Mistral key in
+  the environment variable `MISTRAL_API_KEY`. The key is never echoed and never on a command
+  line: the header comes from a process substitution.
+- Files go to `tests/fixtures/voice_tts/` on `feat/voice-ai-speech`, as `<name>.sse` (the raw
+  body) and `<name>.headers` (the response headers).
+
+```bash
+cd ~/nutshell-wt/voice-ai-speech
+: "${MISTRAL_API_KEY:?set MISTRAL_API_KEY first}"
+D=tests/fixtures/voice_tts
+mkdir -p "$D"
+auth() { printf 'Authorization: Bearer %s\n' "$MISTRAL_API_KEY"; }
+TXT='Hello. This is how replies will sound. A second sentence checks that the stream carries on.'
+for fmt in wav pcm; do
+  curl -sS -N --max-time 90 -X POST https://api.mistral.ai/v1/audio/speech \
+    -H @<(auth) -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
+    -D "$D/mistral_stream_$fmt.headers" -o "$D/mistral_stream_$fmt.sse" \
+    --data "{\"model\":\"voxtral-mini-tts-3-0\",\"input\":\"$TXT\",\"voice_id\":\"voice_1787\",\"response_format\":\"$fmt\",\"stream\":true}"
+done
+curl -sS -N --max-time 90 -X POST https://api.mistral.ai/v1/audio/speech \
+  -H @<(auth) -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
+  -D "$D/mistral_error_bad_voice.headers" -o "$D/mistral_error_bad_voice.sse" \
+  --data "{\"model\":\"voxtral-mini-tts-3-0\",\"input\":\"$TXT\",\"voice_id\":\"no_such_voice_0\",\"response_format\":\"wav\",\"stream\":true}"
+sed -i '/^[Ss]et-[Cc]ookie:/d' "$D"/*.headers
+grep -c -F -f <(printf '%s\n' "$MISTRAL_API_KEY") "$D"/* ; ls -l "$D"
+python3 - "$D/mistral_stream_wav.sse" /tmp/mistral_mary.wav <<'PY'
+import sys, json, base64
+out = open(sys.argv[2], 'wb')
+for line in open(sys.argv[1], encoding='utf-8'):
+    if line.startswith('data:'):
+        try: d = json.loads(line[5:])
+        except ValueError: continue
+        if 'audio_data' in d: out.write(base64.b64decode(d['audio_data']))
+PY
+```
+
+- **What it must show:**
+  - Every file has a `grep` count of 0 (the key appears nowhere).
+  - Both `.headers` files start `HTTP/2 200` (or `HTTP/1.1 200`), and the error capture gets a
+    4xx.
+  - Play `/tmp/mistral_mary.wav` (it is not committed) and check that the voice is Mary, an
+    English (UK) woman. This confirms R2.
+- **Commit** the six files, plus `.gitattributes`' `tests/fixtures/voice_tts/* binary` line if
+  Task 2 has not landed yet. Use a message such as `test(voice): Mistral speech captures for
+  the AI speech parser`.
+- **Then tell the orchestrator.** Task 11's gate starts from these files:
+  - whether `type` is inside `data`;
+  - one WAV header or one per delta (R25 chooses `wav` or `pcm` from this);
+  - the delta sizes;
+  - how the bad voice was reported (HTTP status or an event).
+
+---
+
+### Task 1: The PR 3 settings, the bound key, help, notice lines and digest
+
+**Status:** to build. Revision 3: providers Mistral and Custom; the style is empty by default;
+the key's binding (R43).
 
 **Files:**
 - Modify:
   - `src/config/config.h`;
-  - `src/config/loader.c` (CRLF: load, save, the secret, `k_setting_keys`, the free path's
-    `secure_zero`);
+  - `src/config/loader.c` (CRLF: load, save, the bound secret, `k_setting_keys`, the free
+    path's `secure_zero`);
   - `src/core/voice_config.[ch]`;
   - `src/core/settings_help.[ch]`;
-  - `src/core/notice.c` (`is_voice_subkey`, the British-voice notice's closing clause).
+  - `src/core/notice.c` (`is_voice_subkey` and the British-voice notice's clause).
 - Test: `tests/test_voice_config.c`, `tests/test_notice.c`, and the existing config round-trip
   and `k_setting_keys` tests.
 
@@ -374,207 +331,333 @@ R27 and R28 restate them.
 - Produces, in `Settings` (after `voice_windows_voice_name`):
   ```c
   int  voice_speech_engine;            /* VOICE_SPEECH_WINDOWS (0) or VOICE_SPEECH_AI (1); JSON "windows"/"ai" */
-  char voice_tts_provider[32];         /* "mistral" (default), "groq" or "custom" */
+  char voice_tts_provider[32];         /* "mistral" (default) or "custom"; any other id is kept as stored (R38) */
   char voice_tts_url[CFG_STR_MAX];     /* base URL, Custom only */
-  char tts_api_key[CFG_STR_MAX];       /* DPAPI like stt_api_key */
+  char tts_api_key[CFG_STR_MAX];       /* DPAPI; plaintext "<binding>\n<key>" on disk (R43) */
+  char tts_api_key_for[CFG_STR_MAX];   /* runtime only, never a JSON key: the binding read with it */
   char tts_api_key_enc_preserved[CFG_BLOB_MAX];
   char voice_ai_voice[64];             /* "" = the provider's default (R2) */
   char voice_ai_tts_model[CFG_STR_MAX];/* "" = the provider's default (R3) */
-  char voice_ai_style[1024];           /* default VOICE_AIS_DEFAULT_STYLE; "" = no instructions (R14) */
+  char voice_ai_style[1024];           /* default "" (R3, R14) */
   ```
 - In `voice_config.h`:
-  - `#define VOICE_SPEECH_WINDOWS 0`, `#define VOICE_SPEECH_AI 1`;
-  - `const char *voice_speech_json(int e)` (`"windows"`/`"ai"`);
+  - `VOICE_SPEECH_WINDOWS 0`, `VOICE_SPEECH_AI 1`;
+  - `const char *voice_speech_json(int e)`;
   - `int voice_speech_from_json(const char *s)` (unknown or NULL gives Windows);
-  - `#define VOICE_AIS_DEFAULT_PROVIDER "mistral"` and `#define VOICE_AIS_DEFAULT_STYLE` (the
-    Global Constraints text).
-- `SettingsHelpId` gains, before `SH_COUNT`: `SH_VOICE_SPEECH`, `SH_VOICE_TTS_PROVIDER`,
-  `SH_VOICE_TTS_URL`, `SH_VOICE_TTS_KEY`, `SH_VOICE_AI_VOICE`, `SH_VOICE_AI_MODEL`,
-  `SH_VOICE_AI_STYLE` and `SH_VOICE_PLAY_SAMPLE`.
+  - `#define VOICE_AIS_DEFAULT_PROVIDER "mistral"`.
+- `SettingsHelpId` gains `SH_VOICE_SPEECH`, `SH_VOICE_TTS_PROVIDER`, `SH_VOICE_TTS_URL`,
+  `SH_VOICE_TTS_KEY`, `SH_VOICE_AI_VOICE`, `SH_VOICE_AI_MODEL`, `SH_VOICE_AI_STYLE` and
+  `SH_VOICE_PLAY_SAMPLE`.
+- The bound secret (R43):
+  - Save encrypts `tts_api_key_for + "\n" + tts_api_key` when the key is not empty (through a
+    stack buffer, wiped).
+  - Load splits the decrypted text at its first `\n`. With no `\n`, the binding is empty, so
+    the key never matches.
+  - Preservation and migration work as for `stt_api_key`.
 
 - [ ] **Step 1: Write the failing tests**
   - `test_voice_ais_settings_defaults`: a config without the seven keys loads with Windows,
-    `"mistral"`, an empty URL, an empty key, an empty voice, an empty model and the default
-    style.
-  - `test_voice_ais_settings_roundtrip`: save then load keeps AI, `"custom"`,
-    `"http://10.0.0.5:8880/v1"`, `"bf_emma"`, `"kokoro"`, a style with a quote and a newline,
-    and a key. The file holds `"voice_speech_engine": "ai"`. The key is saved as a `$dpapi$v1$`
-    blob through the fake DPAPI, never in clear text.
-  - `test_voice_ais_key_preserved`: an undecryptable blob loads as an empty key, is kept in
-    `tts_api_key_enc_preserved` and is written back verbatim. A new key drops it.
-  - `test_voice_ais_style_empty_kept`: `"voice_ai_style": ""` loads as `""`.
-  - `test_voice_ais_settings_validate`: `voice_tts_provider` `"openai"` and `"gemini"` validate
-    to `"mistral"`; `"groq"` and `"custom"` are kept; `"voice_speech_engine": "loud"` loads as
-    Windows.
-  - `test_voice_ais_notice_lines`: with `voice_enabled` present and the seven keys missing,
-    exactly the seven Global Constraints lines appear, in key order. With `voice_enabled`
-    missing they fold into "Voice", `tts_api_key` included.
-  - `test_voice_ais_digest`: changing any one of the seven fields, the key included, changes
+    `"mistral"`, an empty URL, an empty key, an empty voice, an empty model and an empty style.
+  - `test_voice_ais_settings_roundtrip`: AI, `"custom"`, `"http://10.0.0.5:8880/v1"`,
+    `"bf_emma"`, `"kokoro"`, a style with a quote and a newline, and a key bound to
+    `"custom http://10.0.0.5:8880/v1"` all survive a save and load. The file holds a
+    `$dpapi$v1$` blob and neither the key nor the binding in clear text.
+  - `test_voice_ais_key_binding_roundtrip`: the binding comes back in `tts_api_key_for`. A
+    blob whose plaintext has no `\n` loads with an empty binding.
+  - `test_voice_ais_key_preserved`: an undecryptable blob is kept verbatim and written back;
+    a new key drops it.
+  - `test_voice_ais_style_empty_kept`: `"voice_ai_style": "x"` and `""` both load as written.
+  - `test_voice_ais_unknown_provider_kept`: `"openai"`, `"gemini"` and `"groq"` load and save
+    unchanged (R38: resolve reports them, validation does not rewrite them).
+    `"voice_speech_engine": "loud"` loads as Windows.
+  - `test_voice_ais_notice_lines`: the seven Global Constraints lines, in key order, and the
+    fold into "Voice" when the switch is new (`tts_api_key` included).
+  - `test_voice_ais_digest`: each of the seven fields, the key and its binding, changes
     `voice_settings_digest`.
-  - The existing `k_setting_keys`-against-a-saved-file test passes with 69 rows.
-  - `test_notice_msg_voice_british_names_the_voice` is updated to the full text with
-    `, or choose AI speech in Settings > Voice.`
+  - The `k_setting_keys` test passes with 69 rows.
+  - `test_notice_msg_voice_british_names_the_voice` gains the clause.
   - `test_settings_help_play_sample`: label `Play sample`, kind `SH_KIND_ACTION`.
-- [ ] **Step 2: Run** `make -j test 2>&1 | tail -5`: the new tests FAIL (or do not link).
-- [ ] **Step 3: Implement.**
-  - The seven `CK(...)` rows carry the labels of the Global Constraints. `tts_api_key` goes
-    through `load_secret`/`secret_prepare` exactly as `stt_api_key` does, and is wiped in the
-    free path.
-  - Help entries (`SETTINGS_PAGE_VOICE`). Each `default_text` is the notice value.
-    - `SH_VOICE_SPEECH`, label `Speech:`. Windows speech uses a voice installed on this PC. AI
-      speech sends each reply's text to the speech provider and plays the AI-generated voice it
-      returns. If AI speech fails, the rest of the reply is read with Windows speech.
-      Conversation mode only.
-    - `SH_VOICE_TTS_PROVIDER`, label `Speech provider:`. Mistral (Voxtral, English (UK) voices),
-      Groq (Orpheus, in Preview at Groq, short requests), or Custom (an OpenAI-compatible
-      `/audio/speech`, for example a Kokoro server on your network). It must say: "OpenAI's
-      speech models shut down on 6 January 2027; until then, Custom with
-      https://api.openai.com/v1 reaches them."
-    - `SH_VOICE_TTS_URL`, label `Base URL:`. A pasted `/audio/speech` is trimmed.
-    - `SH_VOICE_TTS_KEY`, label `Speech API key:`. It is shown only when the speech provider is
-      not the speech-to-text one, and is kept encrypted for this Windows user.
-    - `SH_VOICE_AI_VOICE`, label `AI voice:`. The voice id the provider knows; empty means the
-      provider's default; Custom needs one.
-    - `SH_VOICE_AI_MODEL`, label `AI speech model:`. Empty means the provider's default; Custom
-      needs one.
-    - `SH_VOICE_AI_STYLE`, label `Accent and style:`. Sent to a Custom server as instructions,
-      which some servers ignore. Mistral and Groq take the accent from the voice.
-    - `SH_VOICE_PLAY_SAMPLE`, `SH_KIND_ACTION`, label `Play sample`, `default_text` NULL. It
-      speaks a sentence with the chosen speech and voice, using the values on the page before
-      Save.
-  - Add `"tts_api_key"` to `is_voice_subkey` and the clause to `NOTICE_MSG_VOICE_BRITISH`. Add
-    the seven fields to `voice_settings_digest`.
-- [ ] **Step 4: Run** `make -j test 2>&1 | tail -3`. All pass. Record the key count (69).
-- [ ] **Step 5: Commit** `feat(voice): AI speech settings, key, help and notice lines`.
+- [ ] **Step 2: Run** `make -j test`. FAIL.
+- [ ] **Step 3: Implement.** Help entries (`SETTINGS_PAGE_VOICE`), each `default_text` being
+  the notice value:
+  - `SH_VOICE_SPEECH` (`Speech:`): Windows speech uses a voice installed on this PC. AI speech
+    sends each reply's text to the speech provider and plays the AI-generated voice it returns.
+    If AI speech fails, the rest of the reply is read with Windows speech. Conversation mode
+    only.
+  - `SH_VOICE_TTS_PROVIDER` (`Speech provider:`): Mistral (Voxtral, English (UK) voices), or
+    Custom (an OpenAI-compatible `/audio/speech`, for example a Kokoro server on your network).
+  - `SH_VOICE_TTS_URL` (`Base URL:`): a pasted `/audio/speech` is trimmed. The text of each
+    spoken reply, and the speech key, go to this server. `http://` is not encrypted (R39).
+  - `SH_VOICE_TTS_KEY` (`Speech API key:`): shown only when the speech provider is not the
+    speech-to-text one. It is kept encrypted for this Windows user and only for the provider
+    it was entered for.
+  - `SH_VOICE_AI_VOICE` (`AI voice:`): empty means the provider's default (Mary, for
+    Mistral); Custom needs one.
+  - `SH_VOICE_AI_MODEL` (`AI speech model:`): empty means the provider's default; Custom needs
+    one.
+  - `SH_VOICE_AI_STYLE` (`Accent and style:`): Custom only, sent as instructions when typed.
+  - `SH_VOICE_PLAY_SAMPLE` (`SH_KIND_ACTION`, `Play sample`, `default_text` NULL): it speaks a
+    sentence with the chosen speech and voice, using the page's values before Save.
+- [ ] **Step 4: Run** `make -j test`. PASS. Record the count, 69.
+- [ ] **Step 5: Commit** `feat(voice): AI speech settings, a provider-bound key, help and notice lines`.
 
 Suggested implementer: Sonnet. Reviewer: Opus or Fable.
 
 ---
 
-### Task 2: AI speech in core: providers, targets, the shared key, bodies, Mistral's events, the offset map
+### Task 2: AI speech in core: providers, targets, keys, bodies, Mistral's events, failures, the offset map
 
-**Status:** to build. Revised 2026-11-25: two shapes, Mistral's event parser, base64 decoding,
-the chunker's limits; PCM alignment moved to Task 12.
+**Status:** to build. Revision 3: Groq removed; unknown providers, key binding, brackets,
+failure classes and the event parser's failures; a fuzz target; `TEST_SKIP`.
 
 **Files:**
-- Create: `src/core/voice_aispeech.h`, `src/core/voice_aispeech.c`
+- Create: `src/core/voice_aispeech.h`, `src/core/voice_aispeech.c`, `tests/fuzz/fuzz_aisse.c`,
+  `tests/fuzz/corpus/aisse/*` (at least 5 seeds: the provisional fixtures, an error, a split
+  line, an oversized line, garbage), and `tests/fixtures/voice_tts/provisional_*.sse`
+  (written from the SDK's shape, R33).
 - Modify:
   - `src/core/base64.[ch]` (a decoder);
-  - `src/core/voice_speak.[ch]` (`voice_speak_chunks_lim`; `voice_speak_chunks` becomes its
-    200/1,000 wrapper with unchanged output).
-- Test: `tests/test_voice_aispeech.c`, `tests/test_base64.c` (or wherever `base64_encode` is
-  tested), `tests/test_voice_speak.c`
+  - `tests/test_framework.h`, `tests/runner.c` and `tests/win_runner.c` (`TEST_SKIP` and a
+    counted skip total in both summaries, R42);
+  - `Makefile` (CRLF: `aisse` in `FUZZ_TARGETS`);
+  - `.gitattributes` (`tests/fixtures/voice_tts/* binary`, `tests/fuzz/corpus/aisse/* binary`
+    and `tests/fuzz/corpus/wavstream/* binary`).
+- Test: `tests/test_voice_aispeech.c`, and the existing base64 tests.
 
 **Interfaces:**
 - Consumes: Task 1's fields; `voice_stt_resolve`, `voice_base_url_normalise`,
-  `json_escape_string`, `json_scan_string` and `json_parse`.
+  `json_escape_string`, `json_scan_string` and `sse_line`.
 - Produces:
 ```c
+/* test_framework.h */
+#define TEST_SKIP(reason)   /* prints "  [SKIP] <test>: <reason>", counts a skip, ends the test as not failed */
 /* base64.h */
-size_t base64_decode(const char *src, size_t len, unsigned char *dst, size_t cap);
-       /* standard alphabet, '=' padding, whitespace ignored; (size_t)-1 on a bad byte or cap */
-/* voice_speak.h */
-size_t voice_speak_chunks_lim(const char *text, size_t from, size_t first_max, size_t later_max,
-                              size_t *starts, size_t *lens, size_t max);
+size_t base64_decode(const char *src, size_t len, unsigned char *dst, size_t cap); /* (size_t)-1 on a bad byte or cap */
 /* voice_aispeech.h */
 typedef enum { VAIS_SHAPE_OPENAI = 0, VAIS_SHAPE_MISTRAL } VoiceAisShape;
 typedef enum { VAIS_KEY_OWN = 0, VAIS_KEY_STT, VAIS_KEY_CHAT } VoiceAisKey;
-typedef struct {
-    const char *id, *label, *base;          /* "mistral" "Mistral" "https://api.mistral.ai/v1"; custom: base "" */
-    const char *const *models;              /* NULL-terminated seeds; [0] the default, or NULL list entry 0 for custom */
-    const char *const *voices;              /* likewise */
-    VoiceAisShape shape;
-    size_t first_chunk, later_chunk;        /* 200/1000; Groq 200/200 */
-} VoiceAisProvider;
-const VoiceAisProvider *voice_ais_providers(size_t *n);       /* mistral, groq, custom, in that order */
-const VoiceAisProvider *voice_ais_provider_find(const char *id);
-typedef struct {
-    char url[512]; char model[CFG_STR_MAX]; char voice[64]; char style[1024];
-    char provider[16]; VoiceAisShape shape; VoiceAisKey key_from;
-    int send_instructions; size_t first_chunk, later_chunk;
-} VoiceAisTarget;
+typedef struct { const char *id, *label, *base; const char *const *models, *const *voices;
+                 VoiceAisShape shape; int needs_key; } VoiceAisProvider;   /* mistral, custom */
+const VoiceAisProvider *voice_ais_providers(size_t *n);
+const VoiceAisProvider *voice_ais_provider_find(const char *id);   /* NULL for any other id */
+typedef struct { char url[512], model[CFG_STR_MAX], voice[64], style[1024], provider[16],
+                 host[256]; VoiceAisShape shape; VoiceAisKey key_from; int send_instructions; } VoiceAisTarget;
 int  voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t cap);
-int  voice_ais_key_shared(const Settings *s);                       /* R13 */
-const char *voice_ais_key(const Settings *s, const VoiceAisTarget *t); /* never NULL; may be "" */
+void voice_ais_binding(const Settings *s, char *out, size_t cap);  /* "mistral" | "custom <base>" | "" */
+int  voice_ais_key_shared(const Settings *s);
+const char *voice_ais_key(const Settings *s, const VoiceAisTarget *t);   /* "" when unbound (R43) */
 char *voice_ais_body(const VoiceAisTarget *t, const char *text, size_t len, size_t *out_len);
+                                                         /* R4; [ ] -> ( ) in input (R40) */
+/* failures: VoiceTtsMsg.hr for an AI context */
+#define VOICE_AIS_HR_NET     (-1L)   /* transport, passing */
+#define VOICE_AIS_HR_RESOLVE (-2L)   /* setting cannot work */
+#define VOICE_AIS_HR_FORMAT  (-3L)   /* unsupported audio format: cannot work */
+#define VOICE_AIS_HR_DEVICE  (-4L)   /* render lost or pre-empted while playing: passing */
+#define VOICE_AIS_HR_STREAM  (-5L)   /* R32: passing */
+int  voice_ais_failure_fatal(long hr);                    /* R37: RESOLVE, FORMAT, 401, 403, 404, 422 */
+void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap);
 typedef enum { VAIS_EV_NONE = 0, VAIS_EV_AUDIO, VAIS_EV_DONE, VAIS_EV_ERROR } VoiceAisEvKind;
-typedef struct { char event[64]; } VoiceAisSse;                     /* the last "event:" name */
+typedef struct { char event[64]; int audio_seen; } VoiceAisSse;
 typedef struct { VoiceAisEvKind kind; unsigned char *audio; size_t audio_len; } VoiceAisEv;
 void voice_ais_sse_init(VoiceAisSse *s);
-int  voice_ais_sse_line(VoiceAisSse *s, const char *line, size_t len, VoiceAisEv *ev);
-       /* one sse_line line; AUDIO: ev->audio is malloc'd decoded bytes (caller wipes and frees) */
+int  voice_ais_sse_line(VoiceAisSse *s, const char *line, size_t len, VoiceAisEv *ev);  /* R28 */
 #define VOICE_AIS_EST_FRAMES_PER_BYTE 1600
 size_t voice_ais_offset(const char *text, size_t chunk_from, size_t chunk_len,
                         uint64_t played, uint64_t total, int complete);   /* R9 */
 ```
 - `voice_ais_resolve`:
-  - URL: Mistral `https://api.mistral.ai/v1/audio/speech`; Groq
-    `https://api.groq.com/openai/v1/audio/speech`; Custom normalised `{base}/audio/speech`.
+  - URLs: Mistral `https://api.mistral.ai/v1/audio/speech`; Custom `{normalised base}/audio/speech`.
+  - `host` is set for the privacy line.
   - An empty model or voice takes the provider's `[0]`.
-  - Errors in `err`: `Enter the speech Base URL`, `The speech Base URL is not valid`, `Enter the
-    speech model your server uses`, `Enter the voice your server uses` (Custom only), and
-    `Enter a speech API key` when the key is empty. A Custom server with no key is allowed, so
-    local servers work: the last error applies to Mistral and Groq only.
-- `voice_ais_sse_line` follows R28. A `data:` line whose JSON (or whose `event:` name) is
-  neither audio, done nor error returns `VAIS_EV_NONE`.
+  - Errors in `err`:
+    - `The speech provider is not known` (R38);
+    - `Enter the speech Base URL` and `The speech Base URL is not valid`;
+    - `Enter the speech model your server uses` and `Enter the voice your server uses` (Custom);
+    - `Enter a speech API key` (Mistral, whose `needs_key` is 1, when `voice_ais_key` gives
+      `""`).
+- `voice_ais_sse_line` follows R28. A DONE before any AUDIO (`audio_seen` 0) is returned as
+  ERROR (R32).
 
 - [ ] **Step 1: Write the failing tests**
-  - Resolution:
-    - `test_vais_resolve_mistral_defaults`: the Mistral URL, `voxtral-mini-tts-3-0`,
-      `gb_jane_neutral`, the shape `VAIS_SHAPE_MISTRAL`, `send_instructions` 0 and chunks
-      200/1,000.
-    - `test_vais_resolve_groq`: the Groq URL, `canopylabs/orpheus-v1-english`, `autumn`, shape
-      OPENAI, chunks 200/200.
-    - `test_vais_resolve_custom`: `http://10.0.0.5:8880/v1/audio/speech/` normalises; an empty
-      URL, `ftp://x`, an empty model and an empty voice each give their error. An empty key is
-      allowed.
-    - `test_vais_instructions_custom_only`: Custom with a style and `kokoro` gives 1; `tts-1`
-      and `tts-1-hd` give 0; an empty style gives 0; Mistral and Groq always give 0.
-    - `test_vais_unknown_provider`: `"openai"` resolves as Mistral (validation already mapped
-      it; resolve does not crash on it).
-  - The shared key:
-    - `test_vais_key_shared`: STT Mistral with TTS Mistral shares (`VAIS_KEY_STT`). STT Groq
-      with TTS Groq shares. "Use current AI assistant" never shares with Mistral or Groq (no
-      chat provider is either), except through Custom: a Custom chat and a Custom speech URL
-      with the same base share (`VAIS_KEY_CHAT`).
-    - `test_vais_key_not_shared`: STT OpenAI with TTS Mistral, STT Groq with TTS Mistral, and
-      two different Custom bases all give `VAIS_KEY_OWN`.
-    - `test_vais_key_stt_unresolved`: an STT target that does not resolve gives
-      `VAIS_KEY_OWN`.
-  - The bodies:
-    - `test_vais_body_mistral`: the body parses and has exactly `model`, `input`, `voice_id`,
-      `"response_format":"wav"` and `"stream":true`.
-    - `test_vais_body_openai_shape`: exactly `model`, `voice`, `input` and `response_format`
-      `"wav"`, plus `instructions` only when `send_instructions`.
-    - `test_vais_body_escapes`: the text `He said "C:\temp"\nnext\ttab é ✓` round-trips through
-      `json_parse` in both shapes.
+  - Resolution and keys:
+    - `test_vais_resolve_mistral_defaults`: the URL, `voxtral-mini-tts-3-0`, `voice_1787`,
+      the MISTRAL shape, `send_instructions` 0, and the host `api.mistral.ai`.
+    - `test_vais_resolve_custom`: normalising, the four Custom errors, an empty key allowed,
+      and `send_instructions` 1 only with a style typed.
+    - `test_vais_unknown_provider`: `openai`, `gemini`, `groq` and `""` each give
+      `The speech provider is not known`.
+    - `test_vais_key_shared`: STT Mistral with TTS Mistral gives `VAIS_KEY_STT`. A Custom chat
+      used by "Use current AI assistant", with the same Custom base, gives `VAIS_KEY_CHAT`.
+    - `test_vais_key_not_shared`: STT OpenAI with TTS Mistral, different Custom bases, and an
+      unresolved STT target all give `VAIS_KEY_OWN`.
+    - `test_vais_key_binding`: a key bound to `mistral` is returned for Mistral and is `""`
+      for Custom. A key bound to `custom http://a/v1` is `""` after the URL becomes
+      `http://b/v1`, and resolve then says `Enter a speech API key` for Mistral.
+  - Bodies:
+    - `test_vais_body_mistral`: exactly `model`, `input`, `voice_id`, `response_format` and
+      `"stream":true`.
+    - `test_vais_body_openai_shape`: exactly `model`, `voice`, `input` and `response_format`,
+      plus `instructions` only when typed.
+    - `test_vais_body_escapes`: quotes, a backslash, a newline, a tab, `é` and `✓` round-trip
+      in both shapes.
+    - `test_vais_brackets_neutralised`: the input `[whisper] go [now]` is sent as
+      `(whisper) go (now)` with the same byte length. The caller's text is unchanged.
     - `test_vais_body_rejects_crlf`: a CR or LF in the model or voice gives NULL.
-  - Mistral's events:
-    - `test_vais_sse_audio_delta`: the lines `event: speech.audio.delta` then
-      `data: {"type":"speech.audio.delta","audio_data":"<base64 of 20 000 bytes>"}` give AUDIO
-      with those 20,000 bytes (larger than the tokenizer's cap).
-    - `test_vais_sse_type_only`: a `data:` line with `"type":"speech.audio.delta"` and no
-      `event:` line is AUDIO too.
-    - `test_vais_sse_done_and_error`: `event: speech.audio.done` gives DONE;
-      `data: {"error":{"message":"x"}}` gives ERROR; `data: {"type":"other"}` gives NONE.
-    - `test_vais_sse_split_lines`: fed through `sse_line_feed` in 1-byte pieces, the same
-      stream gives the same events.
-    - `test_vais_sse_bad_base64`: an invalid `audio_data` gives ERROR.
-  - base64 and the chunker:
-    - `test_base64_decode_roundtrip`: lengths 0 to 64 round-trip with `base64_encode`; a byte
-      outside the alphabet and a short `cap` give `(size_t)-1`.
-    - `test_vspeak_chunks_lim`: limits 200/200 keep every chunk at 200 bytes or less, on
-      sentence or word ends. `voice_speak_chunks` gives exactly what it gave before for the
-      existing test texts.
-  - The offset map: `test_vais_offset_complete`, `test_vais_offset_estimate` and
-    `test_vais_offset_utf8`, as in `a3b012f`. For the chunk `"One two three four."` at 10:
-    played 0 gives 10, half gives the start of `three`, and all of it gives the end. An
-    incomplete chunk never passes its end. No offset falls inside a UTF-8 character.
-- [ ] **Step 2: Run.** FAIL.
-- [ ] **Step 3: Implement.** No Win32, no I/O, no logging.
-- [ ] **Step 4: Run** `make -j test 2>&1 | tail -3`. PASS, and the existing `test_vspeak_*`
-  tests are unchanged.
-- [ ] **Step 5: Commit** `feat(voice): AI speech providers, request bodies and Mistral's stream events`.
+  - Failures:
+    - `test_vais_failure_classes`: RESOLVE, FORMAT, 401, 403, 404 and 422 are fatal. NET,
+      DEVICE, STREAM, 429, 500 and 503 are not.
+    - `test_vais_failure_reasons`: each reason gives the exact Global Constraints text.
+  - Mistral's events, against `provisional_mistral_wav.sse` and `provisional_mistral_error.sse`:
+    - `test_vais_sse_audio_delta`: a delta of 20 KB of audio decodes.
+    - `test_vais_sse_type_only`: `type` alone, with no `event:` line, is audio.
+    - `test_vais_sse_done_and_error`: `done` after audio gives DONE; an `error` member gives
+      ERROR; an unknown type gives NONE.
+    - `test_vais_sse_done_without_audio`: gives ERROR (R32).
+    - `test_vais_sse_split_lines`: 1-byte feeds through `sse_line_feed` give the same events.
+    - `test_vais_sse_bad_base64`: gives ERROR.
+  - The capture, through `TEST_SKIP` until Task 0's files exist:
+    - `test_vais_sse_capture_wav`, `test_vais_sse_capture_pcm` and
+      `test_vais_sse_capture_error` run the same assertions against
+      `mistral_stream_wav.sse`, `mistral_stream_pcm.sse` and `mistral_error_bad_voice.sse`.
+      A missing file is a counted skip, which blocks Task 11.
+  - Elsewhere:
+    - `test_base64_decode_roundtrip`: lengths 0 to 64, and the bad-byte and short-`cap`
+      cases.
+    - The offset map, on the chunk `"One two three four."` at 10:
+      - `test_vais_offset_complete`: played 0 gives 10, half gives the start of `three`, and
+        all of it gives the end.
+      - `test_vais_offset_estimate`: with `complete` 0, played = 1600 × 5 gives a word start at
+        or before byte 15, and the offset never passes the chunk end.
+      - `test_vais_offset_utf8`: no offset falls inside a UTF-8 character.
+    - `test_framework_skip_counts`: a skipping test adds 1 to the skip total and 0 to the
+      failures.
+- [ ] **Step 2: Run** `make -j test`. FAIL.
+- [ ] **Step 3: Implement.** No Win32, no I/O, no logging. `fuzz_aisse` feeds its input through
+  `sse_line_feed`, then `voice_ais_sse_line`, and frees every event.
+- [ ] **Step 4: Run** `make -j test` and `make fuzz-run`. PASS, with the three capture tests
+  counted as skips.
+- [ ] **Step 5: Commit** `feat(voice): AI speech providers, bound keys, bodies and Mistral's event parser`.
+
+Suggested implementer: Sonnet. Reviewer: Opus or Fable.
+
+---
+
+### Task 12: The WAV and PCM stream decoder
+
+**Status:** to build. Revision 3: 24 kHz only, no resampler, a raw mode, second-header
+detection, and a fuzz target.
+
+**Files:**
+- Create: `src/core/voice_wavstream.h`, `src/core/voice_wavstream.c`,
+  `tests/fuzz/fuzz_wavstream.c`, `tests/fuzz/corpus/wavstream/*` (at least 5 seeds: mono16,
+  stereo float, `LIST` before `data`, placeholder sizes, a truncated header)
+- Modify: `Makefile` (CRLF: `wavstream` in `FUZZ_TARGETS`)
+- Test: `tests/test_voice_wavstream.c`
+
+**Interfaces:**
+```c
+#define VOICE_WAVS_RATE 24000
+typedef enum { VWS_HEADER = 0, VWS_DATA, VWS_ERROR } VoiceWavState;
+typedef enum { VWS_RAW_NONE = 0, VWS_RAW_F32_MONO } VoiceWavRaw;   /* R25: Mistral pcm */
+typedef struct { /* builder's: header buffer (<= 4096), format, channels, partial-frame carry,
+                    a 12-byte window for the second-header check, frames out */ } VoiceWavStream;
+void   voice_wavs_init(VoiceWavStream *w, VoiceWavRaw raw);   /* VWS_RAW_NONE: expect a WAV header */
+size_t voice_wavs_feed(VoiceWavStream *w, const unsigned char *in, size_t n,
+                       int16_t *out, size_t cap);              /* 24 kHz mono PCM16; returns samples */
+size_t voice_wavs_out_max(size_t n_in);                        /* n_in / 2 */
+VoiceWavState voice_wavs_state(const VoiceWavStream *w);
+int    voice_wavs_finish_ok(const VoiceWavStream *w);          /* 1: in VWS_DATA, no partial frame, frames > 0 */
+uint64_t voice_wavs_frames(const VoiceWavStream *w);
+const char *voice_wavs_error(const VoiceWavStream *w);         /* "", or a reason, never content */
+int    voice_wavs_error_is_format(const VoiceWavStream *w);    /* 1 for "unsupported audio format" */
+void   voice_wavs_wipe(VoiceWavStream *w);
+```
+- **The header:**
+  - `RIFF`, any size, then `WAVE`. Chunks before `data` are walked by size: `fmt ` is read,
+    and the rest (`LIST`, `fact`) are skipped. The `data` size is ignored (R25).
+  - Accepted: tag 1 with 16 bits, or tag 3 with 32 bits; 1 or 2 channels; rate exactly
+    24,000. No tag 0xFFFE unless the capture shows it (R26).
+  - Anything else is `VWS_ERROR`:
+    - `unsupported audio format` (`error_is_format` 1);
+    - `not a WAV stream`, `WAV header too long` or `second WAV header` (each 0).
+- **Data:**
+  - Frames split across feeds are carried.
+  - Stereo is averaged. Float is clamped to [-1, 1] and scaled by 32,767 with rounding.
+  - The 12-byte pattern `RIFF????WAVE` appearing in the data is the error `second WAV header`
+    (R32).
+  - `VWS_RAW_F32_MONO` starts in `VWS_DATA` as float32 24 kHz mono.
+
+- [ ] **Step 1: Write the failing tests**
+  - Decoding:
+    - `test_vwav_mono16`: a header plus a ramp gives the ramp exactly.
+    - `test_vwav_split_everywhere`: every split point from 1 to the length, and 1-byte feeds,
+      give identical output, for mono16 and for stereo float.
+    - `test_vwav_placeholder_sizes`: sizes of `0xFFFFFFFF` and 0 read to the end; `LIST`
+      before `data` is skipped.
+    - `test_vwav_float32`: -1.5, -1, 0, 0.5 and 1 give -32767, -32767, 0, 16384 and 32767.
+    - `test_vwav_stereo_average`: L 1000 and R 3000 give 2000.
+    - `test_vwav_raw_f32`: raw mode decodes the same values with no header.
+  - Errors:
+    - `test_vwav_rejects_unsupported`: 22,050 Hz, 48,000 Hz, 8-bit, 24-bit, 3 channels and tag
+      0xFFFE each give `VWS_ERROR` with `error_is_format` 1 and no output.
+    - `test_vwav_not_wav`: `OggS`, `ID3` and garbage give `not a WAV stream`.
+    - `test_vwav_second_header_fails`: a second complete WAV appended after 100 frames gives
+      `second WAV header`.
+    - `test_vwav_finish_states`: `finish_ok` is 0 in `VWS_HEADER` (a body cut in its header),
+      with a partial frame, and with 0 frames; 1 after real frames.
+- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** No Win32, no I/O, no logging, no heap in the
+  sample path. `fuzz_wavstream` feeds its input in pieces of a size taken from its first byte.
+  **Step 4: Run** `make -j test` and `make fuzz-run`. PASS.
+- [ ] **Step 5: Commit** `feat(voice): a streaming WAV and PCM decoder for AI speech at 24 kHz`.
+
+Suggested implementer: Sonnet. Reviewer: Opus or Fable.
+
+---
+
+### Task 13: The Ending deadline
+
+**Status:** to build. Revision 3: the deadline follows the upload budget; neutral wording; the
+turn's audio is wiped.
+
+**Files:**
+- Modify: `src/core/voice_conv.[ch]`, `src/ui/voice_conv_win.c` (it sets the budget when it
+  submits a turn's upload)
+- Test: `tests/test_voice_conv.c`, `tests/test_voice_conv_win.c`
+
+**Interfaces:**
+- Produces:
+  - `VCN_END_STUCK`, text `Conversation ended: the last turn took too long`;
+  - `unsigned long ending_max` in `VoiceConv`, set to `VOICE_CONV_ENDING_MAX_MS` on every
+    entry to ENDING;
+  - `void voice_conv_set_ending_budget(VoiceConv *c, unsigned long upload_ms)`, which sets
+    `ending_max = max(VOICE_CONV_ENDING_MAX_MS, upload_ms + 10000)`.
+- The glue calls the setter (through a new glue function, or inside `submit_batch`) after
+  every batch submit, including the live fallback. `upload_ms` is twice `send_ms + recv_ms`
+  from `voice_stt_upload_timeouts(wav_len)`.
+- `VCE_TICK` in ENDING: at `now - state_at >= ending_max`, `go_idle(c, VCN_END_STUCK, 0)`.
+  This releases the link and the upload, carries no `VCA_DROP_TURN`, and the glue's
+  end-of-conversation reset wipes the turn's audio. `voice_conv_next_deadline` uses
+  `ending_max`.
+
+- [ ] **Step 1: Write the failing tests**
+  - Core:
+    - `test_vconv_ending_deadline_default`: a batch turn with no result ends at 180 s with
+      `VCN_END_STUCK` and `VCA_CANCEL_BATCH`, no `VCA_DROP_TURN`, and the action-applied test
+      ledger at zero.
+    - `test_vconv_ending_deadline_budget`: a budget of 324,000 ms gives no end at 180 s and an
+      end at 334 s.
+    - `test_vconv_ending_deadline_live`: a live turn whose final and fallback never come ends
+      the same way.
+    - `test_vconv_ending_note_text`: the exact text.
+  - Glue:
+    - `test_vconv_win_ending_wipes_audio_keeps_words`: a turn's audio is held (a test seam
+      counts the bytes kept), then the deadline passes. The kept bytes are 0, `drop_words` was
+      not called, and the note was written.
+  - The built `test_vconv_ending_watchdog_keeps_silence_clock` is replaced by these; the commit
+    says so.
+- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** **Step 4: Run** `make -j test` and
+  `xvfb-run -a make wintest`. PASS.
+- [ ] **Step 5: Commit** `fix(voice): a turn's Ending deadline follows its upload and says why it ended`.
 
 Suggested implementer: Sonnet. Reviewer: Opus or Fable.
 
@@ -582,7 +665,7 @@ Suggested implementer: Sonnet. Reviewer: Opus or Fable.
 
 ### Task 3: The play queue
 
-**Status: built and reviewed** (`932bb02`). Unchanged by the 2026-11-25 provider revision; R31 (Task 7) adds position accumulation across blocks.
+**Status: built and reviewed** (`932bb02`). Unchanged by the provider revisions of 2026-11-25; R31 (Task 7a) adds position accumulation across blocks.
 
 **Files:**
 - Create: `src/core/voice_playq.h`, `src/core/voice_playq.c`
@@ -636,7 +719,7 @@ Suggested implementer: Sonnet. Haiku would also do, since the interface fixes it
 
 ### Task 4: The conversation machine: external send, speech progress, the silence clock, the echo tick wrap
 
-**Status: built and reviewed** (`13db061`). Unchanged by the 2026-11-25 provider revision; Task 13 replaces `test_vconv_ending_watchdog_keeps_silence_clock` with the stronger Ending rule (R29).
+**Status: built and reviewed** (`13db061`). Unchanged by the provider revisions of 2026-11-25; Task 13 replaces `test_vconv_ending_watchdog_keeps_silence_clock` with the deadline rule (R29).
 
 **Files:**
 - Modify: `src/core/voice_conv.[ch]`, `src/core/voice_echo.c`
@@ -711,57 +794,55 @@ Suggested implementer: Sonnet.
 
 ### Task 5: Streaming POST on a voice session, never redirected
 
-**Status:** to build. Revised 2026-11-25: the loopback server speaks WAV and Mistral's events.
+**Status:** to build. Revision 3: the loopback server serves 24 kHz audio only; the cancel test
+skips visibly (R42).
 
 **Files:**
 - Modify: `src/core/ai_http.h` (CRLF), `src/ui/ai_http_win.c` (CRLF; the non-Windows stub too),
-  `src/ui/voice_net_win.h` (the `VNK_TTS` comment: now used),
-  `build-support/delayload/winhttp.def` (the header comment names AI speech; no new entry)
-- Create: `tests/http_loopback_win.h`, `tests/http_loopback_win.c` (a test helper, listed in
+  `src/ui/voice_net_win.h` (`VNK_TTS` is now used), `build-support/delayload/winhttp.def` (the
+  comment names AI speech; no new entry)
+- Create: `tests/http_loopback_win.h`, `tests/http_loopback_win.c` (a helper in
   `WIN_TEST_SRCS`)
-- Test: `tests/test_voice_net_win.c` (extend)
+- Test: `tests/test_voice_net_win.c`
 
 **Interfaces:**
-- Produces:
 ```c
-/* ai_http_post_stream on a session the caller owns (as ai_http_post_ct_ex): never opens or
- * closes it; connect 10 s, send 30 s, receive recv_ms; the request never follows a redirect
- * (WINHTTP_OPTION_REDIRECT_POLICY = NEVER), so a 3xx is returned as the status. NULL session:
- * -1, "No session". Same callback, status, error and cancel contract as ai_http_post_stream. */
 int ai_http_post_stream_ex(void *session, const char *url, const char * const *headers,
                            const char *body, size_t body_len, int recv_ms,
                            AiStreamCallback cb, void *userdata,
                            int *status_out, char *error, size_t error_size, AiNetCancel *nc);
+/* the caller's session (never opened or closed here); connect 10 s, send 30 s, receive recv_ms;
+ * never follows a redirect (WINHTTP_OPTION_REDIRECT_POLICY = NEVER); NULL session: -1 "No session" */
 ```
 - `http_loopback_win.h`:
   - modes:
-    - `HLS_WAV`: 200 and `Transfer-Encoding: chunked`. The body is a WAV with `0xFFFFFFFF`
-      sizes, a `LIST` chunk before `data`, and a parameterised format (rate, channels, 16-bit
-      or float). It is sent in writes of 1, 7 (splitting the header), 4,095 and the rest.
-    - `HLS_SSE`: Mistral-like `text/event-stream`: `event: speech.audio.delta` and
-      `data: {"type":"speech.audio.delta","audio_data":"<base64 of a WAV piece>"}` lines,
-      three deltas, then `event: speech.audio.done` and `data: {"type":"speech.audio.done"}`.
-    - `HLS_SSE_ERROR`: one delta, then `data: {"error":{"message":"x"}}`.
-    - `HLS_401`: a JSON error body.
-    - `HLS_HANG`: reads the request and never answers.
-    - `HLS_302`: a redirect to itself, counting requests.
-  - `hl_start(mode, const HlAudio *a)` with `HlAudio { int rate, channels, float32;
-    double seconds; }`, plus `hl_port`, `hl_stop` (joins every thread), `hl_request_head`,
-    `hl_request_body` and `hl_requests`.
-  - The generated samples are a known ramp, so a test can check them.
-- Refactor `ai_http_post_stream_impl` to take the session, as `ai_http_post_ct_ex`'s impl does.
-  `ai_http_post_stream` keeps its own session and its behaviour.
+    - `HLS_WAV`: chunked, a WAV with `0xFFFFFFFF` sizes and a `LIST` before `data`, sent in
+      writes of 1, 7, 4,095 and the rest;
+    - `HLS_WAV_BADRATE`: the same at 22,050 Hz;
+    - `HLS_WAV_TWICE`: two WAVs back to back;
+    - `HLS_EMPTY`: 200 with an empty body;
+    - `HLS_SSE`: the provisional Mistral fixture, or any file named by `HlAudio.sse_file`;
+    - `HLS_SSE_ERROR`;
+    - `HLS_SSE_DONE_ONLY`;
+    - `HLS_401`, `HLS_404`, `HLS_422` and `HLS_429`;
+    - `HLS_HANG`;
+    - `HLS_302`.
+  - `hl_start(mode, const HlAudio *a)` with `HlAudio { int channels, float32; double seconds;
+    const char *sse_file; }`, plus `hl_port`, `hl_stop`, `hl_request_head`, `hl_request_body`
+    and `hl_requests`.
+- Refactor `ai_http_post_stream_impl` to take the session; `ai_http_post_stream` keeps its own.
 
 - [ ] **Step 1: Write the failing wintests**
-  - `test_ai_stream_ex_wav_bytes`: through `voice_net_open(VNK_TTS)`, an `HLS_WAV` body arrives
-    whole and in order across callbacks, with status 200. `voice_net_open_count()` went up by
-    exactly 1.
-  - `test_ai_stream_ex_sse`: the `HLS_SSE` text arrives whole, byte for byte.
-  - `test_ai_stream_ex_401`: status 401, rc -1, and the error holds the JSON body.
-  - `test_ai_stream_ex_no_redirect`: `HLS_302` gives status 302 and exactly 1 request.
-  - `test_ai_stream_ex_cancel_hang`: `ai_nc_fire` from another thread returns within 2 s, or a
-    defined Wine SKIP as `test_ai_nc_fire_wakes_blocked_winhttp_call` does.
-  - `test_ai_stream_ex_null_session`: rc -1 and "No session".
+  - `test_ai_stream_ex_wav_bytes`: the body arrives whole and in order across callbacks, with
+    status 200; `voice_net_open_count()` went up by exactly 1.
+  - `test_ai_stream_ex_sse`: the SSE file arrives byte for byte.
+  - `test_ai_stream_ex_statuses`: 401, 404, 422 and 429 each give their status, rc -1 and the
+    body in the error.
+  - `test_ai_stream_ex_no_redirect`: 302 and exactly 1 request.
+  - `test_ai_stream_ex_cancel_hang`: `ai_nc_fire` returns within 2 s. Under Wine, if it does
+    not, `TEST_SKIP("Wine does not abort a synchronous WinHTTP call")`; on Windows it must
+    pass.
+  - `test_ai_stream_ex_null_session`.
 - [ ] **Step 2: Run** `xvfb-run -a make wintest`. FAIL. **Step 3: Implement.**
   **Step 4: Run** `xvfb-run -a make wintest`, `make -j test` and `make -j release`. PASS.
 - [ ] **Step 5: Commit** `feat(voice): streaming POST on a voice session, never redirected`.
@@ -772,7 +853,7 @@ Suggested implementer: Sonnet. Reviewer: Opus or Fable.
 
 ### Task 6: The render client on the audio thread
 
-**Status: built** (`5b47a28`), fix round in progress (`31f9a20` and after). Unchanged by the 2026-11-25 provider revision: every stream reaches it as 24 kHz mono PCM16 (R26), so no follow-up task is needed.
+**Status: built, through its fix round** (HEAD `31f9a20`). Unchanged by the provider revisions of 2026-11-25: every stream reaches it as 24 kHz mono PCM16 (R26), so no follow-up task is needed.
 
 **Files:**
 - Modify: `src/ui/voice_audio_win.[ch]`
@@ -859,39 +940,37 @@ Suggested implementer: Sonnet.
 
 ---
 
-### Task 7: The AI speech engine
+### Task 7a: The AI speech engine: contexts, render, ledger, the done guard and the dead flag
 
-**Status:** to build. Revised 2026-11-25: two response shapes through the WAV decoder, and the
-build's lessons on the render client and play queue (R30, R31).
+**Status:** to build (Task 7 split, R41). It runs on a fake fetch; Task 7b adds the real one.
 
 **Files:**
 - Create: `src/ui/voice_aispeech_win.h`, `src/ui/voice_aispeech_win.c`,
   `tests/test_voice_aispeech_win.c`
 - Modify:
   - `src/core/voice_playq.c` and `tests/test_voice_playq.c` (R31 only);
-  - `Makefile` (CRLF: `WIN_ONLY_TESTS`, and `WIN_TEST_SRCS` with `http_loopback_win.c`);
+  - `Makefile` (CRLF: `WIN_ONLY_TESTS`, `WIN_TEST_SRCS`);
   - `tests/win_runner.c`.
 
 **Interfaces:**
-- Consumes:
-  - Task 2: `VoiceAisTarget`, `voice_ais_body`, `voice_ais_sse_*`, `voice_ais_offset` and
-    `voice_speak_chunks_lim`;
-  - Task 12: `VoiceWavStream`;
-  - Task 5: `ai_http_post_stream_ex`;
-  - Task 6: the render API as built;
-  - `sse_line`, `voice_net_open(VNK_TTS)` and `VoiceTtsMsg`/`WM_VOICE_TTS`.
+- Consumes: Task 2 (`VoiceAisTarget`, `voice_ais_offset`, `VOICE_AIS_HR_*`), Task 6's render
+  API as built, `voice_speak_chunks`, and `VoiceTtsMsg`/`WM_VOICE_TTS`.
 - Produces:
 ```c
 #define WM_VOICE_AIS (WM_APP + 0x49)      /* lParam = VoiceAisMsg*, receiver frees */
 typedef enum { VAI_CHUNK_DONE = 1, VAI_FAILED, VAI_EXITED } VoiceAisKind;
 typedef struct { unsigned token, reply_id, chunk; VoiceAisKind kind;
-                 uint64_t frames; int http_status; } VoiceAisMsg;
+                 uint64_t frames; long hr; } VoiceAisMsg;
 #define VOICE_AIS_SAMPLE_TOKEN 0x7FFFFFF2u
-int  voice_ais_start(HWND notify, unsigned token);   /* the one constructor: 0 unless voice_gate_on()
-                                                        and the audio thread is up; no thread, no
-                                                        render yet */
+#define VOICE_AIS_TIMER_BASE   0x56F4      /* + slot 0 or 1; check that both ids are free */
+/* One chunk's fetch, run on the worker thread: push decoded 24 kHz mono PCM16 through push()
+ * (0 = stop: dead or cancelled), return 0 ok or a VOICE_AIS_HR_* / HTTP status. */
+typedef int  (*VoiceAisPush)(void *job, const int16_t *s, size_t n);
+typedef long (*VoiceAisFetch)(void *job, const VoiceAisTarget *t, const char *key,
+                              const char *text, size_t len, VoiceAisPush push);
+int  voice_ais_start(HWND notify, unsigned token);   /* the one constructor; 0 unless voice_gate_on() and audio up */
 void voice_ais_speak(unsigned token, unsigned reply_id, const char *utf8, size_t from,
-                     const VoiceAisTarget *t, const char *key);   /* copies text, target, key */
+                     const VoiceAisTarget *t, const char *key);
 void voice_ais_stop(unsigned token);
 void voice_ais_volume(unsigned token, int percent);
 void voice_ais_quit(unsigned token, unsigned wait_ms);
@@ -899,277 +978,329 @@ void voice_ais_quit_all(unsigned wait_ms);
 int  voice_ais_sample(HWND notify, const VoiceAisTarget *t, const char *key);
 int  voice_ais_running(void);
 int  voice_ais_owns(unsigned token);
-void voice_ais_on_audio(UINT kind, LPARAM lp);   /* VAM_RENDER_* / VAM_PLAYED / VAM_PLAY_DONE; frees */
-void voice_ais_on_msg(VoiceAisMsg *m);           /* WM_VOICE_AIS; frees */
-void voice_ais_on_timer(UINT_PTR id);            /* the done guard (R30) */
-#define VOICE_AIS_TIMER_BASE 0x56F4              /* + context slot (0 or 1); check it is free */
+void voice_ais_on_audio(UINT kind, LPARAM lp);
+void voice_ais_on_msg(VoiceAisMsg *m);
+void voice_ais_on_timer(UINT_PTR id);
+void voice_ais_set_fetch(VoiceAisFetch f);   /* 7b installs the real one; tests install fakes; NULL = none (every speak fails NET) */
 ```
-- **Contexts.** At most two, the conversation's and the sample's, keyed by token.
-  - Each context pushes `render_open` once, on its first speak. `VRES_RENDER` is acquired only
-    then: a same-token `render_open` closes and reopens silently, so it is never pushed twice.
-  - Right after `render_open`, the context sends its current gain when it is not 100: every open
-    starts at 100 %, and the gain belongs to the current owner.
-  - `quit` fires cancel, flushes, does a bounded join (detaching and releasing after `wait_ms`),
-    pushes `render_close` and releases `VRES_RENDER`.
-- **`speak`:**
-  - fire the old worker's cancel and `render_flush(token, reply_id)` first, so two replies are
-    never queued back to back;
-  - chunk `utf8[from..]` with `voice_speak_chunks_lim(t->first_chunk, t->later_chunk)` and keep
-    each chunk's `(start, len)`;
-  - start one worker (`VRES_SPEECH_REQ`).
-- **The worker** (R8), for each chunk:
-  - wait until `voice_audio_render_queued_ms() < 20000` (50 ms slices, cancel-aware);
-  - `voice_net_open(VNK_TTS)`; build the body; send the header `Authorization: Bearer <key>`
-    only when the key is not empty, plus `Accept: text/event-stream` for the Mistral shape;
-  - call `ai_http_post_stream_ex` with `recv_ms` 60,000.
-  - Callback by shape:
-    - OPENAI: bytes go straight to `voice_wavs_feed`.
-    - MISTRAL: bytes go to `sse_line_feed`, then `voice_ais_sse_line`, and each AUDIO event's
-      bytes go to `voice_wavs_feed`. DONE ends the chunk; ERROR fails it.
-  - Each feed's output goes to `render_data(token, reply, k, samples, n)`. If that push fails,
-    the worker frees the samples (a glitch, not a failure).
-  - Chunk end: `voice_wavs_finish`, push the tail, then `VAI_CHUNK_DONE(k, frames)`.
-  - Any failure (status not 200, transport, gate off, `VWS_ERROR`, a Mistral ERROR, or a
-    Mistral body that ends with no DONE) gives `render_end`, then `VAI_FAILED(k, status)`, and
-    stops. The decoder's error text goes to the debug log, with no content.
-  - At the end: `render_end` and `VAI_EXITED`. Wipe the key, the body and the text, and close
-    the session.
+- **Contexts.** At most two, the conversation's and the sample's.
+- **Render (R35).**
+  - Every `speak` first calls `render_flush(token, reply_id)` and fires the old worker's
+    cancel.
+  - If the context does not hold the render client, `speak` pushes `render_open`, acquires
+    `VRES_RENDER`, and sends the gain if it is not 100.
+  - `VAE_RENDER_PREEMPTED` or a render error clears the holding flag and releases
+    `VRES_RENDER`. While playing, it is also a passing `VTT_ERROR(VOICE_AIS_HR_DEVICE)` at the
+    current offset. While not playing, nothing is posted.
+- **The worker:**
+  - one thread per speak (`VRES_SPEECH_REQ`);
+  - chunks from `voice_speak_chunks`;
+  - before each chunk's fetch it waits below 20 s queued (50 ms slices against cancel and the
+    dead flag);
+  - `push` takes the engine's lock, checks the dead flag (R36), counts the frames pushed for
+    the reply and chunk, and calls `render_data`;
+  - a fetch returning 0 with 0 frames for the chunk becomes `VOICE_AIS_HR_STREAM` (R32);
+  - on failure it pushes `render_end` and posts `VAI_FAILED(k, hr)`;
+  - at the end it pushes `render_end` and posts `VAI_EXITED`;
+  - it wipes its copies.
 - **The UI side:**
-  - `VAM_PLAYED` gives `VTT_WORD(offset)` through `voice_ais_offset` on the current reply's
-    chunk table (`total` from `VAI_CHUNK_DONE`).
-  - `VAM_PLAY_DONE` for the current reply gives `VTT_DONE` if every chunk completed, else
-    `VTT_ERROR` with the mapped resume offset and `hr` = the status (or -1). A `VAM_PLAY_DONE`
-    for an older id is ignored.
-  - `VAM_RENDER_ERROR` while playing gives `VTT_ERROR` at the current offset.
-  - A target with an empty `url` (the resolve failed) gives an immediate `VTT_ERROR` at `from`.
-  - `VAI_EXITED` joins the worker (non-blocking) and releases `VRES_SPEECH_REQ`. If every chunk
-    completed and no `VAM_PLAY_DONE` has come, it arms the done guard (R30): a one-shot timer
-    of `voice_audio_render_queued_ms() + 2000` that posts `VTT_DONE` unless `VAM_PLAY_DONE`
-    came first.
-  - Every message is checked against the current reply id. The sample context quits itself at
-    its `VTT_DONE` or `VTT_ERROR`.
-- **R31, in `voice_playq.c`:** the position's `frames_in_chunk` accumulates across consecutive
-  blocks with the same `reply_id` and `chunk`, and restarts at 0 when either changes.
+  - `VAM_PLAYED` gives `VTT_WORD(offset)` (R9), and re-arms the done guard while the worker
+    has finished (R30).
+  - `VAM_PLAY_DONE` for the current id gives `VTT_DONE` when every chunk completed, else
+    `VTT_ERROR(hr)` at the mapped offset. An older id is ignored.
+  - The done guard posts the same result after 2,000 ms with no `VAM_PLAYED` progress.
+  - An empty `t->url` gives `VTT_ERROR(VOICE_AIS_HR_RESOLVE)` at `from` at once.
+  - `VAI_EXITED` joins the thread and releases `VRES_SPEECH_REQ`.
+  - The sample quits itself at its end.
+- **Quit (R36):** set the dead flag under the lock and fire cancel; join within `wait_ms`;
+  on timeout, detach with the ledger count kept until `VAI_EXITED`. Then `render_close` and
+  release `VRES_RENDER`. `voice_ais_quit_all` does this for every context, and the callers in
+  Task 8a call it before `voice_audio_stop`.
+- **R31 in `voice_playq.c`:** `frames_in_chunk` accumulates across consecutive blocks with the
+  same reply and chunk.
 
-- [ ] **Step 1: Write the failing tests**
-  - Native (R31): `test_vplayq_pos_accumulates_across_blocks`: three blocks of 100 frames, all
-    reply 1 chunk 0, then a block for chunk 1. Reading 250 frames gives `frames_in_chunk` 250;
-    reading 100 more gives chunk 1 frame 50.
-  - Wintests: the null render sink, `http_loopback`, a message-only window that pumps
-    `WM_VOICE_TTS`, `WM_VOICE_AIS`, `WM_VOICE_AUDIO` and `WM_TIMER` into the module, and the
-    ledger reset per test.
-    - `test_voice_ais_gate_off`: `start` gives 0, no thread, ledger 0.
-    - `test_voice_ais_speak_done`: `HLS_WAV` (24 kHz mono 16-bit, 0.25 s) and `One. Two.`
-      through a Custom target with model `kokoro` and voice `bf_emma`:
-      - the head has `Authorization: Bearer test-key`, and the body has `"input":"One. Two."`
-        and `"response_format":"wav"`;
-      - `voice_net_open_count()` went up by 1;
-      - `voice_audio_test_render_frames(reply)` is 6,000 ± 1;
-      - the `VTT_WORD` offsets do not decrease and stay within [0, 9];
-      - exactly one `VTT_DONE`;
-      - after `quit`, the ledger is zero.
-    - `test_voice_ais_mistral_sse`: `HLS_SSE` (24 kHz float32) through a Mistral-shaped target
-      pointed at the loopback URL gives exactly one `VTT_DONE`, with the frames written equal to
-      the decoded duration ± 1. The body has `voice_id` and `"stream":true`.
-    - `test_voice_ais_sse_error_event`: `HLS_SSE_ERROR` gives `VTT_ERROR`, and no `VTT_DONE`.
-    - `test_voice_ais_resampled_rate`: `HLS_WAV` at 22,050 Hz stereo for 0.5 s gives 12,000 ± 2
-      frames written.
-    - `test_voice_ais_groq_chunks`: a 600-byte text through a target with 200/200 limits makes
-      at least three requests (counted by the server), each body's `input` 200 bytes or less,
-      and one `VTT_DONE`.
-    - `test_voice_ais_http_401`: `VTT_ERROR` with offset 0 and `hr` 401, and no `VTT_DONE`.
-    - `test_voice_ais_stop_then_speak_no_old_audio`: speak reply 1 (a 3 s body), stop after its
-      first `VAM_PLAYED`, then speak reply 2. `voice_audio_test_render_frames(1)` does not grow
-      after the stop.
-    - `test_voice_ais_gain_survives_open`: volume 18 before the first speak; the null sink's
+- [ ] **Step 1: Write the failing tests** (a fake fetch that pushes a set number of frames per
+  chunk, optionally slowly or failing; the null render sink; a message pump; the ledger reset
+  per test):
+  - Native: `test_vplayq_pos_accumulates_across_blocks`.
+  - Wintests:
+    - `test_voice_ais_gate_off`: with the gate off, `start` gives 0, no thread starts, and the
+      ledger is 0.
+    - `test_voice_ais_fake_done`: two chunks give `VTT_WORD` offsets that do not decrease, at
+      least one of them at or past the offset of `Two` in `One. Two.` (R42), and one
+      `VTT_DONE`. The ledger is zero after `quit`.
+    - `test_voice_ais_empty_chunk_fails`: a chunk with 0 frames gives
+      `VTT_ERROR(VOICE_AIS_HR_STREAM)`.
+    - `test_voice_ais_stop_then_speak_no_old_audio`: speak reply 1 (3 s of fake audio), stop
+      after its first `VAM_PLAYED`, then speak reply 2. `voice_audio_test_render_frames(1)`
+      does not grow after the stop.
+    - `test_voice_ais_gain_survives_open`: volume 18 before the first speak. The null sink's
       peak is 18 % ± 1 of the input's.
-    - `test_voice_ais_render_ledger_once`: two speaks and a quit: `VRES_RENDER` was 1 between
-      them and is 0 after.
-    - `test_voice_ais_done_guard`: drop the `render_end` with `voice_audio_test_fail_push`. The
-      reply still gets `VTT_DONE` within the queued audio plus 2.5 s.
-    - `test_voice_ais_quit_while_server_hangs`: `HLS_HANG`, then speak and `quit(token, 3000)`
-      return within 4 s, with the ledger zero.
-    - `test_voice_ais_sample_self_quits`: `voice_ais_sample` then DONE leave
-      `voice_ais_running()` at 0 and the ledger at 0.
+    - `test_voice_ais_reopen_after_preempt`: open B pre-empts A while A is silent. Nothing is
+      posted for A and `VRES_RENDER` is released. A's next speak reopens, re-sends the gain and
+      plays.
+    - `test_voice_ais_preempt_while_playing`: gives `VTT_ERROR(VOICE_AIS_HR_DEVICE)`.
+    - `test_voice_ais_done_guard_waits_for_progress`: `render_end` is dropped
+      (`voice_audio_test_fail_push`). With audio still playing, no `VTT_DONE` comes before it
+      ends. `VTT_DONE` comes 2 s after the last progress.
+    - `test_voice_ais_dead_worker_never_pushes`: a fetch that blocks, then `quit(token, 50)`
+      detaches it. Once released, the fetch's further pushes return 0;
+      `voice_audio_test_render_frames(reply)` does not grow; `VRES_SPEECH_REQ` stays 1 until
+      `VAI_EXITED`, then 0.
+    - `test_voice_ais_resolve_error_at_once`: an empty `t->url` gives
+      `VTT_ERROR(VOICE_AIS_HR_RESOLVE)` at `from`, with no thread and no render opened.
+    - `test_voice_ais_sample_self_quits`: a sample's DONE leaves `voice_ais_running()` at 0
+      and the ledger at 0.
 - [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** **Step 4: Run**
   `xvfb-run -a make wintest`, `make -j test` and `make -j release`. PASS.
-- [ ] **Step 5: Commit** `feat(voice): AI speech engine streaming WAV through the render client`.
+- [ ] **Step 5: Commit** `feat(voice): AI speech contexts, render handling and the done guard`.
 
 Suggested implementer: Sonnet. Reviewer: Opus.
 
 ---
 
-### Task 8: The conversation glue: engine choice, fallback, progress, external send, routing
+### Task 7b: The AI speech engine: the network fetch for Mistral and Custom
 
-**Status:** to build. Revised 2026-11-25: the build's three glue lessons, and the router for the
-new provider set.
+**Status:** to build (Task 7 split, R41). Its Mistral half is finalised against Task 0's
+capture (R33).
+
+**Files:**
+- Modify: `src/ui/voice_aispeech_win.c` (the real fetch, installed at `voice_ais_start` when
+  none is set), `tests/test_voice_aispeech_win.c`
+
+**Interfaces:**
+- Consumes: Task 2 (`voice_ais_body`, `voice_ais_sse_*`, `base64_decode`), Task 12
+  (`VoiceWavStream`), Task 5 (`ai_http_post_stream_ex`, `http_loopback`), `sse_line`, and
+  `voice_net_open(VNK_TTS)`.
+- **The real fetch.** For one chunk:
+  - `voice_net_open(VNK_TTS)` and the body;
+  - headers: `Authorization: Bearer <key>` only when the key is not empty, and
+    `Accept: text/event-stream` for Mistral;
+  - `ai_http_post_stream_ex` with `recv_ms` 60,000.
+  - By shape:
+    - Custom (OPENAI): the bytes go to `voice_wavs_feed(VWS_RAW_NONE)`.
+    - Mistral: `sse_line_feed`, then `voice_ais_sse_line`, then AUDIO bytes into the decoder
+      (R25 chooses the raw mode only if Task 0 shows per-delta headers). DONE ends the chunk;
+      ERROR fails it.
+  - Decoded samples go through `push`.
+  - At the end of the chunk, the failures of R32 are checked, each a distinct test below:
+    - `voice_wavs_finish_ok` must hold;
+    - `sse_line_skipped(...)` must be 0;
+    - a Mistral body that ended with no DONE is a failure.
+  - Results:
+    - a decoder format error gives `VOICE_AIS_HR_FORMAT`;
+    - other stream failures give `VOICE_AIS_HR_STREAM`;
+    - a non-200 status gives that status;
+    - a transport failure gives `VOICE_AIS_HR_NET`.
+  - The session is closed, and the key, body and buffers are wiped.
+
+- [ ] **Step 1: Write the failing wintests** against `http_loopback`:
+  - `test_voice_ais_custom_wav_done`: `HLS_WAV` mono 16-bit 0.25 s and `One. Two.`:
+    - the head carries the key, and the body has `"input":"One. Two."` and
+      `"response_format":"wav"`;
+    - the open count went up by 1;
+    - 6,000 ± 1 frames were written;
+    - one `VTT_DONE` arrived.
+  - `test_voice_ais_custom_no_key`: an empty key sends no `Authorization` header.
+  - `test_voice_ais_mistral_sse`: the provisional fixture gives one `VTT_DONE`, with frames
+    matching its duration, and a body with `voice_id` and `"stream":true`.
+  - `test_voice_ais_mistral_capture`: the same against `mistral_stream_wav.sse` (or `_pcm`,
+    as R25 chose). It is a `TEST_SKIP` until Task 0's file exists.
+  - `test_voice_ais_sse_error_event` and `test_voice_ais_sse_done_only`: each gives
+    `VTT_ERROR`.
+  - `test_voice_ais_badrate_is_format`: `HLS_WAV_BADRATE` gives
+    `VTT_ERROR(VOICE_AIS_HR_FORMAT)`.
+  - `test_voice_ais_second_header_fails`: `HLS_WAV_TWICE` gives `VOICE_AIS_HR_STREAM`.
+  - `test_voice_ais_empty_body_fails`: `HLS_EMPTY` gives `VOICE_AIS_HR_STREAM`.
+  - `test_voice_ais_oversized_line_fails`: an SSE line over `SSE_LINE_MAX` gives
+    `VOICE_AIS_HR_STREAM`.
+  - `test_voice_ais_http_401` and `test_voice_ais_http_429`: each gives `VTT_ERROR` with that
+    status, and no `VTT_DONE`.
+  - `test_voice_ais_quit_while_server_hangs`: `HLS_HANG`; the quit returns within 4 s and the
+    ledger is zero once the thread has ended.
+- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** **Step 4: Run**
+  `xvfb-run -a make wintest`, `make -j test`, `make -j release` and `make fuzz-run`. PASS, with
+  only the capture tests skipped.
+- [ ] **Step 5: Commit** `feat(voice): AI speech requests to Mistral and OpenAI-compatible servers`.
+
+Suggested implementer: Sonnet. Reviewer: Opus.
+
+---
+
+### Task 8b: The conversation glue: the PR 2 follow-ups
+
+**Status:** to build (Task 8 split, R41). It is independent of AI speech, so it comes before 8a.
+
+**Files:**
+- Modify: `src/ui/voice_conv_win.[ch]`, `src/ui/voice_win.[ch]` (`voice_on_external_send`),
+  `src/ui/ai_chat.c` (the Retry handler's two exits, and any other user launch the grep finds,
+  R23)
+- Test: `tests/test_voice_conv_win.c`
+
+**Interfaces:**
+- `void voice_conv_external_send(void)`. It takes the reply baseline (`g_since =
+  msg_count()`, `g_sent_tick`, `g_busy_seen = !chat_idle()`) in every non-idle state except
+  ENDING-while-sending, then feeds `VCE_EXTERNAL_SEND`.
+- TEST-ONLY seams `voice_conv_test_queue(VoiceConvEvent, int, int)` and
+  `voice_conv_test_pump(void)`.
+- Rules:
+  - The `VCA_DROP_TURN` that comes with an external send discards the turn's audio and link,
+    never its words (a flag around that one event).
+  - `stop_speech()` sets the volume back to 100 when it stops a ducked context.
+  - `speak_reply` zeroes `g_reply_at` and `g_spoken_end_at` before speaking a new reply.
+  - Every `VTT_WORD` for the current id feeds `VCE_SPEECH_PROGRESS`, at most once a second.
+  - `g_notice_raised` is set when `notice_voice` is called.
+  - A `VCE_END` with the queue full goes to its own slot (the first end wins), run after the
+    queue; other overflow is dropped with a `DLOG` warning.
+
+- [ ] **Step 1: Write the failing wintests**:
+  - External send:
+    - `test_vconv_win_external_send`: in Listening, `cap_end` and WORKING; a reply after the
+      new baseline is spoken.
+    - `test_vconv_win_external_send_keeps_words`: while Hearing with live words in the box, no
+      `drop_words` call, and the link is closed.
+    - `test_vconv_win_external_send_unducks`: Speaking, `VCE_DUCK` (volume 18), then an
+      external send gives `tts_volume(token, 100)`.
+  - The reply's times:
+    - `test_vconv_win_new_reply_resets_times`: a reply ended, a new one loading 6 minutes later,
+      and "carry on" during it is classified against the new reply's times only.
+  - Progress:
+    - `test_vconv_win_progress_keeps_long_reply`: `VTT_WORD` every 30 s with
+      `voice_conv_test_advance` for 11 minutes keeps Speaking.
+  - The notice:
+    - `test_vconv_win_notice_kept_if_ended_first`: the notice is posted, the conversation ends
+      before `voice_conv_on_notice`, and the next conversation's first reply raises it.
+  - The pending end:
+    - `test_vconv_win_end_never_dropped`: 30 `voice_conv_test_queue(VCE_TICK, ...)` calls, then
+      `VCE_END(VCX_OFF)`, then `voice_conv_test_pump()`: IDLE, with the ledger zero.
+- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** List the grep's launch sites in the commit
+  body. **Step 4: Run** `make -j test`, `xvfb-run -a make wintest` and `make -j release`.
+  PASS.
+- [ ] **Step 5: Commit** `fix(voice): Retry, long replies, the end event and the notice in conversations`.
+
+Suggested implementer: Sonnet. Reviewer: Opus or Fable.
+
+---
+
+### Task 8a: The conversation glue: the speech router, engine choice, fallback and the once-per-conversation note
+
+**Status:** to build (Task 8 split, R41).
 
 **Files:**
 - Modify:
-  - `src/ui/voice_conv_win.[ch]` (the ops change of R20, the fallback, progress, external send,
-    the notice fixes, the pending end, and the three lessons below);
-  - `src/ui/voice_win.[ch]`:
-    - the real ops router;
-    - `rc_notice_due` returns 0 with AI speech;
-    - `voice_feature_apply`/`voice_feature_shutdown` call `voice_ais_quit_all(3000)` before
-      `voice_audio_stop`;
-    - `voice_on_audio_msg` routes the render messages to `voice_ais_on_audio` before
-      `settings_voice_on_audio`;
-    - new `voice_on_ais(LPARAM)`, `voice_on_ais_timer(UINT_PTR)` and
-      `voice_on_external_send(void)`;
-  - `src/ui/window.c` (route `WM_VOICE_AIS` and the `VOICE_AIS_TIMER_BASE` timers);
-  - `src/ui/ai_chat.c` (the Retry handler's two exits call `voice_on_external_send()`, R23).
-- Test: `tests/test_voice_conv_win.c` (update the fakes for R20, then the new tests)
+  - `src/ui/voice_conv_win.[ch]` (R20's ops, the engine, the fallback, R37);
+  - `src/ui/voice_win.[ch]`: the router; `rc_notice_due` returns 0 with AI speech;
+    `voice_ais_quit_all(3000)` before `voice_audio_stop` in `voice_feature_apply` and
+    `voice_feature_shutdown` (R36); the render messages routed to `voice_ais_on_audio` before
+    `settings_voice_on_audio`; `voice_on_ais(LPARAM)` and `voice_on_ais_timer(UINT_PTR)`;
+  - `src/ui/window.c` (route `WM_VOICE_AIS` and the `VOICE_AIS_TIMER_BASE` timers).
+- Test: `tests/test_voice_conv_win.c` (the fakes gain R20)
 
 **Interfaces:**
-- Consumes: Task 4 (built: `VCE_EXTERNAL_SEND`, `VCE_SPEECH_PROGRESS`, `VCH_AI_FAILED`), Task 7,
-  Task 2 (`voice_ais_resolve`, `voice_ais_key`) and Task 1.
-- Produces:
-  - `VoiceConvOps.tts_start(unsigned token, int engine)`;
+- `VoiceConvOps` changes:
+  - `tts_start(unsigned token, int engine)`;
   - optional `int (*speech_engine)(void)`;
-  - `void voice_conv_external_send(void)`. It takes the reply baseline (`g_since =
-    msg_count()`, `g_sent_tick`, `g_busy_seen = !chat_idle()`) in every non-idle state except
-    ENDING-while-sending, then feeds `VCE_EXTERNAL_SEND`;
-  - TEST-ONLY seams `voice_conv_test_queue(VoiceConvEvent, int, int)` and
-    `voice_conv_test_pump(void)`.
-- Glue rules:
-  - **The engine.** `g_engine_cfg` is read at conversation start. Every `begin_speak` makes sure
-    the context's engine is `g_engine_cfg`, quitting and restarting it if not. An AI start that
-    fails falls back (R10).
-  - **The fallback**, on `VTT_ERROR` for the current id while the context is AI:
-    - show `VCH_AI_FAILED`;
-    - quit the AI context;
-    - start a Windows context;
-    - `begin_speak` a **copy** of `g_spoken` from `m->offset`, with the same reply or phrase
-      kind.
-    - A Windows `VTT_ERROR` then follows today's path.
-  - **Progress.** Every `VTT_WORD` for the current id feeds `VCE_SPEECH_PROGRESS`, at most once
-    every 1,000 ms.
-  - **The notice** (notes item (o)). `g_notice_raised` is set when `notice_voice` is called.
-  - **The pending end** (notes item (r)). A `VCE_END` with the queue full goes to its own slot
-    (the first end wins), and `pump` runs it after the queue. Other overflow is dropped with a
-    `DLOG` warning.
-  - **Lessons from the build:**
-    - The `VCA_DROP_TURN` that comes with `VCE_EXTERNAL_SEND` discards the turn's audio and link
-      but never removes words from the box. The send just made may have used them, and spec
-      §5.6 keeps an unfinished turn's words. A flag set around that one event makes
-      `drop_turn()` skip `drop_words`.
-    - An external send from a ducked reply emits no `VCA_UNDUCK`. `stop_speech()` therefore
-      sets the volume back to 100 whenever it stops a context that is ducked.
-    - When a new reply loads (`speak_reply`), `g_reply_at` and `g_spoken_end_at` are zeroed
-      before it is spoken, so the echo window and phrase age never see the previous reply's
-      times.
-  - **The real router** in `voice_win.c` keeps the engine per token.
-    - `rc_tts_start(token, VOICE_SPEECH_AI)` calls `voice_ais_start(g_main, token)`.
-    - `rc_tts_speak` for an AI token resolves `voice_ais_resolve(s, &t, ...)`. A failure clears
-      `t.url` and logs the error text (no content); the engine then fails at `from`. It then
-      calls `voice_ais_speak(token, id, text, from, &t, voice_ais_key(s, &t))`.
-    - `rc_speech_engine` returns `s->voice_speech_engine` in Conversation mode.
+  - optional `int (*ai_resolve_error)(char *out, size_t cap)`. The real one runs
+    `voice_ais_resolve` on the current settings.
+- Rules:
+  - `g_engine_cfg` is read at conversation start. `g_ai_off` (R37) is cleared at the start.
+  - Every `begin_speak` uses AI unless `g_engine_cfg` is Windows or `g_ai_off` is set.
+  - On `VTT_ERROR` for the current id from an AI context:
+    - `voice_ais_failure_fatal(hr)`:
+      - write the note once (`g_ai_off = 1`), with the reason from
+        `voice_ais_failure_reason(hr, resolve_err)`, where `resolve_err` comes from the op for
+        `VOICE_AIS_HR_RESOLVE`;
+      - no header.
+    - Else: the header `AI speech failed: using Windows speech`.
+    - Either way:
+      - quit the AI context;
+      - start a Windows context;
+      - `begin_speak` a copy of `g_spoken` from `m->offset`, with the same kind.
+  - A Windows `VTT_ERROR` follows today's path.
+- The real router keeps the engine per token.
+  - `rc_tts_speak` resolves; a failure clears `t.url`.
+  - It calls `voice_ais_speak(..., voice_ais_key(s, &t))`.
+  - `rc_speech_engine` gives `s->voice_speech_engine` in Conversation mode.
 
-- [ ] **Step 1: Write the failing wintests**, with the fake ops recording the engine per token
-  and doing the ledger's acquire and release:
-  - The engine and the fallback:
-    - `test_vconv_win_ai_engine_started`, `test_vconv_win_ai_fallback_rest_of_reply`,
-      `test_vconv_win_ai_fail_every_reply`, `test_vconv_win_ai_and_windows_fail` and
-      `test_vconv_win_ai_stale_error_ignored`: as in `a3b012f`.
-      - The fallback gives the header `AI speech failed: using Windows speech`, `tts_quit(ai)`,
-        `tts_start(win, VOICE_SPEECH_WINDOWS)` and `tts_speak(win, ..., text, 40)`. The next
-        reply returns to AI from 0.
-      - Three failing replies each fall back, with no chat note and the ledger zero at the end.
-      - AI then Windows failing gives `Could not speak the reply: it is on screen`.
-  - The notice:
-    - `test_vconv_win_no_notice_with_ai` and `test_vconv_win_notice_kept_if_ended_first`.
-  - External send:
-    - `test_vconv_win_external_send`: in Listening it gives `cap_end` and WORKING, and the reply
-      after the new baseline is spoken.
-    - `test_vconv_win_external_send_keeps_words`: while Hearing with live words in the box, an
-      external send gives no `drop_words` call (the fake records it), and the turn's link is
-      closed.
-    - `test_vconv_win_external_send_unducks`: Speaking, then `VCE_DUCK` (volume 18), then an
-      external send gives `tts_volume(token, 100)` before `tts_stop`, or with it.
-  - The reply's times:
-    - `test_vconv_win_new_reply_resets_times`: a reply spoken and ended, then 6 minutes later a
-      new reply loads. A transcript "carry on" during it is classified against the new reply's
-      times only: no stale echo window, and the phrase age counted from the new reply.
-  - Progress and the pending end:
-    - `test_vconv_win_progress_keeps_long_reply` and `test_vconv_win_end_never_dropped`: as in
-      `a3b012f`.
-- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** Grep every caller of
-  `ai_chat_launch_stream_thread` and every send path outside `ai_chat_send_user_message_ex`.
-  List them in the commit body, and add `voice_on_external_send()` where a user action launches
-  a request (R23). **Step 4: Run** `make -j test`, `xvfb-run -a make wintest` and
-  `make -j release`. PASS, and the exe links.
+- [ ] **Step 1: Write the failing wintests**:
+  - The engine and passing failures:
+    - `test_vconv_win_ai_engine_started`: the engine AI gives `tts_start(token,
+      VOICE_SPEECH_AI)`.
+    - `test_vconv_win_ai_fallback_rest_of_reply`: `VTT_ERROR(NET, offset 40)` gives the
+      header, `tts_quit(ai)`, `tts_start(win, VOICE_SPEECH_WINDOWS)` and
+      `tts_speak(win, ..., text, 40)`. The next reply returns to AI from 0.
+    - `test_vconv_win_ai_and_windows_fail`: the AI error, then a failing Windows start, gives
+      `Could not speak the reply: it is on screen`.
+    - `test_vconv_win_ai_stale_error_ignored`: an older id's error changes nothing.
+    - `test_vconv_win_no_notice_with_ai`: with `notice_due` true and AI speech, no notice is
+      raised.
+    - `test_vconv_win_ai_passing_retries`: three replies failing with `VOICE_AIS_HR_NET`, 429
+      and 503 each fall back with the header. Every next reply starts AI again; there is no
+      chat note; the ledger is zero at the end.
+  - Failures that cannot work:
+    - `test_vconv_win_ai_fatal_note_once`: a 401 on the first reply gives the note `AI speech is
+      off for this conversation: the speech provider refused the key (HTTP 401). Replies are
+      read with Windows speech.` exactly once. The second and third replies start Windows
+      contexts only (no `tts_start(..., AI)`). A new conversation tries AI again.
+    - `test_vconv_win_ai_fatal_resolve`: `VOICE_AIS_HR_RESOLVE`, with the fake op returning
+      `Enter a speech API key`, gives that reason in the note.
+    - `test_vconv_win_ai_fatal_format`: `VOICE_AIS_HR_FORMAT` gives `unsupported audio format`.
+  - Teardown:
+    - `test_vconv_win_ai_off_quits_before_audio`: voice off with an AI context alive calls the
+      fake `tts_quit` before the audio stop (an order the fake records).
+- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** **Step 4: Run** `make -j test`,
+  `xvfb-run -a make wintest` and `make -j release` (the exe links).
 - [ ] **Step 5: Commit** `feat(voice): AI speech in conversations, with the Windows speech fallback`.
 
 Suggested implementer: Sonnet. Reviewer: Opus (the integration task).
 
 ---
 
-### Task 9: Settings > Voice: Speech, the AI rows, Play sample with AI speech
+### Task 9: Settings > Voice: Speech, the AI rows, the privacy line, Play sample with AI speech
 
-**Status:** to build. Revised 2026-11-25: three providers, per-provider seeds, and the style row
-for Custom only.
+**Status:** to build. Revision 3: Mistral and Custom; the privacy line; key rebinding; unknown
+providers.
 
 **Files:**
-- Modify: `src/ui/settings.c`, `src/ui/resource.h` (the ids of the Global Constraints),
-  `src/core/voice_config.[ch]` (a pure enables helper)
+- Modify: `src/ui/settings.c`, `src/ui/resource.h`, `src/core/voice_config.[ch]`
 - Test: `tests/test_voice_config.c`
 
 **Interfaces:**
-- Consumes:
-  - Task 1 (fields, help ids);
-  - Task 2 (`voice_ais_providers`, `voice_ais_provider_find`, `voice_ais_key_shared`,
-    `voice_ais_resolve`, `voice_ais_key`);
-  - Task 7 (`voice_ais_sample`);
-  - PR 2's `voice_tts_sample`.
-- Produces:
 ```c
-typedef struct { int speech; int ai_rows; int url; int key; int style; int uk_line; } VoiceSpeechEnables;
+typedef struct { int speech, ai_rows, url, key, style, uk_line, privacy; } VoiceSpeechEnables;
 void voice_speech_enables(int conversation_enabled, int engine, const char *provider,
                           int key_shared, int uk_voice_installed, VoiceSpeechEnables *out);
 ```
-  - `speech`: Conversation mode.
-  - `ai_rows`: Conversation and AI.
-  - `url`: shown for Custom.
-  - `key`: shown when `!key_shared`.
-  - `style`: enabled for Custom with AI.
-  - `uk_line`: shown with Windows and no en-GB woman's voice.
-- **Rows** (R16):
-  - Speech: `Windows speech` / `AI speech`.
-  - Speech provider: `Mistral` / `Groq` / `Custom`, from `voice_ais_providers`.
-  - Base URL: an edit with the clear-text warning line.
-  - Speech API key: a password edit.
-  - AI voice: an editable combo.
-  - AI speech model: an editable combo.
-  - Accent and style: a multi-line edit, three lines tall, `ES_AUTOVSCROLL`, limited to 1,023
-    bytes.
-- **Seeding.** On every provider change, the voice and model combos are reseeded from the
-  provider's lists. For Mistral and Groq the first entry is the provider's default, and when it
-  is selected, Save stores `""`. Custom's lists are suggestions with no default; its combos open
-  empty unless a value is saved.
-- **Events.** `CBN_SELCHANGE` on Speech or Speech provider, and `EN_CHANGE` on either URL,
-  call `voice_enable_sync`, which applies `voice_speech_enables`. The visibility of the key and
-  URL rows relays the page out.
-- **Reading the page.** Factor the Voice page's save code into `static void
-  voice_page_read(SettingsDlgData *d, Settings *s)`. Save uses it on the real settings.
-  `voice_ais_key_shared` and Play sample use it on a copy of `d->cfg->settings` (R17), and the
-  copy's key fields are wiped after use. Save does `config_secret_drop_stale_preserved` for
-  `tts_api_key`. A hidden key row leaves the key unchanged (R13).
-- **Play sample.** With AI speech: `voice_ais_resolve` on the copy, then
-  `voice_ais_sample(owner, &t, key)`. A resolve failure shows its `err` in the page's dim
-  test-note line. Windows speech: today's call.
+- `privacy` is on whenever the AI rows are; `style` only for Custom.
+- **Rows (R16):**
+  - Speech;
+  - Speech provider (Mistral / Custom; an unknown id shows no selection, R38);
+  - Base URL with the clear-text warning;
+  - Speech API key;
+  - AI voice;
+  - AI speech model;
+  - Accent and style (multi-line, 1,023 bytes);
+  - the dim `Each spoken reply's text is sent to <host>.`, with `<host>` from a resolve of the
+    page's values (`api.mistral.ai`, or the Custom host; `the speech server` when it does not
+    resolve).
+- **Seeding.** A provider change reseeds the voice and model combos, the provider's default
+  first and stored as `""`. Custom's combos open empty unless a value is saved.
+- **Reading the page.** `voice_page_read(d, Settings *s)` is factored out of Save. Save sets
+  `tts_api_key_for = voice_ais_binding(s)` only when the key edit was changed this session
+  (R43), and drops a stale preserved blob for `tts_api_key`. Play sample and the shared-key
+  check read a wiped copy (R17).
+- **Play sample.** AI speech: resolve, then `voice_ais_sample`. A resolve error shows in the
+  dim test-note line. Windows speech: today's call.
 
 - [ ] **Step 1: Write the failing test** `test_voice_speech_enables`:
   - Dictation: everything off.
-  - Conversation with Windows: speech on, ai_rows off, `uk_line` as installed.
-  - Conversation, AI, Mistral, shared: no key, no url, no style.
-  - Groq, not shared: key shown.
-  - Custom: url, key (not shared) and style on.
-  - AI: `uk_line` hidden.
+  - Windows: `uk_line` as installed, and no `privacy`.
+  - AI with Mistral, shared: no key, no url, no style, and `privacy` on.
+  - AI with Custom: url, key and style on.
+  - An unknown provider: the AI rows stay on, and url is off.
 - [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** **Step 4: Run** `make -j test`,
-  `xvfb-run -a make wintest` and `make -j release`. Optionally run
-  `wine build/win/nutshell.exe --ui-demo=settings-voice` and report what shows: the rows, the
-  greying, the reseeding on a provider change, and the key row hidden with Mistral on both.
+  `xvfb-run -a make wintest` and `make -j release`. Optionally check
+  `--ui-demo=settings-voice`.
 - [ ] **Step 5: Commit** `feat(voice): Settings > Voice gains Speech and the AI speech rows`.
 
 Suggested implementer: Sonnet. Reviewer: Opus or Fable.
@@ -1178,206 +1309,93 @@ Suggested implementer: Sonnet. Reviewer: Opus or Fable.
 
 ### Task 10: The self-report: AI speech mode and the resource count
 
-**Status:** to build. Revised 2026-11-25: the config names a Custom model and voice.
+**Status:** to build (unchanged but for the config).
 
 **Files:**
-- Modify: `src/ui/dll_hook_win.c` (a `voice-resources: N` line after `voice-net-opens`),
-  `tests/selftest/check.sh`, `Makefile` (CRLF: the `ai` mode in `selftest-wine`'s loop and
-  `case`), `tests/test_selftest_configs.c`
+- Modify: `src/ui/dll_hook_win.c` (`voice-resources: N`), `tests/selftest/check.sh`,
+  `Makefile` (CRLF: the `ai` mode), `tests/test_selftest_configs.c`
 - Create: `tests/selftest/nutshell-voice-ai.config`: the conv config plus
   `"voice_speech_engine": "ai"`, `"voice_tts_provider": "custom"`,
   `"voice_tts_url": "http://127.0.0.1:9/v1"`, `"voice_ai_tts_model": "kokoro"` and
   `"voice_ai_voice": "bf_emma"`.
 
 **Interfaces:**
-- `voice-resources: N` is the sum of `voice_ledger_count(r)` over every `VoiceRes`, written on
-  the UI thread.
+- `voice-resources: N` is the sum of the ledger's counts.
 - `check.sh`:
-  - every mode except `sapi` asserts `voice-resources: 0`;
-  - `sapi` asserts only that the line exists;
-  - the new `ai` mode asserts winhttp, riched20, msftedit and mmdevapi were requested, mmdevapi
-    is mapped, `no_speech ai`, `voice-net-opens: 0` and `voice-resources: 0`;
-  - the usage line lists `off|voiceoff|on|conv|sapi|ai`.
+  - every mode except `sapi` asserts 0, and `sapi` only that the line exists;
+  - `ai` asserts winhttp, riched20, msftedit and mmdevapi were requested, mmdevapi is mapped,
+    `no_speech ai`, `voice-net-opens: 0` and `voice-resources: 0`.
 
 - [ ] **Step 1:** extend `tests/test_selftest_configs.c` for the new config, and extend
-  `check.sh`. It fails until the line exists.
+  `check.sh` (the usage line lists `off|voiceoff|on|conv|sapi|ai`).
 - [ ] **Step 2: Run** `make -j test`, `make -j release` and `make selftest-wine`: `ai` is
   missing or fails.
-- [ ] **Step 3: Implement.** **Step 4: Run** all three. Every mode passes.
+- [ ] **Step 3: Implement.** **Step 4: Run** all three. All six modes pass.
 - [ ] **Step 5: Commit** `test(selftest): AI speech mode opens nothing until a reply is spoken`.
 
 Suggested implementer: Haiku. Reviewer: Opus or Fable.
 
 ---
 
-### Task 12 (new): The WAV stream decoder and the 24 kHz converter
+### Task 11 (orchestrator): the capture gate, spec findings, notes, version, build, verification
 
-**Status:** to build (new, 2026-11-25). Run it after Task 2 and before Task 7.
+**Status:** last. Revision 3: the capture gate (R33).
 
-**Files:**
-- Create: `src/core/voice_wavstream.h`, `src/core/voice_wavstream.c`
-- Test: `tests/test_voice_wavstream.c`
+- [ ] **The capture gate (R33).** The PR is not marked ready until all of these hold:
+  - Task 0's six files are on the branch.
+  - Every `provisional_*.sse` fixture is either replaced by its capture or kept beside it with
+    a test proving the two parse alike.
+  - R25's `wav` or `pcm` choice is made from the capture.
+  - The default voice (R2) is confirmed or changed.
+  - `make -j test` and `xvfb-run -a make wintest` report **no capture-fixture skips**.
 
-**Interfaces:**
-- Produces:
-```c
-#define VOICE_WAVS_OUT_RATE 24000
-typedef enum { VWS_HEADER = 0, VWS_DATA, VWS_ERROR } VoiceWavState;
-typedef struct { /* builder's fields: header buffer (<= 4096 bytes), format, channels, rate,
-                    partial-frame carry, the resampler's history and phase */ } VoiceWavStream;
-void   voice_wavs_init(VoiceWavStream *w);
-size_t voice_wavs_feed(VoiceWavStream *w, const unsigned char *in, size_t n,
-                       int16_t *out, size_t cap);     /* 24 kHz mono PCM16 out; returns samples */
-size_t voice_wavs_out_max(const VoiceWavStream *w, size_t n_in);   /* bound for one feed */
-size_t voice_wavs_finish(VoiceWavStream *w, int16_t *out, size_t cap);  /* the resampler's tail */
-VoiceWavState voice_wavs_state(const VoiceWavStream *w);
-int    voice_wavs_rate(const VoiceWavStream *w);       /* the source rate, 0 before the header */
-const char *voice_wavs_error(const VoiceWavStream *w); /* "" or a short reason, never content */
-void   voice_wavs_wipe(VoiceWavStream *w);             /* secure_zero the carried bytes */
-```
-- **Header** (R25):
-  - `RIFF`, any size, then `WAVE`.
-  - Chunks before `data` are walked by size: `fmt ` is read; `LIST`, `fact` and the rest are
-    skipped.
-  - The `data` size is ignored: everything after it is audio until the body ends.
-  - Accepted formats: tag 1 with 16 bits; tag 3 with 32 bits; tag 0xFFFE whose subformat GUID
-    starts with 0x0001 or 0x0003, with those widths.
-  - Channels 1 or 2. Rate 8,000 to 48,000.
-  - Anything else is `VWS_ERROR`, with the reason (`"unsupported WAV format"`,
-    `"not a WAV stream"`, `"WAV header too long"`).
-- **Conversion** (R26):
-  - Frames are split anywhere across feeds and carried.
-  - Stereo is averaged to mono. Float is clamped to [-1, 1] and scaled by 32,767 with rounding.
-  - At 24,000 Hz the samples pass through unchanged.
-  - Any other rate goes through a streaming windowed-sinc resampler:
-    - 32 taps, a Kaiser window (beta 7) and a 256-phase coefficient table;
-    - linear interpolation between adjacent phases;
-    - cutoff 0.45 × min(source rate, 24,000), as a fraction of the source rate;
-    - each phase normalised to a DC gain of exactly 1;
-    - int64 accumulation, saturated to int16.
-  - The resampler state carries 32 inputs, so chunking never changes the output.
-  - The existing 16-to-24 kHz `voice_resample` stays for the live transcription path; this one
-    is general and separate.
-
-- [ ] **Step 1: Write the failing tests**:
-  - Pass-through and splits:
-    - `test_vwav_pass_24k_mono16`: a header plus a ramp gives the ramp exactly.
-    - `test_vwav_split_everywhere`: the same stream fed at every split point from 1 to its
-      length, and in 1-byte pieces, gives byte-identical output.
-    - `test_vwav_placeholder_sizes`: `RIFF`/`data` sizes of `0xFFFFFFFF` and of 0 both read to
-      the end, and a `LIST` chunk before `data` is skipped.
-    - `test_vwav_extensible`: tag 0xFFFE with float32 and 16-bit subformats decode.
-  - Sample formats:
-    - `test_vwav_float32`: -1.5, -1, 0, 0.5 and 1 give -32767, -32767, 0, 16384 and 32767.
-    - `test_vwav_stereo_average`: L 1000 and R 3000 give 2000.
-  - Resampling:
-    - `test_vwav_resample_lengths`: 1 s of input at 8,000, 16,000, 22,050, 44,100 and 48,000 Hz
-      gives 24,000 ± 2 samples (including `finish`), whatever the chunking.
-    - `test_vwav_resample_dc_and_tone`: DC 10,000 stays 10,000 ± 2 after the transient. A 1 kHz
-      tone at -6 dBFS keeps its RMS within 0.5 dB from every rate.
-    - `test_vwav_resample_alias`: a 15 kHz tone at 48 kHz comes out at least 30 dB down.
-    - `test_vwav_full_scale_no_overflow`: a full-scale square wave from 44,100 Hz saturates and
-      never wraps.
-  - Errors:
-    - `test_vwav_rejects_unsupported`: 8-bit, 24-bit, 3 channels, 96 kHz, `OggS` and garbage
-      each give `VWS_ERROR`, with no output.
-- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** No Win32, no I/O, no logging, and no heap
-  in the per-sample path. **Step 4: Run** `make -j test`. PASS.
-- [ ] **Step 5: Commit** `feat(voice): a streaming WAV decoder that converts to 24 kHz mono`.
-
-Suggested implementer: Sonnet. Reviewer: Fable (signal processing) or Opus.
-
----
-
-### Task 13 (new): The Ending watchdog ends the conversation
-
-**Status:** to build (new, 2026-11-25, the spec owner's decision R29). Run it before Task 8.
-
-**Files:**
-- Modify: `src/core/voice_conv.[ch]`
-- Test: `tests/test_voice_conv.c`
-
-**Interfaces:**
-- Produces: `VCN_END_STUCK`, appended to `VoiceConvNote`, with text
-  `Conversation ended: the last turn could not be transcribed`.
-- In `VCE_TICK`'s ENDING branch, the `VOICE_CONV_ENDING_MAX_MS` expiry becomes
-  `go_idle(c, VCN_END_STUCK, 0)`. It releases the link and the upload, and the turn's words
-  stay in the box. The live-fallback branch before it is unchanged.
-
-- [ ] **Step 1: Write the failing tests**:
-  - `test_vconv_ending_watchdog_ends_conversation`: a batch turn with no result for 180 s gives
-    IDLE, note `VCN_END_STUCK`, `VCA_CANCEL_BATCH`, no `VCA_DROP_TURN`, and every resource
-    released (applying the actions to a test ledger leaves zero).
-  - `test_vconv_ending_watchdog_live`: the same for a live turn whose final and fallback never
-    come.
-  - The built `test_vconv_ending_watchdog_keeps_silence_clock` (Task 4) is replaced by these
-    two, which hold the stronger rule; say so in the commit.
-- [ ] **Step 2: Run.** FAIL. **Step 3: Implement.** **Step 4: Run** `make -j test`. PASS.
-- [ ] **Step 5: Commit** `fix(voice): a turn stuck for 3 minutes ends the conversation and says why`.
-
-Suggested implementer: Sonnet. Reviewer: Opus or Fable.
-
----
-
-### Task 11 (orchestrator): spec findings, notes, version, build, full verification
-
-**Status:** to do last. Revised 2026-11-25.
-
-- [ ] **Live spec §16:** add "Found at build time (PR 3, 2026-11-2x)" beside the 2026-11-25
-  decisions subsection. It holds:
-  - item 14's counts measured on the branch (keys 69, `CFG_KEYS_MAX` 96, `NOTICE_ITEMS_MAX`
-    24, `winhttp.def` 17);
-  - the IID source for `IAudioRenderClient`;
-  - every ruling R2 to R31 as built, and anything an implementer had to decide differently;
-  - the formats and rates each provider actually returned, if any hand check has run;
-  - the test counts at the end.
-- [ ] **Notes Open list:** a new item, "AI speech (PR 3 of live voice, feat/voice-ai-speech):
-  nothing run on Windows", with one line per hand check:
-  - (a) Mistral with `gb_jane_neutral`, Mary, Sky and Harriet: accent, time to the first word,
-    no gap or click between chunks, and whether its streamed WAV has a header and float32 or
-    16-bit samples. Also the cut-in duck and stop latency.
-  - (b) Groq Orpheus: the 200-byte chunks back to back, the rate it returns, whether it
-    streams, and how its voices sound.
-  - (c) A Custom server (Kokoro-FastAPI with `bf_emma`, and one with another rate, such as
-    piper at 22,050 Hz), with and without `instructions`.
-  - (d) Shared and separate keys: Mistral with Mistral, Groq with Groq, and a separate key;
-    the key row; the DPAPI blob; the blob kept when the config moves.
-  - (e) The fallback: a wrong key (401), Wi-Fi pulled mid-reply, a Custom server returning
-    mp3. The header shows, and Windows speech reads on from about the cut.
-  - (f) "Carry on" after a cut-in resumes near the cut (R9).
-  - (g) Headphones unplugged mid-reply, and a default-device change.
+  Before Task 0 lands, steps below may run, but this box stays open.
+- [ ] **Spec §16:** add "Found at build time (PR 3, 2026-11-2x)". It holds:
+  - what the capture showed (the envelope, headers, delta sizes, the error's form);
+  - item 14's counts (69, 96, 24, 17);
+  - the `IAudioRenderClient` IID source;
+  - every ruling as built, with each implementer departure;
+  - the test counts.
+- [ ] **Notes Open list:** "AI speech (PR 3 of live voice): nothing run on Windows", one line
+  each:
+  - (a) Mistral `voice_1787` and the other English (UK) voices: accent, time to the first
+    word, no gap or click between chunks, the duck, stop latency.
+  - (b) Kokoro-FastAPI with `bf_emma`, and with no key.
+  - (c) Shared, separate and rebound keys; the DPAPI blob and its binding.
+  - (d) The passing fallback: Wi-Fi pulled mid-reply.
+  - (e) The once-per-conversation note: a wrong key, a wrong model, a 22,050 Hz server.
+  - (f) "Carry on" after a cut-in (R9).
+  - (g) Headphones unplugged, and a default-device change.
   - (h) Echo cancellation with our render client, and whether our render session is ducked.
-  - (i) The cost on Mistral's and Groq's usage pages for one conversation.
-  - (j) Play sample with unsaved values; disabled in Dictation.
-  - (k) The Voice page at 100 %, 125 % and 200 %, with the reseeding on a provider change.
+  - (i) The cost on Mistral's usage page.
+  - (j) Play sample with unsaved values.
+  - (k) The page at 100 %, 125 % and 200 %, with the privacy line and the reseeding.
   - (l) `mingw32-make test` and `mingw32-make clean && mingw32-make release` on the Windows
     box.
-  - (m) Retry during a conversation: the mic closes and the reply is spoken.
-  - (n) A turn stuck for 3 minutes (an upload server that never answers) ends the conversation
-    with its note.
+  - (m) Retry during a conversation.
+  - (n) A hung upload ending the conversation at its deadline.
 
-  Mark items (q), (r), (s) and (o)'s folded parts as fixed in code, with their hand check
+  Mark the folded parts of (o), (q), (r) and (s) as fixed in code, with their hand checks
   pending.
-- [ ] **Notes todo:** add an entry:
-  - OpenAI's batch speech-to-text models `gpt-4o-mini-transcribe` (Nutshell's default,
-    `src/core/voice_stt.c:14`), `gpt-4o-transcribe` and `whisper-1` (and `-diarize`) shut down
-    on 2027-02-26.
-  - The replacement is `gpt-transcribe` or `gpt-live-transcribe`.
-  - `gpt-4o-mini-transcribe-2025-03-20` shuts down on 2027-01-20.
-  - Source: `developers.openai.com/api/docs/deprecations.md`, checked 2026-11-25.
-  - Change the default and seeds before then, in its own pull request.
-- [ ] **Version:** `"1.3.0"` and `1,3,0,0` in `src/ui/resource.h`, and README's
-  `**Version**: v1.3.0`.
+- [ ] **Notes todo:**
+  - OpenAI's batch speech-to-text models `gpt-4o-mini-transcribe` (the default,
+    `src/core/voice_stt.c:14`), `gpt-4o-transcribe`, `whisper-1` and `-diarize` shut down on
+    2027-02-26, replaced by `gpt-transcribe` or `gpt-live-transcribe`.
+  - `-2025-03-20` shuts down on 2027-01-20.
+  - Source: `developers.openai.com/api/docs/deprecations.md`, 2026-11-25.
+  - Change them in their own pull request.
+  - Also later: Groq Orpheus once it leaves Preview; resampling for Custom servers.
+- [ ] **Version** `1.3.0` (`1,3,0,0`) in `resource.h` and README.
 - [ ] **Build and verify**, all from the worktree, in this order: `make clean && make release`;
-  `make -j test`; `make test SAN=1`; `make lint-gate`; `make fuzz-run`;
-  `xvfb-run -a make wintest`; `make selftest-wine` (all six modes);
-  `.github/scripts/check-version.sh` against `main`.
-  - Before `wintest`, check `pgrep -a wine` for other sessions' runs.
-  - If the release fails after `clean`, run `git restore build/win/nutshell.exe` before
-    committing anything.
-- [ ] **Commit** the exe and docs. Stage new files by path and read every `??` line. The
-  `Models:` line lists every model and what it did. Do not push.
-- [ ] **Whole-branch reviews** before any push: an independent Opus review and a Fable review of
-  the diff against `58dbd00`. Their findings go to the maintainer before any fix.
+  `make -j test`; `make test SAN=1`; `make lint-gate`; `make fuzz-run` (including `wavstream`
+  and `aisse`); `xvfb-run -a make wintest`; `make selftest-wine` (all six modes);
+  `.github/scripts/check-version.sh`.
+  - List every `[SKIP]` with its reason.
+  - Run `pgrep -a wine` before `wintest`.
+  - If the release fails after `clean`, run `git restore build/win/nutshell.exe`.
+- [ ] **Commit** the exe and docs. Stage new files by path, read every `??` line, and write the
+  `Models:` line. Do not push.
+- [ ] **Whole-branch reviews:** independent Opus and Fable reviews against `58dbd00`. Their
+  findings go to the maintainer first.
 
 Suggested owner: Opus (orchestrator).
