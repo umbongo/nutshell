@@ -499,7 +499,7 @@ selftest-wine: $(TARGET)
 		echo "[skip] selftest-wine needs wine and xvfb-run"; \
 	else \
 		set -e; \
-		for m in off voiceoff on conv sapi; do \
+		for m in off voiceoff on conv sapi ai; do \
 			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
 			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
 			case $$m in \
@@ -509,6 +509,7 @@ selftest-wine: $(TARGET)
 			voiceoff) cp tests/selftest/nutshell-ai-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			on) cp tests/selftest/nutshell-voice-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			conv|sapi) cp tests/selftest/nutshell-voice-conv.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			ai) cp tests/selftest/nutshell-voice-ai.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			esac; \
 			extra=; [ $$m = sapi ] && extra=--self-report-sapi; \
 			( cd $(SELFTEST_DIR)/$$m && WINEPREFIX=$(SELFTEST_PREFIX) WINEDEBUG=-all \
