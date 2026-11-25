@@ -161,6 +161,7 @@ static void va_post(VaCtx *c, VoiceAudioMsg m, LPARAM lp)
     if (!h || !PostMessage(h, WM_VOICE_AUDIO, (WPARAM)m, lp)) {
         if (m == VAM_DEVICES) voice_audio_free_devices((VoiceDeviceList *)lp);
         if (m == VAM_CAPTURED) voice_audio_free_capture((VoiceCapture *)lp);
+        if (m == VAM_CONV_TURN) voice_audio_free_capture((VoiceCapture *)lp);   /* the turn's audio: wiped */
     }
 }
 

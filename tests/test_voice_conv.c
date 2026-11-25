@@ -1403,3 +1403,52 @@ int test_vconv_speaking_watchdog(void)
     ASSERT_TRUE(clean());
     TEST_END();
 }
+
+/* A local "say that again" or "carry on" is not a turn sent to the assistant: it must not
+ * restart the 3-minute silence clock (spec 5.6: it counts from the last turn sent). */
+int test_vconv_local_phrase_keeps_silence_clock(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_state(&c, VCS_ENDING, 0);
+    run(&c, VCE_BATCH_OK, 0, 0, 200);
+    o = run(&c, VCE_TRANSCRIPT, VTC_REPEAT, 0, 300);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_REPEAT));
+    run(&c, VCE_SPEECH_DONE, 0, 0, 170000);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 170000), 10000);   /* still counted from the start */
+    o = run(&c, VCE_TICK, 0, 0, 180001);
+    ASSERT_EQ(c.state, VCS_IDLE);
+    ASSERT_TRUE(clean());
+    /* a reply that came from the chat does restart it */
+    goto_state(&c, VCS_SPEAKING, 0);
+    run(&c, VCE_SPEECH_DONE, 0, 0, 170000);
+    ASSERT_EQ(voice_conv_next_deadline(&c, 170000), 180000);
+    run(&c, VCE_PRESS, 0, 0, 170100);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+/* The final-text deadline survives the tick counter wrapping (the Windows count is 32 bits). */
+int test_vconv_final_deadline_survives_tick_wrap(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    const unsigned long t0 = (unsigned long)-5000;
+    voice_ledger_reset();
+    voice_conv_init(&c);
+    run(&c, VCE_START, 1, 0, t0);
+    run(&c, VCE_TURN_START, 0, 0, t0 + 10);
+    run(&c, VCE_LINK_READY, 0, 0, t0 + 20);
+    run(&c, VCE_TURN_END, 0, 0, t0 + 4000);       /* the 3 s wait ends 2000 after the wrap */
+    ASSERT_EQ(c.state, VCS_ENDING);
+    o = run(&c, VCE_TICK, 0, 0, t0 + 4500);
+    ASSERT_EQ(o.actions, 0u);                      /* not yet: 500 ms into the wait */
+    ASSERT_EQ(voice_conv_next_deadline(&c, t0 + 4500), 2500);
+    o = run(&c, VCE_TICK, 0, 0, t0 + 7100);
+    ASSERT_TRUE(has(o, VCA_SUBMIT_BATCH | VCA_CLOSE_LINK));
+    run(&c, VCE_PRESS, 0, 0, t0 + 7200);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}

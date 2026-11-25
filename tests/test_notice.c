@@ -388,7 +388,7 @@ int test_notice_msg_voice_british_names_the_voice(void)
     ASSERT_STR_EQ(n.opening,
         "Windows has no British English woman's voice installed, so replies use "
         "Microsoft Zira. To get one, add English (United Kingdom) under Windows "
-        "Settings > Time & language > Speech, or choose AI speech in Settings > Voice.");
+        "Settings > Time & language > Speech.");
     ASSERT_EQ(notice_msg(&n, NOTICE_MSG_VOICE_BRITISH, "50%s %d"), 1);
     ASSERT_TRUE(strstr(n.opening, "replies use 50%s %d. To get one") != NULL);
     TEST_END();

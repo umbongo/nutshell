@@ -4004,6 +4004,8 @@ int test_vconv_cut_sends_no_mode(void);
 int test_vconv_hearing_watchdog(void);
 int test_vconv_ending_watchdog(void);
 int test_vconv_speaking_watchdog(void);
+int test_vconv_local_phrase_keeps_silence_clock(void);
+int test_vconv_final_deadline_survives_tick_wrap(void);
 int test_voice_ledger_counts(void);
 int test_voice_live_parse_openai(void);
 int test_voice_live_parse_mistral(void);
@@ -8707,6 +8709,8 @@ int main(void) {
     failed += test_vconv_hearing_watchdog();
     failed += test_vconv_ending_watchdog();
     failed += test_vconv_speaking_watchdog();
+    failed += test_vconv_local_phrase_keeps_silence_clock();
+    failed += test_vconv_final_deadline_survives_tick_wrap();
     failed += test_voice_ledger_counts();
     failed += test_ai_gate_default_off();
     failed += test_ai_gate_enabled();

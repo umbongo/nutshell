@@ -89,6 +89,7 @@ typedef struct {
     int final_armed;              /* the 3 s wait for the final text is armed */
     int sending;                  /* a turn or typed message was handed to the glue */
     int idle_seen;                /* IDLE_POLL has seen the chat idle since idle_since */
+    int local_speech;             /* the speech is a local repeat or continue, not the chat's reply */
     int speaking_reply;           /* SPEAKING a reply (1) or a phrase (0) */
     int held, held_continue;      /* a held reply (held_phrase: the WENT_WRONG phrase) */
     int held_phrase;

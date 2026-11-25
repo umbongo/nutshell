@@ -123,6 +123,7 @@ static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase
     c->state = VCS_SPEAKING;
     c->turn = 0;   /* the turn that led here is over; a cut-in sets it again */
     c->speaking_reply = reply;
+    c->local_speech = 0;
     c->idle_seen = 0;
     if (!c->stopcap) { c->stopcap = 1; a |= VCA_STOP_CAPTION; }
     o = out(a, VCH_SPEAKING);
@@ -178,6 +179,7 @@ static VoiceConvOut on_transcript(VoiceConv *c, int cls)
                            VCPH_NONE, 1);
         o.actions |= x;
         o.header = cls == VTC_REPEAT ? VCH_REPEATING : VCH_CARRYING_ON;
+        c->local_speech = 1;
         c->turn = 0;
         c->sending = 0;
         return o;
@@ -230,7 +232,9 @@ static VoiceConvOut speaking_stopped(VoiceConv *c, unsigned extra, VoiceConvNote
     VoiceConvOut o;
     /* a cut-in turn already open (AEC) carries on as the turn being heard */
     c->state = c->turn ? VCS_HEARING : VCS_LISTENING;
-    c->idle_at = now;   /* the silence clock restarts when listening resumes */
+    /* the silence clock restarts when listening resumes after a reply from the chat, not after
+     * a local repeat or continue (spec 5.6: it counts from the last turn sent) */
+    if (!c->local_speech) c->idle_at = now;
     o = out(extra | VCA_MODE_LISTEN | release_caption(c),
             c->turn ? VCH_HEARING : VCH_LISTENING);
     o.note = note;
@@ -477,7 +481,7 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             return none;
         }
         if (st == VCS_ENDING) {
-            if (c->live && c->link && c->final_armed && now >= c->final_deadline)
+            if (c->live && c->link && c->final_armed && (long)(now - c->final_deadline) >= 0)
                 return live_fallback(c);
             if (now - c->state_at >= VOICE_CONV_ENDING_MAX_MS) {
                 c->sending = 0;
@@ -487,7 +491,7 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             return none;
         }
         if (st == VCS_LISTENING) {
-            unsigned long from = c->sent_at > c->idle_at ? c->sent_at : c->idle_at;
+            unsigned long from = (long)(c->sent_at - c->idle_at) > 0 ? c->sent_at : c->idle_at;
             if (now - from >= VOICE_CONV_SILENCE_END_MS) return go_idle(c, VCN_END_SILENCE, 0);
         }
         return none;
@@ -537,7 +541,7 @@ long voice_conv_next_deadline(const VoiceConv *c, unsigned long now)
     case VCS_WORKING:
         return VOICE_CONV_IDLE_POLL_MS;
     case VCS_LISTENING: {
-        unsigned long from = c->sent_at > c->idle_at ? c->sent_at : c->idle_at;
+        unsigned long from = (long)(c->sent_at - c->idle_at) > 0 ? c->sent_at : c->idle_at;
         left = (long)(from + VOICE_CONV_SILENCE_END_MS - now);
         return left < 0 ? 0 : left;
     }

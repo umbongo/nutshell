@@ -99,7 +99,7 @@ static const MsgRow k_msgs[NOTICE_MSG_COUNT] = {
     [NOTICE_MSG_VOICE_BRITISH] = { NOTICE_INFO, ARG_NAME, "Spoken replies",
         "Windows has no British English woman's voice installed, so replies use ",
         ". To get one, add English (United Kingdom) under Windows Settings > Time & "
-        "language > Speech, or choose AI speech in Settings > Voice." },
+        "language > Speech." },
 };
 
 int notice_msg(Notice *n, NoticeMsgId id, const char *arg)
