@@ -721,6 +721,13 @@ Open, in priority order:
       earlier one so it stops taking screen space; streaming the reasoning live stays as it
       is. The user can reopen an earlier stream to read it, and a thinking box opened by
       hand stays open until it is closed by hand (maintainer, 2026-11-25).
+- [ ] Thinking view: while the reasoning is streaming, scrolling with the mouse wheel, and
+      the equivalent keystrokes, should trigger smart-scroll (maintainer, 2026-11-25,
+      *reported*, not investigated). Read here as: a scroll up stops the view following the
+      tail and holds the reader's place, and returning to the bottom resumes following, the
+      rule `src/core/stick_scroll.c` already gives the chat list and the terminal; confirm
+      that reading with the maintainer, and which of the box and the chat list it covers,
+      before building.
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
