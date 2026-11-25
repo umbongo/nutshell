@@ -60,6 +60,10 @@ int test_voice_lock_is_lock_event(void)
     TEST_BEGIN();
     ASSERT_EQ(voice_lock_is_lock_event((WPARAM)7), 1);   /* WTS_SESSION_LOCK */
     ASSERT_EQ(voice_lock_is_lock_event((WPARAM)8), 0);   /* WTS_SESSION_UNLOCK */
+    ASSERT_EQ(voice_lock_is_lock_event((WPARAM)2), 1);   /* WTS_CONSOLE_DISCONNECT: fail safe */
+    ASSERT_EQ(voice_lock_is_lock_event((WPARAM)4), 1);   /* WTS_REMOTE_DISCONNECT */
+    ASSERT_EQ(voice_lock_is_lock_event((WPARAM)3), 0);   /* WTS_REMOTE_CONNECT */
+    ASSERT_EQ(voice_lock_is_lock_event((WPARAM)1), 0);   /* WTS_CONSOLE_CONNECT */
     ASSERT_EQ(voice_lock_is_lock_event((WPARAM)0), 0);
     TEST_END();
 }

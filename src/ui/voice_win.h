@@ -93,6 +93,10 @@ int voice_send_pressed(void);
 /* Posted by the conversation glue when the first spoken reply of a launch needs the
  * "no British voice" notice; the handler shows it (the dialog pauses the conversation). */
 #define WM_VOICE_NOTICE    (WM_APP + 0x47)
+/* Posted when the window is enabled again (a modal dialog closed): the conversation's
+ * resume runs after the code that follows the dialog (Settings: voice_feature_apply),
+ * so a voice setting saved off or changed never reopens the microphone first. */
+#define WM_VOICE_ACTIVATION (WM_APP + 0x48)
 
 /* The Send/Stop handler's Stop branch ran: a conversation ends its turn. */
 void voice_on_chat_stop(void);

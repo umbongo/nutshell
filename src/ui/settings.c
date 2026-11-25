@@ -1078,14 +1078,14 @@ static const char *voice_win_chosen_id(const SettingsDlgData *d)
     return at >= 0 ? d->voice_win[at].id : "";
 }
 
-/* Play sample: stop a conversation's speech first (spec 5.2), then speak. The
+/* Play sample: a conversation's speech is already stopped (the dialog is modal, so the
+ * conversation is Paused); it is not ended here. Then speak. The
  * WM_VOICE_TTS messages go to the main window (the Settings window's owner),
  * which reaps the speech thread on VTT_EXITED. sapi.dll loads here, on the click. */
 static void voice_play_sample(SettingsDlgData *d)
 {
     HWND owner = GetWindow(GetParent(d->hPage), GW_OWNER);
     if (!owner) return;
-    if (voice_conv_running()) voice_conv_event(VCE_STOP, 0, 0);
     (void)voice_tts_sample(owner, voice_win_chosen_id(d));
 }
 

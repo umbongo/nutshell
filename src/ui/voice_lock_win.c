@@ -36,5 +36,8 @@ int voice_lock_registered(void)
 
 int voice_lock_is_lock_event(WPARAM wp)
 {
-    return wp == (WPARAM)WTS_SESSION_LOCK;
+    /* An RDP or console disconnect leaves the session running with nobody at the microphone:
+     * treated as a lock (fail safe). */
+    return wp == (WPARAM)WTS_SESSION_LOCK || wp == (WPARAM)WTS_REMOTE_DISCONNECT
+        || wp == (WPARAM)WTS_CONSOLE_DISCONNECT;
 }

@@ -376,6 +376,7 @@ $(IT_DIR)/%.o: %.rc
 all: $(TARGET)
 
 release: $(TARGET)
+	@command -v strings >/dev/null 2>&1 || { echo 'FAIL: strings is not installed, so the WAV seam check cannot run'; exit 1; }
 	@! strings -a $(TARGET) | grep -E -q '$(SEAM_MARKERS)' || { echo 'FAIL: the WAV seam is in $(TARGET)'; exit 1; }
 	upx --best --lzma $(TARGET)
 

@@ -5500,6 +5500,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             voice_on_notice();
             return 0;
 
+        case WM_VOICE_ACTIVATION:
+            voice_on_activation();
+            return 0;
+
         case WM_WTSSESSION_CHANGE:
             voice_on_session_change(wParam);
             break;   /* on to DefWindowProc */
@@ -6263,7 +6267,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * when either comes back). */
             if (!wParam) voice_on_deactivate();
             if (msg == WM_ACTIVATEAPP) voice_on_activateapp(wParam != 0);
-            voice_on_activation();
+            if (msg == WM_ENABLE && wParam) PostMessage(hwnd, WM_VOICE_ACTIVATION, 0, 0);
+            else voice_on_activation();
             break;
 
         case WM_NCACTIVATE: {
