@@ -690,6 +690,24 @@ Open, in priority order:
       two nested ones (e.g. two tabs failing at once). Also: a notice raised while the main
       window is minimized appears centred on its restored position, with a taskbar on the
       top or left edge.
+- [ ] **SSH: a resize during the connect never reaches the server** (maintainer's issue mark,
+      2026-11-25, v1.2.95, `nutshell-20261125-112702-p7428.issue1.log`: tmux drew 25 rows and
+      93 columns in a 49x125 window). `connection_thread` asks for the pty with the grid
+      snapshotted when the connect starts (`j->cols`/`j->rows`, `src/ui/window.c`); the grid
+      sync skips `io.resize` while `s->io.ctx` is NULL, so every resize in those seconds (27
+      of them in the log, 25x93 to 49x125) is dropped, and adopting the channel on connect
+      sends no size. The remote pty keeps the starting size until the next grid change.
+      Fix: after `s->io = io` in the SSH branch of the connect-done handler, call
+      `s->io.resize(s->io.ctx, s->term->cols, s->term->rows)`; have `ssh_pty_request` record
+      `last_cols`/`last_rows` so an unchanged size sends nothing. Telnet already reads the
+      current grid at adoption. Test first: a native test that the adopt step sends the
+      current size when it differs from the requested one, and a harness case that resizes
+      mid-connect and reads `stty size`. Until then, resizing the window by one cell fixes a
+      session.
+- [ ] The AI assistant cannot run queued commands while the session is inside tmux; they
+      run only after tmux is closed (maintainer, 2026-11-25, *reported*, not investigated).
+- [ ] Thinking view: each mode (collapsed, compact, extended, open) needs its own colour as
+      it cycles; two of them are both green today (maintainer, 2026-11-25).
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
