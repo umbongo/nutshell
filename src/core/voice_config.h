@@ -67,6 +67,16 @@ void voice_pause_format(int ms, char *out, size_t cap); /* "1.2": seconds with o
 /* What the Voice page leaves enabled (1) for a voice_on / Mode / Key mode state. */
 typedef struct { int key_mode; int mic_delay; int auto_send; int conversation; } VoiceModeEnables;
 void voice_mode_enables(int voice_on, int mode, int ptt_mode, VoiceModeEnables *out);
+/* What the Voice page's speech rows do for the page's own state (not the saved one).
+ * conversation_enabled: the Conversation section is live (voice on, Mode Conversation).
+ * speech: the Speech row is enabled. The rest are shown while 1: ai_rows (provider,
+ * AI voice, AI speech model, Play sample's AI path), url (Custom only), key (not while the
+ * speech-to-text key is shared), style (Custom only), uk_line (Windows speech, no British
+ * woman's voice installed), privacy (whenever the AI rows are). An unknown provider keeps
+ * the AI rows and shows neither url nor style. */
+typedef struct { int speech, ai_rows, url, key, style, uk_line, privacy; } VoiceSpeechEnables;
+void voice_speech_enables(int conversation_enabled, int engine, const char *provider,
+                          int key_shared, int uk_voice_installed, VoiceSpeechEnables *out);
 int voice_gain_clamp(int db);                   /* into VOICE_GAIN_MIN_DB..VOICE_GAIN_MAX_DB */
 void voice_gain_label(int db, char *out, size_t cap); /* "+12 dB" "0 dB" "-12 dB" */
 void voice_settings_default(Settings *s);       /* called by config_default_settings */

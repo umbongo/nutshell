@@ -129,6 +129,22 @@ void voice_mode_enables(int voice_on, int mode, int ptt_mode, VoiceModeEnables *
     out->conversation = voice_on && conv;
 }
 
+void voice_speech_enables(int conversation_enabled, int engine, const char *provider,
+                          int key_shared, int uk_voice_installed, VoiceSpeechEnables *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!conversation_enabled) return;
+    const int ai = engine == VOICE_SPEECH_AI;
+    const int custom = provider && strcmp(provider, "custom") == 0;
+    out->speech = 1;
+    out->ai_rows = ai;
+    out->url = ai && custom;
+    out->key = ai && !key_shared;
+    out->style = ai && custom;
+    out->uk_line = !ai && !uk_voice_installed;
+    out->privacy = ai;
+}
+
 int voice_gain_clamp(int db)
 {
     if (db < VOICE_GAIN_MIN_DB) return VOICE_GAIN_MIN_DB;

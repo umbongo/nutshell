@@ -141,5 +141,12 @@
 #define IDC_VOICE_PAUSE          3118 /* Conversation: "Pause before sending" edit (seconds, one decimal) */
 #define IDC_VOICE_WIN_VOICE      3119 /* Conversation: Windows voice combo (Automatic first) */
 #define IDC_VOICE_PLAY_SAMPLE    3120 /* Conversation: "Play sample" button */
+#define IDC_VOICE_SPEECH         3121 /* Conversation: Speech combo (Windows speech / AI speech) */
+#define IDC_VOICE_TTS_PROVIDER   3122 /* AI speech: provider combo (Mistral / Custom) */
+#define IDC_VOICE_TTS_URL        3123 /* AI speech: Custom base URL edit */
+#define IDC_VOICE_TTS_KEY        3124 /* AI speech: API key edit */
+#define IDC_VOICE_AI_VOICE       3125 /* AI speech: voice (editable combo) */
+#define IDC_VOICE_AI_MODEL       3126 /* AI speech: model (editable combo) */
+#define IDC_VOICE_AI_STYLE       3127 /* AI speech: accent and style (multi-line edit) */
 
 #endif

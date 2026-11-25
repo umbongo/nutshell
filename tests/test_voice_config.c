@@ -1444,6 +1444,50 @@ int test_voice_mode_enables(void)
     TEST_END();
 }
 
+int test_voice_speech_enables(void)
+{
+    TEST_BEGIN();
+    VoiceSpeechEnables e;
+    /* Dictation (the Conversation section off): everything off */
+    voice_speech_enables(0, VOICE_SPEECH_AI, "custom", 0, 0, &e);
+    ASSERT_EQ(e.speech + e.ai_rows + e.url + e.key + e.style + e.uk_line + e.privacy, 0);
+    /* Windows speech, no British woman's voice installed: the line, nothing of AI */
+    voice_speech_enables(1, VOICE_SPEECH_WINDOWS, "mistral", 0, 0, &e);
+    ASSERT_EQ(e.speech, 1);
+    ASSERT_EQ(e.uk_line, 1);
+    ASSERT_EQ(e.ai_rows + e.url + e.key + e.style + e.privacy, 0);
+    /* Windows speech with such a voice installed: no line */
+    voice_speech_enables(1, VOICE_SPEECH_WINDOWS, "mistral", 0, 1, &e);
+    ASSERT_EQ(e.uk_line, 0);
+    ASSERT_EQ(e.speech, 1);
+    /* AI speech with Mistral, key shared: no key, url or style; privacy on; no UK line */
+    voice_speech_enables(1, VOICE_SPEECH_AI, "mistral", 1, 0, &e);
+    ASSERT_EQ(e.ai_rows, 1);
+    ASSERT_EQ(e.privacy, 1);
+    ASSERT_EQ(e.key + e.url + e.style + e.uk_line, 0);
+    /* Mistral with its own key: the key row, still no url or style */
+    voice_speech_enables(1, VOICE_SPEECH_AI, "mistral", 0, 0, &e);
+    ASSERT_EQ(e.key, 1);
+    ASSERT_EQ(e.url + e.style, 0);
+    /* Custom: url, key and style */
+    voice_speech_enables(1, VOICE_SPEECH_AI, "custom", 0, 0, &e);
+    ASSERT_EQ(e.url, 1);
+    ASSERT_EQ(e.key, 1);
+    ASSERT_EQ(e.style, 1);
+    ASSERT_EQ(e.privacy, 1);
+    /* An unknown provider: the AI rows stay on, the url is off */
+    voice_speech_enables(1, VOICE_SPEECH_AI, "openai", 0, 0, &e);
+    ASSERT_EQ(e.ai_rows, 1);
+    ASSERT_EQ(e.privacy, 1);
+    ASSERT_EQ(e.url, 0);
+    ASSERT_EQ(e.style, 0);
+    /* NULL provider is unknown, not a crash */
+    voice_speech_enables(1, VOICE_SPEECH_AI, NULL, 0, 0, &e);
+    ASSERT_EQ(e.ai_rows, 1);
+    ASSERT_EQ(e.url, 0);
+    TEST_END();
+}
+
 /* ---- PR 3: AI speech settings ------------------------------------------- */
 
 static const char *const k_ais_keys[7] = {

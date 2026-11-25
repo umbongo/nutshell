@@ -3854,6 +3854,7 @@ int test_voice_config_first_load_voice_off(void);
 int test_voice_pause_parse(void);
 int test_voice_pause_format(void);
 int test_voice_mode_enables(void);
+int test_voice_speech_enables(void);
 int test_voice_config_stt_key_foreign_blob_preserved(void);
 int test_voice_config_save_aborts_when_stt_encrypt_fails(void);
 int test_voice_config_validate_clamps(void);
@@ -8609,6 +8610,7 @@ int main(void) {
     failed += test_voice_pause_parse();
     failed += test_voice_pause_format();
     failed += test_voice_mode_enables();
+    failed += test_voice_speech_enables();
     failed += test_voice_config_stt_key_foreign_blob_preserved();
     failed += test_voice_config_save_aborts_when_stt_encrypt_fails();
     failed += test_voice_config_validate_clamps();
