@@ -742,6 +742,58 @@ int test_voice_audio_conv_attach_live_feeds(void)
     TEST_END();
 }
 
+/* voice_audio_conv_end_turn ends the open turn at once, as the endpointer's pause would:
+ * TURN_END, then the turn's audio; a stale token or no open turn does nothing; the
+ * listener is then out of the turn (no second TURN_END follows). */
+int test_voice_audio_conv_end_turn(void)
+{
+    TEST_BEGIN();
+    static int16_t s[CV_TOTAL];
+    cv_build(s);
+    va_begin_test();
+    HWND w = va_window();
+    ASSERT_EQ(voice_audio_start(w), 1);
+    ASSERT_EQ(voice_audio_wait_ready(5000), 1);
+    voice_audio_test_conv_open(CV_TOKEN, CV_PAUSE_MS);
+    voice_audio_conv_end_turn(CV_TOKEN);          /* no turn open: nothing */
+    CvGot g0;
+    memset(&g0, 0, sizeof g0);
+    cv_collect(&g0, 300, 0);
+    ASSERT_TRUE(g0.turn == NULL);
+    ASSERT_TRUE(!cv_has(&g0, VLN_TURN_END));
+    size_t part = (size_t)(CV_LEAD + 20) * CV_WIN;
+    voice_audio_test_conv_ingest(CV_TOKEN, s, part);
+    CvGot g;
+    memset(&g, 0, sizeof g);
+    cv_collect(&g, 3000, 0);
+    ASSERT_TRUE(cv_has(&g, VLN_TURN_START));
+    ASSERT_TRUE(g.turn == NULL);
+    voice_audio_conv_end_turn(CV_TOKEN + 1);      /* a stale token: nothing */
+    CvGot g1;
+    memset(&g1, 0, sizeof g1);
+    cv_collect(&g1, 300, 0);
+    ASSERT_TRUE(g1.turn == NULL);
+    voice_audio_conv_end_turn(CV_TOKEN);
+    CvGot g2;
+    memset(&g2, 0, sizeof g2);
+    cv_collect(&g2, 5000, 1);
+    ASSERT_NOT_NULL(g2.turn);
+    ASSERT_TRUE(cv_has(&g2, VLN_TURN_END));
+    ASSERT_TRUE(g2.turn->pcm.n >= (size_t)20 * CV_WIN);   /* the speech so far, kept */
+    ASSERT_EQ((int)g2.turn->token, (int)CV_TOKEN);
+    voice_audio_free_capture(g2.turn);
+    /* the quiet tail: the listener is out of the turn, so it makes no second end for it */
+    voice_audio_test_conv_ingest(CV_TOKEN, s + (CV_LEAD + CV_SPEECH) * CV_WIN, CV_TAIL * CV_WIN);
+    CvGot g3;
+    memset(&g3, 0, sizeof g3);
+    cv_collect(&g3, 800, 0);
+    ASSERT_TRUE(g3.turn == NULL);
+    ASSERT_TRUE(!cv_has(&g3, VLN_TURN_END));
+    voice_audio_conv_end(CV_TOKEN);
+    va_end_test(w);
+    TEST_END();
+}
+
 /* A dictation end or begin during a conversation pre-empts it: the UI is told, under the
  * conversation's token, that the capture is gone (it must not keep believing one is open). */
 int test_voice_audio_conv_preempted_is_reported(void)

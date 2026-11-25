@@ -102,7 +102,7 @@ static size_t va_cap_samples(int cap_ms)
 #define VA_LEVEL_MS     50u
 
 typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH, VC_SET_GAIN,
-               VC_CONV_BEGIN, VC_CONV_MODE, VC_CONV_ATTACH, VC_CONV_END,
+               VC_CONV_BEGIN, VC_CONV_MODE, VC_CONV_ATTACH, VC_CONV_END, VC_CONV_END_TURN,
                VC_TEST_CONV_OPEN, VC_TEST_CONV_INGEST } VaCmdKind;
 typedef struct {
     VaCmdKind kind;
@@ -680,6 +680,17 @@ static void va_conv_end(VaState *st, unsigned token)
     if (va_conv_is(st, token)) va_finish(st, 0);
 }
 
+/* The turn ends now, exactly as the endpointer's pause would end it: TURN_END, the live
+ * session's end after the last samples, the audio posted. The listener is then reset so it
+ * makes no second end for the same turn. Nothing when no turn is open or the token is stale. */
+static void va_conv_end_turn(VaState *st, unsigned token)
+{
+    if (!va_conv_is(st, token) || !st->conv->in_turn) return;
+    va_conv_post_event(st, VLN_TURN_END);
+    va_conv_turn_done(st);
+    voice_listen_set_mode(&st->conv->listen, st->conv->listen.mode);   /* out of the turn */
+}
+
 /* The one place a gain command takes effect, for the thread and the seam. */
 static void va_set_gain(VaState *st, int gain_db)
 {
@@ -858,6 +869,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_CONV_MODE:   va_conv_set_mode(&st, c.token, (VoiceListenMode)c.flag); break;
             case VC_CONV_ATTACH: va_conv_attach(&st, c.token, c.token2); break;
             case VC_CONV_END:    va_conv_end(&st, c.token); break;
+            case VC_CONV_END_TURN: va_conv_end_turn(&st, c.token); break;
             case VC_TEST_CONV_OPEN:
                 st.conv = va_conv_new(&st, c.token, c.pause_ms, 0);
                 break;
@@ -1149,6 +1161,15 @@ void voice_audio_conv_attach_live(unsigned token, unsigned live_token)
     c.kind = VC_CONV_ATTACH;
     c.token = token;
     c.token2 = live_token;
+    va_push_raw(&c);
+}
+
+void voice_audio_conv_end_turn(unsigned token)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_CONV_END_TURN;
+    c.token = token;
     va_push_raw(&c);
 }
 

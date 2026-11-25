@@ -20,7 +20,8 @@
 #define VC_REPLY_B "This is the second answer to a second question, long enough to cut it in the middle. "
 
 typedef struct {
-    int cap_begin, cap_end, cap_mode, attach_live;
+    int cap_begin, cap_end, cap_mode, attach_live, cap_end_turn;
+    unsigned stt_token; int stt_ok;
     unsigned cap_token; VoiceListenMode mode;
     int link_start, link_close, link_ok; unsigned live_token;
     int stt_submit, stt_cancel;
@@ -44,6 +45,7 @@ static int f_cap_begin(unsigned t) { F.cap_begin++; F.cap_token = t; voice_ledge
 static void f_cap_end(unsigned t) { (void)t; F.cap_end++; voice_ledger_release(VRES_CAPTURE); }
 static void f_cap_mode(unsigned t, VoiceListenMode m) { (void)t; F.cap_mode++; F.mode = m; }
 static void f_attach(unsigned t, unsigned l) { (void)t; (void)l; F.attach_live++; }
+static void f_end_turn(unsigned t) { (void)t; F.cap_end_turn++; }
 static int f_link_start(unsigned l)
 {
     F.link_start++;
@@ -53,7 +55,15 @@ static int f_link_start(unsigned l)
     return 1;
 }
 static void f_link_close(unsigned l) { (void)l; F.link_close++; voice_ledger_release(VRES_LIVE_SESSION); }
-static int f_stt_submit(VoiceCapture *c, unsigned t) { (void)c; (void)t; F.stt_submit++; voice_ledger_acquire(VRES_STT_UPLOAD); return 1; }
+static int f_stt_submit(VoiceCapture *c, unsigned t)
+{
+    (void)c;
+    F.stt_submit++;
+    F.stt_token = t;
+    if (!F.stt_ok) return 0;
+    voice_ledger_acquire(VRES_STT_UPLOAD);
+    return 1;
+}
 static void f_stt_cancel(unsigned t) { (void)t; F.stt_cancel++; voice_ledger_release(VRES_STT_UPLOAD); }
 static int f_tts_start(unsigned t)
 {
@@ -131,7 +141,7 @@ static VoiceConvOps fake_ops(void)
     VoiceConvOps o;
     memset(&o, 0, sizeof o);
     o.cap_begin = f_cap_begin; o.cap_end = f_cap_end; o.cap_mode = f_cap_mode;
-    o.cap_attach_live = f_attach;
+    o.cap_attach_live = f_attach; o.cap_end_turn = f_end_turn;
     o.link_start = f_link_start; o.link_close = f_link_close;
     o.stt_submit = f_stt_submit; o.stt_cancel = f_stt_cancel;
     o.tts_start = f_tts_start; o.tts_speak = f_tts_speak; o.tts_stop = f_tts_stop;
@@ -153,6 +163,9 @@ static LRESULT CALLBACK vc_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
     case WM_ACTIVATEAPP:
+        voice_conv_note_activateapp(w != 0);
+        voice_conv_on_activation();
+        break;
     case WM_ENABLE:
         voice_conv_on_activation();
         break;
@@ -194,6 +207,7 @@ static HWND vc_begin(void)
     F.idle = 1;
     F.send_status = VSS_SENT;
     F.app_active = 1;
+    F.stt_ok = 1;
     F.notice_due_first = 0;
     voice_ledger_reset();
     F.win = CreateWindowExW(0, L"VConvTestWin", L"vconv", WS_POPUP, 0, 0, 10, 10, NULL, NULL,
@@ -339,12 +353,11 @@ int test_vconv_win_activate_and_enable_pause(void)
     ASSERT_EQ(F.cap_begin, 1);
     ASSERT_EQ(F.cap_end, 0);
 
-    F.app_active = 0;
+    /* the probe still says active (as it does mid-transition): the message's wParam rules */
     PostMessage(w, WM_ACTIVATEAPP, FALSE, 0);
     pump();
     ASSERT_EQ(F.cap_end, 1);
     ASSERT_STR_EQ(F.header, "Paused while Nutshell is in the background");
-    F.app_active = 1;
     PostMessage(w, WM_ACTIVATEAPP, TRUE, 0);
     pump();
     ASSERT_EQ(F.cap_begin, 2);
@@ -575,6 +588,150 @@ int test_vconv_win_events_after_their_moment_dropped(void)
 
     voice_conv_event(VCE_END, VCX_OFF, 0);
     ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* ---- batch, fallback, Send while Hearing, the draft cue ---- */
+
+#define FALLBACK_FAILED_NOTE \
+    "The recording could not be transcribed again: the text in the box is what arrived live"
+
+static VoiceCapture *make_turn(unsigned tok)
+{
+    VoiceCapture *c = (VoiceCapture *)calloc(1, sizeof *c);
+    int16_t pcm[320];
+    for (int i = 0; i < 320; i++) pcm[i] = (int16_t)(i & 1 ? -3000 : 3000);
+    pcm_init(&c->pcm, 4000);
+    (void)pcm_append(&c->pcm, pcm, 320);
+    c->token = tok;
+    c->verdict = PCM_SPEECH;
+    return c;
+}
+
+static void stt_result(int ok, const char *text, const char *err)
+{
+    VoiceSttResult *r = (VoiceSttResult *)calloc(1, sizeof *r);
+    r->token = F.stt_token;
+    r->ok = ok;
+    r->text_cap = 256;
+    r->text = (char *)calloc(1, r->text_cap);
+    if (text) snprintf(r->text, r->text_cap, "%s", text);
+    if (err) snprintf(r->err, sizeof r->err, "%s", err);
+    voice_conv_on_stt(r);   /* the glue frees it */
+}
+
+/* Hearing; then Send. Returns with the listener's turn ended by the capture command. */
+static unsigned hear_then_send(int live)
+{
+    voice_conv_start(live);
+    const unsigned tok = voice_conv_capture_token();
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(0, tok));
+    aud_event(VLN_TURN_START);
+    return tok;
+}
+
+int test_vconv_win_send_while_hearing_batch(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    const unsigned tok = hear_then_send(0);
+    ASSERT_EQ(voice_conv_state(), VCS_HEARING);
+    voice_conv_event(VCE_SEND, 0, 0);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    ASSERT_EQ(F.cap_end_turn, 1);            /* the turn ends now, as a pause would end it */
+    ASSERT_EQ(F.stt_submit, 0);              /* the audio is still on its way */
+    aud_event(VLN_TURN_END);                 /* what the audio thread posts, then the audio */
+    voice_conv_on_audio(VAM_CONV_TURN, (LPARAM)make_turn(tok));
+    ASSERT_EQ(F.stt_submit, 1);
+    ASSERT_EQ(voice_ledger_count(VRES_STT_UPLOAD), 1);
+    stt_result(1, "hello there friend", NULL);
+    ASSERT_EQ(voice_ledger_count(VRES_STT_UPLOAD), 0);
+    ASSERT_STR_EQ(F.live_text, "hello there friend");
+    ASSERT_EQ(F.send_turn, 1);
+    ASSERT_EQ(F.last_voice_turn, 1);
+    ASSERT_EQ(voice_conv_state(), VCS_WORKING);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_send_while_hearing_live_link_fails_to_fallback(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    const unsigned tok = hear_then_send(1);
+    ASSERT_EQ(F.link_start, 1);
+    live_msg(VLE_READY, "", NULL);
+    live_msg(VLE_DELTA, "i1", "hello wor");
+    voice_conv_event(VCE_SEND, 0, 0);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    ASSERT_EQ(F.cap_end_turn, 1);
+    aud_event(VLN_TURN_END);
+    voice_conv_on_audio(VAM_CONV_TURN, (LPARAM)make_turn(tok));   /* kept as the fallback */
+    ASSERT_EQ(F.stt_submit, 0);
+    live_msg(VLE_CLOSED, "", NULL);          /* the link fails after Send */
+    ASSERT_EQ(F.stt_submit, 1);              /* the kept audio goes to the batch recogniser */
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    stt_result(1, "hello world again", NULL);
+    ASSERT_STR_EQ(F.live_text, "hello world again");   /* replaces this turn's live text */
+    ASSERT_EQ(F.send_turn, 1);
+    ASSERT_EQ(voice_ledger_count(VRES_STT_UPLOAD), 0);
+    ASSERT_EQ(voice_ledger_count(VRES_LIVE_SESSION), 0);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_fallback_failed_note(void)
+{
+    TEST_BEGIN();
+    for (int mode = 0; mode < 3; mode++) {   /* 0 result failed, 1 submit refused, 2 batch turn failed */
+        HWND w = vc_begin();
+        const unsigned tok = hear_then_send(mode != 2);
+        if (mode != 2) live_msg(VLE_DELTA, "i1", "partial words");
+        if (mode == 1) F.stt_ok = 0;
+        voice_conv_event(VCE_SEND, 0, 0);
+        aud_event(VLN_TURN_END);
+        voice_conv_on_audio(VAM_CONV_TURN, (LPARAM)make_turn(tok));
+        F.note[0] = '\0';
+        if (mode != 2) live_msg(VLE_CLOSED, "", NULL);
+        if (mode == 0) stt_result(0, NULL, "HTTP 500");
+        if (mode == 2) stt_result(0, NULL, "HTTP 401");
+        if (mode == 1) ASSERT_EQ(F.stt_submit, 1);
+        if (mode == 2) {
+            ASSERT_STR_EQ(F.note, "HTTP 401");                /* a batch turn says why */
+        } else {
+            ASSERT_STR_EQ(F.note, FALLBACK_FAILED_NOTE);      /* a live turn says the words stay */
+        }
+        ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+        ASSERT_EQ(F.send_turn, 0);
+        ASSERT_EQ(voice_ledger_count(VRES_STT_UPLOAD), 0);
+        voice_conv_event(VCE_END, VCX_OFF, 0);
+        ASSERT_TRUE(voice_ledger_all_zero());
+        vc_end(w);
+    }
+    TEST_END();
+}
+
+int test_vconv_win_draft_cue_follows_the_box(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    ASSERT_STR_EQ(F.header, "Listening\xE2\x80\xA6 speak, then pause to send");
+    F.box_text = 1;
+    voice_conv_on_box_changed();
+    ASSERT_STR_EQ(F.header, "Your text and what you say next will be sent after a pause.");
+    const int h = F.headers;
+    voice_conv_on_box_changed();             /* no change: nothing is rewritten */
+    ASSERT_EQ(F.headers, h);
+    F.box_text = 0;
+    voice_conv_on_box_changed();
+    ASSERT_STR_EQ(F.header, "Listening\xE2\x80\xA6 speak, then pause to send");
+    voice_conv_event(VCE_END, VCX_OFF, 0);
     vc_end(w);
     TEST_END();
 }

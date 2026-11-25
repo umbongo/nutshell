@@ -6251,6 +6251,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * ends a push-to-talk recording; a conversation pauses (and resumes
              * when either comes back). */
             if (!wParam) voice_on_deactivate();
+            if (msg == WM_ACTIVATEAPP) voice_on_activateapp(wParam != 0);
             voice_on_activation();
             break;
 

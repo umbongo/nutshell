@@ -20,6 +20,9 @@
  */
 
 #define CUE_DRAFT "Your text and what you say next will be sent after a pause."
+#define FALLBACK_FAILED \
+    "The recording could not be transcribed again: the text in the box is what arrived live"
+#define LISTENING_TEXT "Listening\xE2\x80\xA6 speak, then pause to send"
 #define QMAX 24
 #define BUSY_FALLBACK_MS 10000ul
 #define CONV_TOKEN_BASE 0x800000u
@@ -43,7 +46,6 @@ static VoiceTranscript g_vt;
 static int g_vt_on;
 static VoiceCapture *g_turn_audio;          /* the finished turn's audio (fallback or batch) */
 static int g_batch_want;                    /* SUBMIT_BATCH is waiting for the turn's audio */
-static int g_audio_gone;                    /* the turn's audio was wiped under the machine */
 static int g_turn_open_listener;            /* the listener's turn is open (TURN_START seen, no end yet) */
 static int g_err_note_done;                 /* a provider error or failure text was shown this turn */
 
@@ -65,6 +67,8 @@ static int g_notice_raised;                 /* raised this launch */
 static char g_notice_voice[160];
 
 static int g_paused;                        /* VoiceConvPause as last fed */
+static int g_active_hint = -1;              /* WM_ACTIVATEAPP's last wParam, -1 unknown */
+static char g_last_header[200];             /* the header text last shown */
 
 static QEv g_q[QMAX];
 static int g_qn;
@@ -163,7 +167,6 @@ static void turn_begin(void)
     wipe_turn_audio();
     free_transcript();
     g_batch_want = 0;
-    g_audio_gone = 0;
     g_err_note_done = 0;
     g_ops->live_begin();
     vt_init(&g_vt, 0, 0);   /* the real live_replace puts the separator in front itself */
@@ -215,7 +218,7 @@ void voice_conv_event(VoiceConvEvent ev, int a, int b)
 
 /* ---- machine actions ---- */
 
-static const char *device_text(VoiceAudioErr e)
+const char *voice_conv_device_text(VoiceAudioErr e)
 {
     switch (e) {
     case VAE_NO_DEVICE:
@@ -249,7 +252,7 @@ static void open_capture(void)
         return;
     }
     g_cap_open = 0;
-    note(device_text(VAE_OPEN_FAILED));
+    note(voice_conv_device_text(VAE_OPEN_FAILED));
     enqueue(VCE_END, VCX_DEVICE_LOST, 0);
 }
 
@@ -258,6 +261,7 @@ static void close_capture(void)
     if (!g_cap_open) return;
     g_cap_open = 0;
     g_have_mode = 0;
+    g_turn_open_listener = 0;   /* a closed capture has no turn */
     g_ops->cap_end(g_cap_token);
 }
 
@@ -294,7 +298,8 @@ static void do_submit(void)
     if (g_ops->stt_submit(g_turn_audio, g_stt_token)) {
         g_stt_open = 1;
     } else {
-        enqueue(VCE_BATCH_FAIL, 0, 0);   /* the op says why */
+        if (g_c.live) note(FALLBACK_FAILED);
+        enqueue(VCE_BATCH_FAIL, 0, 0);   /* a batch turn: the op says why */
     }
     wipe_turn_audio();   /* the upload holds its own copy */
 }
@@ -303,11 +308,6 @@ static void submit_batch(void)
 {
     if (g_turn_audio) {
         do_submit();
-        return;
-    }
-    if (g_audio_gone) {   /* the turn's audio went with the listener's hold */
-        g_batch_want = 0;
-        enqueue(VCE_BATCH_FAIL, 0, 0);
         return;
     }
     g_batch_want = 1;     /* the audio arrives as VAM_CONV_TURN */
@@ -476,7 +476,25 @@ static void show_header(VoiceConvHeader h)
     if (h == VCH_LISTENING && g_c.state == VCS_LISTENING && g_ops->box_has_text
         && g_ops->box_has_text())
         t = CUE_DRAFT;
-    if (t[0] && g_ops->header) g_ops->header(t);
+    if (t[0] && g_ops->header) {
+        snprintf(g_last_header, sizeof g_last_header, "%s", t);
+        g_ops->header(t);
+    }
+}
+
+/* The draft cue follows the box while Listening: a draft in the box shows the cue, an empty box
+ * the plain Listening text. Any other header (a pause, "Didn't catch that") is left alone. */
+void voice_conv_on_box_changed(void)
+{
+    const char *want;
+    if (!ops_ready() || !voice_conv_running() || g_c.state != VCS_LISTENING || g_c.pause != VCP_NONE)
+        return;
+    if (strcmp(g_last_header, CUE_DRAFT) != 0 && strcmp(g_last_header, voice_conv_header_text(VCH_LISTENING)) != 0)
+        return;
+    want = (g_ops->box_has_text && g_ops->box_has_text()) ? CUE_DRAFT : LISTENING_TEXT;
+    if (strcmp(want, g_last_header) == 0) return;
+    snprintf(g_last_header, sizeof g_last_header, "%s", want);
+    if (g_ops->header) g_ops->header(want);
 }
 
 static void arm_timer(void)
@@ -497,7 +515,7 @@ static void reset_resources(void)
     wipe_turn_audio();
     wipe_free(&g_reply);
     wipe_free(&g_spoken);
-    g_batch_want = g_audio_gone = g_turn_open_listener = 0;
+    g_batch_want = g_turn_open_listener = 0;
     g_notice_pending = 0;
     g_cut = 0;
     g_playing = g_read_to_end = 0;
@@ -505,7 +523,7 @@ static void reset_resources(void)
     g_busy_seen = 0;
 }
 
-static void apply(VoiceConvOut o, VoiceConvEvent ev, VoiceConvState before)
+static void apply(VoiceConvOut o)
 {
     const unsigned a = o.actions;
 
@@ -529,30 +547,26 @@ static void apply(VoiceConvOut o, VoiceConvEvent ev, VoiceConvState before)
     if (a & VCA_OPEN_CAPTURE) open_capture();
 
     if (a & (VCA_MODE_LISTEN | VCA_MODE_SPEAK | VCA_MODE_HOLD)) {
-        VoiceListenMode m = (a & VCA_MODE_SPEAK) ? speak_mode()
-                          : (a & VCA_MODE_LISTEN) ? VLM_LISTEN : VLM_HOLD;
-        int skip = 0;
-        if (m == VLM_HOLD && g_turn_open_listener) {
-            /* Send pressed while hearing: the listener's turn is still open. A batch turn needs
-             * its audio, so the listener is left to end the turn itself; a live turn is ended on
-             * the link below and the hold wipes the audio (no fallback is possible then). */
-            if (!g_link_open && ev == VCE_SEND && before == VCS_HEARING) skip = 1;
-            else { g_audio_gone = 1; g_turn_open_listener = 0; }
+        const VoiceListenMode m = (a & VCA_MODE_SPEAK) ? speak_mode()
+                                : (a & VCA_MODE_LISTEN) ? VLM_LISTEN : VLM_HOLD;
+        if (m == VLM_HOLD && g_turn_open_listener && g_cap_open) {
+            /* Send pressed while hearing: the turn ends now, exactly as the pause would end it
+             * (the live session is ended and the audio kept on the audio thread's side). The
+             * TURN_END and the audio follow as messages. */
+            g_ops->cap_end_turn(g_cap_token);
+            g_turn_open_listener = 0;
         }
-        if (!skip) {
-            g_want_mode = m;
-            g_have_mode = 1;
-            apply_mode();
-        }
+        g_want_mode = m;
+        g_have_mode = 1;
+        apply_mode();
     }
     if (a & VCA_LOCK_TYPING) {
         turn_begin();
         g_ops->lock_typing(1);
     }
     if (a & VCA_OPEN_LINK) open_link();
-    if (a & VCA_END_TURN_AUDIO) {
-        if (g_link_open && (g_audio_gone || g_turn_open_listener)) voice_live_feed_end(g_live_token);
-    }
+    /* VCA_END_TURN_AUDIO: nothing to do here; the audio thread ends the live session's audio
+     * when the turn ends (by the pause, or by cap_end_turn above). */
     if (a & VCA_SUBMIT_BATCH) submit_batch();
     if (a & VCA_UNLOCK_TYPING) g_ops->lock_typing(0);
     if (a & VCA_SEND_TURN) send_now(1);
@@ -580,7 +594,7 @@ static void run_event(VoiceConvEvent ev, int a, int b)
     const VoiceConvState before = g_c.state;
     const VoiceConvOut o = voice_conv_step(&g_c, ev, a, b, now_ms());
     if (before == VCS_IDLE && ev == VCE_START) g_ops->mic_ui(1);
-    apply(o, ev, before);
+    apply(o);
     if (g_c.state == VCS_IDLE) {
         if (before != VCS_IDLE) {
             g_ops->mic_ui(0);
@@ -618,6 +632,8 @@ void voice_conv_set_ops(const VoiceConvOps *ops)
     g_cap_token = g_live_token = g_stt_token = g_tts_token = 0;
     g_aec = -1;
     g_have_mode = 0;
+    g_active_hint = -1;
+    g_last_header[0] = '\0';
     g_notice_checked = g_notice_raised = 0;
     g_adj = 0;
     g_since = 0;
@@ -657,6 +673,7 @@ void voice_conv_start(int live)
 {
     if (!ops_ready() || voice_conv_running()) return;
     reset_resources();
+    g_last_header[0] = '\0';
     g_notice_checked = 0;   /* g_aec keeps the last report for the Settings page */
     g_since = g_ops->msg_count();
     voice_conv_event(VCE_START, live ? 1 : 0, 0);
@@ -699,7 +716,7 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
         }
         /* The capture is gone (ended by another command, or the device failed). */
         close_capture();
-        if (e != VAE_CONV_ENDED) note(device_text(e));
+        if (e != VAE_CONV_ENDED) note(voice_conv_device_text(e));
         voice_conv_event(VCE_END, VCX_DEVICE_LOST, 0);
         return;
     }
@@ -823,7 +840,8 @@ void voice_conv_on_stt(VoiceSttResult *r)
         enqueue(VCE_BATCH_OK, 0, 0);
         transcript_final(r->text);
     } else {
-        if (!g_c.live) note(r->err[0] ? r->err : "Transcription failed");
+        if (g_c.live) note(FALLBACK_FAILED);
+        else note(r->err[0] ? r->err : "Transcription failed");
         enqueue(VCE_BATCH_FAIL, 0, 0);   /* the live words stay: its own header says so */
     }
     voice_stt_result_free(r);
@@ -921,12 +939,17 @@ void voice_conv_on_notice(void)
         begin_speak(g_reply, 0, 1);
 }
 
+void voice_conv_note_activateapp(int active)
+{
+    g_active_hint = active ? 1 : 0;   /* the probe is unreliable during the transition itself */
+}
+
 void voice_conv_on_activation(void)
 {
     int want;
     if (!ops_ready() || !voice_conv_running()) return;
     if (g_main && !IsWindowEnabled(g_main)) want = VCP_DIALOG;
-    else if (!app_active()) want = VCP_BACKGROUND;
+    else if (!(g_active_hint >= 0 ? g_active_hint : app_active())) want = VCP_BACKGROUND;
     else want = VCP_NONE;
     if (want == g_paused) return;
     g_paused = want;

@@ -30,6 +30,7 @@ typedef struct {     /* every effect the glue has; the real table calls the modu
     int  (*cap_begin)(unsigned token);  void (*cap_end)(unsigned token);
     void (*cap_mode)(unsigned token, VoiceListenMode m);
     void (*cap_attach_live)(unsigned token, unsigned live_token);
+    void (*cap_end_turn)(unsigned token);   /* end the open turn now, as the pause would (Send while hearing) */
     int  (*link_start)(unsigned live_token); void (*link_close)(unsigned live_token);
     int  (*stt_submit)(VoiceCapture *turn, unsigned token); void (*stt_cancel)(unsigned token);
     int  (*tts_start)(unsigned token);  void (*tts_speak)(unsigned token, unsigned id,
@@ -72,6 +73,10 @@ void voice_conv_on_stt(VoiceSttResult *r);          /* WM_VOICE_STT for the turn
 void voice_conv_on_tts(const VoiceTtsMsg *m);
 void voice_conv_on_timer(void);                     /* VOICE_CONV_TIMER_ID */
 void voice_conv_on_activation(void);                /* recompute paused/active */
+void voice_conv_note_activateapp(int active);       /* WM_ACTIVATEAPP's wParam: the activation hint */
+void voice_conv_on_box_changed(void);               /* the input box's text changed: the draft cue */
+/* The user-facing text of a capture error (also what dictation shows). */
+const char *voice_conv_device_text(VoiceAudioErr e);
 void voice_conv_on_turn_idle(void);                 /* WM_VOICE_TURN_IDLE */
 void voice_conv_on_card(int kind);                  /* WM_VOICE_CARD, kind = VoiceCardKind */
 void voice_conv_on_notice(void);                    /* WM_VOICE_NOTICE: shows the notice */

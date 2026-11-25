@@ -725,6 +725,11 @@ static void rc_cap_attach_live(unsigned token, unsigned live_token)
     if (g_audio_up) voice_audio_conv_attach_live(token, live_token);
 }
 
+static void rc_cap_end_turn(unsigned token)
+{
+    if (g_audio_up) voice_audio_conv_end_turn(token);
+}
+
 static int rc_link_start(unsigned live_token)
 {
     const Settings *s = ui_current_settings();
@@ -886,7 +891,7 @@ static int rc_notice_due(char *name, size_t cap)
 static void rc_level(double frac) { ai_chat_voice_set_level(ui_ai_panel(), frac); }
 
 static const VoiceConvOps k_conv_ops = {
-    rc_cap_begin, rc_cap_end, rc_cap_mode, rc_cap_attach_live,
+    rc_cap_begin, rc_cap_end, rc_cap_mode, rc_cap_attach_live, rc_cap_end_turn,
     rc_link_start, rc_link_close,
     rc_stt_submit, rc_stt_cancel,
     rc_tts_start, rc_tts_speak, rc_tts_stop, rc_tts_volume, rc_tts_quit,
@@ -902,6 +907,16 @@ static const VoiceConvOps k_conv_ops = {
 void voice_on_activation(void)
 {
     if (g_audio_up) voice_conv_on_activation();
+}
+
+void voice_on_activateapp(int active)
+{
+    voice_conv_note_activateapp(active);   /* the message's own word, not the foreground probe */
+}
+
+void voice_on_box_changed(void)
+{
+    if (g_audio_up) voice_conv_on_box_changed();
 }
 
 void voice_on_tts(LPARAM lp)
@@ -1053,21 +1068,7 @@ static void on_capture_error(VoiceAudioErr e)
      * where the device could still be open. A no-op when nothing is active. */
     if (g_audio_up) voice_audio_capture_end(0);
     release_capture();
-    const char *text;
-    switch (e) {
-    case VAE_NO_DEVICE:
-        text = "No microphone was found. Connect one, or choose another in Settings > Voice.";
-        break;
-    case VAE_DEVICE_LOST:
-        text = "The microphone stopped responding (was it unplugged?). Nothing was sent.";
-        break;
-    case VAE_ACCESS_DENIED:
-        text = VOICE_PRIVACY_TEXT;
-        break;
-    default:
-        text = "The microphone could not be opened.";
-        break;
-    }
+    const char *text = voice_conv_device_text(e);
     if (e == VAE_DEVICE_LOST && g_dict.state != VDS_IDLE) {
         /* A lost device is a soft end: the last words still arrive, nothing is sent. The
          * capture is gone, so tell the link and the machine so it does not wait for it. */
@@ -1097,7 +1098,9 @@ void voice_on_audio_msg(WPARAM wp, LPARAM lp)
         voice_conv_on_audio((UINT)wp, lp);
         return;
     }
-    if (wp == VAM_LEVEL && voice_conv_running()) {
+    /* Only while the conversation's capture is open: a Settings Test meter owns the level otherwise
+     * (a dialog pause closes the capture). */
+    if (wp == VAM_LEVEL && voice_conv_running() && voice_conv_capture_token() != 0) {
         voice_conv_on_audio((UINT)wp, lp);
         return;
     }

@@ -100,6 +100,8 @@ void voice_on_chat_stop(void);
 /* Conversation mode: window.c and the panel route these (each is a no-op with no
  * conversation running). */
 void voice_on_activation(void);          /* WM_ACTIVATEAPP / WM_ENABLE, both directions */
+void voice_on_activateapp(int active);   /* WM_ACTIVATEAPP's wParam, just before voice_on_activation */
+void voice_on_box_changed(void);         /* EN_CHANGE of the AI input box: the conversation's draft cue */
 void voice_on_tts(LPARAM lp);            /* WM_VOICE_TTS: lParam is a VoiceTtsMsg the receiver frees */
 void voice_on_turn_idle(void);           /* WM_VOICE_TURN_IDLE */
 void voice_on_card(WPARAM kind);         /* WM_VOICE_CARD */

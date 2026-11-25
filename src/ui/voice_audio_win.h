@@ -91,6 +91,10 @@ int  voice_audio_conv_begin(const char *device_id_utf8, unsigned token, double g
 void voice_audio_conv_mode(unsigned token, VoiceListenMode m);   /* HOLD wipes a turn in progress */
 void voice_audio_conv_attach_live(unsigned token, unsigned live_token);  /* turn so far is replayed */
 void voice_audio_conv_end(unsigned token);    /* close the device, wipe the turn */
+/* End the open turn now, as the endpointer's pause would: VAM_CONV_EVENT TURN_END, the live
+ * session's end, then VAM_CONV_TURN with the audio kept. No-op with no open turn or a stale
+ * token. (Send pressed while hearing.) */
+void voice_audio_conv_end_turn(unsigned token);
 /* TEST-ONLY seams (no device): open a conversation state on the audio thread, and feed it
  * samples as the capture path would (gain applied, then the listener). */
 void voice_audio_test_conv_open(unsigned token, int pause_ms);

@@ -1260,6 +1260,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         case IDC_CHAT_INPUT:
             /* Handle Enter key in input (via EN_CHANGE notification is wrong;
              * we handle it via WM_KEYDOWN subclass or default button) */
+            if (HIWORD(wParam) == EN_CHANGE) voice_on_box_changed();   /* a conversation's draft cue */
             break;
         }
         break;
@@ -2299,6 +2300,7 @@ next_coalesce:;
         /* Losing activation, or a modal dialog disabling the (undocked)
          * panel, ends a push-to-talk recording. */
         if (!wParam) voice_on_deactivate();
+        if (msg == WM_ACTIVATEAPP) voice_on_activateapp(wParam != 0);
         voice_on_activation();   /* a conversation pauses or resumes */
         break;
 
