@@ -44,3 +44,6 @@ tests/integration/.ai_config/
 
 build/wineprefix/
 build/selftest/
+build/win/nutshell-it.exe
+build/win/it-obj/
+build/seamcheck/

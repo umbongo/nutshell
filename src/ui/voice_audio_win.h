@@ -102,4 +102,13 @@ void voice_audio_test_conv_ingest(unsigned token, const int16_t *s, size_t n);
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
 
+#ifdef NS_VOICE_WAV_SEAM
+/* The harness build only (make harness-exe): a 16 kHz mono 16-bit PCM WAV replaces WASAPI for
+ * every capture, dictation and conversation. "" clears it. */
+void voice_audio_seam_set_wav(const char *path);
+/* Appends a conversation header line to "<wav>.header" (the harness reads it; the header is painted,
+ * not a window text). A no-op with no WAV set. */
+void voice_audio_seam_note_header(const char *text);
+#endif
+
 #endif /* NUTSHELL_VOICE_AUDIO_WIN_H */

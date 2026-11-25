@@ -224,6 +224,135 @@ typedef struct {
     struct VaConv       *conv;         /* a conversation capture (or the test seam's state) */
 } VaState;
 
+#ifdef NS_VOICE_WAV_SEAM
+/* ---- the harness build's microphone (make harness-exe, never the release exe) ------------
+ * --voice-wav=<file> (16 kHz mono 16-bit PCM) replaces WASAPI for every capture, dictation and
+ * conversation: a 20 ms waitable timer stands in for the capture event (it is st->buf_ev, so the
+ * thread loop, the stall check and the close all work unchanged), and va_drain feeds one 20 ms
+ * chunk per tick from the file, then silence. The file is consumed once per process, so a
+ * conversation that reopens its capture after Working does not replay the phrase. While a
+ * capture is open "<file>.capture" holds "open", else "closed": the harness reads it to see that
+ * no microphone is open while a tool card waits. */
+static void va_ingest(VaState *st, const int16_t *src, size_t frames);
+__attribute__((used)) static const char g_seam_marker[] = "ns-voice-wav-seam";
+#define VA_SEAM_CHUNK 320u                 /* 20 ms at 16 kHz */
+static char     g_seam_path[MAX_PATH];
+static int16_t *g_seam_pcm;
+static size_t   g_seam_n, g_seam_pos;
+static int      g_seam_loaded, g_seam_open;
+static ULONGLONG g_seam_t0, g_seam_sent;
+
+static void va_seam_state(int open)
+{
+    char p[MAX_PATH + 16];
+    (void)snprintf(p, sizeof(p), "%s.capture", g_seam_path);
+    FILE *f = fopen(p, "w");
+    if (f) { fputs(open ? "open\n" : "closed\n", f); fclose(f); }
+    g_seam_open = open;
+}
+
+static uint32_t va_seam_u32(const unsigned char *b)
+{
+    return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+}
+
+/* Reads the file once; any fault leaves an empty clip (silence), never a crash. */
+static void va_seam_load(void)
+{
+    if (g_seam_loaded) return;
+    g_seam_loaded = 1;
+    FILE *f = fopen(g_seam_path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char *b = (len >= 44 && len < 64L * 1024 * 1024) ? (unsigned char *)malloc((size_t)len) : NULL;
+    if (b && fread(b, 1, (size_t)len, f) == (size_t)len && memcmp(b, "RIFF", 4) == 0 &&
+        memcmp(b + 8, "WAVE", 4) == 0) {
+        size_t off = 12, ulen = (size_t)len;
+        int fmt_ok = 0;
+        while (off + 8 <= ulen) {
+            size_t cl = va_seam_u32(b + off + 4);
+            const unsigned char *cd = b + off + 8;
+            if (cl > ulen - off - 8) cl = ulen - off - 8;   /* a streamed header's size: take what is there */
+            if (memcmp(b + off, "fmt ", 4) == 0 && cl >= 16) {
+                fmt_ok = cd[0] == 1 && cd[1] == 0 && cd[2] == 1 && cd[3] == 0 &&
+                         va_seam_u32(cd + 4) == (uint32_t)WAV_RATE && cd[14] == 16 && cd[15] == 0;
+            } else if (memcmp(b + off, "data", 4) == 0 && fmt_ok) {
+                size_t n = cl / 2;
+                g_seam_pcm = (int16_t *)malloc((n ? n : 1) * sizeof(int16_t));
+                if (g_seam_pcm) {
+                    for (size_t i = 0; i < n; i++)
+                        g_seam_pcm[i] = (int16_t)(uint16_t)(cd[2 * i] | cd[2 * i + 1] << 8);
+                    g_seam_n = n;
+                }
+                break;
+            }
+            off += 8 + cl + (cl & 1u);
+        }
+    }
+    free(b);
+    fclose(f);
+}
+
+void voice_audio_seam_set_wav(const char *path)
+{
+    free(g_seam_pcm);
+    g_seam_pcm = NULL;
+    g_seam_n = g_seam_pos = 0;
+    g_seam_loaded = 0;
+    (void)snprintf(g_seam_path, sizeof(g_seam_path), "%s", path ? path : "");
+}
+
+void voice_audio_seam_note_header(const char *text)
+{
+    char p[MAX_PATH + 16];
+    if (!g_seam_path[0] || !text) return;
+    (void)snprintf(p, sizeof(p), "%s.header", g_seam_path);
+    FILE *f = fopen(p, "a");
+    if (f) { fprintf(f, "%s\n", text); fclose(f); }
+}
+
+/* The seam's va_open_endpoint: the timer in place of the capture event; no device, no echo. */
+static int va_seam_open(VaState *st, unsigned token)
+{
+    va_seam_load();
+    HANDLE tm = CreateWaitableTimerA(NULL, FALSE, NULL);
+    LARGE_INTEGER due;
+    due.QuadPart = -200000;                /* 20 ms, relative, in 100 ns */
+    if (!tm || !SetWaitableTimer(tm, &due, 20, NULL, NULL, FALSE)) {
+        if (tm) CloseHandle(tm);
+        va_post_err(st->ctx, VAE_OPEN_FAILED, token);
+        return 0;
+    }
+    st->buf_ev = tm;
+    st->used_default = 0;
+    g_seam_t0 = GetTickCount64();
+    g_seam_sent = 0;
+    va_seam_state(1);
+    return 1;
+}
+
+/* The seam's va_drain: every 20 ms chunk that is due, from the file, then zeros. */
+static int va_seam_drain(VaState *st)
+{
+    ULONGLONG due = (GetTickCount64() - g_seam_t0) / 20u;
+    int budget = 50;                       /* a stalled thread catches up in bounded bursts */
+    while (g_seam_sent < due && budget-- > 0 && st->active) {
+        int16_t chunk[VA_SEAM_CHUNK];
+        memset(chunk, 0, sizeof(chunk));
+        size_t n = g_seam_n > g_seam_pos ? g_seam_n - g_seam_pos : 0;
+        if (n > VA_SEAM_CHUNK) n = VA_SEAM_CHUNK;
+        if (n > 0) memcpy(chunk, g_seam_pcm + g_seam_pos, n * sizeof(int16_t));
+        g_seam_pos += n;
+        g_seam_sent++;
+        va_ingest(st, chunk, VA_SEAM_CHUNK);
+        secure_zero(chunk, sizeof(chunk));
+    }
+    return 1;
+}
+#endif /* NS_VOICE_WAV_SEAM */
+
 /* The communications-category extras of a conversation capture; every object is released
  * when the capture closes (before the audio client). */
 typedef struct {
@@ -261,6 +390,9 @@ static void va_close_client(VaState *st)
     if (st->cap) { IAudioCaptureClient_Release(st->cap); st->cap = NULL; }
     if (st->client) { IAudioClient_Release(st->client); st->client = NULL; }
     if (st->buf_ev) { CloseHandle(st->buf_ev); st->buf_ev = NULL; }
+#ifdef NS_VOICE_WAV_SEAM
+    if (g_seam_open) va_seam_state(0);
+#endif
 }
 
 /* The live feed, or the test seam's stand-in (NULL in product code). */
@@ -551,6 +683,9 @@ static int va_open_dev(IMMDeviceEnumerator *enm, IMMDevice *dev, IAudioClient **
  * va_open_dev. */
 static int va_open_endpoint(VaState *st, const char *id, unsigned token, VaComms *cm, int *echo)
 {
+#ifdef NS_VOICE_WAV_SEAM
+    if (g_seam_path[0]) { (void)cm; (void)echo; (void)id; return va_seam_open(st, token); }
+#endif
     if (!st->enm) { va_post_err(st->ctx, VAE_NO_DEVICE, token); return 0; }
 
     IAudioClient *cl = NULL;
@@ -723,6 +858,9 @@ static void va_ingest(VaState *st, const int16_t *src, size_t frames)
 /* Drains every packet. Returns 0 on a device error. */
 static int va_drain(VaState *st)
 {
+#ifdef NS_VOICE_WAV_SEAM
+    if (g_seam_path[0] && !st->cap) return va_seam_drain(st);
+#endif
     for (;;) {
         UINT32 frames = 0;
         HRESULT hr = IAudioCaptureClient_GetNextPacketSize(st->cap, &frames);

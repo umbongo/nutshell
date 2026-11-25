@@ -265,7 +265,7 @@ $(call write-stamp,$(FUZZ_FLAGS_STAMP),$(FUZZ_FLAGS_TEXT))
 $(call write-stamp,$(FUZZ_SRCS_STAMP),$(FUZZ_SRCS_TEXT))
 
 
-.PHONY: all clean test lint lint-gate debug release wintest selftest-wine fuzz fuzz-run fuzz-long
+.PHONY: all clean test lint lint-gate debug release wintest selftest-wine fuzz fuzz-run fuzz-long seam-leak-check harness-exe
 
 # ── Win32-only test harness: the icon renderer (GDI+) and the ConPTY
 # backend (real pseudo-consoles, real child processes).  Runs directly on a
@@ -330,9 +330,53 @@ WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui -Itests
 WIN_TEST_LDFLAGS = $(DEP_LIB) -lcrypto -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32 -lwinhttp -lole32 -lcrypt32 -lwtsapi32
 
+# ── The WAV-injection seam (spec 2026-11-24, section 12; plan Task 16). A harness-only build
+# reads --voice-wav=<file> in place of the microphone; the code is under
+# #ifdef NS_VOICE_WAV_SEAM and carries the marker strings below. The release exe must never
+# hold them: seam-leak-check compiles the three files that hold the seam with the release
+# flags to assembly (-fno-lto, so the literals are visible) and fails on a marker;
+# `release` runs the same grep over the linked exe before UPX packs it. Forcing the seam on
+# (make seam-leak-check SEAM_CHECK_DEFS=-DNS_VOICE_WAV_SEAM) must fail.
+SEAM_DIR        = build/seamcheck
+SEAM_CHECK_DEFS =
+SEAM_CHECK_SRCS = src/core/cli_args.c src/ui/voice_audio_win.c src/main.c
+SEAM_MARKERS    = ns-voice-wav-seam|--voice-wav
+
+seam-leak-check:
+	@rm -rf $(SEAM_DIR); mkdir -p $(SEAM_DIR)
+	@for f in $(SEAM_CHECK_SRCS); do \
+		$(CC) $(CFLAGS) -fno-lto $(SEAM_CHECK_DEFS) -S $$f -o $(SEAM_DIR)/`basename $$f .c`.s || exit 1; \
+	done
+	@if grep -E -q '$(SEAM_MARKERS)' $(SEAM_DIR)/*.s; then \
+		echo "FAIL: the WAV-injection seam is compiled into the release flags"; \
+		grep -E -l '$(SEAM_MARKERS)' $(SEAM_DIR)/*.s; exit 1; \
+	else echo "seam-leak-check: ok (no seam in $(SEAM_CHECK_SRCS))"; fi
+
+# The harness exe: every source recompiled with -DNS_VOICE_WAV_SEAM into its own object
+# directory, linked to build/win/nutshell-it.exe (git-ignored, never UPX-packed, never
+# committed). It touches neither the release objects nor build/win/nutshell.exe.
+IT_DIR     = build/win/it-obj
+IT_TARGET  = $(BUILD_DIR)/nutshell-it.exe
+IT_OBJS    = $(addprefix $(IT_DIR)/,$(OBJS))
+
+harness-exe: $(IT_TARGET)
+
+$(IT_TARGET): $(IT_OBJS) $(DELAY_LIBS)
+	@mkdir -p $(dir $@)
+	$(CC) $(IT_OBJS) -o $@ $(LDFLAGS)
+
+$(IT_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DNS_VOICE_WAV_SEAM -c $< -o $@
+
+$(IT_DIR)/%.o: %.rc
+	@mkdir -p $(dir $@)
+	$(WINDRES) -Isrc/ui $< $@
+
 all: $(TARGET)
 
 release: $(TARGET)
+	@! strings -a $(TARGET) | grep -E -q '$(SEAM_MARKERS)' || { echo 'FAIL: the WAV seam is in $(TARGET)'; exit 1; }
 	upx --best --lzma $(TARGET)
 
 $(TARGET): $(OBJS) $(DELAY_LIBS)

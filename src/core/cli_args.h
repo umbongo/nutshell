@@ -30,6 +30,9 @@ typedef struct {
     char theme[CLI_THEME_MAX];           /* --theme <name>, only with --ui-demo */
     char self_report[CLI_REPORT_MAX];    /* --self-report=<path>, only with a plain run or -nc */
     int  self_report_sapi;               /* --self-report-sapi: hold an SpVoice while the report is written */
+#ifdef NS_VOICE_WAV_SEAM
+    char voice_wav[CLI_REPORT_MAX];      /* --voice-wav=<path>: the harness build's microphone (never in the release exe) */
+#endif
 } CliOptions;
 
 /* Parse argv (argv[0] ignored). Never fails hard: bad input yields

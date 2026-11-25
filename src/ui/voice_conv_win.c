@@ -9,6 +9,9 @@
 #include "voice_stt.h"
 #include "voice_transcript.h"
 #include "voice_win.h"
+#ifdef NS_VOICE_WAV_SEAM
+#include "voice_audio_win.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -498,6 +501,9 @@ static void show_header(VoiceConvHeader h)
         t = CUE_DRAFT;
     if (t[0] && g_ops->header) {
         snprintf(g_last_header, sizeof g_last_header, "%s", t);
+#ifdef NS_VOICE_WAV_SEAM
+        voice_audio_seam_note_header(t);
+#endif
         g_ops->header(t);
     }
 }
@@ -514,6 +520,9 @@ void voice_conv_on_box_changed(void)
     want = (g_ops->box_has_text && g_ops->box_has_text()) ? CUE_DRAFT : voice_conv_header_text(VCH_LISTENING);
     if (strcmp(want, g_last_header) == 0) return;
     snprintf(g_last_header, sizeof g_last_header, "%s", want);
+#ifdef NS_VOICE_WAV_SEAM
+    voice_audio_seam_note_header(want);
+#endif
     if (g_ops->header) g_ops->header(want);
 }
 

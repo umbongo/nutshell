@@ -52,6 +52,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\85-telnet.ps1` | telnet against a scripted loopback responder (`Start-TelnetResponder`/`Stop-TelnetResponder`, a `TcpListener` in its own runspace; no real device): `telnet_autologin_never_logs_password`, `telnet_port_refused_reports_in_tab`, `telnet_port_check_is_passive_and_echoes_locally`, `telnet_password_box_asks_and_sends`, plus `ssh_password_box_cancel_reports_in_tab` (needs the SSH host). Status lines are written to the terminal only, so they are read back with Edit > Select All and the clipboard, not from the session log |
 | `cases\90-keys.ps1` | special keys: F-keys, Alt+letter, Shift+Tab/Ctrl+arrows, Ctrl+Space, PgUp/PgDn by screen, the Send Key menu (including "Send Next Key with Alt"), Backspace over SSH, Ctrl+W/T vs. Ctrl+Shift+W/T |
 | `cases\95-ai-select.ps1` | character selection in the AI panel under `--ui-demo=chat`: exact copy, across items, auto-scroll, Edit > Copy and focus |
+| `cases\97-voice.ps1` | `voice_live_dictation_fixture` and `voice_conversation_card_fixture`: voice fed from a synthesised WAV through the harness-only exe `build\win\nutshell-it.exe` (written, unrun; tier `ai`) |
 
 Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
 `cases\*.ps1` is picked up automatically) rather than growing one giant script.
@@ -256,6 +257,8 @@ touches before marking its pull request ready.
 | `cli_host_flag_connects` | (`CLI-1`) `-h tompi` resolves the generated profile by host (`config_find_profile_by_host`) and connects, same as `-sn` |
 | `self_report_ai_off_clean` | (spec section 6, unrun) `nutshell.exe -nc --self-report=self_report.txt` with the AI assistant off: exits 0 after writing the DLL record and module list; winhttp.dll, riched20.dll and msftedit.dll were never requested. Standalone case (the window lives about a second). `make selftest-wine` asserts the same under Wine |
 | `self_report_voice_off_clean` | (unrun) the same `--self-report` with the assistant on and voice off: no `requested: mmdevapi.dll`, no `module: mmdevapi.dll` or `audioses.dll`. `make selftest-wine` asserts the same under Wine (`voiceoff`) |
+| `voice_live_dictation_fixture` | (written, unrun, tier `ai`; needs `NUTSHELL_IT_STT_KEY`, an OpenAI key, and `build\win\nutshell-it.exe`) dictation mode fed "check the disk space on this machine" from a WAV the case synthesises with System.Speech: after the mic click the words reach the AI input while the capture is still open, the Send button stays idle and the box keeps its text after the second mic click, and Send empties the box |
+| `voice_conversation_card_fixture` | (written, unrun, tier `ai`; same keys and exe) conversation mode fed "list the files in my home directory": the controller's headers run Hearing, Sending, Waiting for your approval, the capture is closed while the run_command card waits, Auto-approve stays off, and Run selected then approves it |
 | `f_keys_reach_shell` | F1-F4 -> SS3 P-S, F5-F10 -> CSI 15/17/18/19/20/21~ (F10 posted as `WM_SYSKEYDOWN`, matching real Windows), Shift+F11 -> CSI 23;2~ (plain F11 stays the fullscreen toggle), F12 -> CSI 24~, read back from `cat -v` |
 | `alt_letter_reaches_shell` | Alt+F (posted as `WM_SYSKEYDOWN`/`WM_SYSKEYUP` with no `WM_SYSCHAR` of its own) produces exactly one `^[f` in `cat -v`, proving the app's own `TranslateMessage` synthesises it once, not twice |
 | `shift_tab_and_ctrl_arrows` | Shift+Tab -> CSI Z; Ctrl+Up/Down/Right/Left -> CSI 1;5 A/B/C/D, read back from `cat -v` |
@@ -411,6 +414,23 @@ observe a dialog that blocks the main window from becoming visible in the first
 place (config-missing/corrupt — `WM_CREATE` shows a modal `MessageBoxA` before
 `CreateWindowEx` even returns) can't use `Invoke-Case`'s `Start-Nutshell` at all;
 see `Start-NutshellUntilDialogOrWindow` in `cases\50-window.ps1` for that pattern.
+
+### The WAV-injection seam (harness only)
+
+The release `nutshell.exe` can neither read a WAV nor parse `--voice-wav`. `make harness-exe`
+compiles every source again with `-DNS_VOICE_WAV_SEAM` into `build\win\it-obj\` and links
+`build\win\nutshell-it.exe` (git-ignored, not UPX-packed, never committed; it leaves
+`build\win\nutshell.exe` alone). That build accepts `--voice-wav=<file>` (16 kHz mono 16-bit PCM,
+the only format) and then every capture, dictation and conversation, reads the file in 20 ms
+chunks paced in real time, once per process, then silence, in place of WASAPI. It also keeps
+`<file>.capture` (`open` or `closed`) and `<file>.header` (each conversation header shown, one per
+line) beside the WAV: the release exe's `--self-report` is a one-shot at startup and the
+header is painted, not a window text, so the cases read these instead. `make seam-leak-check`
+compiles the three files that hold the seam with the release flags and fails if a marker string
+(`ns-voice-wav-seam`, `--voice-wav`) is present; `make release` greps the linked exe for the same
+markers before UPX packs it. `make seam-leak-check SEAM_CHECK_DEFS=-DNS_VOICE_WAV_SEAM` must fail.
+The fixtures are synthesised at run time (`New-VoiceFixtureWav` in `cases\97-voice.ps1`), so no
+audio file is committed.
 
 ### Known product bugs
 
