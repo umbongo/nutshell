@@ -706,6 +706,9 @@ Open, in priority order:
       session.
 - [ ] The AI assistant cannot run queued commands while the session is inside tmux; they
       run only after tmux is closed (maintainer, 2026-11-25, *reported*, not investigated).
+- [ ] AI panel: with Auto-approve on there is no record of the commands that were run.
+      They must be displayed and recorded exactly as they are with Auto-approve off
+      (maintainer, 2026-11-25, *reported*, not investigated).
 - [ ] Thinking view: each mode (collapsed, compact, extended, open) needs its own colour as
       it cycles; two of them are both green today (maintainer, 2026-11-25).
 - [ ] Thinking view: when a reasoning stream has ended and a new one begins, minimise the
