@@ -54,6 +54,7 @@ typedef struct {     /* every effect the glue has; the real table calls the modu
     int  (*notice_due)(char *voice_name, size_t cap);   /* 1 when the notice is due; names the voice */
     void (*level)(double frac);                         /* the mic pulse follows the level, 0..1 */
     int  (*app_active)(void);                           /* 0 when another application has the foreground */
+    int  (*chat_same)(void);                            /* 0 when the panel's chat is no longer the conversation's */
 } VoiceConvOps;
 
 /* Registers the real table and the main window (timer, pause checks, WM_VOICE_NOTICE).

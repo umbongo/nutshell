@@ -362,9 +362,19 @@ static void transcript_final(const char *text)
     enqueue(VCE_TRANSCRIPT, (int)classify_text(text ? text : ""), 0);
 }
 
+/* 1 when the panel's chat is no longer the one the conversation started in. */
+static int chat_moved(void)
+{
+    return g_ops->chat_same && !g_ops->chat_same();
+}
+
 static void send_now(int voice_turn)
 {
     VoiceSendStatus st;
+    if (chat_moved()) {   /* a posted chat-changed notice may not have run yet */
+        enqueue(VCE_END, VCX_CHAT_CHANGED, 0);
+        return;
+    }
     g_since = g_ops->msg_count();
     st = g_ops->send_turn(voice_turn);
     if (st == VSS_SENT) {
@@ -410,6 +420,8 @@ static void begin_speak(const char *text, size_t from, int is_reply)
         return;
     }
     g_notice_pending = 0;
+    /* a cut-in's duck is over once the speech it ducked is gone: every reply starts at full volume */
+    if (g_ops->tts_volume) g_ops->tts_volume(g_tts_token, 100);
     g_cur_id = ++g_reply_seq;
     g_cur_is_reply = is_reply;
     if (is_reply) {
@@ -438,6 +450,10 @@ static void speak_reply(void)
     char *text = NULL;
     int err = 0;
     char *sp = NULL;
+    if (chat_moved()) {   /* the reply belongs to another chat now: say nothing */
+        enqueue(VCE_END, VCX_CHAT_CHANGED, 0);
+        return;
+    }
     if (g_ops->reply(g_since, &text, &err) && text) sp = voice_speak_text(text);
     if (text) {
         secure_zero(text, strlen(text) + 1);
@@ -778,6 +794,7 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
                 voice_conv_event(VCE_UNDUCK, 0, 0);
                 break;
             case VLN_CUT:
+                g_want_mode = VLM_LISTEN;   /* the listener moved itself; no command is sent */
                 voice_conv_event(VCE_CUT, 0, 0);
                 break;
             default:

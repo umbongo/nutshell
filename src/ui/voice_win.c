@@ -586,6 +586,9 @@ int voice_pump_filter(const MSG *m)
         voice_conv_event(VCE_ESCAPE, 0, 0);
         return 1;
     }
+    /* A running conversation is ended or stopped by the key wherever the focus is: the second
+     * press is the safeguard when the user clicked away (spec 5.1, 5.6, 5.7). */
+    if (conv_mode(s) && voice_conv_running()) in_panel = 1;
     VoiceStep st = step_now(ev, in_panel);
 
     if (in == VI_ESCAPE) return st.consume;
@@ -806,6 +809,13 @@ static void rc_tts_quit(unsigned token) { voice_tts_quit(token, 3000); }
 static int rc_lock_reg(void) { return voice_lock_register(g_main); }
 static void rc_lock_unreg(void) { voice_lock_unregister(g_main); }
 
+static int rc_chat_same(void)
+{
+    VoiceBinding now;
+    ai_chat_voice_binding(ui_ai_panel(), &now);
+    return voice_binding_same(&g_conv_bind, &now);
+}
+
 static VoiceSendStatus rc_send_turn(int voice_turn)
 {
     return ai_chat_voice_send_turn(ui_ai_panel(), voice_turn);
@@ -899,7 +909,7 @@ static const VoiceConvOps k_conv_ops = {
     rc_note, rc_header,
     rc_live_begin, rc_live_replace, rc_drop_words, rc_lock_typing, rc_send_caption, rc_mic_ui,
     rc_box_has_text, rc_notice_voice,
-    rc_notice_due, rc_level, NULL
+    rc_notice_due, rc_level, NULL, rc_chat_same
 };
 
 /* What window.c and the panel route to the conversation (each is a no-op with none running). */
@@ -993,6 +1003,7 @@ void voice_feature_apply(HWND main)
     } else {
         g_voice_filter = NULL;
         voice_conv_event(VCE_END, VCX_OFF, 0);   /* capture ended, speech quit, link closed, lock unregistered */
+        voice_tts_quit(VOICE_TTS_SAMPLE_TOKEN, 3000);   /* a Play sample in flight */
         stop_everything();
         voice_stt_cancel_all();   /* an upload in flight is cancelled and joined */
         voice_live_reap(3000);    /* closes and joins every live session */
@@ -1009,6 +1020,7 @@ void voice_feature_shutdown(void)
     voice_gate_set_enabled(0);
     g_voice_filter = NULL;
     voice_conv_event(VCE_END, VCX_OFF, 0);
+    voice_tts_quit(VOICE_TTS_SAMPLE_TOKEN, 3000);   /* a Play sample in flight */
     stop_everything();
     voice_stt_cancel_all();
     voice_live_reap(3000);

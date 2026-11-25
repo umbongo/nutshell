@@ -36,6 +36,7 @@ typedef struct {
     int box_text;
     int notice_voice, notice_due_calls; char notice_name[160]; int notice_due_first;
     int app_active;
+    int chat_differs;   /* the panel's binding is no longer the conversation's */
     HWND win;
 } Fake;
 
@@ -107,6 +108,7 @@ static int f_reply(unsigned since, char **text, int *err)
     return 1;
 }
 static int f_idle(void) { return F.idle; }
+static int f_chat_same(void) { return !F.chat_differs; }
 static void f_cancel_work(void) { F.cancel_work++; }
 static void f_note(const char *t) { F.notes++; snprintf(F.note, sizeof F.note, "%s", t); }
 static void f_header(const char *t) { F.headers++; snprintf(F.header, sizeof F.header, "%s", t); }
@@ -153,7 +155,7 @@ static VoiceConvOps fake_ops(void)
     o.live_begin = f_live_begin; o.live_replace = f_live_replace; o.drop_words = f_drop_words;
     o.lock_typing = f_lock_typing; o.send_caption = f_caption; o.mic_ui = f_mic;
     o.box_has_text = f_box_text; o.notice_voice = f_notice_voice;
-    o.notice_due = f_notice_due; o.app_active = f_app_active;
+    o.notice_due = f_notice_due; o.app_active = f_app_active; o.chat_same = f_chat_same;
     return o;
 }
 
@@ -761,6 +763,65 @@ int test_vconv_win_audio_lost_leaves_ending(void)
         ASSERT_TRUE(voice_ledger_all_zero());
         vc_end(w);
     }
+    TEST_END();
+}
+
+/* A turn or a reply for a chat that is no longer the conversation's is not sent or spoken:
+ * the conversation ends "the chat changed" instead (the posted notice may arrive after the
+ * message that would have acted). */
+int test_vconv_win_changed_chat_sends_and_speaks_nothing(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    F.chat_differs = 1;
+    voice_conv_event(VCE_SEND, 0, 0);          /* a typed send: refused, the conversation ends */
+    ASSERT_EQ(F.send_turn, 0);
+    ASSERT_FALSE(voice_conv_running());
+    ASSERT_STR_EQ(F.note, "Conversation ended: the chat changed");
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+
+    w = vc_begin();
+    voice_conv_start(0);
+    to_working();                              /* same chat: sent */
+    ASSERT_EQ(F.send_turn, 1);
+    F.chat_differs = 1;                        /* the chat changes before its reply is read */
+    chat_finishes(VC_REPLY_A);
+    ASSERT_EQ(F.tts_speak, 0);
+    ASSERT_FALSE(voice_conv_running());
+    ASSERT_STR_EQ(F.note, "Conversation ended: the chat changed");
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* A cut-in's duck must not leak into the next reply: it is spoken at full volume. */
+int test_vconv_win_reply_after_duck_is_full_volume(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    ASSERT_EQ(F.tts_speak, 1);
+    aud_event(VLN_DUCK);
+    ASSERT_EQ(F.volume, 18);
+    aud_event(VLN_CUT);                        /* the cut ends the duck */
+    ASSERT_EQ(F.volume, 100);
+    voice_conv_event(VCE_PRESS, 0, 0);         /* the cut left it Hearing: a press ends it */
+    ASSERT_FALSE(voice_conv_running());
+    vc_end(w);
+
+    w = vc_begin();                            /* a duck whose un-duck was lost */
+    voice_conv_start(0);
+    F.volume = 18;
+    to_speaking();
+    ASSERT_EQ(F.tts_speak, 1);
+    ASSERT_EQ(F.volume, 100);                  /* the reply starts at full volume */
+    voice_conv_event(VCE_PRESS, 0, 0);
+    voice_conv_event(VCE_PRESS, 0, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
     TEST_END();
 }
 
