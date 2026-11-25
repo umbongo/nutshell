@@ -4080,6 +4080,7 @@ int test_vplayq_end_without_data(void);
 int test_vplayq_wrap_ids(void);
 int test_vplayq_queued_frames(void);
 int test_vplayq_empty_push(void);
+int test_vplayq_pos_accumulates_across_blocks(void);
 int test_vwav_mono16(void);
 int test_vwav_split_everywhere(void);
 int test_vwav_placeholder_sizes(void);
@@ -8869,6 +8870,7 @@ int main(void) {
     failed += test_vplayq_wrap_ids();
     failed += test_vplayq_queued_frames();
     failed += test_vplayq_empty_push();
+    failed += test_vplayq_pos_accumulates_across_blocks();
     failed += test_vwav_mono16();
     failed += test_vwav_split_everywhere();
     failed += test_vwav_placeholder_sizes();

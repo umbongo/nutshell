@@ -22,6 +22,9 @@ struct VoicePlayQ {
     uint64_t queued;
     unsigned ended[ENDED_MAX];   /* ring of reached end markers */
     int ended_first, ended_count;
+    int acc_valid;               /* frames_in_chunk accumulates across blocks (R31) */
+    unsigned acc_reply, acc_chunk;
+    uint64_t acc_frames;
 };
 
 static int before(unsigned a, unsigned b) { return (int)(a - b) < 0; }
@@ -56,6 +59,7 @@ static void clear(VoicePlayQ *q)
     q->tail = NULL;
     q->queued = 0;
     q->ended_first = q->ended_count = 0;
+    q->acc_valid = 0;
 }
 
 VoicePlayQ *voice_playq_new(void)
@@ -159,10 +163,17 @@ size_t voice_playq_read(VoicePlayQ *q, int16_t *out, size_t frames, VoicePlayPos
         b->read += take;
         got += take;
         q->queued -= take;
+        if (q->acc_valid && q->acc_reply == b->reply_id && q->acc_chunk == b->chunk)
+            q->acc_frames += take;
+        else
+            q->acc_frames = take;
+        q->acc_valid = 1;
+        q->acc_reply = b->reply_id;
+        q->acc_chunk = b->chunk;
         if (pos) {
             pos->reply_id = b->reply_id;
             pos->chunk = b->chunk;
-            pos->frames_in_chunk = b->read;
+            pos->frames_in_chunk = q->acc_frames;
         }
         if (b->read == b->n) {
             q->head = b->next;

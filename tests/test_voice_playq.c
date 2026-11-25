@@ -169,3 +169,34 @@ int test_vplayq_empty_push(void)
     voice_playq_free(q);
     TEST_END();
 }
+
+int test_vplayq_pos_accumulates_across_blocks(void)
+{
+    TEST_BEGIN();
+    VoicePlayQ *q = voice_playq_new();
+    int16_t out[100];
+    VoicePlayPos pos = {99, 99, 99};
+    ASSERT_NOT_NULL(q);
+    /* one chunk arrives as three blocks, then the next chunk's first block */
+    ASSERT_EQ(voice_playq_push(q, 4, 0, mk(30, 1), 30), 1);
+    ASSERT_EQ(voice_playq_push(q, 4, 0, mk(30, 1), 30), 1);
+    ASSERT_EQ(voice_playq_push(q, 4, 0, mk(30, 1), 30), 1);
+    ASSERT_EQ(voice_playq_push(q, 4, 1, mk(20, 1), 20), 1);
+    /* a read ending in the third block, then a read across the block boundary */
+    ASSERT_EQ(voice_playq_read(q, out, 70, &pos), 70);
+    ASSERT_EQ(pos.chunk, 0);
+    ASSERT_EQ(pos.frames_in_chunk, 70);
+    ASSERT_EQ(voice_playq_read(q, out, 20, &pos), 20);
+    ASSERT_EQ(pos.chunk, 0);
+    ASSERT_EQ(pos.frames_in_chunk, 90);
+    ASSERT_EQ(voice_playq_read(q, out, 5, &pos), 5);
+    ASSERT_EQ(pos.chunk, 1);
+    ASSERT_EQ(pos.frames_in_chunk, 5);
+    /* after a flush the count starts over, even for the same reply and chunk */
+    voice_playq_flush(q, 4);
+    ASSERT_EQ(voice_playq_push(q, 4, 1, mk(10, 1), 10), 1);
+    ASSERT_EQ(voice_playq_read(q, out, 10, &pos), 10);
+    ASSERT_EQ(pos.frames_in_chunk, 10);
+    voice_playq_free(q);
+    TEST_END();
+}
