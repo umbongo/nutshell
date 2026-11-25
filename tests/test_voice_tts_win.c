@@ -394,4 +394,42 @@ int test_voice_tts_exited_context_restarts(void)
     TEST_END();
 }
 
+int test_voice_tts_reap_by_generation(void)
+{
+    TEST_BEGIN();
+    voice_ledger_reset();
+    HWND w = tt_window();
+    ASSERT_TRUE(w != NULL);
+    gates(1);
+    ASSERT_EQ(voice_tts_start(w, 31u, NULL), 1);
+    VoiceTtsMsg *m = wait_msg(31u, 1u << VTT_EXITED | 1u << VTT_READY, 5000);
+    ASSERT_TRUE(m != NULL);
+    const int exited = (m->kind == VTT_EXITED);
+    const unsigned gen1 = m->gen;
+    free(m);
+    if (!exited) {
+        printf("  SKIP: SAPI is present: no start-time exit to restart over\n");
+        voice_tts_quit(31u, 3000);
+    } else {
+        ASSERT_EQ(voice_tts_start(w, 31u, NULL), 1);       /* reap and restart */
+        m = wait_msg(31u, 1u << VTT_EXITED, 5000);
+        ASSERT_TRUE(m != NULL);
+        const unsigned gen2 = m->gen;
+        free(m);
+        ASSERT_TRUE(gen1 != gen2);
+        voice_tts_reap(31u, gen1);                         /* the stale one: a no-op */
+        ASSERT_EQ(voice_tts_running(), 1);
+        ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 1);
+        voice_tts_reap(31u, gen2);                         /* the current one: freed */
+        ASSERT_EQ(voice_tts_running(), 0);
+        ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
+        voice_tts_reap(31u, gen2);                         /* idempotent */
+        ASSERT_EQ(voice_ledger_underflow(), 0);
+    }
+    drain();
+    gates(0);
+    DestroyWindow(w);
+    TEST_END();
+}
+
 #endif /* _WIN32 */

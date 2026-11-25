@@ -31,6 +31,7 @@ typedef struct {
 typedef struct TtsCtx {
     HWND notify;
     unsigned token;
+    unsigned gen;                 /* process-wide, distinct per context */
     char voice_id[256];
     HANDLE thread;
     HANDLE cmd_evt;               /* auto-reset: a command is waiting */
@@ -49,6 +50,7 @@ typedef struct TtsCtx {
 } TtsCtx;
 
 static TtsCtx *g_ctx[TTS_MAX_CTX];   /* UI thread only */
+static volatile LONG g_gen;          /* generation counter */
 
 /* ---- UTF-8 -> UTF-16 with position map ---- */
 
@@ -97,6 +99,7 @@ static void post(const TtsCtx *c, VoiceTtsKind kind, unsigned reply, size_t offs
     VoiceTtsMsg *m = (VoiceTtsMsg *)calloc(1, sizeof(*m));
     if (m == NULL) return;
     m->token = c->token;
+    m->gen = c->gen;
     m->kind = kind;
     m->reply_id = reply;
     m->offset = offset;
@@ -357,6 +360,7 @@ int voice_tts_start(HWND notify, unsigned token, const char *voice_id)
     if (c == NULL) return 0;
     c->notify = notify;
     c->token = token;
+    c->gen = (unsigned)InterlockedIncrement(&g_gen);
     c->volume = -1;
     c->auto_quit = (token == VOICE_TTS_SAMPLE_TOKEN);
     if (voice_id != NULL) {
@@ -396,6 +400,17 @@ void voice_tts_speak(unsigned token, unsigned reply_id, const char *utf8, size_t
     c->have_speak = 1;
     LeaveCriticalSection(&c->cs);
     SetEvent(c->cmd_evt);
+}
+
+void voice_tts_reap(unsigned token, unsigned gen)
+{
+    TtsCtx *c = find(token);
+    if (c == NULL || c->gen != gen) return;   /* stale: not the context that exited */
+    EnterCriticalSection(&c->cs);
+    const int exited = c->exited;
+    LeaveCriticalSection(&c->cs);
+    if (!exited) return;
+    voice_tts_quit(token, INFINITE);          /* exited: the join is immediate */
 }
 
 void voice_tts_stop(unsigned token)

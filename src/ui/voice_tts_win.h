@@ -30,6 +30,8 @@ typedef enum { VTT_READY = 1, VTT_WORD, VTT_DONE, VTT_ERROR, VTT_EXITED } VoiceT
 
 typedef struct {
     unsigned token;
+    unsigned gen;    /* distinct for every context ever started: a stale message from a
+                      * reaped-and-restarted token is told apart by it */
     VoiceTtsKind kind;
     unsigned reply_id;
     size_t offset;   /* VTT_WORD: UTF-8 byte offset into the text given to speak */
@@ -62,6 +64,14 @@ void voice_tts_volume(unsigned token, int percent);
 /* Stop, release SpVoice, join (bounded by wait_ms; the thread then detaches
  * and frees itself). Releases VRES_SPVOICE. Idempotent per token. */
 void voice_tts_quit(unsigned token, unsigned wait_ms);
+
+/* The UI handles VTT_EXITED with voice_tts_reap(msg->token, msg->gen), never
+ * voice_tts_quit: frees the context for `token` only when its generation matches
+ * and its thread has exited; a stale or mismatched gen is a no-op, so a late
+ * VTT_EXITED of a reaped-and-restarted token cannot kill the new context.
+ * Releases VRES_SPVOICE when it frees. voice_tts_quit stays for deliberate
+ * teardown. */
+void voice_tts_reap(unsigned token, unsigned gen);
 
 int  voice_tts_running(void);   /* 1 while any speech thread is held */
 
