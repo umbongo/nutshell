@@ -931,4 +931,171 @@ int test_vconv_win_speak_mode_follows_new_capture(void)
     TEST_END();
 }
 
+/* ---- Task 8b: Retry as an external send, unducking, the reply's times, progress, the notice
+ * flag and a pending end event ---- */
+
+int test_vconv_win_external_send(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    F.idle = 0;                          /* the chat is busy as the external send goes out */
+    voice_conv_external_send();
+    ASSERT_EQ(voice_conv_state(), VCS_WORKING);
+    ASSERT_EQ(F.cap_end, 1);             /* the capture is closed */
+    ASSERT_EQ(F.send_turn, 0);           /* the glue sends nothing itself */
+    chat_finishes(VC_REPLY_A);           /* a reply after the new baseline */
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    ASSERT_EQ(F.tts_speak, 1);
+    ASSERT_TRUE(strstr(F.speak_text, "first answer") != NULL);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_external_send_keeps_words(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    aud_event(VLN_TURN_START);
+    live_msg(VLE_READY, "", NULL);
+    live_msg(VLE_DELTA, "i1", "hello there");
+    ASSERT_EQ(voice_conv_state(), VCS_HEARING);
+    ASSERT_TRUE(F.live_replace >= 1);
+    ASSERT_EQ(F.link_close, 0);
+    F.idle = 0;
+    voice_conv_external_send();
+    ASSERT_EQ(voice_conv_state(), VCS_WORKING);
+    ASSERT_EQ(F.drop_words, 0);          /* the words in the box were just sent: not stripped */
+    ASSERT_EQ(F.link_close, 1);          /* the turn's link is closed */
+    ASSERT_EQ(F.cap_end, 1);
+    ASSERT_EQ(F.typing, 0);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_external_send_unducks(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    aud_event(VLN_DUCK);
+    ASSERT_EQ(F.volume, 18);
+    F.idle = 0;
+    voice_conv_external_send();
+    ASSERT_EQ(voice_conv_state(), VCS_WORKING);
+    ASSERT_TRUE(F.tts_stop >= 1);
+    ASSERT_EQ(F.volume, 100);            /* the duck is over once the speech it ducked is gone */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_new_reply_resets_times(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    tts_msg(VTT_DONE, F.speak_id, 0);    /* reply A ended: its time is stamped */
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    voice_conv_test_advance(360000ul);   /* 6 minutes: more than the phrase window */
+    to_working();
+    chat_finishes(VC_REPLY_B);           /* the new reply loads and speaks */
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    const unsigned id_b = F.speak_id;
+    tts_msg(VTT_WORD, id_b, 40);
+    aud_event(VLN_CUT);
+    aud_event(VLN_TURN_START);
+    live_msg(VLE_READY, "", NULL);
+    aud_event(VLN_TURN_END);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    const int speaks = F.tts_speak;
+    live_msg(VLE_DONE, "", "carry on");  /* judged against the new reply's times only */
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    ASSERT_EQ(F.tts_speak, speaks + 1);
+    ASSERT_EQ((int)F.speak_from, 40);
+    ASSERT_EQ(F.send_turn, 2);           /* "carry on" was not sent as a turn */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_progress_keeps_long_reply(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    const unsigned id = F.speak_id;
+    for (int i = 0; i < 22; i++) {       /* 11 minutes in 30-second steps */
+        voice_conv_test_advance(30000ul);
+        tts_msg(VTT_WORD, id, 5);
+        voice_conv_on_timer();
+        ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    }
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_notice_kept_if_ended_first(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    F.notice_due_first = 1;
+    voice_conv_start(0);
+    to_working();
+    chat_finishes(VC_REPLY_A);           /* the notice is posted, the reply held */
+    ASSERT_EQ(F.tts_speak, 0);
+    ASSERT_EQ(F.notice_voice, 0);
+    voice_conv_event(VCE_END, VCX_OFF, 0);   /* the conversation ends before WM_VOICE_NOTICE runs */
+    pump();
+    ASSERT_EQ(F.notice_voice, 0);        /* nothing was shown: the notice is still owed */
+    ASSERT_TRUE(voice_ledger_all_zero());
+    F.notice_due_first = 1;
+    voice_conv_start(0);
+    to_working();
+    chat_finishes(VC_REPLY_A);           /* the next conversation's first reply raises it */
+    ASSERT_EQ(F.tts_speak, 0);
+    pump();
+    ASSERT_EQ(F.notice_voice, 1);
+    ASSERT_EQ(F.tts_speak, 1);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_end_never_dropped(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    for (int i = 0; i < 30; i++) voice_conv_test_queue(VCE_TICK, 0, 0);   /* the queue is full */
+    voice_conv_test_queue(VCE_END, VCX_OFF, 0);                           /* the end must survive */
+    voice_conv_test_queue(VCE_END, VCX_SETTINGS, 0);                      /* the first end wins */
+    voice_conv_test_pump();
+    ASSERT_EQ(voice_conv_state(), VCS_IDLE);
+    ASSERT_FALSE(voice_conv_running());
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+    vc_end(w);
+    TEST_END();
+}
+
 #endif /* _WIN32 */

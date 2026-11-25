@@ -84,6 +84,11 @@ void voice_on_chat_changed_msg(void);
  * recording and sends once the words are in); the handler then returns without sending. */
 int voice_send_pressed(void);
 
+/* A user launch of a chat turn that did not go through the conversation (Retry, a suggestion chip,
+ * a typed send while Working): a running conversation takes the reply baseline again and moves to
+ * Working (voice_conv_external_send). Call it after the launch, once the chat is busy. */
+void voice_on_external_send(void);
+
 /* Posted to the main window by ai_chat when the chat is idle (nothing streaming, no
  * dispatch, no card waiting for the user), and when a card needing the user appears
  * (wParam = VoiceCardKind). The controller re-checks and ignores both when no

@@ -9,6 +9,7 @@
 #include "voice_stt.h"
 #include "voice_transcript.h"
 #include "voice_win.h"
+#include "dlog.h"
 #ifdef NS_VOICE_WAV_SEAM
 #include "voice_audio_win.h"
 #endif
@@ -76,6 +77,11 @@ static char g_last_header[200];             /* the header text last shown */
 static QEv g_q[QMAX];
 static int g_qn;
 static int g_in_step;
+static int g_pend_end;                      /* a VCE_END that found the queue full: its own slot */
+static int g_pend_end_a, g_pend_end_b;
+static int g_keep_words;                    /* the VCA_DROP_TURN of an external send keeps the box's words */
+static int g_ducked;                        /* the speech context's volume is ducked */
+static unsigned long g_progress_at;         /* the last VCE_SPEECH_PROGRESS fed (0: none for this speech) */
 
 static unsigned long now_ms(void)
 {
@@ -179,7 +185,7 @@ static void turn_begin(void)
 
 static void drop_turn(void)
 {
-    if (g_vt_on) g_ops->drop_words();
+    if (g_vt_on && !g_keep_words) g_ops->drop_words();
     free_transcript();
     wipe_turn_audio();
     g_batch_want = 0;
@@ -194,7 +200,17 @@ static void enqueue(VoiceConvEvent ev, int a, int b)
         g_q[g_qn].a = a;
         g_q[g_qn].b = b;
         g_qn++;
+        return;
     }
+    if (ev == VCE_END) {   /* an end is never dropped: the first one waits in its own slot */
+        if (!g_pend_end) {
+            g_pend_end = 1;
+            g_pend_end_a = a;
+            g_pend_end_b = b;
+        }
+        return;
+    }
+    DLOG(DLOG_AI, DLOG_WARN, 0, "voice.conv_queue_full", "event=%d dropped", (int)ev);
 }
 
 static void run_event(VoiceConvEvent ev, int a, int b);
@@ -204,10 +220,18 @@ static void pump(void)
 {
     if (g_in_step) return;
     g_in_step = 1;
-    while (g_qn > 0) {
-        const QEv e = g_q[0];
-        g_qn--;
-        memmove(&g_q[0], &g_q[1], (size_t)g_qn * sizeof g_q[0]);
+    while (g_qn > 0 || g_pend_end) {
+        QEv e;
+        if (g_qn > 0) {
+            e = g_q[0];
+            g_qn--;
+            memmove(&g_q[0], &g_q[1], (size_t)g_qn * sizeof g_q[0]);
+        } else {   /* the queue drained: the pending end runs now */
+            e.ev = VCE_END;
+            e.a = g_pend_end_a;
+            e.b = g_pend_end_b;
+            g_pend_end = 0;
+        }
         run_event(e.ev, e.a, e.b);
     }
     g_in_step = 0;
@@ -420,6 +444,8 @@ static void mark_not_playing(int read_to_end)
 static void stop_speech(void)
 {
     if (g_playing && g_tts_alive) g_ops->tts_stop(g_tts_token);
+    if (g_ducked && g_tts_alive && g_ops->tts_volume) g_ops->tts_volume(g_tts_token, 100);
+    g_ducked = 0;   /* no VCA_UNDUCK comes with every stop (an external send): the duck ends here */
     mark_not_playing(0);
 }
 
@@ -432,6 +458,8 @@ static void begin_speak(const char *text, size_t from, int is_reply)
     g_notice_pending = 0;
     /* a cut-in's duck is over once the speech it ducked is gone: every reply starts at full volume */
     if (g_ops->tts_volume) g_ops->tts_volume(g_tts_token, 100);
+    g_ducked = 0;
+    g_progress_at = 0;
     g_cur_id = ++g_reply_seq;
     g_cur_is_reply = is_reply;
     if (is_reply) {
@@ -471,6 +499,10 @@ static void speak_reply(void)
     }
     wipe_free(&g_reply);
     g_cut = 0;
+    /* A new reply has its own times: the last one's must not age a "carry on" out of the window or
+     * into it. Stamped now rather than zero: a zero is "long ago" to the classifier's age test. */
+    g_reply_at = now_ms();
+    g_spoken_end_at = g_reply_at - VOICE_ECHO_AFTER_MS - 1ul;   /* outside the echo window */
     if (sp && sp[0]) {
         g_reply = sp;
     } else {
@@ -482,7 +514,6 @@ static void speak_reply(void)
         return;
     }
     if (notice_wanted()) {
-        g_notice_raised = 1;
         g_notice_pending = 1;
         if (g_main) PostMessage(g_main, WM_VOICE_NOTICE, 0, 0);
         return;
@@ -585,10 +616,14 @@ static void apply(VoiceConvOut o)
     if (a & VCA_CANCEL_WORK) g_ops->cancel_work();
     if (a & VCA_STOP_SPEECH) stop_speech();
     if (a & VCA_DUCK) {
-        if (g_tts_alive) g_ops->tts_volume(g_tts_token, VOICE_TTS_DUCK_PERCENT);
+        if (g_tts_alive) {
+            g_ops->tts_volume(g_tts_token, VOICE_TTS_DUCK_PERCENT);
+            g_ducked = 1;
+        }
     }
     if (a & VCA_UNDUCK) {
         if (g_tts_alive) g_ops->tts_volume(g_tts_token, 100);
+        g_ducked = 0;
     }
     if (a & VCA_DROP_TURN) drop_turn();
     if (a & VCA_CANCEL_BATCH) cancel_batch();
@@ -649,7 +684,9 @@ static void run_event(VoiceConvEvent ev, int a, int b)
     const VoiceConvState before = g_c.state;
     const VoiceConvOut o = voice_conv_step(&g_c, ev, a, b, now_ms());
     if (before == VCS_IDLE && ev == VCE_START) g_ops->mic_ui(1);
+    g_keep_words = (ev == VCE_EXTERNAL_SEND);   /* the words in the box were just sent */
     apply(o);
+    g_keep_words = 0;
     if (g_c.state == VCS_IDLE) {
         if (before != VCS_IDLE) {
             g_ops->mic_ui(0);
@@ -683,6 +720,8 @@ void voice_conv_set_ops(const VoiceConvOps *ops)
     g_ops = ops ? ops : g_real;
     g_qn = 0;
     g_in_step = 0;
+    g_pend_end = g_keep_words = g_ducked = 0;
+    g_progress_at = 0;
     g_cap_open = g_link_open = g_stt_open = g_tts_alive = 0;
     g_cap_token = g_live_token = g_stt_token = g_tts_token = 0;
     g_aec = -1;
@@ -727,6 +766,30 @@ void voice_conv_test_advance(unsigned long ms)
 size_t voice_conv_test_turn_audio_bytes(void)
 {
     return g_turn_audio ? g_turn_audio->pcm.n * sizeof(int16_t) : 0;
+}
+
+/* The box was sent from outside the conversation. The reply baseline is taken here, as send_now
+ * does for the conversation's own send, then the machine moves to Working. The conversation's own
+ * send in flight (Ending, sending) is left alone. */
+void voice_conv_external_send(void)
+{
+    if (!ops_ready() || !voice_conv_running()) return;
+    if (g_c.state == VCS_ENDING && g_c.sending) return;
+    g_since = g_ops->msg_count();
+    g_sent_tick = now_ms();
+    g_busy_seen = g_ops->chat_idle() ? 0 : 1;
+    voice_conv_event(VCE_EXTERNAL_SEND, 0, 0);
+}
+
+/* TEST-ONLY seams (declared in the header): fill the queue without running it, then run it. */
+void voice_conv_test_queue(VoiceConvEvent ev, int a, int b)
+{
+    enqueue(ev, a, b);
+}
+
+void voice_conv_test_pump(void)
+{
+    pump();
 }
 
 void voice_conv_start(int live)
@@ -922,7 +985,15 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
     case VTT_READY:
         break;
     case VTT_WORD:
-        if (m->reply_id == g_cur_id && g_cur_is_reply && g_playing) g_cut = m->offset;
+        if (m->reply_id == g_cur_id && g_playing) {
+            const unsigned long t = now_ms();
+            if (g_cur_is_reply) g_cut = m->offset;
+            /* The speech is advancing: the Speaking watchdog restarts (at most once a second). */
+            if (g_progress_at == 0 || t - g_progress_at >= 1000ul) {
+                g_progress_at = t ? t : 1ul;
+                voice_conv_event(VCE_SPEECH_PROGRESS, 0, 0);
+            }
+        }
         break;
     case VTT_DONE:
         if (m->reply_id != g_cur_id || !g_playing) break;
@@ -996,6 +1067,7 @@ void voice_conv_on_card(int kind)
 void voice_conv_on_notice(void)
 {
     if (!ops_ready() || !voice_conv_running() || !g_notice_pending) return;
+    g_notice_raised = 1;   /* shown this launch from here: a conversation that ended first owes it */
     (void)g_ops->notice_voice(g_notice_voice[0] ? g_notice_voice : "the Windows default voice");
     /* The dialog pauses the conversation (the main window is disabled) and resume speaks the
      * held reply. If nothing paused (the dialog did not open), speak it now. */

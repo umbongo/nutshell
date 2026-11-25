@@ -653,6 +653,11 @@ int voice_send_pressed(void)
     return 1;
 }
 
+void voice_on_external_send(void)
+{
+    if (g_audio_up && voice_conv_running()) voice_conv_external_send();
+}
+
 void voice_on_chat_stop(void)
 {
     /* The Stop already cancelled the work: the conversation ends its turn. */

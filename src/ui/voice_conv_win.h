@@ -86,9 +86,19 @@ int  voice_conv_last_aec(void);                     /* -1 unknown, 0 none, 1 or 
 int  voice_conv_is_typing_locked(void);             /* the brief's voice_conv_typing_locked(): renamed, the core has that name */
 unsigned voice_conv_capture_token(void);            /* the open conversation capture's token, 0 none */
 
+/* The box was sent from outside the conversation (Retry, a suggestion chip, a typed send the
+ * conversation did not own): takes the reply baseline again and feeds VCE_EXTERNAL_SEND. A no-op
+ * while idle or while the conversation's own send is in flight (Ending, sending). */
+void voice_conv_external_send(void);
+
 /* TEST-ONLY seam: moves the glue's clock forward (the machine's 3-minute and 30-second rules). */
 void voice_conv_test_advance(unsigned long ms);
 /* TEST-ONLY seam: the bytes of the turn's audio the glue still holds (0 when none). */
 size_t voice_conv_test_turn_audio_bytes(void);
+
+/* TEST-ONLY seams: queue an event without running it, and run what is queued. They let a test
+ * fill the event queue; no product path calls them. */
+void voice_conv_test_queue(VoiceConvEvent ev, int a, int b);
+void voice_conv_test_pump(void);
 
 #endif /* NUTSHELL_VOICE_CONV_WIN_H */
