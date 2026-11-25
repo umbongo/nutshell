@@ -694,7 +694,7 @@ Open, in priority order:
       2026-11-25, v1.2.95, `nutshell-20261125-112702-p7428.issue1.log`: tmux drew 25 rows and
       93 columns in a 49x125 window). `connection_thread` asks for the pty with the grid
       snapshotted when the connect starts (`j->cols`/`j->rows`, `src/ui/window.c`); the grid
-      sync skips `io.resize` while `s->io.ctx` is NULL, so every resize in those seconds (27
+      sync skips `io.resize` while `s->io.ctx` is NULL, so every resize in those seconds (25
       of them in the log, 25x93 to 49x125) is dropped, and adopting the channel on connect
       sends no size. The remote pty keeps the starting size until the next grid change.
       Fix: after `s->io = io` in the SSH branch of the connect-done handler, call
