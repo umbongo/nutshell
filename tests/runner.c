@@ -3047,6 +3047,12 @@ int test_vais_offset_complete(void);
 int test_vais_offset_estimate(void);
 int test_vais_offset_utf8(void);
 int test_framework_skip_counts(void);
+int test_vais_capture_error_check_not_empty(void);
+int test_vais_sse_unknown_event_non_json_ignored(void);
+int test_vais_sse_null_error_member(void);
+int test_vais_sse_unknown_event_name(void);
+int test_vais_resolve_shared_key_message(void);
+int test_framework_skip_after_failure_fails(void);
 
 /* test_key_encode.c */
 int test_key_arrows_unmodified_normal(void);
@@ -8693,6 +8699,12 @@ int main(void) {
     failed += test_vais_offset_estimate();
     failed += test_vais_offset_utf8();
     failed += test_framework_skip_counts();
+    failed += test_vais_capture_error_check_not_empty();
+    failed += test_vais_sse_unknown_event_non_json_ignored();
+    failed += test_vais_sse_null_error_member();
+    failed += test_vais_sse_unknown_event_name();
+    failed += test_vais_resolve_shared_key_message();
+    failed += test_framework_skip_after_failure_fails();
     failed += test_dlog_configure_registers_the_tts_key_as_a_secret();
     failed += test_settings_help_play_sample();
     failed += test_selftest_configs_complete();

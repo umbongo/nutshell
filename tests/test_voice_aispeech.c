@@ -809,6 +809,64 @@ int test_vais_sse_bad_base64(void)
     TEST_END();
 }
 
+/* A forced-error capture: it must never end as a clean reply (no AUDIO then DONE) and it
+ * must prove something: the terminal event is ERROR, or the file has no `data:` line at
+ * all (a plain, non-SSE HTTP error body). An empty file, or a parser that ignores
+ * everything, proves nothing and fails. */
+static int check_error_stream(const char *path)
+{
+    EvRec r;
+    rec_init(&r);
+    size_t len = 0;
+    char *raw = read_all(path, &len);
+    if (!raw || len == 0 || !feed_file(path, 4096, &r)) { free(raw); rec_free(&r); return 0; }
+    int has_data_line = strstr(raw, "data:") != NULL;
+    free(raw);
+    int done = 0;
+    for (int i = 0; i < r.n; i++) if (r.kinds[i] == VAIS_EV_DONE) done = 1;
+    int terminal_error = r.n > 0 && r.kinds[r.n - 1] == VAIS_EV_ERROR;
+    int ok = !done && (terminal_error || !has_data_line);
+    rec_free(&r);
+    return ok;
+}
+
+int test_vais_capture_error_check_not_empty(void)
+{
+    TEST_BEGIN();
+    static const char *const empty = TEST_TMP_DIR "/nutshell_vais_empty.sse";
+    static const char *const body = TEST_TMP_DIR "/nutshell_vais_body.sse";
+    static const char *const clean = TEST_TMP_DIR "/nutshell_vais_clean.sse";
+    static const char *const ignored = TEST_TMP_DIR "/nutshell_vais_ignored.sse";
+    FILE *f = test_fopen_private(empty);
+    ASSERT_NOT_NULL(f);
+    if (f) fclose(f);
+    f = test_fopen_private(body);
+    ASSERT_NOT_NULL(f);
+    if (f) { fputs("{\"detail\": \"bad voice\"}\n", f); fclose(f); }
+    f = test_fopen_private(clean);
+    ASSERT_NOT_NULL(f);
+    if (f) {
+        fputs("data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"QUJDRA==\"}\n\n"
+              "data: {\"type\":\"speech.audio.done\"}\n\n", f);
+        fclose(f);
+    }
+    f = test_fopen_private(ignored);
+    ASSERT_NOT_NULL(f);
+    if (f) { fputs("event: speech.unknown\ndata: {\"type\":\"speech.unknown\"}\n\n", f); fclose(f); }
+    ASSERT_EQ(check_error_stream(FIX_ERR), 1);     /* a real error stream passes */
+    ASSERT_EQ(check_error_stream(body), 1);        /* a non-SSE HTTP error body, stated as such */
+    ASSERT_EQ(check_error_stream(empty), 0);       /* nothing at all proves nothing */
+    ASSERT_EQ(check_error_stream(clean), 0);       /* a clean reply is not an error capture */
+    ASSERT_EQ(check_error_stream(ignored), 0);     /* SSE data that the parser ignored proves nothing */
+    ASSERT_EQ(check_error_stream(TEST_TMP_DIR "/nutshell_vais_missing.sse"), 0);
+    remove(empty);
+    remove(body);
+    remove(clean);
+    remove(ignored);
+    TEST_END();
+}
+
+/* Task 11: replace with the capture's real shape (these three assert the provisional one). */
 int test_vais_sse_capture_wav(void)
 {
     TEST_BEGIN();
@@ -819,6 +877,7 @@ int test_vais_sse_capture_wav(void)
     TEST_END();
 }
 
+/* Task 11: replace with the capture's real shape */
 int test_vais_sse_capture_pcm(void)
 {
     TEST_BEGIN();
@@ -829,19 +888,109 @@ int test_vais_sse_capture_pcm(void)
     TEST_END();
 }
 
+/* Task 11: replace with the capture's real shape */
 int test_vais_sse_capture_error(void)
 {
     TEST_BEGIN();
     FILE *f = fopen(CAP_ERR, "rb");
     if (!f) TEST_SKIP("no capture: " CAP_ERR " (Task 0)");
     fclose(f);
+    ASSERT_TRUE(check_error_stream(CAP_ERR));
+    TEST_END();
+}
+
+/* I2: under another event name, data that is not JSON is ignored (R28). */
+int test_vais_sse_unknown_event_non_json_ignored(void)
+{
+    TEST_BEGIN();
     EvRec r;
     rec_init(&r);
-    ASSERT_EQ(feed_file(CAP_ERR, 4096, &r), 1);
-    int done = 0;
-    for (int i = 0; i < r.n; i++) if (r.kinds[i] == VAIS_EV_DONE) done = 1;
-    ASSERT_EQ(done, 0);                             /* a forced error never ends as a clean reply */
+    feed_text("event: keepalive\ndata: ping\n\n"
+              "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"QUJDRA==\"}\n\n", &r);
+    ASSERT_EQ(r.n, 1);
+    ASSERT_EQ(r.kinds[0], (int)VAIS_EV_AUDIO);
     rec_free(&r);
+    /* With no event name, or a known one, non-JSON is still a failure. */
+    rec_init(&r);
+    feed_text("data: ping\n\n", &r);
+    ASSERT_EQ(r.n, 1);
+    ASSERT_EQ(r.kinds[0], (int)VAIS_EV_ERROR);
+    rec_free(&r);
+    rec_init(&r);
+    feed_text("event: speech.audio.delta\ndata: ping\n\n", &r);
+    ASSERT_EQ(r.n, 1);
+    ASSERT_EQ(r.kinds[0], (int)VAIS_EV_ERROR);
+    rec_free(&r);
+    TEST_END();
+}
+
+/* M2: a JSON null error member is not an error. */
+int test_vais_sse_null_error_member(void)
+{
+    TEST_BEGIN();
+    EvRec r;
+    rec_init(&r);
+    feed_text("data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"QUJDRA==\"}\n\n"
+              "data: {\"type\":\"speech.audio.done\",\"error\":null}\n\n", &r);
+    ASSERT_EQ(r.n, 2);
+    ASSERT_EQ(r.kinds[1], (int)VAIS_EV_DONE);
+    rec_free(&r);
+    rec_init(&r);
+    feed_text("data: {\"error\":null,\"x\":1}\n\n", &r);
+    ASSERT_EQ(r.n, 0);
+    rec_free(&r);
+    TEST_END();
+}
+
+/* M6: an unknown event's name is carried (name only) so it can be logged. */
+int test_vais_sse_unknown_event_name(void)
+{
+    TEST_BEGIN();
+    VoiceAisSse st;
+    VoiceAisEv ev;
+    voice_ais_sse_init(&st);
+    voice_ais_sse_line(&st, "event: speech.something.else", 28, &ev);
+    ASSERT_EQ(ev.kind, VAIS_EV_NONE);
+    const char *d = "data: {\"type\":\"speech.something.else\",\"secret\":\"hush\"}";
+    voice_ais_sse_line(&st, d, strlen(d), &ev);
+    ASSERT_EQ(ev.kind, VAIS_EV_NONE);
+    ASSERT_STR_EQ(ev.event, "speech.something.else");
+    ASSERT_TRUE(strstr(ev.event, "hush") == NULL);
+    voice_ais_sse_line(&st, "", 0, &ev);
+    ASSERT_STR_EQ(ev.event, "");
+    /* Type only, no event: line. */
+    const char *d2 = "data: {\"type\":\"speech.other\"}";
+    voice_ais_sse_line(&st, d2, strlen(d2), &ev);
+    ASSERT_EQ(ev.kind, VAIS_EV_NONE);
+    ASSERT_STR_EQ(ev.event, "speech.other");
+    /* A known event carries no name. */
+    const char *d3 = "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"QUJDRA==\"}";
+    voice_ais_sse_line(&st, d3, strlen(d3), &ev);
+    ASSERT_EQ(ev.kind, VAIS_EV_AUDIO);
+    ASSERT_STR_EQ(ev.event, "");
+    secure_zero(ev.audio, ev.audio_len);
+    free(ev.audio);
+    TEST_END();
+}
+
+/* M7: the shared key's empty message names the speech-to-text key. */
+int test_vais_resolve_shared_key_message(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200] = "";
+    base_settings(&s);
+    snprintf(s.voice_stt_provider, sizeof s.voice_stt_provider, "mistral");
+    ASSERT_EQ(voice_ais_key_shared(&s), (int)VAIS_KEY_STT);
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+    ASSERT_STR_EQ(err, "Enter a speech-to-text API key");
+    snprintf(s.stt_api_key, sizeof s.stt_api_key, "k");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    /* Not shared: the own-key message. */
+    base_settings(&s);
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+    ASSERT_STR_EQ(err, "Enter a speech API key");
     TEST_END();
 }
 
@@ -914,8 +1063,32 @@ int test_vais_offset_utf8(void)
 static int skipping_test(void)
 {
     TEST_BEGIN();
-    TEST_SKIP("the counted skip under test");
+    TEST_SKIP("framework self-test, not counted");
     ASSERT_TRUE(0);                                 /* never reached */
+    TEST_END();
+}
+
+/* A test that has already failed must not hide it behind a skip. */
+static int fail_then_skip(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(0 == 1);                            /* expected: framework self-test */
+    TEST_SKIP("framework self-test, not counted");
+    TEST_END();
+}
+
+int test_framework_skip_after_failure_fails(void)
+{
+    TEST_BEGIN();
+    int skipped0 = _tf_skipped, failed0 = _tf_failed, run0 = _tf_run;
+    printf("  (framework self-test: the next FAIL line is expected)\n");
+    int rc = fail_then_skip();
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(_tf_failed - failed0, 1);
+    ASSERT_EQ(_tf_skipped - skipped0, 0);
+    /* Take the demonstration back out. */
+    _tf_failed = failed0;
+    _tf_run = run0;
     TEST_END();
 }
 

@@ -70,10 +70,26 @@ extern int _tf_skipped;
  * a silent pass. Use it where TEST_END() would be: it returns from the test. */
 #define TEST_SKIP(reason) \
     do { \
+        if (_tf_local_fail) { \
+            /* a failed assertion is never hidden behind a skip */ \
+            printf("  [SKIP] %s: %s (ignored: the test already failed)\n", __func__, (reason)); \
+            printf("[FAIL] %s\n", __func__); \
+            _tf_run++; \
+            _tf_failed++; \
+            return 1; \
+        } \
         printf("  [SKIP] %s: %s\n", __func__, (reason)); \
         _tf_run++; \
         _tf_skipped++; \
         return 0; \
+    } while(0)
+
+/* A partial skip: part of a test cannot run here (a Wine limitation) but the rest does,
+ * so the test goes on to its TEST_END(). Printed and counted in the skip total. */
+#define TEST_SKIP_PART(reason) \
+    do { \
+        printf("  [SKIP] %s: %s\n", __func__, (reason)); \
+        _tf_skipped++; \
     } while(0)
 
 #define ASSERT_TRUE(cond) if (!(cond)) { printf("  Assertion failed: %s\n", #cond); _tf_local_fail = 1; }

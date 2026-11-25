@@ -162,7 +162,9 @@ int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t ca
     }
     t->key_from = (VoiceAisKey)voice_ais_key_shared(s);
     if (p->needs_key && voice_ais_key(s, t)[0] == '\0') {
-        put_err(err, cap, "Enter a speech API key");
+        /* A shared key is the speech-to-text one; the speech key row is hidden then (R13). */
+        put_err(err, cap, t->key_from == VAIS_KEY_OWN ? "Enter a speech API key"
+                                                      : "Enter a speech-to-text API key");
         return 0;
     }
     return 1;
@@ -332,6 +334,8 @@ static void handle_data(VoiceAisSse *s, const char *data, size_t len, VoiceAisEv
     if (len > 0) {
         if (!json_scan_string(data, len, 1, "type", 63, &type, &type_len)) type = NULL;
     }
+    char type_name[64];
+    snprintf(type_name, sizeof type_name, "%s", type ? type : "");
     int err_name = is_name(s->event, EV_ERROR) || is_name(type, EV_ERROR);
     int delta = is_name(s->event, EV_DELTA) || is_name(type, EV_DELTA);
     int done = is_name(s->event, EV_DONE) || is_name(type, EV_DONE);
@@ -376,14 +380,23 @@ static void handle_data(VoiceAisSse *s, const char *data, size_t len, VoiceAisEv
             free(z);
         }
     }
-    int has_error = root && root->type == JSON_OBJECT && json_obj_get(root, "error") != NULL;
+    int parsed = root != NULL;
+    const JsonNode *errm = (root && root->type == JSON_OBJECT) ? json_obj_get(root, "error") : NULL;
+    int has_error = errm && errm->type != JSON_NULL;   /* "error": null is no error */
     json_free(root);
     if (has_error) { ev->kind = VAIS_EV_ERROR; return; }
     if (done) {
         ev->kind = s->audio_seen ? VAIS_EV_DONE : VAIS_EV_ERROR;   /* a reply with no audio is a failure */
         return;
     }
-    if (len > 0 && !root) ev->kind = VAIS_EV_ERROR;   /* data that is not JSON */
+    /* Data that is not JSON fails the reply under no event name; under any other
+     * (unknown) name the event is ignored, as R28 says of unknown events. */
+    if (len > 0 && !parsed && s->event[0] == '\0') {
+        ev->kind = VAIS_EV_ERROR;
+        return;
+    }
+    /* An ignored event: its name (never its data) for the log. */
+    snprintf(ev->event, sizeof ev->event, "%s", s->event[0] ? s->event : type_name);
 }
 
 int voice_ais_sse_line(VoiceAisSse *s, const char *line, size_t len, VoiceAisEv *ev)

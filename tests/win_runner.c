@@ -599,6 +599,8 @@ int main(int argc, char **argv)
     int pty_failed = spawn_pty_child();
     if (pty_failed < 0) {
         printf("[SKIP] ConPTY cases -- could not re-execute this harness\n");
+        _tf_run += PTY_CASE_COUNT;               /* counted: each case is a skip */
+        _tf_skipped += PTY_CASE_COUNT;
     } else {
         failed += pty_failed;
         _tf_run += PTY_CASE_COUNT;

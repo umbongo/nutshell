@@ -91,6 +91,7 @@ typedef struct {
     VoiceAisEvKind kind;
     unsigned char *audio;            /* AUDIO only: decoded bytes, the caller frees */
     size_t audio_len;
+    char event[64];                  /* an unknown event's name (name only, never data), for the log */
 } VoiceAisEv;
 
 void voice_ais_sse_init(VoiceAisSse *s);
