@@ -44,6 +44,9 @@
 #include "voice_stt.h"
 #include "voice_live.h"
 #include "voice_win.h"
+#include "voice_conv_win.h"
+#include "voice_tts_win.h"
+#include "voice_voices_win.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -217,7 +220,7 @@ typedef struct {
     /* The Voice page: the rows that come and go, and the dim notes. */
     HWND     hVoiceBlock;    /* dim "Needs the AI assistant" under Enable voice */
     HWND     hVoiceAiNote;   /* dim reason "Use current AI assistant" cannot be ticked */
-    HWND     hVoiceHead[2];  /* "Speech to Text" / "Microphone" section labels */
+    HWND     hVoiceHead[3];  /* "Speech to Text" / "Microphone" / "Conversation" section labels */
     HWND     hVoiceUrlWarn;  /* warning-coloured "not encrypted" line under the voice Base URL */
     SettingsCtrl *ctrl_voice_block;
     SettingsCtrl *ctrl_voice_ai_note;
@@ -233,6 +236,18 @@ typedef struct {
     HWND     hVoiceLangHint;      /* the Other language box's hint, under the Language row */
     SettingsCtrl *ctrl_voice_lang;       /* the Language row (its extra is the Other box) */
     SettingsCtrl *ctrl_voice_lang_hint;
+    HWND     hVoiceNoteVoice;     /* dim "The saved voice is not installed on this PC: using Automatic" */
+    HWND     hVoiceNoteUk;        /* dim "No British English woman's voice is installed: ..." */
+    HWND     hVoiceNoteAec;       /* dim "Your microphone reports no echo cancellation: ..." */
+    HWND     hVoiceNoteDuck;      /* dim "Windows may lower other sounds during a conversation. ..." */
+    SettingsCtrl *ctrl_voice_note_voice;
+    SettingsCtrl *ctrl_voice_note_uk;
+    SettingsCtrl *ctrl_voice_note_aec;
+    SettingsCtrl *ctrl_voice_note_duck;
+    size_t   voice_win_n;         /* installed Windows voices read when the page was built */
+    VoiceInfo voice_win[VOICE_INFO_MAX];   /* entry i is combo item i + 1 (item 0 is Automatic) */
+    int      voice_win_missing;   /* the saved voice is not in the list */
+    int      voice_win_touched;   /* the user changed the voice combo */
     HWND     hVoiceLiveNote;      /* dim "Live text as you speak needs OpenAI or Mistral" */
     SettingsCtrl *ctrl_voice_live;       /* the Live model row (OpenAI or Mistral) */
     SettingsCtrl *ctrl_voice_live_note;  /* the note in the same slot otherwise */
@@ -1028,6 +1043,52 @@ static int voice_rows_apply(SettingsDlgData *d)
     return changed;
 }
 
+/* The Mode combo's choice (the saved mode until the combo exists). */
+static int voice_mode_selected(const SettingsDlgData *d)
+{
+    HWND cmb = GetDlgItem(d->hPage, IDC_VOICE_MODE);
+    if (!cmb) return d->cfg->settings.voice_mode;
+    return SendMessage(cmb, CB_GETCURSEL, 0, 0) == 1 ? VOICE_MODE_CONVERSATION
+                                                     : VOICE_MODE_DICTATION;
+}
+
+/* Enable or disable the control `id` and its label together. */
+static void voice_row_enable(const SettingsDlgData *d, int id, int enable)
+{
+    HWND h = GetDlgItem(d->hPage, id);
+    if (!h) return;
+    EnableWindow(h, enable ? TRUE : FALSE);
+    for (int i = 0; i < d->n_ctrls; i++) {
+        const SettingsCtrl *c = &d->ctrls[i];
+        if (c->page != SETTINGS_PAGE_VOICE || c->hCtrl != h) continue;
+        if (c->hLabel) EnableWindow(c->hLabel, enable ? TRUE : FALSE);
+        if (c->hExtra) EnableWindow(c->hExtra, enable ? TRUE : FALSE);
+        break;
+    }
+}
+
+/* The voice Play sample speaks: the combo's choice, with Automatic resolved
+ * as voice_choose_auto does ("" = the Windows default voice). */
+static const char *voice_win_chosen_id(const SettingsDlgData *d)
+{
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_WIN_VOICE, CB_GETCURSEL, 0, 0);
+    if (sel >= 1 && (size_t)(sel - 1) < d->voice_win_n) return d->voice_win[sel - 1].id;
+    if (sel >= 1) return d->cfg->settings.voice_windows_voice;
+    int at = voice_choose_auto(d->voice_win, d->voice_win_n);
+    return at >= 0 ? d->voice_win[at].id : "";
+}
+
+/* Play sample: stop a conversation's speech first (spec 5.2), then speak. The
+ * WM_VOICE_TTS messages go to the main window (the Settings window's owner),
+ * which reaps the speech thread on VTT_EXITED. sapi.dll loads here, on the click. */
+static void voice_play_sample(SettingsDlgData *d)
+{
+    HWND owner = GetWindow(GetParent(d->hPage), GW_OWNER);
+    if (!owner) return;
+    if (voice_conv_running()) voice_conv_event(VCE_STOP, 0, 0);
+    (void)voice_tts_sample(owner, voice_win_chosen_id(d));
+}
+
 /* The Enable voice box is usable only while the AI tick is on; every other
  * Voice row only while both ticks are. Use current AI assistant is also
  * disabled (and unticked) while the provider has no speech-to-text, the
@@ -1062,18 +1123,28 @@ static void voice_enable_sync(SettingsDlgData *d)
     HWND test = GetDlgItem(d->hPage, IDC_VOICE_TEST);
     if (test)
         EnableWindow(test, (on && d->voice_dev_listed) ? TRUE : FALSE);
-    /* The Mic start delay applies to Hold to talk only. */
-    HWND delay = GetDlgItem(d->hPage, IDC_VOICE_MIC_DELAY);
-    if (delay) {
-        int msel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PTT_MODE, CB_GETCURSEL, 0, 0);
-        const BOOL delay_on = (on && msel == VOICE_MODE_HOLD) ? TRUE : FALSE;
-        EnableWindow(delay, delay_on);
-        for (int i = 0; i < d->n_ctrls; i++) {
-            const SettingsCtrl *c = &d->ctrls[i];
-            if (c->page == SETTINGS_PAGE_VOICE && c->hCtrl == delay && c->hLabel) {
-                EnableWindow(c->hLabel, delay_on);
-                break;
-            }
+    /* Mode: Conversation greys Key mode, the Mic start delay and auto-send;
+     * Dictation greys the whole Conversation section, Play sample included. */
+    {
+        VoiceModeEnables en;
+        voice_mode_enables(on, voice_mode_selected(d),
+                           (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PTT_MODE, CB_GETCURSEL, 0, 0), &en);
+        voice_row_enable(d, IDC_VOICE_PTT_MODE, en.key_mode);
+        voice_row_enable(d, IDC_VOICE_PTT_KEY, on);
+        voice_row_enable(d, IDC_VOICE_MIC_DELAY, en.mic_delay);
+        voice_row_enable(d, IDC_VOICE_AUTO_SEND, en.auto_send);
+        voice_row_enable(d, IDC_VOICE_PAUSE, en.conversation);
+        voice_row_enable(d, IDC_VOICE_WIN_VOICE, en.conversation);
+        voice_row_enable(d, IDC_VOICE_PLAY_SAMPLE, en.conversation);
+        if (d->hVoiceHead[2]) EnableWindow(d->hVoiceHead[2], en.conversation ? TRUE : FALSE);
+        if (d->hVoiceNoteVoice) EnableWindow(d->hVoiceNoteVoice, en.conversation ? TRUE : FALSE);
+        if (d->hVoiceNoteUk) EnableWindow(d->hVoiceNoteUk, en.conversation ? TRUE : FALSE);
+        if (d->hVoiceNoteAec) EnableWindow(d->hVoiceNoteAec, en.conversation ? TRUE : FALSE);
+        /* The ducking line is for Conversation mode only. */
+        if (d->ctrl_voice_note_duck) {
+            const int show = voice_mode_selected(d) == VOICE_MODE_CONVERSATION;
+            if (d->ctrl_voice_note_duck->visible != show) changed = 1;
+            d->ctrl_voice_note_duck->visible = show;
         }
     }
     if (changed && d->cur_page == SETTINGS_PAGE_VOICE) {
@@ -1489,7 +1560,8 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
             if ((int)dis->CtlID == IDC_AI_REFRESH ||
                 (int)dis->CtlID == IDC_DBG_BROWSE ||
                 (int)dis->CtlID == IDC_DBG_OPEN ||
-                (int)dis->CtlID == IDC_VOICE_TEST) {
+                (int)dis->CtlID == IDC_VOICE_TEST ||
+                (int)dis->CtlID == IDC_VOICE_PLAY_SAMPLE) {
                 draw_themed_button(dis, d->theme, 0);
                 return TRUE;
             }
@@ -2254,6 +2326,16 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
             }
             {
+                /* Mode decides what everything below does: Dictation or Conversation. */
+                HWND lbl = make_label2(nd, SH_VOICE_MODE);
+                HWND cmb = make_combo2(nd, IDC_VOICE_MODE, CBS_DROPDOWNLIST, SH_VOICE_MODE);
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Dictation");
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Conversation");
+                SendMessage(cmb, CB_SETCURSEL,
+                            (WPARAM)(vs->voice_mode == VOICE_MODE_CONVERSATION ? 1 : 0), 0);
+                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
                 /* "Needs the AI assistant" while the dialog's AI box is off. */
                 nd->hVoiceBlock = make_hint(nd, "");
                 nd->ctrl_voice_block = add_ctrl(nd, NULL, nd->hVoiceBlock, NULL,
@@ -2461,6 +2543,89 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                             vs->voice_auto_send ? BST_CHECKED : BST_UNCHECKED, 0);
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
             }
+            {
+                nd->hVoiceHead[2] = make_hint(nd, "Conversation");
+                add_ctrl(nd, NULL, nd->hVoiceHead[2], NULL, SETTINGS_PAGE_VOICE,
+                         0, 0, 1, 0, 1, 1);
+            }
+            {
+                /* Pause before sending: seconds with one decimal; Save clamps to 0.5..3.0. */
+                char pbuf[16];
+                voice_pause_format(vs->voice_pause_ms, pbuf, sizeof(pbuf));
+                HWND lbl = make_label2(nd, SH_VOICE_PAUSE);
+                HWND ed = make_edit2(nd, pbuf, IDC_VOICE_PAUSE, 0, SH_VOICE_PAUSE);
+                SendMessage(ed, EM_SETLIMITTEXT, 8, 0);
+                HWND secs = make_hint(nd, "seconds");
+                add_ctrl(nd, lbl, ed, secs, SETTINGS_PAGE_VOICE, 140, 70, 1, 0, 1, 0);
+            }
+            {
+                /* Windows voice: Automatic first, then every installed voice. The list
+                 * is read from the registry (never sapi.dll); the saved voice is
+                 * selected by token id. */
+                nd->voice_win_n = voice_voices_list(nd->voice_win, VOICE_INFO_MAX);
+                int auto_idx = voice_choose_auto(nd->voice_win, nd->voice_win_n);
+                char auto_label[200];
+                if (auto_idx >= 0) {
+                    char nm[128];
+                    voice_display_name(&nd->voice_win[auto_idx], nm, sizeof(nm));
+                    (void)snprintf(auto_label, sizeof(auto_label), "Automatic (%s)", nm);
+                } else {
+                    (void)snprintf(auto_label, sizeof(auto_label),
+                                   "Automatic (the Windows default voice)");
+                }
+                HWND lbl = make_label2(nd, SH_VOICE_WIN_VOICE);
+                HWND cmb = make_combo2_wide(nd, IDC_VOICE_WIN_VOICE, SH_VOICE_WIN_VOICE);
+                voice_combo_add_utf8(cmb, auto_label);
+                for (size_t i = 0; i < nd->voice_win_n; i++) {
+                    char nm[128];
+                    voice_display_name(&nd->voice_win[i], nm, sizeof(nm));
+                    voice_combo_add_utf8(cmb, nm);
+                }
+                int sel = 0;
+                if (vs->voice_windows_voice[0]) {
+                    int at = voice_find_saved(nd->voice_win, nd->voice_win_n,
+                                              vs->voice_windows_voice);
+                    if (at >= 0) sel = at + 1;
+                    else nd->voice_win_missing = 1;
+                }
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                nd->hVoiceNoteVoice = make_hint(nd,
+                    "The saved voice is not installed on this PC: using Automatic");
+                nd->ctrl_voice_note_voice = add_ctrl(nd, NULL, nd->hVoiceNoteVoice, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0, nd->voice_win_missing, 0);   /* control column */
+            }
+            {
+                int uk = 0;
+                for (size_t i = 0; i < nd->voice_win_n; i++)
+                    if (voice_info_is_en_gb(&nd->voice_win[i]) && nd->voice_win[i].female) uk = 1;
+                nd->hVoiceNoteUk = make_hint(nd,
+                    "No British English woman's voice is installed: add English (United "
+                    "Kingdom) under Windows Settings > Time & language > Speech");
+                nd->ctrl_voice_note_uk = add_ctrl(nd, NULL, nd->hVoiceNoteUk, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0, !uk, 1);
+            }
+            {
+                HWND btn = page_ctrl(nd, "BUTTON", "Play sample", BS_OWNERDRAW,
+                                     IDC_VOICE_PLAY_SAMPLE, SH_NONE);
+                add_ctrl(nd, NULL, btn, NULL, SETTINGS_PAGE_VOICE, 140, 0, 1, 0, 1, 1);
+            }
+            {
+                nd->hVoiceNoteAec = make_hint(nd,
+                    "Your microphone reports no echo cancellation: a headset works best");
+                nd->ctrl_voice_note_aec = add_ctrl(nd, NULL, nd->hVoiceNoteAec, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 1, 0, voice_conv_last_aec() == 0, 1);
+            }
+            {
+                nd->hVoiceNoteDuck = make_hint(nd,
+                    "Windows may lower other sounds during a conversation. To stop that: "
+                    "Control Panel > Sound > Communications > Do nothing.");
+                nd->ctrl_voice_note_duck = add_ctrl(nd, NULL, nd->hVoiceNoteDuck, NULL,
+                    SETTINGS_PAGE_VOICE, 0, 0, 2, 0,
+                    vs->voice_mode == VOICE_MODE_CONVERSATION, 1);
+            }
             /* Voice saved on: ask the audio thread for the microphones and
              * to tell us when one comes or goes. */
             g_voice_dlg = nd;
@@ -2550,8 +2715,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 EnumChildWindows(hwnd, SetFontProc, (LPARAM)nd->hDlgFont);
             if (nd->hBoldFont && nd->hPageTitle)
                 SendMessage(nd->hPageTitle, WM_SETFONT, (WPARAM)nd->hBoldFont, TRUE);
-            /* The Voice page's two section labels use the heading font too. */
-            for (int vi = 0; vi < 2; vi++)
+            /* The Voice page's three section labels use the heading font too. */
+            for (int vi = 0; vi < 3; vi++)
                 if (nd->hBoldFont && nd->hVoiceHead[vi])
                     SendMessage(nd->hVoiceHead[vi], WM_SETFONT,
                                 (WPARAM)nd->hBoldFont, TRUE);
@@ -2864,7 +3029,23 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             break;
 
         case IDC_VOICE_PTT_MODE:
+        case IDC_VOICE_MODE:
             if (d && HIWORD(wParam) == CBN_SELCHANGE) voice_enable_sync(d);
+            break;
+
+        case IDC_VOICE_WIN_VOICE:
+            if (d && HIWORD(wParam) == CBN_SELCHANGE) {
+                d->voice_win_touched = 1;   /* a choice replaces "not installed" */
+                if (d->ctrl_voice_note_voice && d->ctrl_voice_note_voice->visible) {
+                    d->ctrl_voice_note_voice->visible = 0;
+                    relayout(hwnd, d);
+                    InvalidateRect(d->hPage, NULL, TRUE);
+                }
+            }
+            break;
+
+        case IDC_VOICE_PLAY_SAMPLE:
+            if (d && HIWORD(wParam) == BN_CLICKED) voice_play_sample(d);
             break;
 
         case IDC_VOICE_DEVICE:
@@ -3303,6 +3484,31 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 sel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_PTT_MODE,
                                               CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < VOICE_MODE_COUNT) s->voice_ptt_mode = sel;
+            }
+            s->voice_mode = voice_mode_selected(d);
+            {
+                char pt[32];
+                pt[0] = '\0';
+                GetDlgItemText(d->hPage, IDC_VOICE_PAUSE, pt, (int)sizeof(pt));
+                s->voice_pause_ms = voice_pause_parse(pt, s->voice_pause_ms);
+            }
+            {
+                int vsel = (int)SendDlgItemMessage(d->hPage, IDC_VOICE_WIN_VOICE,
+                                                   CB_GETCURSEL, 0, 0);
+                /* Automatic stores nothing, unless it stands for a saved voice that
+                 * is not installed and the user left it alone (like the microphone). */
+                if (vsel == 0) {
+                    if (!(d->voice_win_missing && !d->voice_win_touched)) {
+                        s->voice_windows_voice[0] = '\0';
+                        s->voice_windows_voice_name[0] = '\0';
+                    }
+                } else if (vsel >= 1 && (size_t)(vsel - 1) < d->voice_win_n) {
+                    const VoiceInfo *vi = &d->voice_win[vsel - 1];
+                    (void)snprintf(s->voice_windows_voice, sizeof(s->voice_windows_voice),
+                                   "%s", vi->id);
+                    voice_display_name(vi, s->voice_windows_voice_name,
+                                       sizeof(s->voice_windows_voice_name));
+                }
             }
             v = GetDlgItemInt(d->hPage, IDC_VOICE_MIC_DELAY, &ok, FALSE);
             s->voice_mic_delay_ms =

@@ -74,6 +74,51 @@ int voice_pause_round(int ms)
     return (voice_pause_clamp(ms) + 50) / 100 * 100;
 }
 
+int voice_pause_parse(const char *text, int keep_ms)
+{
+    if (!text) return keep_ms;
+    while (*text == ' ' || *text == '\t') text++;
+    long whole = 0;
+    int digits = 0;
+    while (*text >= '0' && *text <= '9') {
+        if (whole < 100000) whole = whole * 10 + (*text - '0');
+        text++;
+        digits++;
+    }
+    long frac = 0;   /* hundredths of a second, from the first two decimals */
+    if (*text == '.' || *text == ',') {
+        text++;
+        int places = 0;
+        while (*text >= '0' && *text <= '9') {
+            if (places < 2) frac = frac * 10 + (*text - '0');
+            places++;
+            digits++;
+            text++;
+        }
+        if (places == 1) frac *= 10;
+    }
+    while (*text == ' ' || *text == '\t') text++;
+    if (digits == 0 || *text != '\0') return keep_ms;
+    long ms = whole * 1000 + frac * 10;
+    if (ms > VOICE_PAUSE_MAX_MS) ms = VOICE_PAUSE_MAX_MS;
+    return voice_pause_round((int)ms);
+}
+
+void voice_pause_format(int ms, char *out, size_t cap)
+{
+    ms = voice_pause_round(ms);
+    (void)snprintf(out, cap, "%d.%d", ms / 1000, ms % 1000 / 100);
+}
+
+void voice_mode_enables(int voice_on, int mode, int ptt_mode, VoiceModeEnables *out)
+{
+    const int conv = mode == VOICE_MODE_CONVERSATION;
+    out->key_mode = voice_on && !conv;
+    out->mic_delay = voice_on && !conv && ptt_mode == VOICE_MODE_HOLD;
+    out->auto_send = voice_on && !conv;
+    out->conversation = voice_on && conv;
+}
+
 int voice_gain_clamp(int db)
 {
     if (db < VOICE_GAIN_MIN_DB) return VOICE_GAIN_MIN_DB;

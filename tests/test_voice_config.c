@@ -1376,3 +1376,70 @@ int test_voice_conv_auto_send_unchanged(void)
     remove(VCFG);
     TEST_END();
 }
+
+/* Task 14: the Pause before sending entry and the Mode greying. */
+int test_voice_pause_parse(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(voice_pause_parse("1.2", 1700), 1200);
+    ASSERT_EQ(voice_pause_parse("0.3", 1700), 500);      /* clamped up */
+    ASSERT_EQ(voice_pause_parse("9", 1700), 3000);       /* clamped down */
+    ASSERT_EQ(voice_pause_parse("3.0", 1700), 3000);
+    ASSERT_EQ(voice_pause_parse("0.5", 1700), 500);
+    ASSERT_EQ(voice_pause_parse("2", 1700), 2000);       /* no decimals */
+    ASSERT_EQ(voice_pause_parse(" 1.5 ", 1700), 1500);   /* spaces */
+    ASSERT_EQ(voice_pause_parse("1,5", 1700), 1500);     /* decimal comma */
+    ASSERT_EQ(voice_pause_parse("1.25", 1700), 1300);    /* nearest 100, halves up */
+    ASSERT_EQ(voice_pause_parse("abc", 1700), 1700);     /* keep */
+    ASSERT_EQ(voice_pause_parse("", 1700), 1700);
+    ASSERT_EQ(voice_pause_parse(NULL, 1700), 1700);
+    ASSERT_EQ(voice_pause_parse("1.2x", 1700), 1700);
+    ASSERT_EQ(voice_pause_parse("-1", 1700), 1700);
+    ASSERT_EQ(voice_pause_parse(".", 1700), 1700);
+    ASSERT_EQ(voice_pause_parse("99999999999999999999", 1700), 3000);
+    TEST_END();
+}
+
+int test_voice_pause_format(void)
+{
+    TEST_BEGIN();
+    char b[16];
+    voice_pause_format(1200, b, sizeof(b));
+    ASSERT_STR_EQ(b, "1.2");
+    voice_pause_format(3000, b, sizeof(b));
+    ASSERT_STR_EQ(b, "3.0");
+    voice_pause_format(500, b, sizeof(b));
+    ASSERT_STR_EQ(b, "0.5");
+    voice_pause_format(50, b, sizeof(b));    /* clamped */
+    ASSERT_STR_EQ(b, "0.5");
+    voice_pause_format(1250, b, sizeof(b));  /* rounded */
+    ASSERT_STR_EQ(b, "1.3");
+    TEST_END();
+}
+
+int test_voice_mode_enables(void)
+{
+    TEST_BEGIN();
+    VoiceModeEnables e;
+    /* Dictation, Toggle key */
+    voice_mode_enables(1, VOICE_MODE_DICTATION, VOICE_MODE_TOGGLE, &e);
+    ASSERT_EQ(e.key_mode, 1);
+    ASSERT_EQ(e.mic_delay, 0);
+    ASSERT_EQ(e.auto_send, 1);
+    ASSERT_EQ(e.conversation, 0);
+    /* Dictation, Hold key */
+    voice_mode_enables(1, VOICE_MODE_DICTATION, VOICE_MODE_HOLD, &e);
+    ASSERT_EQ(e.mic_delay, 1);
+    /* Conversation: key mode, delay and auto-send off, the section on */
+    voice_mode_enables(1, VOICE_MODE_CONVERSATION, VOICE_MODE_HOLD, &e);
+    ASSERT_EQ(e.key_mode, 0);
+    ASSERT_EQ(e.mic_delay, 0);
+    ASSERT_EQ(e.auto_send, 0);
+    ASSERT_EQ(e.conversation, 1);
+    /* Voice off: everything off */
+    voice_mode_enables(0, VOICE_MODE_CONVERSATION, VOICE_MODE_TOGGLE, &e);
+    ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation, 0);
+    voice_mode_enables(0, VOICE_MODE_DICTATION, VOICE_MODE_HOLD, &e);
+    ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation, 0);
+    TEST_END();
+}
