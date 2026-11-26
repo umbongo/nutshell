@@ -717,6 +717,23 @@ int test_vais_audio_cap(void)
     TEST_END();
 }
 
+/* F5: what a decoder failure is. Not WAV at the very start cannot work (the spec lists audio
+ * Nutshell cannot read as cannot-work); anything after audio began, or any other decoder error,
+ * is a passing stream failure. */
+int test_vais_decoder_failure_hr(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(voice_ais_decoder_failure(0, 1, 0), VOICE_AIS_HR_FORMAT);   /* ID3 / OggS first */
+    ASSERT_EQ(voice_ais_decoder_failure(1, 0, 0), VOICE_AIS_HR_FORMAT);   /* wrong rate */
+    ASSERT_EQ(voice_ais_decoder_failure(1, 0, 500), VOICE_AIS_HR_FORMAT);
+    ASSERT_EQ(voice_ais_decoder_failure(0, 1, 1), VOICE_AIS_HR_STREAM);   /* broke after a frame */
+    ASSERT_EQ(voice_ais_decoder_failure(0, 0, 0), VOICE_AIS_HR_STREAM);   /* second header, too long */
+    ASSERT_EQ(voice_ais_decoder_failure(0, 0, 9000), VOICE_AIS_HR_STREAM);
+    ASSERT_EQ(voice_ais_failure_fatal(voice_ais_decoder_failure(0, 1, 0)), 1);
+    ASSERT_EQ(voice_ais_failure_fatal(voice_ais_decoder_failure(0, 1, 7)), 0);
+    TEST_END();
+}
+
 /* ---- Mistral's events ---- */
 
 #define MAX_EV 64

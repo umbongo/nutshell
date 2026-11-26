@@ -51,6 +51,11 @@ int voice_wavs_error_is_format(const VoiceWavStream *w)
     return w->err == VWS_E_FORMAT;
 }
 
+int voice_wavs_error_is_notwav(const VoiceWavStream *w)
+{
+    return w->err == VWS_E_NOTWAV;
+}
+
 void voice_wavs_wipe(VoiceWavStream *w)
 {
     secure_zero(w, sizeof *w);

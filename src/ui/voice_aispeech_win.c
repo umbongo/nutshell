@@ -340,6 +340,7 @@ typedef struct {
     int done;                           /* Mistral: speech.audio.done seen */
     int failed;                         /* an error event, a bad delta or a decoder error */
     int fmt_err;                        /* the decoder error was "unsupported audio format" */
+    int notwav_err;                     /* the decoder error was "not a WAV stream" */
     uint64_t frames;                    /* decoded frames of this request, against VOICE_AIS_MAX_FRAMES */
     VoiceWavStream wav;
     SseLine sse;
@@ -357,6 +358,7 @@ static int fetch_feed(AisFetch *f, const unsigned char *p, size_t n)
         if (voice_wavs_state(&f->wav) == VWS_ERROR) {
             f->failed = 1;
             f->fmt_err = voice_wavs_error_is_format(&f->wav);
+            f->notwav_err = voice_wavs_error_is_notwav(&f->wav);
             return 1;
         }
         if (got > 0) {
@@ -451,7 +453,7 @@ static long ais_fetch(void *job, const VoiceAisTarget *t, const char *key, const
         } else if (f->stopped) {
             r = 0;                                        /* the worker reads its own flags */
         } else if (f->failed) {
-            r = f->fmt_err ? VOICE_AIS_HR_FORMAT : VOICE_AIS_HR_STREAM;
+            r = voice_ais_decoder_failure(f->fmt_err, f->notwav_err, f->frames);
         } else if ((f->mistral && !f->done) ||            /* R32: cut off before the done event */
                    sse_line_skipped(&f->sse) > 0 ||       /* a line was too long and dropped */
                    !voice_wavs_finish_ok(&f->wav)) {      /* no header, no frame or half a frame */

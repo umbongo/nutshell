@@ -279,6 +279,13 @@ int voice_ais_failure_fatal(long hr)
            hr == 400 || hr == 401 || hr == 403 || hr == 404 || hr == 422;
 }
 
+long voice_ais_decoder_failure(int format_err, int notwav_err, uint64_t frames_decoded)
+{
+    if (format_err) return VOICE_AIS_HR_FORMAT;
+    if (notwav_err && frames_decoded == 0) return VOICE_AIS_HR_FORMAT;
+    return VOICE_AIS_HR_STREAM;
+}
+
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap)
 {
     if (!out || cap == 0) return;

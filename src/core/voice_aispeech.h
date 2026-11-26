@@ -89,6 +89,11 @@ char *voice_ais_body(const VoiceAisTarget *t, const char *text, size_t len, size
 
 /* 1 for a setting that cannot work: RESOLVE, FORMAT, 400, 401, 403, 404, 422 and 300 to 399. */
 int  voice_ais_failure_fatal(long hr);
+/* The hr of a decoder failure of a 200 reply: VOICE_AIS_HR_FORMAT for an unsupported format
+ * (format_err) and for audio that is not WAV at its start (notwav_err with no frame decoded
+ * yet), which Nutshell cannot read and a retry cannot fix; VOICE_AIS_HR_STREAM for anything
+ * else, including a stream that began as valid WAV and broke later. */
+long voice_ais_decoder_failure(int format_err, int notwav_err, uint64_t frames_decoded);
 /* The reason for the chat note, no full stop: for RESOLVE it is resolve_err. */
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap);
 

@@ -960,7 +960,7 @@ int test_voice_ais_mistral_capture(void)
 }
 
 /* One event of the stream ends in an error, or only the done event arrives: each fails. */
-static int vr_expect_stream_fail(int mode)   /* 0 when every check held */
+static int vr_expect_stream_fail_hr(int mode, long want_hr)   /* 0 when every check held */
 {
     int _tf_local_fail = 0;
     HWND w = vr_begin();
@@ -973,7 +973,7 @@ static int vr_expect_stream_fail(int mode)   /* 0 when every check held */
         va_pump(100);
         ASSERT_EQ(va_count(VTT_DONE, 1), 0);
         ASSERT_EQ(va_count(VTT_ERROR, 1), 1);
-        ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+        ASSERT_EQ((int)vr_error_hr(), (int)want_hr);
         voice_ais_quit(VA_TOKEN, 3000);
     }
     if (h) hl_stop(h);
@@ -981,7 +981,40 @@ static int vr_expect_stream_fail(int mode)   /* 0 when every check held */
     return _tf_local_fail;
 }
 
-int test_voice_ais_sse_error_event(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_stream_fail(HLS_SSE_ERROR), 0); TEST_END(); }
+static int vr_expect_stream_fail(int mode) { return vr_expect_stream_fail_hr(mode, VOICE_AIS_HR_STREAM); }
+
+/* A stream of valid WAV audio that then ends in an error event is a passing stream failure. The
+ * canned error fixture's first delta is raw PCM, not WAV, so (F5) it fails as an unsupported format
+ * instead; both are checked. */
+int test_voice_ais_sse_error_event(void)
+{
+    TEST_BEGIN();
+    static const char *const path = TEST_TMP_DIR "/nutshell_vais_wavthenerr.sse";
+    static const char err_ev[] = "event: error\ndata: {\"error\": {\"message\": \"interrupted\", "
+                                 "\"type\": \"server_error\", \"code\": 500}}\n\n";
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    size_t n = 0;
+    char *fix = vr_read(VR_FIX_WAV, &n);
+    ASSERT_NOT_NULL(fix);
+    const char *first_end = fix ? strstr(fix, "\n\n") : NULL;
+    ASSERT_NOT_NULL(first_end);
+    if (w && first_end) {
+        ASSERT_EQ(vr_write(path, fix, (size_t)(first_end - fix) + 2, err_ev, sizeof(err_ev) - 1), 1);
+        HttpLoop *h = NULL;
+        ASSERT_EQ(vr_mistral_file(w, &h, path, VR_KEY), 1);
+        va_pump(100);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+        ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+        if (h) hl_stop(h);
+        voice_ais_quit(VA_TOKEN, 3000);
+    }
+    free(fix);
+    remove(path);
+    va_end(w);
+    ASSERT_EQ(vr_expect_stream_fail_hr(HLS_SSE_ERROR, VOICE_AIS_HR_FORMAT), 0);
+    TEST_END();
+}
 int test_voice_ais_sse_done_only(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_stream_fail(HLS_SSE_DONE_ONLY), 0); TEST_END(); }
 
 /* Each custom-server failure of the decoder or the stream, by mode and by the hr it must give. */
@@ -1008,6 +1041,15 @@ static int vr_expect_custom(int mode, long want_hr)   /* 0 when every check held
 }
 
 int test_voice_ais_badrate_is_format(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_WAV_BADRATE, VOICE_AIS_HR_FORMAT), 0); TEST_END(); }
+/* F5: a 200 whose body is not WAV (an MP3 tag here) cannot work: unsupported audio format. A stream
+ * that began as valid WAV and broke later (second_header_fails below) stays a stream failure. */
+int test_voice_ais_not_wav_is_format(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(vr_expect_custom(HLS_NOTWAV, VOICE_AIS_HR_FORMAT), 0);
+    ASSERT_EQ(voice_ais_failure_fatal(VOICE_AIS_HR_FORMAT), 1);
+    TEST_END();
+}
 int test_voice_ais_second_header_fails(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_WAV_TWICE, VOICE_AIS_HR_STREAM), 0); TEST_END(); }
 int test_voice_ais_empty_body_fails(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_EMPTY, VOICE_AIS_HR_STREAM), 0); TEST_END(); }
 int test_voice_ais_http_401(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_401, 401), 0); TEST_END(); }

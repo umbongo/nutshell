@@ -61,6 +61,9 @@ uint64_t voice_wavs_frames(const VoiceWavStream *w);
 const char *voice_wavs_error(const VoiceWavStream *w);
 /* 1 for "unsupported audio format". */
 int    voice_wavs_error_is_format(const VoiceWavStream *w);
+/* 1 for "not a WAV stream" (the header is not RIFF/WAVE, or lacks a usable fmt before data).
+ * Only the header can fail this way, so it is always before the first frame. */
+int    voice_wavs_error_is_notwav(const VoiceWavStream *w);
 void   voice_wavs_wipe(VoiceWavStream *w);
 
 #endif

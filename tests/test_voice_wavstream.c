@@ -257,6 +257,7 @@ int test_vwav_rejects_unsupported(void)
         ASSERT_EQ(voice_wavs_feed(&w, b, o, out, voice_wavs_out_max(o)), 0);
         ASSERT_EQ(voice_wavs_state(&w), VWS_ERROR);
         ASSERT_EQ(voice_wavs_error_is_format(&w), 1);
+        ASSERT_EQ(voice_wavs_error_is_notwav(&w), 0);
         ASSERT_STR_EQ(voice_wavs_error(&w), "unsupported audio format");
         ASSERT_EQ(voice_wavs_finish_ok(&w), 0);
         /* an error is final: more bytes give nothing */
@@ -280,6 +281,8 @@ int test_vwav_not_wav(void)
         ASSERT_EQ(voice_wavs_state(&w), VWS_ERROR);
         ASSERT_STR_EQ(voice_wavs_error(&w), "not a WAV stream");
         ASSERT_EQ(voice_wavs_error_is_format(&w), 0);
+        ASSERT_EQ(voice_wavs_error_is_notwav(&w), 1);
+        ASSERT_EQ((int)voice_wavs_frames(&w), 0);
     }
     /* a data chunk with no fmt before it */
     {
@@ -360,6 +363,7 @@ int test_vwav_second_header_fails(void)
     ASSERT_EQ(voice_wavs_state(&w), VWS_ERROR);
     ASSERT_STR_EQ(voice_wavs_error(&w), "second WAV header");
     ASSERT_EQ(voice_wavs_error_is_format(&w), 0);
+    ASSERT_EQ(voice_wavs_error_is_notwav(&w), 0);   /* it broke after frames: a stream failure */
     ASSERT_EQ(voice_wavs_finish_ok(&w), 0);
     /* the 12-byte window split at every point across two feeds, and bytewise */
     for (s = h2 + 1; s < h2 + 12; s++) {
