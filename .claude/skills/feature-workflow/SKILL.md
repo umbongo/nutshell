@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-21 (retrospective: the merge count in the ask, open alerts after a merge, the session's own model, tests that can fail). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-26 (the main session runs the plan; no long-lived orchestrator). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules live in CLAUDE.md ("Software Development Rules", "Branches, pull
 requests and the merge gate"); this skill walks through them in order, and
 CLAUDE.md wins where they disagree. History and rationale: the retrospectives.
@@ -15,7 +15,7 @@ CLAUDE.md wins where they disagree. History and rationale: the retrospectives.
 **One rule:** hand off to sub-agents wherever possible, without letting
 the quality of the result suffer. The purpose is to curate what enters
 the main session's context. A survey returns conclusions; an
-implementation returns a diff and a test summary; a review returns ranked
+implementation returns its commits, a diff stat and a test summary; a review returns ranked
 findings. Raw files, transcripts and intermediate detail stay in the
 sub-agent. The main session keeps the decisions, the diffs it reviews,
 the reports and the key learnings.
@@ -25,7 +25,7 @@ the reports and the key learnings.
 | Job | Model |
 |---|---|
 | The main session: the maintainer's conversation, briefs, rulings | The session's own model, named by its id (`claude-fable-5-2` in PR #99, `claude-opus-5-5` in PR #101) |
-| Judgement: reviews, critiques, orchestrating a multi-step package | Opus (`claude-opus-5-5`) |
+| Judgement: reviews, critiques, a per-task orchestrator when one is used ("Running a plan") | Opus (`claude-opus-5-5`) |
 | Code and tests | Sonnet (`claude-sonnet-5-5`) |
 | Mechanical, single-pattern work: renames, fixtures, doc tables | Haiku (`claude-haiku-5-5`) |
 | Surveys of the tree that should return conclusions, not files | Explore agent |
@@ -39,14 +39,67 @@ be longer than the change. Say so in one line.
 **Quality checks are sub-agents too.** A second opinion on a decision is
 the `critique` skill. A diff review is an Opus agent given the diff, never a
 summary. Never poll a running agent; its completion notification is the
-signal. **Every Opus review's findings reach the maintainer before any
-fix** (CLAUDE.md). `subagent-driven-development` does not stop there, so the
-orchestrator's brief overrides its stop rules: after any Opus review, return
-the ranked findings and your rulings, and stop. The main session shows them
-and, unless told otherwise, resumes that orchestrator (SendMessage) for the
-fixes (a fresh one gets the ledger path and findings if it cannot be
-resumed). Sonnet per-task reviews keep looping inside the run. Finish means
-push and open or update the draft PR (step 5), never merge.
+signal. **Every Opus or Fable review's findings reach the maintainer
+before any fix** (CLAUDE.md). `subagent-driven-development` does not stop
+there, so the main session, as its controller, shows the findings and its
+rulings before it dispatches a fixer; unless told otherwise, the fixes then
+go ahead ("Running a plan" covers a per-task orchestrator). Every review is
+run by a model other than the one that wrote the code, Opus or Fable
+(maintainer, 2026-11-25). Finish means push and open or update the draft
+PR (step 5), never merge.
+
+## Running a plan
+
+**The main session runs the plan itself** (maintainer, 2026-11-26). It is
+the controller for `superpowers:subagent-driven-development`: it dispatches
+every agent the plan needs as a background agent and takes their
+completion notifications. That is each task's implementer, reviewer and
+fixer, and the work after the last task: the version bump, build and
+verification (a Sonnet agent), the final reviews, the fix wave and its
+re-review. No sub-agent spans two of these jobs.
+
+- **Why** (measured over 2026-11-21 to 26, `docs/token-usage/`): the
+  long-lived Opus orchestrators were about 30% of the cost index. Their
+  contexts grew to 300k-600k and every request re-read them; and a
+  sub-agent's prompt cache lives 5 minutes, so it expired while they
+  waited on an implementer and the next request rewrote it in full (64
+  times). The main session has the 1-hour cache on the subscription. It
+  takes on part of the controller's reading, so the expected saving is
+  smaller: the critique estimated 14-17% of the index.
+- **The ledger** is the plan-execution skill's own,
+  `.superpowers/sdd/<plan>/progress.md` in the worktree, not the plan's
+  checkboxes. Write a line when an agent is dispatched (task, role, model,
+  worktree) and when it returns (commits, test line, verdict), before
+  anything else, so a compaction or a new session resumes from the file
+  and never re-dispatches a task that is running or done. The maintainer's
+  instructions given mid-run go in it too; a compaction can lose them.
+- **Keep the main session lean.** It does not run `make`, `git diff` or
+  broad Reads itself: the implementer runs the tests, the reviewer reads
+  the diff, and a question about the code goes to a short sub-agent. To
+  rule on a finding it may read the few lines the finding cites. Per task
+  it receives the report (commits, a diff stat, the test summary line,
+  open questions) and the reviewer's ranked findings.
+- **The check before the merge** (step 5) comes last, after the fix wave,
+  when nothing else is pending. On a branch that had the two blind final
+  reviews it is the diff stat and the cited hunks, not the whole diff
+  (PR 3's is about 15,000 lines, most of a compaction).
+- **Briefs carry the task, not the documents:** the task's section of the
+  plan and the rulings it cites, pasted or by path and line range, never
+  "read the spec and the plan". A spec's review notes and revision history
+  go in a file implementers are not pointed at.
+- **Fix rounds** follow the plan-execution skill (resume the implementer
+  with SendMessage for rounds 1 to 3) only when the implementer finished a
+  few minutes ago. Otherwise, and overriding that skill, a fresh fixer gets
+  the findings and the files: a cold resume rewrites the implementer's
+  whole context.
+- **A per-task orchestrator** (Opus) only for a task whose own loop the
+  main session should not hold. It is spawned for that task and ends with
+  it. After a review it returns the findings and its rulings and stops; the
+  main session shows them, then resumes it for the fixes (a fresh one gets
+  the ledger path and the findings).
+- **Not used:** `subagentPromptCacheTtl: "1h"` (a settings key in Claude
+  Code 2.1.332). It makes every sub-agent cache write dearer to spare the
+  waits of a few; revisit only with a retrospective's measurement.
 
 **Attribution:** every commit and pull request carries a `Models:` line
 naming each model and what it did, then the co-author trailer (CLAUDE.md,
@@ -70,15 +123,15 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
    to migrate, run the `critique` skill: an Opus critic gets the spec and
    the files, never the author's reasoning. Each finding is accepted or
    rejected in writing.
-4. **Implementation.** A sub-agent works on the branch: Opus orchestrating
-   when the package is multi-step, otherwise Sonnet directly, Haiku for
+4. **Implementation.** Sub-agents work on the branch, dispatched task by
+   task by the main session ("Running a plan"): Sonnet for code, Haiku for
    the mechanical parts. Tests first (CLAUDE.md, "Test-Driven
    Development"). A test that tells two states apart needs a fixture in
    which they differ (PR #101's click-cycle wintest could not fail: at 14
    lines the extended and open heights were equal). `make test` before
-   every push. What returns to the main session is the diff and the test
-   summary line, and mid-run the final review's findings (Allocation,
-   "Quality checks").
+   every push. What returns to the main session is each task's report
+   (commits, a diff stat, the test summary line) and the reviews' findings
+   (Allocation, "Quality checks").
 5. **Draft pull request.** The first push opens it. Before touching it,
    classify the diff:
 
@@ -92,8 +145,14 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
      require it and the committed exe would then disagree.
    - **Non-empty**: step 6 applies in full.
 
-   The main session reads the diff in full before the maintainer merges.
-   Stage new files by path and read every `??` line first (CLAUDE.md, "Git
+   Before the maintainer merges, the main session checks the diff
+   (maintainer, 2026-11-26). A branch that had the two blind final reviews
+   has been read in full by them, so the main session reads
+   `git diff --stat origin/main...HEAD`, compares it with the files the
+   plan's tasks named, reads in full any file no task named, and reads the
+   hunks the reviews' findings cite and the fixes made to them. A branch
+   with no final review (a small fix, docs, a config change) is still read
+   in full. Stage new files by path and read every `??` line first (CLAUDE.md, "Git
    commits"). A PR stacked on an unmerged branch is retargeted to `main`
    when its base is deleted (else `gh api -X PATCH
    repos/umbongo/nutshell/pulls/N -f base=main`; `gh pr edit` fails here);

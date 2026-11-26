@@ -1,0 +1,175 @@
+{
+ "merges": 17,
+ "peak_context": {
+  "critique": 180021,
+  "fix": 276687,
+  "implement": 363075,
+  "main": 291073,
+  "orchestrator": 596203,
+  "other": 239830,
+  "plan/spec": 554184,
+  "review": 518910,
+  "survey": 205786
+ },
+ "since": "2026-11-21T00:00:00+00:00",
+ "subagent_start_median": 56195,
+ "subagent_start_n": 266,
+ "totals": {
+  "all:all": {
+   "agents": 271,
+   "cache_read": 1261344188,
+   "compactions": 4,
+   "cost_index": 242523304.80000046,
+   "fresh_input": 60861650,
+   "idle_rewrite_cost": 36685567.5,
+   "idle_rewrite_tokens": 27945576,
+   "idle_rewrites": 106,
+   "output": 7540712,
+   "requests": 8144
+  },
+  "model:<synthetic>": {
+   "cache_read": 0,
+   "cost_index": 0.0,
+   "fresh_input": 0,
+   "output": 0,
+   "requests": 1
+  },
+  "model:fable-5-2": {
+   "cache_read": 72741472,
+   "cost_index": 15081056.699999996,
+   "fresh_input": 3424698,
+   "idle_rewrite_cost": 1918544.25,
+   "idle_rewrite_tokens": 1122213,
+   "idle_rewrites": 6,
+   "output": 542049,
+   "requests": 412
+  },
+  "model:haiku-5-5": {
+   "cache_read": 708252,
+   "cost_index": 531051.7000000001,
+   "fresh_input": 269084,
+   "output": 24776,
+   "requests": 17
+  },
+  "model:opus-5-5": {
+   "cache_read": 712449081,
+   "cost_index": 135724957.34999996,
+   "fresh_input": 36581481,
+   "idle_rewrite_cost": 30985509.5,
+   "idle_rewrite_tokens": 23798152,
+   "idle_rewrites": 84,
+   "output": 3391736,
+   "requests": 3773
+  },
+  "model:sonnet-5-5": {
+   "cache_read": 475445383,
+   "cost_index": 91186239.05000019,
+   "fresh_input": 20586387,
+   "idle_rewrite_cost": 3781513.75,
+   "idle_rewrite_tokens": 3025211,
+   "idle_rewrites": 16,
+   "output": 3582151,
+   "requests": 3941
+  },
+  "role:critique": {
+   "agents": 6,
+   "cache_read": 10466824,
+   "compactions": 0,
+   "cost_index": 2818168.899999999,
+   "fresh_input": 793886,
+   "output": 155836,
+   "requests": 102
+  },
+  "role:fix": {
+   "agents": 61,
+   "cache_read": 119589219,
+   "compactions": 0,
+   "cost_index": 23139316.649999995,
+   "fresh_input": 5681011,
+   "idle_rewrite_cost": 786461.25,
+   "idle_rewrite_tokens": 629169,
+   "idle_rewrites": 3,
+   "output": 815934,
+   "requests": 1061
+  },
+  "role:implement": {
+   "agents": 77,
+   "cache_read": 346305016,
+   "compactions": 0,
+   "cost_index": 62588967.09999984,
+   "fresh_input": 11938958,
+   "idle_rewrite_cost": 2995052.5,
+   "idle_rewrite_tokens": 2396042,
+   "idle_rewrites": 13,
+   "output": 2607234,
+   "requests": 2692
+  },
+  "role:main": {
+   "agents": 5,
+   "cache_read": 92258273,
+   "compactions": 4,
+   "cost_index": 18376875.299999986,
+   "fresh_input": 3485198,
+   "idle_rewrite_cost": 4676260.0,
+   "idle_rewrite_tokens": 2338130,
+   "idle_rewrites": 16,
+   "output": 436454,
+   "requests": 609
+  },
+  "role:orchestrator": {
+   "agents": 12,
+   "cache_read": 414402414,
+   "compactions": 0,
+   "cost_index": 78095285.65000013,
+   "fresh_input": 24182901,
+   "idle_rewrite_cost": 25587410.0,
+   "idle_rewrite_tokens": 20469928,
+   "idle_rewrites": 68,
+   "output": 1285482,
+   "requests": 1629
+  },
+  "role:other": {
+   "agents": 8,
+   "cache_read": 18406665,
+   "compactions": 0,
+   "cost_index": 3988827.7500000014,
+   "fresh_input": 997983,
+   "output": 180153,
+   "requests": 165
+  },
+  "role:plan/spec": {
+   "agents": 2,
+   "cache_read": 54204830,
+   "compactions": 0,
+   "cost_index": 10001839.0,
+   "fresh_input": 2123268,
+   "idle_rewrite_cost": 1612598.75,
+   "idle_rewrite_tokens": 1290079,
+   "idle_rewrites": 4,
+   "output": 385474,
+   "requests": 193
+  },
+  "role:review": {
+   "agents": 83,
+   "cache_read": 159192748,
+   "compactions": 0,
+   "cost_index": 35098501.7999999,
+   "fresh_input": 9658556,
+   "idle_rewrite_cost": 1027785.0,
+   "idle_rewrite_tokens": 822228,
+   "idle_rewrites": 2,
+   "output": 1421328,
+   "requests": 1206
+  },
+  "role:survey": {
+   "agents": 17,
+   "cache_read": 46518199,
+   "compactions": 0,
+   "cost_index": 8415522.649999995,
+   "fresh_input": 1999889,
+   "output": 252817,
+   "requests": 487
+  }
+ },
+ "until": "2026-11-26T00:45:00+00:00"
+}
