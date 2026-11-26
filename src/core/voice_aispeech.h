@@ -86,7 +86,7 @@ char *voice_ais_body(const VoiceAisTarget *t, const char *text, size_t len, size
 #define VOICE_AIS_HR_DEVICE  (-4L)   /* render lost or pre-empted while playing: passing */
 #define VOICE_AIS_HR_STREAM  (-5L)   /* a stream failure of R32: passing */
 
-/* 1 for a setting that cannot work: RESOLVE, FORMAT, 401, 403, 404, 422. */
+/* 1 for a setting that cannot work: RESOLVE, FORMAT, 400, 401, 403, 404, 422 and 300 to 399. */
 int  voice_ais_failure_fatal(long hr);
 /* The reason for the chat note, no full stop: for RESOLVE it is resolve_err. */
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap);

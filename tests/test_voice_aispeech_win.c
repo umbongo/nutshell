@@ -1012,6 +1012,15 @@ int test_voice_ais_second_header_fails(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect
 int test_voice_ais_empty_body_fails(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_EMPTY, VOICE_AIS_HR_STREAM), 0); TEST_END(); }
 int test_voice_ais_http_401(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_401, 401), 0); TEST_END(); }
 int test_voice_ais_http_429(void) { TEST_BEGIN(); ASSERT_EQ(vr_expect_custom(HLS_429, 429), 0); TEST_END(); }
+/* F3: a redirect is not followed and not retried: the status is the failure, and it is fatal. */
+int test_voice_ais_http_302_redirect(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(vr_expect_custom(HLS_302, 302), 0);
+    ASSERT_EQ(vr_expect_custom(HLS_307, 307), 0);
+    ASSERT_EQ(voice_ais_failure_fatal(302), 1);
+    TEST_END();
+}
 int test_voice_ais_http_404_and_422(void)
 {
     TEST_BEGIN();

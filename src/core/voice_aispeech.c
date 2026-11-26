@@ -259,7 +259,8 @@ char *voice_ais_body(const VoiceAisTarget *t, const char *text, size_t len, size
 int voice_ais_failure_fatal(long hr)
 {
     return hr == VOICE_AIS_HR_RESOLVE || hr == VOICE_AIS_HR_FORMAT ||
-           hr == 401 || hr == 403 || hr == 404 || hr == 422;
+           (hr >= 300 && hr <= 399) ||                   /* a redirect: the Base URL is wrong */
+           hr == 400 || hr == 401 || hr == 403 || hr == 404 || hr == 422;
 }
 
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap)
@@ -273,8 +274,9 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
     case 404:
         snprintf(out, cap, "the speech model or voice was not found (HTTP 404)");
         break;
+    case 400:
     case 422:
-        snprintf(out, cap, "the speech provider refused the request (HTTP 422)");
+        snprintf(out, cap, "the speech provider refused the request (HTTP %ld)", hr);
         break;
     case VOICE_AIS_HR_FORMAT:
         snprintf(out, cap, "unsupported audio format");
@@ -293,7 +295,9 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
         snprintf(out, cap, "the speech stream was broken");
         break;
     default:
-        if (hr > 0) snprintf(out, cap, "the speech provider returned HTTP %ld", hr);
+        if (hr >= 300 && hr <= 399)
+            snprintf(out, cap, "the server redirected the request (HTTP %ld): check the Base URL", hr);
+        else if (hr > 0) snprintf(out, cap, "the speech provider returned HTTP %ld", hr);
         else snprintf(out, cap, "the speech request failed");
         break;
     }

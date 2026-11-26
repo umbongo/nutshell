@@ -562,7 +562,16 @@ int test_vais_failure_classes(void)
     ASSERT_EQ(voice_ais_failure_fatal(500), 0);
     ASSERT_EQ(voice_ais_failure_fatal(503), 0);
     ASSERT_EQ(voice_ais_failure_fatal(0), 0);
-    ASSERT_EQ(voice_ais_failure_fatal(400), 0);
+    /* 400 and every 3xx cannot work by trying again (the request is wrong or the URL moved) */
+    ASSERT_EQ(voice_ais_failure_fatal(400), 1);
+    ASSERT_EQ(voice_ais_failure_fatal(300), 1);
+    ASSERT_EQ(voice_ais_failure_fatal(301), 1);
+    ASSERT_EQ(voice_ais_failure_fatal(308), 1);
+    ASSERT_EQ(voice_ais_failure_fatal(399), 1);
+    ASSERT_EQ(voice_ais_failure_fatal(299), 0);
+    ASSERT_EQ(voice_ais_failure_fatal(399 + 1), 1);   /* 400 again: the class edge */
+    ASSERT_EQ(voice_ais_failure_fatal(408), 0);       /* passing */
+    ASSERT_EQ(voice_ais_failure_fatal(401 + 7), 0);   /* 408 */
     TEST_END();
 }
 
@@ -578,6 +587,18 @@ int test_vais_failure_reasons(void)
     ASSERT_STR_EQ(o, "the speech model or voice was not found (HTTP 404)");
     voice_ais_failure_reason(422, NULL, o, sizeof o);
     ASSERT_STR_EQ(o, "the speech provider refused the request (HTTP 422)");
+    voice_ais_failure_reason(400, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the speech provider refused the request (HTTP 400)");
+    voice_ais_failure_reason(300, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 300): check the Base URL");
+    voice_ais_failure_reason(301, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 301): check the Base URL");
+    voice_ais_failure_reason(308, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 308): check the Base URL");
+    voice_ais_failure_reason(399, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 399): check the Base URL");
+    voice_ais_failure_reason(408, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the speech provider returned HTTP 408");
     voice_ais_failure_reason(VOICE_AIS_HR_FORMAT, NULL, o, sizeof o);
     ASSERT_STR_EQ(o, "unsupported audio format");
     voice_ais_failure_reason(VOICE_AIS_HR_RESOLVE, "Enter a speech API key", o, sizeof o);
