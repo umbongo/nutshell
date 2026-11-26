@@ -7,7 +7,7 @@ has the why.
 ## 2026-11-26 — the main session runs a plan; token use is measured
 
 Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
-Models: claude-opus-5-5 (main session, measurement, these edits); claude-fable-5-2 (critique).
+Models: claude-opus-5-5 (main session, measurement, the first edits); claude-fable-5-2 (critique; main session for the two later points).
 
 The maintainer asked for a cheaper development loop and for token use to be compared before
 and after at the next retrospective. Measured over 2026-11-21 to 26 (`docs/token-usage/`):
@@ -48,6 +48,16 @@ Critique (Fable 5.2, high effort, one round; the decision did not change, so no 
 9. Trim the skill and tool listings too (about 5%). Accepted as a follow-up, not here: they
    come from plugins and connectors outside this repository's settings, which is the
    maintainer's call.
+Later the same day the maintainer settled the two open points ("make these changes"), with
+no second critique since the maintainer decided them:
+- **`skills/feature-workflow/SKILL.md`** step 5 and "Running a plan": a branch that had the
+  two blind final reviews is not read in full again by the main session; it reads the diff
+  stat, any file no task named and the hunks the findings cite. A branch with no final review
+  is still read in full.
+- **`memory/MEMORY.md`**: the start-up trim in `~/nutshell/.claude/settings.local.json`
+  (finding 9, now done): synced skills, claude.ai connectors, playwright and three synced
+  plugins off for nutshell sessions; 54.3k to 45.6k on a headless start.
+
 - Not verified, left so: the 30-day transcript deletion (October transcripts still exist,
   so the skill says "can delete"); how subscription limits weigh models and 1-hour writes;
   whether compaction requests appear in the counts.

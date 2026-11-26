@@ -79,9 +79,10 @@ re-review. No sub-agent spans two of these jobs.
   rule on a finding it may read the few lines the finding cites. Per task
   it receives the report (commits, a diff stat, the test summary line,
   open questions) and the reviewer's ranked findings.
-- **The diff read before the merge** (step 5) comes last, after the fix
-  wave, when nothing else is pending. On a large branch (PR 3: about 15,000
-  lines) expect a compaction; the ledger carries the state across it.
+- **The check before the merge** (step 5) comes last, after the fix wave,
+  when nothing else is pending. On a branch that had the two blind final
+  reviews it is the diff stat and the cited hunks, not the whole diff
+  (PR 3's is about 15,000 lines, most of a compaction).
 - **Briefs carry the task, not the documents:** the task's section of the
   plan and the rulings it cites, pasted or by path and line range, never
   "read the spec and the plan". A spec's review notes and revision history
@@ -144,8 +145,14 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
      require it and the committed exe would then disagree.
    - **Non-empty**: step 6 applies in full.
 
-   The main session reads the diff in full before the maintainer merges.
-   Stage new files by path and read every `??` line first (CLAUDE.md, "Git
+   Before the maintainer merges, the main session checks the diff
+   (maintainer, 2026-11-26). A branch that had the two blind final reviews
+   has been read in full by them, so the main session reads
+   `git diff --stat origin/main...HEAD`, compares it with the files the
+   plan's tasks named, reads in full any file no task named, and reads the
+   hunks the reviews' findings cite and the fixes made to them. A branch
+   with no final review (a small fix, docs, a config change) is still read
+   in full. Stage new files by path and read every `??` line first (CLAUDE.md, "Git
    commits"). A PR stacked on an unmerged branch is retargeted to `main`
    when its base is deleted (else `gh api -X PATCH
    repos/umbongo/nutshell/pulls/N -f base=main`; `gh pr edit` fails here);

@@ -48,8 +48,16 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` change it, deliberately unset).
   An agent that waits longer than that rewrites its whole context at the
   next request.
-- Every sub-agent starts at about 56k tokens before its brief; about 8.5k
-  of it is the skill list, mostly plugins this repository never uses.
+- Every sub-agent started at about 56k tokens before its brief. Since
+  2026-11-26 `~/nutshell/.claude/settings.local.json` on `automaton`
+  (gitignored, so not in a worktree or another clone) turns off what this
+  repository never uses: `syncClaudeAiSkills: false`,
+  `disableClaudeAiConnectors: true`, and `enabledPlugins` false for
+  playwright and the synced engineering, design and cowork plugins. A
+  headless start fell from 54.3k to 45.6k. Sessions must start in
+  `~/nutshell` to get it. Gmail, Calendar, Drive and Claude Docs are
+  therefore absent in nutshell sessions; desktop-commander is kept as the
+  fallback when Bash fails (the full-disk note below).
 
 ## Working from a cloud (Linux) session
 

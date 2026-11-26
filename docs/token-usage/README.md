@@ -60,3 +60,14 @@ list of loadable tools ~4k; the brief itself ~1.5k.
   main session's share and compactions rising. The reviewer rule of
   2026-11-25 (Opus or Fable, never Sonnet) moves review tokens to dearer
   models at the same time, which the index does not show.
+- 2026-11-26: the start-up context is trimmed for nutshell sessions on
+  `automaton`, in `~/nutshell/.claude/settings.local.json` (not in the
+  repository): the skills and connectors synced from claude.ai, the
+  playwright plugin and the synced engineering, design and cowork plugins are
+  off; desktop-commander stays. A headless session's first request fell from
+  54.3k to 45.6k tokens (81 skills to 45, 141 tools to 53). Expected: the
+  sub-agent start-up median falls by a similar 8-9k.
+- 2026-11-26: before a merge the main session no longer reads the whole diff
+  of a branch that had the two blind final reviews; it reads the diff stat,
+  any file no task named and the hunks the findings cite (`feature-workflow`
+  step 5). Expected: one compaction fewer on a large pull request.
