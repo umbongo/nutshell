@@ -84,6 +84,11 @@ void voice_on_chat_changed_msg(void);
  * recording and sends once the words are in); the handler then returns without sending. */
 int voice_send_pressed(void);
 
+/* A user launch of a chat turn that did not go through the conversation (Retry, a suggestion chip,
+ * a typed send while Working): a running conversation takes the reply baseline again and moves to
+ * Working (voice_conv_external_send). Call it after the launch, once the chat is busy. */
+void voice_on_external_send(void);
+
 /* Posted to the main window by ai_chat when the chat is idle (nothing streaming, no
  * dispatch, no card waiting for the user), and when a card needing the user appears
  * (wParam = VoiceCardKind). The controller re-checks and ignores both when no
@@ -111,6 +116,8 @@ void voice_on_turn_idle(void);           /* WM_VOICE_TURN_IDLE */
 void voice_on_card(WPARAM kind);         /* WM_VOICE_CARD */
 void voice_on_notice(void);              /* WM_VOICE_NOTICE */
 void voice_on_conv_timer(void);          /* WM_TIMER with VOICE_CONV_TIMER_ID */
+void voice_on_ais(LPARAM lp);            /* WM_VOICE_AIS: frees the VoiceAisMsg */
+void voice_on_ais_timer(UINT_PTR id);    /* WM_TIMER in VOICE_AIS_TIMER_BASE..+1 */
 void voice_on_panel_closed(void);        /* the AI panel was hidden or destroyed */
 
 #endif /* NUTSHELL_VOICE_WIN_H */

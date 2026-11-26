@@ -17,6 +17,7 @@
 #include "voice_config.h"
 #include "voice_gate.h"
 #include "voice_live_win.h"
+#include "voice_playq.h"
 
 /* The GUIDs and the property key are defined here, as copies: linking
  * libuuid/mmdevapi for them would add an import the exe must not have. */
@@ -26,6 +27,8 @@ static const GUID VA_IID_IMMDeviceEnumerator =
     {0xA95664D2, 0x9614, 0x4F35, {0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6}};
 static const GUID VA_IID_IAudioClient =
     {0x1CB9AD4C, 0xDBFA, 0x4C32, {0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2}};
+static const GUID VA_IID_IAudioRenderClient =   /* F294ACFC-3146-4483-A7BF-ADDCA7C260E2, as mingw-w64's audioclient.h */
+    {0xF294ACFC, 0x3146, 0x4483, {0xA7, 0xBF, 0xAD, 0xDC, 0xA7, 0xC2, 0x60, 0xE2}};
 static const GUID VA_IID_IAudioCaptureClient =
     {0xC8ADBD64, 0xE71E, 0x48A0, {0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17}};
 static const GUID VA_IID_IMMNotificationClient =
@@ -103,7 +106,10 @@ static size_t va_cap_samples(int cap_ms)
 
 typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH, VC_SET_GAIN,
                VC_CONV_BEGIN, VC_CONV_MODE, VC_CONV_ATTACH, VC_CONV_END, VC_CONV_END_TURN,
-               VC_TEST_CONV_OPEN, VC_TEST_CONV_INGEST } VaCmdKind;
+               VC_TEST_CONV_OPEN, VC_TEST_CONV_INGEST,
+               VC_R_OPEN, VC_R_DATA, VC_R_END, VC_R_FLUSH, VC_R_GAIN, VC_R_CLOSE,
+               /* a failed unlosable push, replayed at its place in the queue (va_pop makes these) */
+               VC_P_CONV_END, VC_P_FLUSH, VC_P_CLOSE } VaCmdKind;
 typedef struct {
     VaCmdKind kind;
     char      id[256];
@@ -113,7 +119,8 @@ typedef struct {
     int       cap_ms;    /* VC_BEGIN: this capture's length cap, <= 0 = VOICE_CAP_MS */
     int       pause_ms;  /* VC_CONV_BEGIN, VC_TEST_CONV_OPEN: the endpoint pause */
     int       live;      /* VC_BEGIN: feed the live session */
-    unsigned  token2;    /* VC_CONV_ATTACH: the live session's token */
+    unsigned  token2;    /* VC_CONV_ATTACH: the live session's token; VC_R_*: the reply id (min reply for a flush) */
+    unsigned  chunk;     /* VC_R_DATA */
     int16_t  *data;      /* VC_TEST_CONV_INGEST: owned by the command, wiped and freed when run */
     size_t    n;
 } VaCmd;
@@ -121,6 +128,7 @@ typedef struct {
 /* Everything one audio thread uses lives in its own context, so a thread
  * that outlives voice_audio_stop() (wedged in a driver call) can never touch
  * the next thread's state. The thread and the owner free it between them. */
+#define VA_PEND_MAX 16
 typedef struct VaCtx VaCtx;
 typedef struct { const IMMNotificationClientVtbl *lpVtbl; VaCtx *ctx; } VaNotify;
 struct VaCtx {
@@ -133,6 +141,17 @@ struct VaCtx {
     VaNotify         nc;
     int              exited;     /* under g_cs: the thread is done with ctx */
     int              orphaned;   /* under g_cs: stop() gave up waiting */
+    /* Commands whose push failed (notes item (r)): conv_end, render_flush, render_close. Each is
+     * recorded here under qcs with `seq`, the number of commands pushed before it, and replayed
+     * by va_pop as soon as the thread has popped that many: the queue's FIFO order is kept, so
+     * the command can neither be lost nor undo what was queued after it. The array is part of
+     * the context (no allocation at failure time). If it is full, the newest entry goes to the
+     * overflow slot of its kind (the last one of a kind wins), which va_pop replays first at
+     * the start of the next drain instead of dropping it. */
+    unsigned         pushed, popped;   /* under qcs: commands enqueued / popped (wrap-safe compares) */
+    struct { unsigned seq; VaCmdKind kind; unsigned token, min; } pend[VA_PEND_MAX];
+    int              npend;
+    struct { int used; unsigned token, min; } ovf[3];   /* VC_P_CONV_END, VC_P_FLUSH, VC_P_CLOSE */
 };
 
 static VaCtx           *g_ctx;
@@ -162,6 +181,7 @@ static void va_post(VaCtx *c, VoiceAudioMsg m, LPARAM lp)
         if (m == VAM_DEVICES) voice_audio_free_devices((VoiceDeviceList *)lp);
         if (m == VAM_CAPTURED) voice_audio_free_capture((VoiceCapture *)lp);
         if (m == VAM_CONV_TURN) voice_audio_free_capture((VoiceCapture *)lp);   /* the turn's audio: wiped */
+        if (m == VAM_PLAYED || m == VAM_PLAY_DONE) free((void *)lp);
     }
 }
 
@@ -204,6 +224,32 @@ static const IMMNotificationClientVtbl g_nc_vtbl = {
 
 /* ---- audio-thread state ---------------------------------------------- */
 
+#define VA_R_RATE       24000u
+#define VA_R_BUF_FRAMES 2400u        /* 100 ms */
+#define VA_R_STALL_MS   2000u
+#define VA_R_POST_MS    100u
+#define VA_R_ENDS       16
+
+/* The render client (AI speech), one owner token (R7). Audio thread only. */
+typedef struct {
+    int           open, started, null_sink;
+    unsigned      token;
+    VoicePlayQ   *q;
+    IAudioClient *client;
+    IAudioRenderClient *rc;
+    HANDLE        ev;                 /* the render event, or the null sink's 10 ms timer */
+    UINT32        buf_frames;
+    ULONGLONG     t_last_ev, t_last_post;
+    unsigned      ends[VA_R_ENDS];    /* ends reached by a read, waiting for padding 0 */
+    int           nends;
+    VoicePlayPos  pos;                /* after the last frame written */
+    int           have_pos;
+    /* null sink: a simulated 100 ms buffer draining in real time */
+    UINT32        sim_pad;
+    LONGLONG      sim_last;
+    int16_t       nbuf[VA_R_BUF_FRAMES];
+} VaRender;
+
 typedef struct {
     VaCtx               *ctx;
     IMMDeviceEnumerator *enm;
@@ -223,6 +269,7 @@ typedef struct {
     int                  raw_nonzero;  /* any non-zero sample seen before the gain */
     int                  active;
     struct VaConv       *conv;         /* a conversation capture (or the test seam's state) */
+    VaRender             r;
 } VaState;
 
 #ifdef NS_VOICE_WAV_SEAM
@@ -965,14 +1012,388 @@ static void va_watch(VaState *st, int on)
     }
 }
 
+/* ---- the render client (AI speech) on the audio thread ----------------- */
+
+static volatile LONG g_r_ms;          /* queued play-queue ms, any thread */
+static volatile LONG g_r_null;        /* TEST-ONLY: the null sink instead of WASAPI */
+static volatile LONG g_r_peak;        /* TEST-ONLY: largest |sample| the null sink took */
+static volatile LONG g_fail_push;     /* TEST-ONLY: raw pushes still to fail */
+#define VA_RF_N 16
+static struct { unsigned id; uint64_t frames; int used; } g_rf[VA_RF_N];   /* TEST-ONLY, under g_cs */
+
+static void va_rf_add(unsigned id, uint64_t n)
+{
+    if (!g_cs_ready || n == 0) return;
+    EnterCriticalSection(&g_cs);
+    int slot = -1;
+    for (int i = 0; i < VA_RF_N; i++) {
+        if (g_rf[i].used && g_rf[i].id == id) { slot = i; break; }
+        if (!g_rf[i].used && slot < 0) slot = i;
+    }
+    if (slot >= 0) { g_rf[slot].used = 1; g_rf[slot].id = id; g_rf[slot].frames += n; }
+    LeaveCriticalSection(&g_cs);
+}
+
+static int va_token_eq(unsigned a, unsigned b)
+{
+    return (a & VOICE_TOKEN_MASK) == (b & VOICE_TOKEN_MASK);
+}
+
+static void va_r_post_msg(VaState *st, VoiceAudioMsg m, unsigned reply, int with_pos)
+{
+    VaRender *r = &st->r;
+    VoiceRenderMsg *p = (VoiceRenderMsg *)calloc(1, sizeof(*p));
+    if (!p) return;
+    p->token = r->token;
+    p->reply_id = reply;
+    if (with_pos && r->have_pos && r->pos.reply_id == reply) {
+        p->chunk = r->pos.chunk;
+        p->frames_in_chunk = r->pos.frames_in_chunk;
+    }
+    va_post(st->ctx, m, (LPARAM)p);      /* frees p when the post fails */
+}
+
+static void va_r_update_ms(VaRender *r)
+{
+    uint64_t f = r->open && r->q ? voice_playq_queued_frames(r->q) : 0;
+    InterlockedExchange(&g_r_ms, (LONG)(f * 1000u / VA_R_RATE));
+}
+
+static void va_r_stop(VaRender *r)
+{
+    if (r->started) {
+        if (r->null_sink) {
+            if (r->ev) CancelWaitableTimer(r->ev);
+        } else if (r->client) {
+            IAudioClient_Stop(r->client);
+            IAudioClient_Reset(r->client);
+        }
+    }
+    r->started = 0;
+    r->sim_pad = 0;
+    r->have_pos = 0;
+}
+
+/* Releases everything (the play queue wiped). A gain dies with its owner: every open is 100 %. */
+static void va_r_close(VaState *st)
+{
+    VaRender *r = &st->r;
+    if (!r->open) return;
+    if (r->client) IAudioClient_Stop(r->client);
+    if (r->rc) { IAudioRenderClient_Release(r->rc); r->rc = NULL; }
+    if (r->client) { IAudioClient_Release(r->client); r->client = NULL; }
+    if (r->ev) { CloseHandle(r->ev); r->ev = NULL; }
+    voice_playq_free(r->q);
+    r->q = NULL;
+    secure_zero(r->nbuf, sizeof(r->nbuf));
+    r->open = r->started = r->null_sink = 0;
+    r->nends = 0;
+    r->have_pos = 0;
+    r->sim_pad = 0;
+    InterlockedExchange(&g_r_ms, 0);
+}
+
+static void va_r_error(VaState *st, VoiceAudioErr e)
+{
+    unsigned token = st->r.token;
+    va_r_close(st);
+    va_post(st->ctx, VAM_RENDER_ERROR, VOICE_ERR_PACK(e, token));
+}
+
+static LONGLONG va_qpc(void)
+{
+    LARGE_INTEGER l;
+    QueryPerformanceCounter(&l);
+    return l.QuadPart;
+}
+
+/* Frames of the simulated buffer still unplayed. */
+static UINT32 va_sim_padding(VaRender *r)
+{
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    LONGLONG fr = (va_qpc() - r->sim_last) * (LONGLONG)VA_R_RATE / f.QuadPart;
+    if (fr > 0) {
+        r->sim_last += fr * f.QuadPart / (LONGLONG)VA_R_RATE;
+        r->sim_pad = (LONGLONG)r->sim_pad > fr ? r->sim_pad - (UINT32)fr : 0;
+    }
+    return r->sim_pad;
+}
+
+static int va_r_padding(VaRender *r, UINT32 *pad)
+{
+    if (r->null_sink) { *pad = va_sim_padding(r); return 1; }
+    *pad = 0;
+    return SUCCEEDED(IAudioClient_GetCurrentPadding(r->client, pad));
+}
+
+static void va_r_take_ends(VaRender *r)
+{
+    unsigned id;
+    while (voice_playq_take_end(r->q, &id))
+        if (r->nends < VA_R_ENDS) r->ends[r->nends++] = id;
+}
+
+/* Copies up to buffer - padding frames from the play queue into the device. 0 on a device
+ * error. *wrote is the frames written. */
+static int va_r_fill(VaRender *r, UINT32 pad, size_t *wrote)
+{
+    *wrote = 0;
+    UINT32 avail = r->buf_frames > pad ? r->buf_frames - pad : 0;
+    if (avail == 0 || voice_playq_queued_frames(r->q) == 0) {
+        voice_playq_read(r->q, NULL, 0, NULL);          /* walks past end markers at the head */
+        va_r_take_ends(r);
+        return 1;
+    }
+    BYTE *buf = NULL;
+    if (r->null_sink) {
+        buf = (BYTE *)r->nbuf;
+        if (avail > VA_R_BUF_FRAMES) avail = VA_R_BUF_FRAMES;
+    } else if (FAILED(IAudioRenderClient_GetBuffer(r->rc, avail, &buf)) || !buf) {
+        return 0;
+    }
+    VoicePlayPos pos;
+    memset(&pos, 0, sizeof(pos));
+    size_t n = voice_playq_read(r->q, (int16_t *)buf, avail, &pos);
+    if (n > 0) { r->pos = pos; r->have_pos = 1; }
+    if (r->null_sink) {
+        int pk = 0;
+        for (size_t i = 0; i < n; i++) {
+            int v = r->nbuf[i] < 0 ? -(int)r->nbuf[i] : (int)r->nbuf[i];
+            if (v > pk) pk = v;
+        }
+        for (;;) {
+            LONG cur = g_r_peak;
+            if (pk <= cur || InterlockedCompareExchange(&g_r_peak, pk, cur) == cur) break;
+        }
+        if (n > 0) va_rf_add(pos.reply_id, n);
+        r->sim_pad += (UINT32)n;
+        secure_zero(r->nbuf, n * sizeof(int16_t));
+    } else if (FAILED(IAudioRenderClient_ReleaseBuffer(r->rc, (UINT32)n, 0))) {
+        return 0;
+    }
+    va_r_take_ends(r);
+    *wrote = n;
+    return 1;
+}
+
+static int va_r_start(VaState *st, ULONGLONG now)
+{
+    VaRender *r = &st->r;
+    if (r->null_sink) {
+        LARGE_INTEGER due;
+        due.QuadPart = -100000;                          /* 10 ms */
+        if (!SetWaitableTimer(r->ev, &due, 10, NULL, NULL, FALSE)) return 0;
+        r->sim_last = va_qpc();
+    } else if (FAILED(IAudioClient_Start(r->client))) {
+        return 0;
+    }
+    r->started = 1;
+    r->t_last_ev = r->t_last_post = now;
+    return 1;
+}
+
+/* One pass: padding, play-out of finished replies, fill, start, position post, stall check. */
+static void va_r_service(VaState *st, ULONGLONG now, int ev_fired)
+{
+    VaRender *r = &st->r;
+    if (!r->open) return;
+    if (ev_fired) r->t_last_ev = now;
+    UINT32 pad = 0;
+    if (r->started && !va_r_padding(r, &pad)) { va_r_error(st, VAE_DEVICE_LOST); return; }
+
+    /* A reply's end was reached by a read; it has played out once padding is 0 (or the
+     * client was never started: nothing was written). */
+    if (r->nends > 0 && pad == 0) {
+        for (int i = 0; i < r->nends; i++) va_r_post_msg(st, VAM_PLAY_DONE, r->ends[i], 1);
+        r->nends = 0;
+        if (voice_playq_queued_frames(r->q) == 0) va_r_stop(r);   /* R6: stop and reset between texts */
+    }
+
+    size_t wrote = 0;
+    if (!va_r_fill(r, pad, &wrote)) { va_r_error(st, VAE_DEVICE_LOST); return; }
+    pad += (UINT32)wrote;
+    if (!r->started && wrote > 0 && !va_r_start(st, now)) { va_r_error(st, VAE_DEVICE_LOST); return; }
+    if (!r->started && r->nends > 0) {   /* ends reached with nothing playing: padding is 0 by definition */
+        for (int i = 0; i < r->nends; i++) va_r_post_msg(st, VAM_PLAY_DONE, r->ends[i], 1);
+        r->nends = 0;
+    }
+
+    if (r->started && r->have_pos && now - r->t_last_post >= VA_R_POST_MS) {
+        r->t_last_post = now;
+        /* R24: written position less padding, clamped within the chunk. */
+        VoicePlayPos shown = r->pos;
+        shown.frames_in_chunk = shown.frames_in_chunk > pad ? shown.frames_in_chunk - pad : 0;
+        VoiceRenderMsg *p = (VoiceRenderMsg *)calloc(1, sizeof(*p));
+        if (p) {
+            p->token = r->token;
+            p->reply_id = shown.reply_id;
+            p->chunk = shown.chunk;
+            p->frames_in_chunk = shown.frames_in_chunk;
+            va_post(st->ctx, VAM_PLAYED, (LPARAM)p);
+        }
+    }
+    va_r_update_ms(r);
+    if (r->started && now - r->t_last_ev > VA_R_STALL_MS) va_r_error(st, VAE_DEVICE_LOST);
+}
+
+/* The real device: default eRender/eConsole, shared, 24 kHz mono 16-bit, 100 ms, not started. */
+static int va_r_open_real(VaState *st, VaRender *r, VoiceAudioErr *err)
+{
+    *err = VAE_OPEN_FAILED;
+    if (!st->enm) { *err = VAE_NO_DEVICE; return 0; }
+    IMMDevice *dev = NULL;
+    if (FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(st->enm, eRender, eConsole, &dev)) || !dev) {
+        *err = VAE_NO_DEVICE;
+        return 0;
+    }
+    HRESULT hr = IMMDevice_Activate(dev, &VA_IID_IAudioClient, CLSCTX_ALL, NULL, (void **)&r->client);
+    IMMDevice_Release(dev);
+    if (FAILED(hr) || !r->client) { r->client = NULL; return 0; }
+    WAVEFORMATEX wfx;
+    memset(&wfx, 0, sizeof(wfx));
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = 1;
+    wfx.nSamplesPerSec = VA_R_RATE;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = 2;
+    wfx.nAvgBytesPerSec = VA_R_RATE * 2u;
+    hr = IAudioClient_Initialize(r->client, AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+            AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            1000000, 0, &wfx, NULL);                    /* 100 ms in 100 ns units */
+    r->ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (SUCCEEDED(hr) && r->ev) hr = IAudioClient_SetEventHandle(r->client, r->ev);
+    else if (SUCCEEDED(hr)) hr = E_FAIL;
+    if (SUCCEEDED(hr)) hr = IAudioClient_GetBufferSize(r->client, &r->buf_frames);
+    if (SUCCEEDED(hr) && r->buf_frames == 0) hr = E_FAIL;
+    if (SUCCEEDED(hr))
+        hr = IAudioClient_GetService(r->client, &VA_IID_IAudioRenderClient, (void **)&r->rc);
+    if (FAILED(hr) || !r->rc) {
+        r->rc = NULL;
+        IAudioClient_Release(r->client);
+        r->client = NULL;
+        if (r->ev) { CloseHandle(r->ev); r->ev = NULL; }
+        return 0;
+    }
+    return 1;
+}
+
+static void va_r_open(VaState *st, unsigned token)
+{
+    VaRender *r = &st->r;
+    if (r->open) {
+        if (!va_token_eq(r->token, token))               /* R7: the older owner is told */
+            va_post(st->ctx, VAM_RENDER_ERROR, VOICE_ERR_PACK(VAE_RENDER_PREEMPTED, r->token));
+        va_r_close(st);
+    }
+    r->token = token;
+    r->null_sink = g_r_null ? 1 : 0;
+    r->started = 0;
+    r->nends = 0;
+    r->have_pos = 0;
+    r->sim_pad = 0;
+    VoiceAudioErr err = VAE_OPEN_FAILED;
+    int ok;
+    if (r->null_sink) {
+        r->buf_frames = VA_R_BUF_FRAMES;
+        r->ev = CreateWaitableTimerA(NULL, FALSE, NULL);  /* armed when started */
+        ok = r->ev != NULL;
+    } else {
+        ok = va_r_open_real(st, r, &err);
+    }
+    if (ok) {
+        r->q = voice_playq_new();
+        if (!r->q) { ok = 0; err = VAE_NO_MEMORY; }
+    }
+    if (!ok) {
+        r->open = 1;                                     /* so va_r_close releases what is there */
+        va_r_close(st);
+        va_post(st->ctx, VAM_RENDER_ERROR, VOICE_ERR_PACK(err, token));
+        return;
+    }
+    r->open = 1;
+    va_r_update_ms(r);
+    va_post(st->ctx, VAM_RENDER_OPENED, VOICE_ERR_PACK(0, token));
+}
+
+static int va_r_is(const VaState *st, unsigned token)
+{
+    return st->r.open && va_token_eq(st->r.token, token);
+}
+
+static void va_r_flush(VaState *st, unsigned token, unsigned min_reply)
+{
+    if (!va_r_is(st, token)) return;
+    VaRender *r = &st->r;
+    voice_playq_flush(r->q, min_reply);
+    r->nends = 0;
+    va_r_stop(r);                                        /* stop and reset (R6) */
+    va_r_update_ms(r);
+}
+
+static void va_r_command(VaState *st, VaCmd *c)
+{
+    VaRender *r = &st->r;
+    switch (c->kind) {
+    case VC_R_OPEN:
+        va_r_open(st, c->token);
+        break;
+    case VC_R_DATA:
+        if (va_r_is(st, c->token) && c->data) {
+            int16_t *d = c->data;
+            size_t n = c->n;
+            c->data = NULL;                              /* the queue owns it (wipes it when it drops it) */
+            voice_playq_push(r->q, c->token2, c->chunk, d, n);
+        }
+        break;
+    case VC_R_END:
+        if (va_r_is(st, c->token))
+            voice_playq_end(r->q, c->token2);
+        break;
+    case VC_R_FLUSH:
+        va_r_flush(st, c->token, c->token2);
+        break;
+    case VC_R_GAIN:      /* the owner's only: a stale or closed token changes nothing */
+        if (va_r_is(st, c->token)) voice_playq_set_gain(r->q, c->gain_db);
+        break;
+    case VC_R_CLOSE:
+        if (va_r_is(st, c->token)) va_r_close(st);
+        break;
+    default:
+        break;
+    }
+}
+
+/* The next command in queue order: an overflowed pending command first, then a pending one
+ * whose turn has come (every command pushed before it has been popped), else the queue head. */
 static int va_pop(VaCtx *cx, VaCmd *out)
 {
     int got = 0;
     EnterCriticalSection(&cx->qcs);
-    if (cx->qn > 0 && !cx->hold) {
+    for (int k = 0; k < 3 && !got; k++) {
+        if (!cx->ovf[k].used) continue;
+        memset(out, 0, sizeof(*out));
+        out->kind = (VaCmdKind)(VC_P_CONV_END + k);
+        out->token = cx->ovf[k].token;
+        out->token2 = cx->ovf[k].min;
+        cx->ovf[k].used = 0;
+        got = 1;
+    }
+    if (!got && cx->npend > 0 && (int)(cx->popped - cx->pend[0].seq) >= 0) {
+        memset(out, 0, sizeof(*out));
+        out->kind = cx->pend[0].kind;
+        out->token = cx->pend[0].token;
+        out->token2 = cx->pend[0].min;
+        memmove(&cx->pend[0], &cx->pend[1], (size_t)(cx->npend - 1) * sizeof(cx->pend[0]));
+        cx->npend--;
+        got = 1;
+    }
+    if (!got && cx->qn > 0 && !cx->hold) {
         *out = cx->q[0];
         memmove(&cx->q[0], &cx->q[1], (size_t)(cx->qn - 1) * sizeof(VaCmd));
         cx->qn--;
+        cx->popped++;
         got = 1;
     }
     LeaveCriticalSection(&cx->qcs);
@@ -998,12 +1419,17 @@ static DWORD WINAPI va_thread(LPVOID arg)
     SetEvent(cx->ready);
 
     for (;;) {
-        HANDLE h[3] = { cx->stop, cx->wake, st.buf_ev };
-        DWORD nh = st.active ? 3u : 2u;
-        DWORD w = WaitForMultipleObjects(nh, h, FALSE, st.active ? 100u : INFINITE);
+        HANDLE h[4];
+        DWORD nh = 0;
+        h[nh++] = cx->stop;
+        h[nh++] = cx->wake;
+        if (st.active) h[nh++] = st.buf_ev;
+        if (st.r.open) h[nh++] = st.r.ev;
+        DWORD w = WaitForMultipleObjects(nh, h, FALSE, (st.active || st.r.started) ? 100u : INFINITE);
         if (w == WAIT_OBJECT_0) break;
-        if (w != WAIT_OBJECT_0 + 1 && w != WAIT_OBJECT_0 + 2 && w != WAIT_TIMEOUT)
+        if (w != WAIT_TIMEOUT && w >= WAIT_OBJECT_0 + nh)
             break;                      /* WAIT_FAILED or anything unexpected: leave */
+        HANDLE fired = (w == WAIT_TIMEOUT) ? NULL : h[w - WAIT_OBJECT_0];
         VaCmd c;
         while (va_pop(cx, &c)) {
             switch (c.kind) {
@@ -1020,18 +1446,32 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_CONV_ATTACH: va_conv_attach(&st, c.token, c.token2); break;
             case VC_CONV_END:    va_conv_end(&st, c.token); break;
             case VC_CONV_END_TURN: va_conv_end_turn(&st, c.token); break;
+            case VC_P_CONV_END:  va_conv_end(&st, c.token); break;
+            case VC_P_FLUSH:     va_r_flush(&st, c.token, c.token2); break;
+            case VC_P_CLOSE:     if (va_r_is(&st, c.token)) va_r_close(&st); break;
             case VC_TEST_CONV_OPEN:
                 st.conv = va_conv_new(&st, c.token, c.pause_ms, 0);
                 break;
             case VC_TEST_CONV_INGEST:
-                if (va_conv_is(&st, c.token) && c.data) va_ingest(&st, c.data, c.n);
+                if (va_conv_is(&st, c.token) && c.data)
+                    va_ingest(&st, c.data, c.n);
+                break;
+            case VC_R_OPEN: case VC_R_DATA: case VC_R_END: case VC_R_FLUSH: case VC_R_GAIN:
+            case VC_R_CLOSE:
+                va_r_command(&st, &c);
                 break;
             }
             if (c.data) { secure_zero(c.data, c.n * sizeof(int16_t)); free(c.data); }
         }
+        if (st.r.open) {
+            /* The render event may have been taken by a wait that returned another handle. */
+            int rev = fired == st.r.ev ||
+                      (st.r.started && WaitForSingleObject(st.r.ev, 0) == WAIT_OBJECT_0);
+            va_r_service(&st, GetTickCount64(), rev);
+        }
         if (st.active) {
             ULONGLONG now = GetTickCount64();
-            if (w == WAIT_OBJECT_0 + 2) st.t_last_ev = now;
+            if (fired == st.buf_ev) st.t_last_ev = now;
             if (!va_drain(&st)) { va_fail(&st, VAE_DEVICE_LOST); continue; }
             /* The cap ends a push-to-talk capture here, so the device never
              * stays open past it whatever the UI does (a Test runs until stopped). */
@@ -1045,6 +1485,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
     }
 
     va_finish(&st, 0);              /* closes a conversation too (device, objects, turn audio) */
+    va_r_close(&st);                /* and the render client (the play queue wiped) */
     va_watch(&st, 0);               /* unregistered here, never inside a callback */
     if (st.enm) IMMDeviceEnumerator_Release(st.enm);
     if (com) CoUninitialize();
@@ -1160,6 +1601,7 @@ static void va_push(VaCmdKind k, const char *id, unsigned token, int flag, int g
         c->gain_db = gain_db;
         c->cap_ms = cap_ms;
         c->live = live;
+        cx->pushed++;
     }
     LeaveCriticalSection(&cx->qcs);
     SetEvent(cx->wake);
@@ -1267,16 +1709,42 @@ static int va_push_raw(const VaCmd *c)
     VaCtx *cx = g_ctx;
     int ok = 0;
     if (!cx) return 0;
+    {   /* TEST-ONLY: fail as on OOM (the caller keeps what it handed in) */
+        LONG v = g_fail_push;
+        if (v > 0 && InterlockedCompareExchange(&g_fail_push, v - 1, v) == v) return 0;
+    }
     EnterCriticalSection(&cx->qcs);
     if (cx->qn >= cx->qcap) {
         int ncap = cx->qcap ? cx->qcap * 2 : VOICE_AUDIO_QUEUE_MIN;
         VaCmd *nq = (VaCmd *)realloc(cx->q, (size_t)ncap * sizeof(VaCmd));
         if (nq) { cx->q = nq; cx->qcap = ncap; }
     }
-    if (cx->qn < cx->qcap) { cx->q[cx->qn++] = *c; ok = 1; }
+    if (cx->qn < cx->qcap) { cx->q[cx->qn++] = *c; cx->pushed++; ok = 1; }
     LeaveCriticalSection(&cx->qcs);
     if (ok) SetEvent(cx->wake);
     return ok;
+}
+
+/* Records a failed unlosable push at its place in the queue (see VaCtx::pend). */
+static void va_pend_add(VaCmdKind kind, unsigned token, unsigned min)
+{
+    VaCtx *cx = g_ctx;
+    if (!cx) return;
+    EnterCriticalSection(&cx->qcs);
+    if (cx->npend < VA_PEND_MAX) {
+        cx->pend[cx->npend].seq = cx->pushed;
+        cx->pend[cx->npend].kind = kind;
+        cx->pend[cx->npend].token = token;
+        cx->pend[cx->npend].min = min;
+        cx->npend++;
+    } else {                              /* full: the overflow slot of its kind, replayed first next drain */
+        int k = (int)(kind - VC_P_CONV_END);
+        cx->ovf[k].used = 1;
+        cx->ovf[k].token = token;
+        cx->ovf[k].min = min;
+    }
+    LeaveCriticalSection(&cx->qcs);
+    SetEvent(cx->wake);
 }
 
 int voice_audio_conv_begin(const char *id, unsigned token, double gain_db, int pause_ms)
@@ -1329,7 +1797,7 @@ void voice_audio_conv_end(unsigned token)
     memset(&c, 0, sizeof(c));
     c.kind = VC_CONV_END;
     c.token = token;
-    va_push_raw(&c);
+    if (!va_push_raw(&c)) va_pend_add(VC_P_CONV_END, token, 0);   /* cannot be lost */
 }
 
 /* TEST-ONLY seams (wintest), never called by product code: a conversation state with no
@@ -1356,6 +1824,92 @@ void voice_audio_test_conv_ingest(unsigned token, const int16_t *s, size_t n)
     memcpy(c.data, s, n * sizeof(int16_t));
     if (!va_push_raw(&c)) { secure_zero(c.data, n * sizeof(int16_t)); free(c.data); }
 }
+
+/* ---- AI speech render client (UI thread side) -------------------------- */
+
+static void va_r_push(VaCmdKind k, unsigned token, unsigned reply, int percent)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = k;
+    c.token = token;
+    c.token2 = reply;
+    c.gain_db = percent;
+    va_push_raw(&c);
+}
+
+int voice_audio_render_open(unsigned token)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_R_OPEN;
+    c.token = token;
+    return va_push_raw(&c);
+}
+
+int voice_audio_render_data(unsigned token, unsigned reply_id, unsigned chunk, int16_t *s, size_t n)
+{
+    VaCmd c;
+    if (!s || n == 0) return 0;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_R_DATA;
+    c.token = token;
+    c.token2 = reply_id;
+    c.chunk = chunk;
+    c.data = s;
+    c.n = n;
+    return va_push_raw(&c);
+}
+
+void voice_audio_render_end(unsigned token, unsigned reply_id) { va_r_push(VC_R_END, token, reply_id, 0); }
+void voice_audio_render_gain(unsigned token, int percent) { va_r_push(VC_R_GAIN, token, 0, percent); }
+
+void voice_audio_render_flush(unsigned token, unsigned min_reply)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_R_FLUSH;
+    c.token = token;
+    c.token2 = min_reply;
+    if (!va_push_raw(&c)) va_pend_add(VC_P_FLUSH, token, min_reply);   /* cannot be lost */
+}
+
+void voice_audio_render_close(unsigned token)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_R_CLOSE;
+    c.token = token;
+    if (!va_push_raw(&c)) va_pend_add(VC_P_CLOSE, token, 0);   /* cannot be lost */
+}
+
+long voice_audio_render_queued_ms(void) { return (long)g_r_ms; }
+
+/* TEST-ONLY seams (wintest), never called by product code. */
+void voice_audio_test_render_null(int on)
+{
+    InterlockedExchange(&g_r_null, on ? 1 : 0);
+    InterlockedExchange(&g_r_peak, 0);
+    if (g_cs_ready) {
+        EnterCriticalSection(&g_cs);
+        memset(g_rf, 0, sizeof(g_rf));
+        LeaveCriticalSection(&g_cs);
+    }
+}
+
+uint64_t voice_audio_test_render_frames(unsigned reply_id)
+{
+    uint64_t n = 0;
+    if (!g_cs_ready) return 0;
+    EnterCriticalSection(&g_cs);
+    for (int i = 0; i < VA_RF_N; i++)
+        if (g_rf[i].used && g_rf[i].id == reply_id) n = g_rf[i].frames;
+    LeaveCriticalSection(&g_cs);
+    return n;
+}
+
+int voice_audio_test_render_peak(void) { return (int)InterlockedExchange(&g_r_peak, 0); }
+void voice_audio_test_fail_push(int n) { InterlockedExchange(&g_fail_push, n < 0 ? 0 : n); }
 
 void voice_audio_free_devices(VoiceDeviceList *l) { free(l); }
 

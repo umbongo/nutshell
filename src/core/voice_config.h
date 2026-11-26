@@ -52,6 +52,13 @@ int voice_ptt_mode_from_json(const char *s);    /* unknown/NULL -> VOICE_MODE_TO
 const char *voice_ptt_mode_label(int mode);     /* "Toggle" "Hold to talk"; default for out of range */
 const char *voice_mode_json(int mode);          /* "dictation" "conversation"; Dictation for out of range */
 int voice_mode_from_json(const char *s);        /* unknown/NULL -> VOICE_MODE_DICTATION */
+
+/* Settings.voice_speech_engine: who speaks the replies. */
+#define VOICE_SPEECH_WINDOWS 0
+#define VOICE_SPEECH_AI 1
+#define VOICE_AIS_DEFAULT_PROVIDER "mistral"
+const char *voice_speech_json(int e);           /* "windows" "ai"; Windows for out of range */
+int voice_speech_from_json(const char *s);      /* unknown/NULL -> VOICE_SPEECH_WINDOWS */
 int voice_pause_clamp(int ms);                  /* into VOICE_PAUSE_MIN_MS..VOICE_PAUSE_MAX_MS */
 int voice_pause_round(int ms);                  /* clamped, then to the nearest 100 (halves up) */
 int voice_pause_parse(const char *text, int keep_ms); /* Settings entry in seconds ("1.2", "1,5") -> ms, rounded to 100 and clamped; keep_ms when it is not a plain non-negative number */
@@ -60,6 +67,16 @@ void voice_pause_format(int ms, char *out, size_t cap); /* "1.2": seconds with o
 /* What the Voice page leaves enabled (1) for a voice_on / Mode / Key mode state. */
 typedef struct { int key_mode; int mic_delay; int auto_send; int conversation; } VoiceModeEnables;
 void voice_mode_enables(int voice_on, int mode, int ptt_mode, VoiceModeEnables *out);
+/* What the Voice page's speech rows do for the page's own state (not the saved one).
+ * conversation_enabled: the Conversation section is live (voice on, Mode Conversation).
+ * speech: the Speech row is enabled. The rest are shown while 1: ai_rows (provider,
+ * AI voice, AI speech model, Play sample's AI path), url (Custom only), key (not while the
+ * speech-to-text key is shared), style (Custom only), uk_line (Windows speech, no British
+ * woman's voice installed), privacy (whenever the AI rows are). An unknown provider keeps
+ * the AI rows and shows neither url nor style. */
+typedef struct { int speech, ai_rows, url, key, style, uk_line, privacy; } VoiceSpeechEnables;
+void voice_speech_enables(int conversation_enabled, int engine, const char *provider,
+                          int key_shared, int uk_voice_installed, VoiceSpeechEnables *out);
 int voice_gain_clamp(int db);                   /* into VOICE_GAIN_MIN_DB..VOICE_GAIN_MAX_DB */
 void voice_gain_label(int db, char *out, size_t cap); /* "+12 dB" "0 dB" "-12 dB" */
 void voice_settings_default(Settings *s);       /* called by config_default_settings */

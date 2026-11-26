@@ -46,6 +46,8 @@ typedef enum {
     VCE_SPEECH_DONE,  /* what was being spoken was read to the end */
     VCE_SPEECH_FAILED,/* speech could not start */
     VCE_END,          /* a = VoiceConvEnd */
+    VCE_EXTERNAL_SEND,/* the box was sent from outside the conversation (typed, a command) */
+    VCE_SPEECH_PROGRESS, /* the speech advanced (a sentence began or ended) */
     VCE_TICK
 } VoiceConvEvent;
 enum {  /* action bits */
@@ -73,9 +75,9 @@ enum {  /* action bits */
 typedef enum { VCH_NONE = 0, VCH_LISTENING, VCH_HEARING, VCH_SENDING, VCH_TRANSCRIBING,
                VCH_WORKING, VCH_SPEAKING, VCH_PAUSED_BG, VCH_PAUSED_DIALOG, VCH_APPROVAL,
                VCH_DIDNT_CATCH, VCH_IGNORED_ECHO, VCH_REPEATING, VCH_CARRYING_ON,
-               VCH_LIVE_UNAVAILABLE, VCH_LIVE_STOPPED } VoiceConvHeader;
+               VCH_LIVE_UNAVAILABLE, VCH_LIVE_STOPPED, VCH_AI_FAILED } VoiceConvHeader;
 typedef enum { VCN_NONE = 0, VCN_END_SETTINGS, VCN_END_LOCK, VCN_END_SILENCE, VCN_END_CHAT,
-               VCN_BUSY, VCN_NO_SESSION, VCN_FULL, VCN_LAUNCH, VCN_NO_SPEECH } VoiceConvNote;
+               VCN_END_STUCK, VCN_BUSY, VCN_NO_SESSION, VCN_FULL, VCN_LAUNCH, VCN_NO_SPEECH } VoiceConvNote;
 typedef enum { VCPH_NONE = 0, VCPH_APPROVE_COMMAND, VCPH_APPROVE_WRITE, VCPH_APPROVE_OTHER,
                VCPH_NOT_SENT, VCPH_WENT_WRONG } VoiceConvPhrase;
 typedef struct { unsigned actions; VoiceConvHeader header; VoiceConvNote note;
@@ -93,9 +95,11 @@ typedef struct {
     int speaking_reply;           /* SPEAKING a reply (1) or a phrase (0) */
     int held, held_continue;      /* a held reply (held_phrase: the WENT_WRONG phrase) */
     int held_phrase;
+    int held_local;               /* the held speech was a local repeat or continue */
     int card;                     /* a card raised while paused: VoiceCardKind + 1, 0 none */
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
     unsigned long state_at;       /* when the state last changed (the watchdogs' clock) */
+    unsigned long ending_max;     /* this Ending's deadline in ms: the default, or the upload's budget */
 } VoiceConv;
 #define VOICE_CONV_FINAL_WAIT_MS   3000
 #define VOICE_CONV_IDLE_POLL_MS    1000
@@ -105,12 +109,17 @@ typedef struct {
 /* Watchdogs for a state that waits on an event that may never come (a lost end, a lost
  * transcript, a lost speech-done). Hearing: the listener's own turn cap is 120 s, plus 10 s.
  * Ending: longer than the upload's own timeouts (88 s send plus 72 s receive for a 120 s
- * turn, plus a retry), 180 s. Speaking: a very long reply
- * read aloud, 10 minutes. On expiry the conversation goes back to Listening. */
+ * turn, plus a retry), 180 s by default and longer for a long turn (voice_conv_set_ending_budget);
+ * at the deadline the conversation ends with VCN_END_STUCK. Speaking: a very long reply
+ * read aloud, 10 minutes. On expiry of the others the conversation goes back to Listening. */
 #define VOICE_CONV_HEARING_MAX_MS  130000
 #define VOICE_CONV_ENDING_MAX_MS   180000
 #define VOICE_CONV_SPEAKING_MAX_MS 600000
 void         voice_conv_init(VoiceConv *c);
+/* The glue calls this when it submits a turn's upload: the Ending deadline becomes
+ * max(VOICE_CONV_ENDING_MAX_MS, upload_ms + 10000), upload_ms being the upload's own timeouts
+ * with its one retry. Every entry to Ending starts again from the default. */
+void         voice_conv_set_ending_budget(VoiceConv *c, unsigned long upload_ms);
 VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsigned long now);
 long         voice_conv_next_deadline(const VoiceConv *c, unsigned long now); /* ms or -1 */
 int          voice_conv_active(const VoiceConv *c);          /* state != IDLE */

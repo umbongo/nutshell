@@ -725,8 +725,8 @@ Open, in priority order:
       key); likely first fixes: `GetNewClosure()` with the `$Exe` override, the
       `SpeechAudioFormatInfo` overload, reading the Send button text, the mic click as
       `WM_COMMAND`. The conversation case does not assert the command ran.
-      (o) Follow-ups noted in the build, not built: Play sample has no help entry; a
-      notice raised for a launch is lost if the conversation ends before the handler runs;
+      (o) Follow-ups noted in the build, not built: Play sample has no help entry [fixed in code in PR 3; hand check pending]; a
+      notice raised for a launch is lost if the conversation ends before the handler runs [fixed in code in PR 3; hand check pending];
       the echo estimate's and detector's deferred minors are in the live spec §16.
       (p) From the final whole-branch review (2026-11-25), not built, no code: keeping the
       British-voice notice open for more than 30 s loses the held reply (the first reply of a
@@ -739,9 +739,9 @@ Open, in priority order:
       panel, a changed chat, full volume after a cut-in) each want a Windows hand check too.
       (q) Follow-ups from the re-review of those fixes, not built: a spoken reply longer than
       10 minutes is cut silently by the Speaking watchdog ("continue" resumes it; refreshing
-      the clock on each spoken word would avoid it); a Hearing or Ending watchdog expiry
+      the clock on each spoken word would avoid it) [fixed in code in PR 3; hand check pending]; a Hearing or Ending watchdog expiry
       restarts the 3-minute silence clock, against the rule that a failed turn must not, so
-      with uploads hanging a noisy room can keep a conversation alive; a list item or
+      with uploads hanging a noisy room can keep a conversation alive [fixed in code in PR 3; hand check pending]; a list item or
       indented line that starts with a one-line triple-backtick span opens a fence and the
       rest of the reply is not read (fails closed); after a pause cuts an approval
       announcement the header returns to "Working..." although a card waits, and the
@@ -755,13 +755,13 @@ Open, in priority order:
       Listening with the microphone open while the chat works, and its reply is not spoken
       (spec 5.2 closes the capture while Working): it needs an "external send" event for the
       controller (Listening to Working, capture closed, the reply baseline taken), not a
-      patch; Enter while a reply is being spoken stops the speech instead of sending the typed
+      patch [fixed in code in PR 3; hand check pending]; Enter while a reply is being spoken stops the speech instead of sending the typed
       text (Send shows Stop), against spec 5.1 "sent with Enter as normal": the maintainer
       decides; `voice_audio_conv_end` and `voice_audio_conv_mode` go through `va_push_raw`,
       which drops the command if `realloc` fails, so under memory exhaustion the glue believes
       the capture closed while the device stays open (a close that cannot fail: a token field
-      under the queue lock); the glue's event queue drops events past 24 silently, a `VCE_END`
-      included (not reachable today, at most about 3 per step); hand checks: the ducking
+      under the queue lock) [fixed in code in PR 3; hand check pending]; the glue's event queue drops events past 24 silently, a `VCE_END`
+      included (not reachable today, at most about 3 per step) [fixed in code in PR 3; hand check pending]; hand checks: the ducking
       opt-out is set on the default render session after the capture client is initialised
       (Microsoft's guidance applies it to the communications stream's session before it
       opens), so do other apps and the reply duck?; the speech thread's CPU during an idle
@@ -773,9 +773,86 @@ Open, in priority order:
       send that" phrase after a refused turn still restarts the 3-minute silence clock
       (`on_sent` reaches Speaking through `enter_speaking`, which clears `local_speech`), so
       with the chat full a noisy room keeps the microphone open; set `local_speech = 1` on
-      the refusal path. A local repeat that is paused and resumed also restarts it.
+      the refusal path [fixed in code in PR 3; hand check pending]. A local repeat that is paused and resumed also restarts it [fixed in code in PR 3; hand check pending].
       `voice_echo.c:204` and `:208` compare tick counts without a wrap-safe subtraction (a
-      conversation spanning the 49.7-day wrap only).
+      conversation spanning the 49.7-day wrap only) [fixed in code in PR 3; hand check pending].
+- [ ] **AI speech (PR 3 of live voice): nothing run on Windows.** Built and tested here under
+      Wine and the native suite with no real audio device and no live provider; the Mistral
+      capture (plan Task 0) was waived by the maintainer on 2026-11-26, so the parser, built
+      against the SDK shape with provisional fixtures, is first proven by these hand checks.
+      Each line is its own check.
+      (a) Mistral `voice_1787` and the other English (UK) voices: accent, time to the first
+      word, no gap or click between chunks, the duck, stop latency.
+      (b) Kokoro-FastAPI with `bf_emma`, and with no key.
+      (c) Shared, separate and rebound keys; the DPAPI blob and its binding.
+      (d) The passing fallback: Wi-Fi pulled mid-reply.
+      (e) The once-per-conversation note: a wrong key, a wrong model, a 22,050 Hz server.
+      (f) "Carry on" after a cut-in (R9).
+      (g) Headphones unplugged, and a default-device change.
+      (h) Echo cancellation with our render client, and whether our render session is ducked.
+      (i) The cost on Mistral's usage page.
+      (j) Play sample with unsaved values.
+      (k) The page at 100 %, 125 % and 200 %, with the privacy line and the reseeding.
+      (l) `mingw32-make test` and `mingw32-make clean && mingw32-make release` on the Windows
+      box.
+      (m) Retry during a conversation.
+      (n) A hung upload ending the conversation at its deadline.
+      (o) The real WASAPI render path (Initialize, GetBuffer, padding, PLAY_DONE) has run
+      nowhere: under Wine `test_voice_render_real_wine` gets VAE_NO_DEVICE.
+      (p) On Windows, `test_ai_stream_ex_cancel_hang` and `test_voice_ais_quit_while_server_hangs`
+      must pass (they skip under Wine); for the latter only `VRES_SPEECH_REQ == 0`
+      discriminates.
+      (q) Inspection item: R36's order in `src/ui/voice_win.c`, `voice_ais_quit_all(3000)`
+      before `voice_audio_stop` at both call sites (the only two); `voice_win.c` is not in the
+      wintest build.
+      (r) A conversation started with a held-only legacy command card on screen (every entry
+      APPROVE_BLOCKED; `cmd_batch_finished` counts BLOCKED as finished,
+      `cmd_batch.c:133-139`, so `busy_of` is 0 and the start is allowed): raise the ceiling
+      (`apply_policy_change` -> `chat_approval_unblock_all`, `ai_chat_status.c:56-59`), click
+      Run (`ai_chat.c:1002-1030`), and `ai_chat_send_continue_message`
+      (`ai_chat_send.c:739-771`) launches a turn the conversation never sees; it stays in
+      Listening and the reply is not spoken. Should: Working on the launch, or a held-only
+      card blocks the start. Follow-up.
+      (s) A failed Play sample with a wrong key shows `Could not play the sample: the speech
+      provider refused the key (HTTP 401)` in the note under the meter (v1.3.1).
+      (t) The speech-to-text upload now refuses redirects ("Redirect refused (HTTP n)"): check
+      each built-in provider live.
+      (u) A short one-sentence reply right after the PC wakes or the output device changes: the
+      reply must be heard before the header returns to Listening, and Stop must still stop it.
+      The done guard (`src/ui/voice_aispeech_win.c:797-826`) is armed at the worker's exit
+      whether or not playback has begun, and does not flush; a render endpoint that takes more
+      than 2 s to open would post `VTT_DONE` first. Cannot happen under Wine. Follow-up if
+      seen: re-arm while audio is queued, flush when the guard ends a reply.
+      (v) Save Settings with a Custom speech URL near 248 bytes and a long key: the save must
+      succeed. The bound-key blob is about 1,019 of `CFG_BLOB_MAX` 1,024 at maximum lengths
+      (`src/config/loader.c:347-365`); a real DPAPI blob one block larger would abort the whole
+      save.
+      (w) If Mistral answers `response_format: "wav"` with raw PCM in its first delta, the first
+      reply gives "AI speech is off for this conversation: unsupported audio format" (before
+      v1.3.1 every reply failed in passing). That is the capture's question (R25) answered by
+      ear: report it and the fix is the `pcm` path.
+- [ ] Follow-ups from the final review of AI speech, not built:
+      a valid WAV `data` chunk size is ignored (R25), so a finite WAV with a trailing LIST or
+      id3 chunk has the trailer played as PCM and an odd trailer length fails the reply after it
+      was heard (`src/core/voice_wavstream.c:88-97`; spec section 8.4 says only 0 and
+      0xFFFFFFFF mean "until the end").
+      The typed-key decision in `src/ui/settings.c` (`voice_tts_key_touched`,
+      `voice_tts_key_bound`, the reset in `voice_page_read`) has no test; move it to a pure
+      function in `src/core/voice_aispeech.c`.
+      `The speech Base URL is too long` also refuses a keyless Custom server, or one sharing the
+      speech-to-text key, where the binding is never read (`src/core/voice_aispeech.c:155-161`):
+      refuse only when the speech key is its own and one is typed.
+      `settings_voice_sample_failed` (`src/ui/settings.c:1539`) drops the failure when another
+      Settings page is showing; drop the `cur_page` condition.
+      The redirect reason says "check the Base URL" for Mistral too, which has no Base URL row
+      (`src/core/voice_aispeech.c:321-322`).
+      `http://host?x=a@b` passes the authority check but `parse_url`
+      (`src/ui/ai_http_win.c:36-46`) ends the host only at `:` or `/`, so the connect fails;
+      refuse `?` and `#` in a base, and correct the comment at `src/core/voice_aispeech.c:71-73`.
+      `test_voice_ais_sse_error_event`'s first half would pass with the error event ignored;
+      split or rename it. Only the native parser tests cover the error event.
+      The 5-minute cap counts decoded frames, so a Mistral stream that never ends and carries no
+      audio stays open until the user stops it or the 10-minute Speaking watchdog fires.
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
@@ -799,6 +876,13 @@ Open, in priority order:
       two nested ones (e.g. two tabs failing at once). Also: a notice raised while the main
       window is minimized appears centred on its restored position, with a taskbar on the
       top or left edge.
+- [ ] OpenAI's batch speech-to-text models `gpt-4o-mini-transcribe` (the default,
+      `src/core/voice_stt.c:14`), `gpt-4o-transcribe`, `whisper-1` and `-diarize` shut down on
+      2027-02-26, replaced by `gpt-transcribe` or `gpt-live-transcribe`; the
+      `-2025-03-20` snapshot shuts down on 2027-01-20. Source:
+      `developers.openai.com/api/docs/deprecations.md`, 2026-11-25. Change them in their own
+      pull request. Also later: Groq Orpheus once it leaves Preview; resampling for Custom
+      servers.
 - [ ] **SSH: a resize during the connect never reaches the server** (maintainer's issue mark,
       2026-11-25, v1.2.95, `nutshell-20261125-112702-p7428.issue1.log`: tmux drew 25 rows and
       93 columns in a 49x125 window). `connection_thread` asks for the pty with the grid

@@ -18,6 +18,12 @@ void voice_conv_init(VoiceConv *c)
     c->pause = VCP_NONE;
 }
 
+void voice_conv_set_ending_budget(VoiceConv *c, unsigned long upload_ms)
+{
+    unsigned long want = upload_ms + 10000ul;
+    c->ending_max = want > VOICE_CONV_ENDING_MAX_MS ? want : (unsigned long)VOICE_CONV_ENDING_MAX_MS;
+}
+
 int voice_conv_active(const VoiceConv *c) { return c->state != VCS_IDLE; }
 int voice_conv_typing_locked(const VoiceConv *c) { return c->typing; }
 
@@ -75,6 +81,8 @@ static VoiceConvOut go_idle(VoiceConv *c, VoiceConvNote note, int cancel_work)
     c->held = 0;
     c->held_continue = 0;
     c->held_phrase = 0;
+    c->held_local = 0;
+    c->local_speech = 0;
     c->card = 0;
     o = out(a, VCH_NONE);
     o.note = note;
@@ -100,19 +108,12 @@ static VoiceConvOut enter_listening(VoiceConv *c, unsigned extra, VoiceConvHeade
     return out(extra | open_capture(c) | VCA_MODE_LISTEN, h);
 }
 
-/* enter_listening for a state that gave up waiting: the silence clock restarts. */
-static VoiceConvOut enter_listening_at(VoiceConv *c, unsigned extra, VoiceConvHeader h,
-                                       unsigned long now)
-{
-    c->idle_at = now;
-    return enter_listening(c, extra, h);
-}
-
 static void hold(VoiceConv *c, int continue_from, int phrase, unsigned long now)
 {
     c->held = 1;
     c->held_continue = continue_from;
     c->held_phrase = phrase;
+    c->held_local = c->local_speech;
     c->held_at = now;
 }
 
@@ -134,6 +135,7 @@ static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase
 /* The chat finished its turn (a = has prose, err = reply was an error). */
 static VoiceConvOut work_finished(VoiceConv *c, int prose, int err, unsigned long now)
 {
+    c->local_speech = 0;   /* a refusal's phrase leaves it set; this speech is the chat's */
     c->idle_at = now;
     c->idle_seen = 0;
     c->card = 0;
@@ -216,6 +218,7 @@ static VoiceConvOut on_sent(VoiceConv *c, int status, unsigned long now)
         }
         o = enter_speaking(c, VCA_SPEAK_PHRASE, VCPH_NOT_SENT, 0);
         o.actions |= a;
+        c->local_speech = 1;   /* the refusal's phrase is not a reply: the silence clock runs on */
         /* a refusal's phrase is not a Stop-caption moment */
         if (o.actions & VCA_STOP_CAPTION) { o.actions &= ~(unsigned)VCA_STOP_CAPTION; c->stopcap = 0; }
         o.note = status == VSS_BUSY ? VCN_BUSY : status == VSS_NO_SESSION ? VCN_NO_SESSION
@@ -241,6 +244,43 @@ static VoiceConvOut speaking_stopped(VoiceConv *c, unsigned extra, VoiceConvNote
     return o;
 }
 
+
+/* The box was sent from outside the conversation: drop whatever it was doing and wait for
+ * the chat like a turn of its own. Working and an ENDING that already handed its turn over
+ * are on their way there. */
+static VoiceConvOut external_send(VoiceConv *c, unsigned long now)
+{
+    unsigned x = 0;
+    switch (c->state) {
+    case VCS_LISTENING:
+        break;
+    case VCS_HEARING:
+    case VCS_ENDING:
+        if (c->state == VCS_ENDING && c->sending) return out(0, VCH_NONE);
+        x |= VCA_DROP_TURN | release_link(c) | release_batch(c) | release_typing(c);
+        break;
+    case VCS_SPEAKING:
+        x |= VCA_STOP_SPEECH | release_caption(c);
+        if (c->turn) x |= VCA_DROP_TURN | release_link(c) | release_typing(c);
+        break;
+    default:
+        return out(0, VCH_NONE);
+    }
+    if (c->capture) { c->capture = 0; x |= VCA_CLOSE_CAPTURE; }
+    if (c->held) {
+        x |= VCA_DROP_HELD;
+        c->held = c->held_continue = c->held_phrase = c->held_local = 0;
+    }
+    c->state = VCS_WORKING;
+    c->turn = 0;
+    c->sending = 0;
+    c->speaking_reply = 0;
+    c->local_speech = 0;
+    c->sent_at = now;
+    c->idle_seen = 0;
+    c->card = 0;
+    return out(x, c->pause != VCP_NONE ? pause_header(c) : VCH_WORKING);
+}
 
 static VoiceConvOut on_pause(VoiceConv *c, int reason, unsigned long now)
 {
@@ -306,11 +346,14 @@ static VoiceConvOut on_resume(VoiceConv *c, unsigned long now)
     if (c->state != VCS_LISTENING) return out(0, VCH_NONE);
     if (c->held) {
         int fresh = (now - c->held_at) < VOICE_CONV_HELD_MAX_MS;
-        int cont = c->held_continue, ph = c->held_phrase;
-        c->held = c->held_continue = c->held_phrase = 0;
+        int cont = c->held_continue, ph = c->held_phrase, local = c->held_local;
+        VoiceConvOut o;
+        c->held = c->held_continue = c->held_phrase = c->held_local = 0;
         if (fresh) {
-            if (ph) return enter_speaking(c, VCA_SPEAK_PHRASE, VCPH_WENT_WRONG, 0);
-            return enter_speaking(c, cont ? VCA_SPEAK_CONTINUE : VCA_SPEAK_REPLY, VCPH_NONE, 1);
+            if (ph) o = enter_speaking(c, VCA_SPEAK_PHRASE, VCPH_WENT_WRONG, 0);
+            else o = enter_speaking(c, cont ? VCA_SPEAK_CONTINUE : VCA_SPEAK_REPLY, VCPH_NONE, 1);
+            c->local_speech = local;   /* enter_speaking cleared it */
+            return o;
         }
         return enter_listening(c, VCA_DROP_HELD, VCH_LISTENING);
     }
@@ -356,10 +399,11 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             /* typing is accepted while paused too; a held reply is not spoken over it */
             unsigned x = VCA_SEND_TYPED;
             c->state = VCS_ENDING;
+            c->ending_max = VOICE_CONV_ENDING_MAX_MS;
             c->sending = 1;
             if (c->held) {
                 x |= VCA_DROP_HELD;
-                c->held = c->held_continue = c->held_phrase = 0;
+                c->held = c->held_continue = c->held_phrase = c->held_local = 0;
             }
             return out(x, c->pause != VCP_NONE ? pause_header(c) : VCH_SENDING);
         }
@@ -398,6 +442,7 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             unsigned x = VCA_MODE_HOLD;
             VoiceConvHeader h;
             c->state = VCS_ENDING;
+            c->ending_max = VOICE_CONV_ENDING_MAX_MS;
             if (c->live && c->link) {
                 x |= VCA_END_TURN_AUDIO;
                 c->final_armed = 1;
@@ -466,12 +511,18 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
         if (st != VCS_SPEAKING) return none;
         return speaking_stopped(c, 0, c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE, now);
 
+    case VCE_EXTERNAL_SEND:
+        return external_send(c, now);
+    case VCE_SPEECH_PROGRESS:
+        if (st == VCS_SPEAKING) c->state_at = now;
+        return none;
+
     case VCE_TICK:
         if (st == VCS_HEARING) {
             if (now - c->state_at >= VOICE_CONV_HEARING_MAX_MS) {
                 unsigned x = VCA_DROP_TURN | release_link(c) | release_typing(c);
                 c->turn = 0;
-                return enter_listening_at(c, x, VCH_LISTENING, now);
+                return enter_listening(c, x, VCH_LISTENING);
             }
             return none;
         }
@@ -483,11 +534,8 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
         if (st == VCS_ENDING) {
             if (c->live && c->link && c->final_armed && (long)(now - c->final_deadline) >= 0)
                 return live_fallback(c);
-            if (now - c->state_at >= VOICE_CONV_ENDING_MAX_MS) {
-                c->sending = 0;
-                c->idle_at = now;
-                return ending_to_listening(c, VCA_DROP_TURN, VCH_DIDNT_CATCH);
-            }
+            if (now - c->state_at >= c->ending_max)   /* releases the link and the upload; the words stay */
+                return go_idle(c, VCN_END_STUCK, 0);
             return none;
         }
         if (st == VCS_LISTENING) {
@@ -532,7 +580,7 @@ long voice_conv_next_deadline(const VoiceConv *c, unsigned long now)
         left = (long)(c->state_at + VOICE_CONV_SPEAKING_MAX_MS - now);
         return left < 0 ? 0 : left;
     case VCS_ENDING:
-        left = (long)(c->state_at + VOICE_CONV_ENDING_MAX_MS - now);
+        left = (long)(c->state_at + c->ending_max - now);
         if (c->live && c->link && c->final_armed) {
             long f = (long)(c->final_deadline - now);
             if (f < left) left = f;
@@ -568,6 +616,7 @@ const char *voice_conv_header_text(VoiceConvHeader h)
     case VCH_CARRYING_ON:      return "Carrying on";
     case VCH_LIVE_UNAVAILABLE: return "Live text is unavailable: the words will appear when you stop";
     case VCH_LIVE_STOPPED:     return "Live text stopped: the rest will appear when you stop";
+    case VCH_AI_FAILED:        return "AI speech failed: using Windows speech";
     case VCH_NONE:
     default:                   return "";
     }
@@ -580,6 +629,7 @@ const char *voice_conv_note_text(VoiceConvNote n)
     case VCN_END_LOCK:     return "Conversation ended: Windows was locked";
     case VCN_END_SILENCE:  return "Conversation ended: nothing said for 3 minutes";
     case VCN_END_CHAT:     return "Conversation ended: the chat changed";
+    case VCN_END_STUCK:    return "Conversation ended: the last turn took too long";
     case VCN_BUSY:         return "The assistant is busy";
     case VCN_NO_SESSION:   return "Connect a session first";
     case VCN_FULL:         return "The conversation is full: start a New Chat";

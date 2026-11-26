@@ -116,6 +116,7 @@ static _Thread_local char t_tag[8];
 
 static char g_api_key[256];
 static char g_stt_key[256];   /* the speech-to-text key, scrubbed the same way */
+static char g_tts_key[256];   /* the speech (text-to-speech) key, likewise */
 
 /* A writer that did not stop within the join timeout still points into G, so G
  * and the rings are left alone (leaked on purpose) and a new start is refused
@@ -1144,10 +1145,11 @@ void dlog_configure(const struct Settings *s)
     DlogConfig c;
     dlog_config_from_settings(s, &c);
     dlog_apply(&c);
-    /* the AI API key and the speech-to-text key are known secrets: scrub
+    /* the AI API key and the speech-to-text and speech keys are known secrets: scrub
      * them from content */
     sync_secret(g_api_key, sizeof(g_api_key), s ? s->ai_api_key : "");
     sync_secret(g_stt_key, sizeof(g_stt_key), s ? s->stt_api_key : "");
+    sync_secret(g_tts_key, sizeof(g_tts_key), s ? s->tts_api_key : "");
 }
 
 /* ---- lifecycle ------------------------------------------------------------------------------------ */
@@ -1251,6 +1253,7 @@ void dlog_shutdown(void)
         dlog_secret_clear();
         secure_zero(g_api_key, sizeof(g_api_key));
         secure_zero(g_stt_key, sizeof(g_stt_key));
+        secure_zero(g_tts_key, sizeof(g_tts_key));
         return;
     }
     /* flush every pending repeat, then drain */
@@ -1278,6 +1281,7 @@ void dlog_shutdown(void)
     dlog_secret_clear();
     secure_zero(g_api_key, sizeof(g_api_key));
     secure_zero(g_stt_key, sizeof(g_stt_key));
+        secure_zero(g_tts_key, sizeof(g_tts_key));
     teardown();
 }
 

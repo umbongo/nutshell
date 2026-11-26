@@ -2,6 +2,8 @@
 #define NUTSHELL_VOICE_AUDIO_WIN_H
 
 #include <windows.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "wav.h"
 #include "voice_ptt.h"
 #include "voice_listen.h"
@@ -32,7 +34,13 @@ typedef enum {
     /* Conversation capture: lParam packs (value << 24) | (token & VOICE_TOKEN_MASK) unless noted. */
     VAM_CONV_OPENED,      /* value = echo cancellation: 0 none, 1 on, 2 turned on by us */
     VAM_CONV_EVENT,       /* value = VoiceListenEvent */
-    VAM_CONV_TURN         /* lParam = VoiceCapture* of the finished turn (TURN_END/CAP); receiver frees */
+    VAM_CONV_TURN,        /* lParam = VoiceCapture* of the finished turn (TURN_END/CAP); receiver frees */
+    /* AI speech render client (one owner token, R7) */
+    VAM_RENDER_OPENED,    /* lParam = VOICE_ERR_PACK(0, token) */
+    VAM_PLAYED,           /* lParam = VoiceRenderMsg* (receiver frees with free), every 100 ms while playing */
+    VAM_PLAY_DONE,        /* lParam = VoiceRenderMsg*: reply_id's end marker played out (padding 0) */
+    VAM_RENDER_ERROR      /* lParam = VOICE_ERR_PACK(err, token): VAE_DEVICE_LOST, VAE_OPEN_FAILED,
+                             VAE_NO_DEVICE, VAE_NO_MEMORY, VAE_RENDER_PREEMPTED */
     /* VAM_LEVEL is posted every 50 ms during a conversation capture too (the mic pulse) */
 } VoiceAudioMsg;
 #define VOICE_CONV_PACK(value, token) \
@@ -40,7 +48,7 @@ typedef enum {
 
 typedef enum { VAE_NONE = 0, VAE_NO_DEVICE, VAE_DEVICE_LOST, VAE_OPEN_FAILED,
                VAE_COM_FAILED, VAE_NO_MEMORY, VAE_ACCESS_DENIED,
-               VAE_CONV_ENDED } VoiceAudioErr;
+               VAE_CONV_ENDED, VAE_RENDER_PREEMPTED } VoiceAudioErr;
 /* VAE_CONV_ENDED, under a conversation token: the conversation capture is gone because a
  * non-conversation command (a dictation or Test begin or end, or another conversation begin)
  * pre-empted it; its device is closed and its turn wiped. Fatal for that capture. By contrast
@@ -99,6 +107,30 @@ void voice_audio_conv_end_turn(unsigned token);
  * samples as the capture path would (gain applied, then the listener). */
 void voice_audio_test_conv_open(unsigned token, int pause_ms);
 void voice_audio_test_conv_ingest(unsigned token, const int16_t *s, size_t n);
+
+/* AI speech render client (spec: 24 kHz mono 16-bit, shared mode, 100 ms buffer) on the audio
+ * thread, fed from a VoicePlayQ. Every call is a queued command under the caller's token; a
+ * stale token is ignored. The resource ledger is the caller's business (UI thread). */
+typedef struct { unsigned token, reply_id, chunk; uint64_t frames_in_chunk; } VoiceRenderMsg;
+/* One client, one owner: gain belongs to the current owner only. render_gain from a token that
+ * does not own the open client is ignored, and every render_open starts at 100 %, so a caller
+ * ducks AFTER its open (Task 7 sends its gain after render_open, never before). */
+int  voice_audio_render_open(unsigned token);       /* push; 1 queued, 0 no thread */
+int  voice_audio_render_data(unsigned token, unsigned reply_id, unsigned chunk,
+                             int16_t *s, size_t n);  /* takes s on 1; 0: caller still owns s */
+void voice_audio_render_end(unsigned token, unsigned reply_id);
+void voice_audio_render_flush(unsigned token, unsigned min_reply);   /* cannot be lost */
+void voice_audio_render_gain(unsigned token, int percent);
+void voice_audio_render_close(unsigned token);                       /* cannot be lost */
+long voice_audio_render_queued_ms(void);           /* any thread, interlocked; 0 with none */
+/* TEST-ONLY seams, never product code: */
+void voice_audio_test_render_null(int on);         /* a 10 ms waitable timer and a simulated
+                                                      100 ms buffer draining in real time stand
+                                                      in for WASAPI (also resets the counters) */
+uint64_t voice_audio_test_render_frames(unsigned reply_id);  /* frames written for reply_id */
+int  voice_audio_test_render_peak(void);           /* largest |sample| the null sink took since the last call */
+void voice_audio_test_fail_push(int n);            /* the next n raw pushes fail as on OOM */
+
 void voice_audio_free_devices(VoiceDeviceList *l);
 void voice_audio_free_capture(VoiceCapture *c);  /* pcm_free (secure wipe) + free */
 

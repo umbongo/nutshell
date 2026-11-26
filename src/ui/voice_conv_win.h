@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <windows.h>
 #include "voice_conv.h"
+#include "voice_config.h"
 #include "voice_audio_win.h"
 #include "voice_live_win.h"
 #include "voice_stt_win.h"
@@ -33,7 +34,8 @@ typedef struct {     /* every effect the glue has; the real table calls the modu
     void (*cap_end_turn)(unsigned token);   /* end the open turn now, as the pause would (Send while hearing) */
     int  (*link_start)(unsigned live_token); void (*link_close)(unsigned live_token);
     int  (*stt_submit)(VoiceCapture *turn, unsigned token); void (*stt_cancel)(unsigned token);
-    int  (*tts_start)(unsigned token);  void (*tts_speak)(unsigned token, unsigned id,
+    int  (*tts_start)(unsigned token, int engine);  /* engine: VOICE_SPEECH_WINDOWS or VOICE_SPEECH_AI */
+    void (*tts_speak)(unsigned token, unsigned id,
                                                           const char *text, size_t from);
     void (*tts_stop)(unsigned token);   void (*tts_volume)(unsigned token, int percent);
     void (*tts_quit)(unsigned token);
@@ -56,6 +58,8 @@ typedef struct {     /* every effect the glue has; the real table calls the modu
     int  (*app_active)(void);                           /* 0 when another application has the foreground */
     int  (*dialog_open)(void);                          /* 1 when a dialog owned by the (undocked) AI panel is up */
     int  (*chat_same)(void);                            /* 0 when the panel's chat is no longer the conversation's */
+    int  (*speech_engine)(void);                        /* VOICE_SPEECH_* read at conversation start; NULL = Windows */
+    int  (*ai_resolve_error)(char *out, size_t cap);    /* 1 with the resolve error in out when AI speech cannot resolve */
 } VoiceConvOps;
 
 /* Registers the real table and the main window (timer, pause checks, WM_VOICE_NOTICE).
@@ -86,7 +90,19 @@ int  voice_conv_last_aec(void);                     /* -1 unknown, 0 none, 1 or 
 int  voice_conv_is_typing_locked(void);             /* the brief's voice_conv_typing_locked(): renamed, the core has that name */
 unsigned voice_conv_capture_token(void);            /* the open conversation capture's token, 0 none */
 
+/* The box was sent from outside the conversation (Retry, a suggestion chip, a typed send the
+ * conversation did not own): takes the reply baseline again and feeds VCE_EXTERNAL_SEND. A no-op
+ * while idle or while the conversation's own send is in flight (Ending, sending). */
+void voice_conv_external_send(void);
+
 /* TEST-ONLY seam: moves the glue's clock forward (the machine's 3-minute and 30-second rules). */
 void voice_conv_test_advance(unsigned long ms);
+/* TEST-ONLY seam: the bytes of the turn's audio the glue still holds (0 when none). */
+size_t voice_conv_test_turn_audio_bytes(void);
+
+/* TEST-ONLY seams: queue an event without running it, and run what is queued. They let a test
+ * fill the event queue; no product path calls them. */
+void voice_conv_test_queue(VoiceConvEvent ev, int a, int b);
+void voice_conv_test_pump(void);
 
 #endif /* NUTSHELL_VOICE_CONV_WIN_H */

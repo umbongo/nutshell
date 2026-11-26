@@ -17,6 +17,7 @@
 #include "dll_hook_win.h"
 #include "dll_record.h"
 #include "voice_net_win.h"
+#include "voice_ledger.h"
 
 static FARPROC WINAPI ns_dli_hook(unsigned notify, PDelayLoadInfo info)
 {
@@ -60,6 +61,12 @@ int ns_self_report_write(const char *path, int sapi_state)
     /* The voice opener's count, after the DLL record: an idle launch shows 0. */
     int extra = snprintf(text + len, sizeof(text) - len, "voice-net-opens: %ld\n",
                          voice_net_open_count());
+    if (extra > 0 && (size_t)extra < sizeof(text) - len) len += (size_t)extra;
+    /* The resource ledger's sum (capture, sessions, speech requests, render
+     * clients, ...): an idle launch holds none. */
+    long voice_res = 0;
+    for (int r = 0; r < (int)VRES_COUNT; r++) voice_res += voice_ledger_count((VoiceRes)r);
+    extra = snprintf(text + len, sizeof(text) - len, "voice-resources: %ld\n", voice_res);
     if (extra > 0 && (size_t)extra < sizeof(text) - len) len += (size_t)extra;
     /* --self-report-sapi's control: -1 not asked (no line), 0 or 1 */
     if (sapi_state >= 0) {

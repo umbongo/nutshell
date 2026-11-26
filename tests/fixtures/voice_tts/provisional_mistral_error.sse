@@ -1,0 +1,6 @@
+event: speech.audio.delta
+data: {"type": "speech.audio.delta", "audio_data": "EBsWGccWKxRLES8O5Ap0B+oDUwC8/C/5uvVn8kLvVuyt6U/nRuWX40jiXuHd4MTgFuHR4fLiduRX5pDoF+vm7fLwMvSZ9x37sf5JAtsFWAm1DOgP5BKhFRQYNRr9G2cdbB4KH0AfCh9sHmcd/Rs1GhQYoRXkEugPtQxYCdsFSQKx/h37mfcy9PLw5u0X65DoV+Z25PLi0eEW4cTg3eBe4Ujil+NG5U/nrelW7ELvZ/K69S/5vPxTAOoDdAfkCi8OSxErFMcWFhkQG64c6h3BHjAfNR/PHgIezhw5G0gZABdrFJAReg4yC8UHPQSnABD9gfkJ9rLyie+X7Ojpg+dx5brjYuJv4eTgwuAL4bzh1OJP5CjmWejZ6qLtqfDk80n3yvpe/vYBiAUICWkMnw+hEmQV3hcHGtgbSh1ZHgAfPx8UH38egx0iHGIaSRjdFScTMBACDagJLQadAgX/cPvq94D0PPEr7lbrx+iH5p7kEuPn4SPhyODW4E7hL+J04xvlHOdy6RXs++4b8mv13vhp/AAAlwMiB5UK5Q0FEesTjhbkGOUajBzRHbIeKh84H90eGR7uHGIbeRk5F6oU1RHEDoALFgiQBPsAY/3T+Vj2/vLQ79nsI+q3557l3uN94oHh"}
+
+event: error
+data: {"error": {"message": "The stream was interrupted", "type": "server_error", "code": 500}}
+

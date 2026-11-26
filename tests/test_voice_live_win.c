@@ -356,8 +356,8 @@ int test_voice_live_close_mid_handshake(void)
     ASSERT_TRUE(GetTickCount64() - t0 < 200);       /* close never blocks the UI thread */
     voice_live_reap(3000);
     if (running_under_wine() && GetTickCount64() - t0 >= 2900)
-        printf("  [SKIP] Wine does not abort a blocked WinHTTP handshake on handle close;"
-               " the session was detached; strict on a Windows host only\n");
+        TEST_SKIP_PART("Wine does not abort a blocked WinHTTP handshake on handle close;"
+                       " the session was detached; strict on a Windows host only");
     else
         ASSERT_TRUE(GetTickCount64() - t0 < 2900);
     ASSERT_TRUE(voice_ledger_all_zero());
