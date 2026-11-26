@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-21 (retrospective of PRs #95-#101: the merge count in the ask, baselines, the full-disk symptom, CodeQL's PR-only view, the Windows-host `make test`, open items).
+Last updated: 2026-11-26 (the token-use baseline and the loop change; before that, 2026-11-21's retrospective of PRs #95-#101).
 
 ## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
@@ -32,6 +32,24 @@ Last updated: 2026-11-21 (retrospective of PRs #95-#101: the merge count in the 
   #101). The next one covers the merges since it
   (`git log --merges --first-parent be6599f..origin/main`); move this
   marker at every retrospective.
+- **The next retrospective compares token use before and after the
+  2026-11-26 loop change** (maintainer): the main session now runs a plan
+  itself, with no long-lived orchestrator. The baseline is
+  `docs/token-usage/2026-11-26-baseline.json` (2026-11-21T00:00 to
+  2026-11-26T00:45 UTC; the next window starts at that `until`; the
+  controller, main session plus orchestrators, 40% of the cost index and
+  1.25M per implementer agent; 106 idle cache rewrites; 56k sub-agent
+  start-up); the method is the `checkpoint` skill's step 1.
+
+## Token use, facts measured on 2026-11-26
+
+- A sub-agent's prompt cache lives 5 minutes; the main session's, 1 hour on
+  the subscription (Claude Code 2.1.332; `subagentPromptCacheTtl` and
+  `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` change it, deliberately unset).
+  An agent that waits longer than that rewrites its whole context at the
+  next request.
+- Every sub-agent starts at about 56k tokens before its brief; about 8.5k
+  of it is the skill list, mostly plugins this repository never uses.
 
 ## Working from a cloud (Linux) session
 
