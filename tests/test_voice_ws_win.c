@@ -302,8 +302,8 @@ int test_voice_ws_cancel_during_handshake(void)
          * another thread (the same measured limit as test_ai_nc_fire_wakes_blocked_winhttp_call);
          * nor, measured, at its receive timeout. Windows aborts it. Closing the
          * server side ends the call, so the thread can still be joined. */
-        printf("  [SKIP] Wine does not abort a blocked WinHTTP handshake on handle close;"
-               " strict on a Windows host only\n");
+        TEST_SKIP_PART("Wine does not abort a blocked WinHTTP handshake on handle close;"
+                       " strict on a Windows host only");
         ws_loop_stop(l);
         l = NULL;
         w = WaitForSingleObject(t, 5000);

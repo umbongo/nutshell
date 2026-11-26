@@ -105,6 +105,16 @@ typedef struct Settings {
     int  voice_pause_ms;                 /* Conversation: silence that ends a turn, 500-3000, default 1200 */
     char voice_windows_voice[256];       /* SAPI token id of the spoken-reply voice; empty = Automatic */
     char voice_windows_voice_name[128];  /* its friendly name, for display */
+    /* AI speech (PR 3): spoken replies from a speech provider instead of a Windows voice. */
+    int  voice_speech_engine;            /* VOICE_SPEECH_WINDOWS (0) or VOICE_SPEECH_AI (1); JSON "windows"/"ai" */
+    char voice_tts_provider[32];         /* "mistral" (default) or "custom"; any other id is kept as stored */
+    char voice_tts_url[CFG_STR_MAX];     /* base URL, Custom only */
+    char tts_api_key[CFG_STR_MAX];       /* DPAPI; the plaintext on disk is "<binding>\n<key>" */
+    char tts_api_key_for[CFG_STR_MAX];   /* runtime only, never a JSON key: the binding read with the key */
+    char tts_api_key_enc_preserved[CFG_BLOB_MAX]; /* same contract as ai_api_key_enc_preserved */
+    char voice_ai_voice[64];             /* empty = the provider's default */
+    char voice_ai_tts_model[CFG_STR_MAX];/* empty = the provider's default */
+    char voice_ai_style[1024];           /* accent and style instructions, default empty */
 } Settings;
 
 typedef struct {

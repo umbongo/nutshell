@@ -1,6 +1,8 @@
 #include "voice_conv_win.h"
 
 #include "secure_zero.h"
+#include "voice_aispeech.h"
+#include "voice_config.h"
 #include "voice_echo.h"
 #include "voice_level.h"
 #include "voice_listen.h"
@@ -9,6 +11,7 @@
 #include "voice_stt.h"
 #include "voice_transcript.h"
 #include "voice_win.h"
+#include "dlog.h"
 #ifdef NS_VOICE_WAV_SEAM
 #include "voice_audio_win.h"
 #endif
@@ -40,6 +43,9 @@ static unsigned long g_adj;                 /* the test clock offset */
 static unsigned g_seq;
 static unsigned g_cap_token, g_live_token, g_stt_token, g_tts_token;
 static int g_cap_open, g_link_open, g_stt_open, g_tts_alive;
+static int g_tts_engine;                    /* VOICE_SPEECH_* of the live speech context */
+static int g_engine_cfg;                    /* the configured engine, read at conversation start */
+static int g_ai_off;                        /* AI speech cannot work this conversation (R37) */
 static int g_aec = -1;                      /* the last VAM_CONV_OPENED value */
 static VoiceListenMode g_want_mode = VLM_HOLD;
 static int g_have_mode;
@@ -52,7 +58,7 @@ static int g_audio_lost;                    /* the turn's audio can no longer ar
 static int g_turn_open_listener;            /* the listener's turn is open (TURN_START seen, no end yet) */
 static int g_err_note_done;                 /* a provider error or failure text was shown this turn */
 
-static unsigned g_since;                    /* message count just before the last send */
+static unsigned g_since;                    /* the message count at the last send's baseline */
 static int g_busy_seen;
 static unsigned long g_sent_tick;
 
@@ -76,6 +82,11 @@ static char g_last_header[200];             /* the header text last shown */
 static QEv g_q[QMAX];
 static int g_qn;
 static int g_in_step;
+static int g_pend_end;                      /* a VCE_END that found the queue full: its own slot */
+static int g_pend_end_a, g_pend_end_b;
+static int g_keep_words;                    /* the VCA_DROP_TURN of an external send keeps the box's words */
+static int g_ducked;                        /* the speech context's volume is ducked */
+static unsigned long g_progress_at;         /* the last VCE_SPEECH_PROGRESS fed (0: none for this speech) */
 
 static unsigned long now_ms(void)
 {
@@ -179,7 +190,7 @@ static void turn_begin(void)
 
 static void drop_turn(void)
 {
-    if (g_vt_on) g_ops->drop_words();
+    if (g_vt_on && !g_keep_words) g_ops->drop_words();
     free_transcript();
     wipe_turn_audio();
     g_batch_want = 0;
@@ -189,12 +200,23 @@ static void drop_turn(void)
 
 static void enqueue(VoiceConvEvent ev, int a, int b)
 {
+    if (ev == VCE_END && g_pend_end) return;   /* an end is parked: it is the first, and it wins */
     if (g_qn < QMAX) {
         g_q[g_qn].ev = ev;
         g_q[g_qn].a = a;
         g_q[g_qn].b = b;
         g_qn++;
+        return;
     }
+    if (ev == VCE_END) {   /* an end is never dropped: the first one waits in its own slot */
+        if (!g_pend_end) {
+            g_pend_end = 1;
+            g_pend_end_a = a;
+            g_pend_end_b = b;
+        }
+        return;
+    }
+    DLOG(DLOG_AI, DLOG_WARN, 0, "voice.conv_queue_full", "event=%d dropped", (int)ev);
 }
 
 static void run_event(VoiceConvEvent ev, int a, int b);
@@ -204,10 +226,18 @@ static void pump(void)
 {
     if (g_in_step) return;
     g_in_step = 1;
-    while (g_qn > 0) {
-        const QEv e = g_q[0];
-        g_qn--;
-        memmove(&g_q[0], &g_q[1], (size_t)g_qn * sizeof g_q[0]);
+    while (g_qn > 0 || g_pend_end) {
+        QEv e;
+        if (g_qn > 0) {
+            e = g_q[0];
+            g_qn--;
+            memmove(&g_q[0], &g_q[1], (size_t)g_qn * sizeof g_q[0]);
+        } else {   /* the queue drained: the pending end runs now */
+            e.ev = VCE_END;
+            e.a = g_pend_end_a;
+            e.b = g_pend_end_b;
+            g_pend_end = 0;
+        }
         run_event(e.ev, e.a, e.b);
     }
     g_in_step = 0;
@@ -294,11 +324,21 @@ static void release_upload(void)
     g_ops->stt_cancel(g_stt_token);
 }
 
+/* The Ending deadline follows this turn's upload: twice its send and receive timeouts (the one
+ * retry). The WAV is the PCM at 16 kHz 16-bit mono plus its 44-byte header. */
+static void set_ending_budget(void)
+{
+    int send_ms = 0, recv_ms = 0;
+    voice_stt_upload_timeouts(44u + g_turn_audio->pcm.n * sizeof(int16_t), &send_ms, &recv_ms);
+    voice_conv_set_ending_budget(&g_c, 2ul * ((unsigned long)send_ms + (unsigned long)recv_ms));
+}
+
 static void do_submit(void)
 {
     g_batch_want = 0;
     if (g_stt_open) release_upload();
     g_stt_token = next_token();
+    set_ending_budget();
     if (g_ops->stt_submit(g_turn_audio, g_stt_token)) {
         g_stt_open = 1;
     } else {
@@ -387,13 +427,55 @@ static void send_now(int voice_turn)
 
 /* ---- speech ---- */
 
+/* Who speaks the next text: AI speech unless Windows speech is configured or AI speech cannot
+ * work in this conversation. */
+static int want_engine(void)
+{
+    return (g_engine_cfg == VOICE_SPEECH_AI && !g_ai_off) ? VOICE_SPEECH_AI : VOICE_SPEECH_WINDOWS;
+}
+
+static int start_context(int engine)
+{
+    g_tts_token = next_token();
+    if (!g_ops->tts_start(g_tts_token, engine)) return 0;
+    g_tts_alive = 1;
+    g_tts_engine = engine;
+    return 1;
+}
+
+static void header_raw(const char *t)
+{
+    if (!t || !t[0] || !g_ops->header) return;
+    snprintf(g_last_header, sizeof g_last_header, "%s", t);
+#ifdef NS_VOICE_WAV_SEAM
+    voice_audio_seam_note_header(t);
+#endif
+    g_ops->header(t);
+}
+
+#define HDR_AI_FAILED "AI speech failed: using Windows speech"
+
+/* Starts the wanted engine; AI speech that cannot start reads with Windows speech, with the header. */
+static int start_best(void)
+{
+    const int want = want_engine();
+    g_tts_alive = 0;
+    if (start_context(want)) return 1;
+    if (want != VOICE_SPEECH_AI) return 0;
+    header_raw(HDR_AI_FAILED);
+    return start_context(VOICE_SPEECH_WINDOWS);
+}
+
+/* The context a text is spoken with: the live one when it is the wanted engine's, else it is
+ * quit and the wanted one started (a reply after a fallback returns to AI speech). */
 static int ensure_engine(void)
 {
-    if (g_tts_alive) return 1;
-    g_tts_token = next_token();
-    if (!g_ops->tts_start(g_tts_token)) return 0;
-    g_tts_alive = 1;
-    return 1;
+    if (g_tts_alive && g_tts_engine == want_engine()) return 1;
+    if (g_tts_alive) {
+        g_ops->tts_quit(g_tts_token);
+        g_tts_alive = 0;
+    }
+    return start_best();
 }
 
 static void mark_not_playing(int read_to_end)
@@ -410,18 +492,18 @@ static void mark_not_playing(int read_to_end)
 static void stop_speech(void)
 {
     if (g_playing && g_tts_alive) g_ops->tts_stop(g_tts_token);
+    if (g_ducked && g_tts_alive && g_ops->tts_volume) g_ops->tts_volume(g_tts_token, 100);
+    g_ducked = 0;   /* no VCA_UNDUCK comes with every stop (an external send): the duck ends here */
     mark_not_playing(0);
 }
 
-static void begin_speak(const char *text, size_t from, int is_reply)
+static void speak_with_context(const char *text, size_t from, int is_reply)
 {
-    if (!text || !ensure_engine()) {
-        enqueue(VCE_SPEECH_FAILED, 0, 0);
-        return;
-    }
     g_notice_pending = 0;
     /* a cut-in's duck is over once the speech it ducked is gone: every reply starts at full volume */
     if (g_ops->tts_volume) g_ops->tts_volume(g_tts_token, 100);
+    g_ducked = 0;
+    g_progress_at = 0;
     g_cur_id = ++g_reply_seq;
     g_cur_is_reply = is_reply;
     if (is_reply) {
@@ -434,12 +516,22 @@ static void begin_speak(const char *text, size_t from, int is_reply)
     g_ops->tts_speak(g_tts_token, g_cur_id, text, from);
 }
 
+static void begin_speak(const char *text, size_t from, int is_reply)
+{
+    if (!text || !ensure_engine()) {
+        enqueue(VCE_SPEECH_FAILED, 0, 0);
+        return;
+    }
+    speak_with_context(text, from, is_reply);
+}
+
 /* The first reply of a launch, with Automatic landing on a voice that is not an English (UK)
  * woman's: not spoken now; WM_VOICE_NOTICE shows the notice and the conversation pauses
  * while it is up, then speaks the held reply from 0 on resume. */
 static int notice_wanted(void)
 {
     if (g_notice_raised || g_notice_checked || !g_ops->notice_due) return 0;
+    if (g_engine_cfg == VOICE_SPEECH_AI) return 0;   /* the notice is for Windows speech only; a fallback never raises it */
     g_notice_checked = 1;
     g_notice_voice[0] = '\0';
     return g_ops->notice_due(g_notice_voice, sizeof g_notice_voice);
@@ -461,6 +553,11 @@ static void speak_reply(void)
     }
     wipe_free(&g_reply);
     g_cut = 0;
+    /* A new reply has its own times: the last one's must not age a "carry on" out of the window or
+     * into it. Stamped now rather than zero: a zero is "long ago" to the classifier's age test. */
+    g_read_to_end = 0;   /* the last reply's "read to the end" is not this one's */
+    g_reply_at = now_ms();
+    g_spoken_end_at = g_reply_at - VOICE_ECHO_AFTER_MS - 1ul;   /* outside the echo window */
     if (sp && sp[0]) {
         g_reply = sp;
     } else {
@@ -472,7 +569,6 @@ static void speak_reply(void)
         return;
     }
     if (notice_wanted()) {
-        g_notice_raised = 1;
         g_notice_pending = 1;
         if (g_main) PostMessage(g_main, WM_VOICE_NOTICE, 0, 0);
         return;
@@ -515,13 +611,7 @@ static void show_header(VoiceConvHeader h)
     if (h == VCH_LISTENING && g_c.state == VCS_LISTENING && g_ops->box_has_text
         && g_ops->box_has_text())
         t = CUE_DRAFT;
-    if (t[0] && g_ops->header) {
-        snprintf(g_last_header, sizeof g_last_header, "%s", t);
-#ifdef NS_VOICE_WAV_SEAM
-        voice_audio_seam_note_header(t);
-#endif
-        g_ops->header(t);
-    }
+    header_raw(t);
 }
 
 /* The draft cue follows the box while Listening: a draft in the box shows the cue, an empty box
@@ -575,18 +665,24 @@ static void apply(VoiceConvOut o)
     if (a & VCA_CANCEL_WORK) g_ops->cancel_work();
     if (a & VCA_STOP_SPEECH) stop_speech();
     if (a & VCA_DUCK) {
-        if (g_tts_alive) g_ops->tts_volume(g_tts_token, VOICE_TTS_DUCK_PERCENT);
+        if (g_tts_alive) {
+            g_ops->tts_volume(g_tts_token, VOICE_TTS_DUCK_PERCENT);
+            g_ducked = 1;
+        }
     }
     if (a & VCA_UNDUCK) {
         if (g_tts_alive) g_ops->tts_volume(g_tts_token, 100);
+        g_ducked = 0;
     }
     if (a & VCA_DROP_TURN) drop_turn();
     if (a & VCA_CANCEL_BATCH) cancel_batch();
     if (a & VCA_CLOSE_LINK) close_link();
     if (a & VCA_LOCK_REG) (void)g_ops->lock_reg();
     if (a & VCA_ENGINE_START) {
-        g_tts_token = next_token();
-        g_tts_alive = g_ops->tts_start(g_tts_token) ? 1 : 0;
+        /* Nothing is spoken yet: an AI start that fails waits for begin_speak, which falls back
+         * with the header when there is something to read. */
+        g_tts_alive = 0;
+        (void)start_context(want_engine());
     }
     if (a & VCA_CLOSE_CAPTURE) close_capture();
     if (a & VCA_OPEN_CAPTURE) open_capture();
@@ -639,7 +735,9 @@ static void run_event(VoiceConvEvent ev, int a, int b)
     const VoiceConvState before = g_c.state;
     const VoiceConvOut o = voice_conv_step(&g_c, ev, a, b, now_ms());
     if (before == VCS_IDLE && ev == VCE_START) g_ops->mic_ui(1);
+    g_keep_words = (ev == VCE_EXTERNAL_SEND);   /* the words in the box were just sent */
     apply(o);
+    g_keep_words = 0;
     if (g_c.state == VCS_IDLE) {
         if (before != VCS_IDLE) {
             g_ops->mic_ui(0);
@@ -673,6 +771,11 @@ void voice_conv_set_ops(const VoiceConvOps *ops)
     g_ops = ops ? ops : g_real;
     g_qn = 0;
     g_in_step = 0;
+    g_pend_end = g_keep_words = g_ducked = 0;
+    g_progress_at = 0;
+    g_engine_cfg = VOICE_SPEECH_WINDOWS;
+    g_ai_off = 0;
+    g_tts_engine = VOICE_SPEECH_WINDOWS;
     g_cap_open = g_link_open = g_stt_open = g_tts_alive = 0;
     g_cap_token = g_live_token = g_stt_token = g_tts_token = 0;
     g_aec = -1;
@@ -714,12 +817,43 @@ void voice_conv_test_advance(unsigned long ms)
     g_adj += ms;
 }
 
+size_t voice_conv_test_turn_audio_bytes(void)
+{
+    return g_turn_audio ? g_turn_audio->pcm.n * sizeof(int16_t) : 0;
+}
+
+/* The box was sent from outside the conversation. The reply baseline is taken here, as send_now
+ * does for the conversation's own send, then the machine moves to Working. The conversation's own
+ * send in flight (Ending, sending) is left alone. */
+void voice_conv_external_send(void)
+{
+    if (!ops_ready() || !voice_conv_running()) return;
+    if (g_c.state == VCS_ENDING && g_c.sending) return;
+    g_since = g_ops->msg_count();
+    g_sent_tick = now_ms();
+    g_busy_seen = g_ops->chat_idle() ? 0 : 1;
+    voice_conv_event(VCE_EXTERNAL_SEND, 0, 0);
+}
+
+/* TEST-ONLY seams (declared in the header): fill the queue without running it, then run it. */
+void voice_conv_test_queue(VoiceConvEvent ev, int a, int b)
+{
+    enqueue(ev, a, b);
+}
+
+void voice_conv_test_pump(void)
+{
+    pump();
+}
+
 void voice_conv_start(int live)
 {
     if (!ops_ready() || voice_conv_running()) return;
     reset_resources();
     g_last_header[0] = '\0';
     g_notice_checked = 0;   /* g_aec keeps the last report for the Settings page */
+    g_ai_off = 0;           /* R37: a new conversation tries AI speech again */
+    g_engine_cfg = g_ops->speech_engine ? g_ops->speech_engine() : VOICE_SPEECH_WINDOWS;
     g_since = g_ops->msg_count();
     voice_conv_event(VCE_START, live ? 1 : 0, 0);
 }
@@ -894,6 +1028,61 @@ void voice_conv_on_stt(VoiceSttResult *r)
     pump();
 }
 
+/* R37: a setting that cannot work writes the note once per conversation and keeps this
+ * conversation on Windows speech. */
+static void ai_turn_off(long hr)
+{
+    char reason[200], resolve_err[160], text[320];
+    if (g_ai_off) return;
+    resolve_err[0] = '\0';
+    if (hr == VOICE_AIS_HR_RESOLVE && g_ops->ai_resolve_error
+        && !g_ops->ai_resolve_error(resolve_err, sizeof resolve_err))
+        resolve_err[0] = '\0';
+    voice_ais_failure_reason(hr, resolve_err, reason, sizeof reason);
+    snprintf(text, sizeof text, "AI speech is off for this conversation: %s. "
+             "Replies are read with Windows speech.", reason);
+    g_ai_off = 1;
+    note(text);
+}
+
+/* An AI speech failure for the current reply (R10, R15, R37): quits the AI context and reads the
+ * rest of the reply, from the failure's offset, with Windows speech. A setting that cannot work
+ * writes the note once and keeps this conversation on Windows speech; a passing failure shows the
+ * header and the next reply tries AI speech again. */
+static void ai_fallback(const VoiceTtsMsg *m)
+{
+    char *rest = g_spoken ? dup_str(g_spoken) : NULL;
+    const int was_ducked = g_ducked;
+    const int is_reply = g_cur_is_reply;
+    size_t from = m->offset;
+    DLOG(DLOG_AI, DLOG_WARN, 0, "voice.ais_fallback", "hr=%ld %s", m->hr,
+         voice_ais_failure_fatal(m->hr) ? "fatal" : "passing");   /* R15: no content */
+    if (voice_ais_failure_fatal(m->hr)) {
+        ai_turn_off(m->hr);
+    } else {
+        header_raw(HDR_AI_FAILED);
+    }
+    g_ops->tts_quit(g_tts_token);
+    g_tts_alive = 0;
+    if (!rest || !start_context(VOICE_SPEECH_WINDOWS)) {
+        if (rest) {
+            secure_zero(rest, strlen(rest) + 1);
+            free(rest);
+        }
+        mark_not_playing(0);
+        voice_conv_event(VCE_SPEECH_FAILED, 0, 0);
+        return;
+    }
+    if (from > strlen(rest)) from = strlen(rest);
+    speak_with_context(rest, from, is_reply);
+    if (was_ducked && g_ops->tts_volume) {   /* a cut-in's duck outlives the engine change */
+        g_ops->tts_volume(g_tts_token, VOICE_TTS_DUCK_PERCENT);
+        g_ducked = 1;
+    }
+    secure_zero(rest, strlen(rest) + 1);
+    free(rest);
+}
+
 void voice_conv_on_tts(const VoiceTtsMsg *m)
 {
     if (!m) return;
@@ -907,7 +1096,15 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
     case VTT_READY:
         break;
     case VTT_WORD:
-        if (m->reply_id == g_cur_id && g_cur_is_reply && g_playing) g_cut = m->offset;
+        if (m->reply_id == g_cur_id && g_playing) {
+            const unsigned long t = now_ms();
+            if (g_cur_is_reply) g_cut = m->offset;
+            /* The speech is advancing: the Speaking watchdog restarts (at most once a second). */
+            if (g_progress_at == 0 || t - g_progress_at >= 1000ul) {
+                g_progress_at = t ? t : 1ul;
+                voice_conv_event(VCE_SPEECH_PROGRESS, 0, 0);
+            }
+        }
         break;
     case VTT_DONE:
         if (m->reply_id != g_cur_id || !g_playing) break;
@@ -918,6 +1115,12 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
         /* An error for an older reply is nothing. The thread stays in its loop after an error
          * (no VTT_EXITED follows a failed Speak), so it is quit here, not just forgotten. */
         if (m->reply_id != 0 && m->reply_id != g_cur_id) break;
+        if (g_tts_alive && g_tts_engine == VOICE_SPEECH_AI && g_playing) {
+            ai_fallback(m);
+            break;
+        }
+        if (g_tts_alive && g_tts_engine == VOICE_SPEECH_AI && voice_ais_failure_fatal(m->hr))
+            ai_turn_off(m->hr);   /* the error came after the speech stopped: the rule still holds */
         if (g_tts_alive) g_ops->tts_quit(g_tts_token);
         g_tts_alive = 0;
         mark_not_playing(0);
@@ -981,6 +1184,7 @@ void voice_conv_on_card(int kind)
 void voice_conv_on_notice(void)
 {
     if (!ops_ready() || !voice_conv_running() || !g_notice_pending) return;
+    g_notice_raised = 1;   /* shown this launch from here: a conversation that ended first owes it */
     (void)g_ops->notice_voice(g_notice_voice[0] ? g_notice_voice : "the Windows default voice");
     /* The dialog pauses the conversation (the main window is disabled) and resume speaks the
      * held reply. If nothing paused (the dialog did not open), speak it now. */

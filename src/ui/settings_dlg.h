@@ -40,5 +40,10 @@ void settings_dlg_show_demo_page(HWND parent, Config *cfg, int page);
  * it (it then owns a VAM_DEVICES payload), else 0 (the caller frees it). */
 int settings_voice_on_audio(WPARAM wp, LPARAM lp);
 
+/* The AI speech Play sample failed after it started (a VTT_ERROR under VOICE_AIS_SAMPLE_TOKEN,
+ * hr as in voice_aispeech.h): shows "Could not play the sample: <reason>" in the Voice page's dim
+ * note when the Settings dialog is open on that page; does nothing otherwise. */
+void settings_voice_sample_failed(long hr);
+
 #endif
 #endif

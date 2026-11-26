@@ -74,3 +74,32 @@ int test_base64_binary(void)
     ASSERT_STR_EQ(out, "AP+AAQ==");
     TEST_END();
 }
+
+int test_base64_decode_roundtrip(void)
+{
+    TEST_BEGIN();
+    unsigned char src[64], back[80];
+    char enc[128];
+    for (size_t i = 0; i < sizeof src; i++) src[i] = (unsigned char)(i * 37 + 11);
+    for (size_t n = 0; n <= 64; n++) {
+        size_t e = base64_encode(src, n, enc, sizeof enc);
+        ASSERT_EQ(e, ((n + 2) / 3) * 4);
+        size_t d = base64_decode(enc, e, back, sizeof back);
+        ASSERT_EQ(d, n);
+        ASSERT_TRUE(memcmp(src, back, n) == 0);
+    }
+    /* A bad byte, whitespace, '=' in the middle and a stray length are refused. */
+    ASSERT_EQ(base64_decode("AB*D", 4, back, sizeof back), (size_t)-1);
+    ASSERT_EQ(base64_decode("AB D", 4, back, sizeof back), (size_t)-1);
+    ASSERT_EQ(base64_decode("A=BC", 4, back, sizeof back), (size_t)-1);
+    ASSERT_EQ(base64_decode("A", 1, back, sizeof back), (size_t)-1);
+    ASSERT_EQ(base64_decode("QUJDRA==QQ==", 12, back, sizeof back), (size_t)-1);
+    /* Padding is optional at the very end. */
+    ASSERT_EQ(base64_decode("QUJDRA", 6, back, sizeof back), (size_t)4);
+    /* Too small a cap is refused, an exact one is not. */
+    ASSERT_EQ(base64_decode("QUJDRA==", 8, back, 3), (size_t)-1);
+    ASSERT_EQ(base64_decode("QUJDRA==", 8, back, 4), (size_t)4);
+    ASSERT_EQ(base64_decode("", 0, back, 0), (size_t)0);
+    ASSERT_EQ(base64_decode(NULL, 4, back, sizeof back), (size_t)-1);
+    TEST_END();
+}

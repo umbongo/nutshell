@@ -714,8 +714,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             } else if (voice_send_pressed()) {
                 /* A dictation recording is running or finishing: voice took the
                  * Send (it ends the recording, then sends once the words are in). */
-            } else {
-                ai_chat_send_user_message(d);
+            } else if (ai_chat_send_user_message_ex(d, 0) == VSS_SENT) {
+                voice_on_external_send();   /* R23: a typed send the conversation did not own */
             }
             /* Only while the panel is on screen: a send finishing after the
              * panel was hidden must not pull keyboard focus back into it. */
@@ -740,7 +740,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             const char *const *sugg = ai_panel_suggestions(&count);
             if (i >= 0 && i < count) {
                 SetWindowText(d->hInput, sugg[i]);
-                ai_chat_send_user_message(d);
+                if (ai_chat_send_user_message_ex(d, 0) == VSS_SENT)
+                    voice_on_external_send();   /* R23: a chip sent while a conversation runs */
                 SetFocus(d->hInput);
             }
             return 0;
@@ -1177,6 +1178,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                      * waiting behind this one must not be stranded; the call
                      * is a no-op while the relaunch's stream is busy. */
                     ai_chat_maybe_start_next_batch(d);
+                    /* R23: Retry is a user launch; only when a turn really started (a launch
+                     * that failed leaves the conversation where it was). */
+                    if (ACTIVE_BUSY(d) || d->dispatch_active)
+                        voice_on_external_send();
                     return 0;
                 }
 
@@ -1200,7 +1205,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                 /* Re-launch stream */
                 ai_chat_start_indicator(d, "retrying");
-                ai_chat_launch_stream_thread(d, "retry");
+                if (ai_chat_launch_stream_thread(d, "retry"))
+                    voice_on_external_send();   /* R23: Retry is a user launch (relaunch exit) */
                 return 0;
             }
 

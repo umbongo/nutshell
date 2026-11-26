@@ -15,6 +15,8 @@
 #include "voice_speak.h"
 #include "voice_win.h"
 #include "voice_ledger.h"
+#include "voice_aispeech.h"
+#include "voice_config.h"
 
 #define VC_REPLY_A "Here is the first answer, and it is long enough to have a cut-off inside it. "
 #define VC_REPLY_B "This is the second answer to a second question, long enough to cut it in the middle. "
@@ -36,6 +38,12 @@ typedef struct {
     int box_text;
     int notice_voice, notice_due_calls; char notice_name[160]; int notice_due_first;
     int app_active;
+    /* AI speech: the engine the fake config names, which engine each start asked for, the contexts
+     * alive (an AI one holds no SpVoice), a Windows start that fails, and the call order. */
+    int engine, start_engine, ai_starts, win_starts, ai_live, win_start_fail, ai_speaks;
+    unsigned ai_tok, win_tok, ai_speak_id; size_t ai_speak_from;
+    char resolve_err[160]; int resolve_calls;
+    int seq, quit_seq, ai_quit_seq, win_start_seq, ai_start_fail, ai_headers;
     int dialog_open;    /* a dialog owned by the undocked panel is up */
     int chat_differs;   /* the panel's binding is no longer the conversation's */
     HWND win;
@@ -67,24 +75,51 @@ static int f_stt_submit(VoiceCapture *c, unsigned t)
     return 1;
 }
 static void f_stt_cancel(unsigned t) { (void)t; F.stt_cancel++; voice_ledger_release(VRES_STT_UPLOAD); }
-static int f_tts_start(unsigned t)
+static int f_tts_start(unsigned t, int engine)
 {
     F.tts_start++;
+    F.start_engine = engine;
+    if (engine == VOICE_SPEECH_AI) {
+        F.ai_starts++;
+        if (F.ai_start_fail) return 0;
+        F.ai_tok = t;
+        F.ai_live = 1;
+        F.tts_token = t;
+        return 1;
+    }
+    F.win_starts++;
+    F.win_start_seq = ++F.seq;
+    if (F.win_start_fail) return 0;
+    F.win_tok = t;
     F.tts_token = t;
     voice_ledger_acquire(VRES_SPVOICE);
     return 1;
 }
 static void f_tts_speak(unsigned t, unsigned id, const char *text, size_t from)
 {
-    (void)t;
     F.tts_speak++;
+    if (F.ai_live && t == F.ai_tok) { F.ai_speaks++; F.ai_speak_id = id; F.ai_speak_from = from; }
     F.speak_id = id;
     F.speak_from = from;
     snprintf(F.speak_text, sizeof F.speak_text, "%s", text);
 }
 static void f_tts_stop(unsigned t) { (void)t; F.tts_stop++; }
 static void f_tts_volume(unsigned t, int p) { (void)t; F.volume = p; }
-static void f_tts_quit(unsigned t) { (void)t; F.tts_quit++; voice_ledger_release(VRES_SPVOICE); }
+static void f_tts_quit(unsigned t)
+{
+    F.tts_quit++;
+    F.quit_seq = ++F.seq;
+    if (F.ai_live && t == F.ai_tok) { F.ai_live = 0; F.ai_quit_seq = F.quit_seq; return; }   /* an AI context holds no SpVoice */
+    voice_ledger_release(VRES_SPVOICE);
+}
+static int f_speech_engine(void) { return F.engine; }
+static int f_ai_resolve_error(char *out, size_t cap)
+{
+    F.resolve_calls++;
+    if (!F.resolve_err[0]) return 0;
+    snprintf(out, cap, "%s", F.resolve_err);
+    return 1;
+}
 static int f_lock_reg(void)
 {
     F.lock_reg++;
@@ -113,7 +148,7 @@ static int f_dialog_open(void) { return F.dialog_open; }
 static int f_chat_same(void) { return !F.chat_differs; }
 static void f_cancel_work(void) { F.cancel_work++; }
 static void f_note(const char *t) { F.notes++; snprintf(F.note, sizeof F.note, "%s", t); }
-static void f_header(const char *t) { F.headers++; snprintf(F.header, sizeof F.header, "%s", t); }
+static void f_header(const char *t) { F.headers++; if (strcmp(t, "AI speech failed: using Windows speech") == 0) F.ai_headers++; snprintf(F.header, sizeof F.header, "%s", t); }
 static void f_live_begin(void) { F.live_begin++; }
 static void f_live_replace(const char *t) { F.live_replace++; snprintf(F.live_text, sizeof F.live_text, "%s", t); }
 static void f_drop_words(void) { F.drop_words++; }
@@ -150,6 +185,7 @@ static VoiceConvOps fake_ops(void)
     o.stt_submit = f_stt_submit; o.stt_cancel = f_stt_cancel;
     o.tts_start = f_tts_start; o.tts_speak = f_tts_speak; o.tts_stop = f_tts_stop;
     o.tts_volume = f_tts_volume; o.tts_quit = f_tts_quit;
+    o.speech_engine = f_speech_engine; o.ai_resolve_error = f_ai_resolve_error;
     o.lock_reg = f_lock_reg; o.lock_unreg = f_lock_unreg;
     o.send_turn = f_send_turn; o.msg_count = f_msg_count; o.reply = f_reply;
     o.chat_idle = f_idle; o.cancel_work = f_cancel_work;
@@ -661,6 +697,41 @@ int test_vconv_win_send_while_hearing_batch(void)
     TEST_END();
 }
 
+/* Task 13 (R29): a turn stuck in Ending ends the conversation with a note; its audio is wiped
+ * and its words stay in the box. */
+int test_vconv_win_ending_wipes_audio_keeps_words(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    const unsigned tok = hear_then_send(1);
+    live_msg(VLE_READY, "", NULL);
+    live_msg(VLE_DELTA, "i1", "hello wor");
+    voice_conv_event(VCE_SEND, 0, 0);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    aud_event(VLN_TURN_END);
+    voice_conv_on_audio(VAM_CONV_TURN, (LPARAM)make_turn(tok));   /* kept as the fallback */
+    ASSERT_TRUE(voice_conv_test_turn_audio_bytes() > 0);
+    ASSERT_EQ(F.drop_words, 0);
+    F.notes = 0;
+    voice_conv_test_advance(181000ul);
+    voice_conv_on_timer();   /* the live final never came: the fallback batch starts */
+    voice_conv_on_timer();
+    /* the upload's own budget (2 x (30 s + 60 s) + 10 s for this short turn) holds the Ending open
+     * past the 180 s default: the glue set it when it submitted */
+    ASSERT_TRUE(voice_conv_running());
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    voice_conv_test_advance(10000ul);
+    voice_conv_on_timer();   /* the upload never answers: the deadline */
+    ASSERT_TRUE(!voice_conv_running());
+    ASSERT_EQ((int)voice_conv_test_turn_audio_bytes(), 0);
+    ASSERT_EQ(F.drop_words, 0);
+    ASSERT_EQ(F.notes, 1);
+    ASSERT_STR_EQ(F.note, "Conversation ended: the last turn took too long");
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
 int test_vconv_win_send_while_hearing_live_link_fails_to_fallback(void)
 {
     TEST_BEGIN();
@@ -891,6 +962,624 @@ int test_vconv_win_speak_mode_follows_new_capture(void)
     ASSERT_EQ(F.mode, VLM_SPEAK_HD);            /* the new device has no echo cancellation */
     voice_conv_event(VCE_PRESS, 0, 0);
     voice_conv_event(VCE_PRESS, 0, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* ---- Task 8b: Retry as an external send, unducking, the reply's times, progress, the notice
+ * flag and a pending end event ---- */
+
+int test_vconv_win_external_send(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    F.idle = 0;                          /* the chat is busy as the external send goes out */
+    voice_conv_external_send();
+    ASSERT_EQ(voice_conv_state(), VCS_WORKING);
+    ASSERT_EQ(F.cap_end, 1);             /* the capture is closed */
+    ASSERT_EQ(F.send_turn, 0);           /* the glue sends nothing itself */
+    chat_finishes(VC_REPLY_A);           /* a reply after the new baseline */
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    ASSERT_EQ(F.tts_speak, 1);
+    ASSERT_TRUE(strstr(F.speak_text, "first answer") != NULL);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_external_send_keeps_words(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    aud_event(VLN_TURN_START);
+    live_msg(VLE_READY, "", NULL);
+    live_msg(VLE_DELTA, "i1", "hello there");
+    ASSERT_EQ(voice_conv_state(), VCS_HEARING);
+    ASSERT_TRUE(F.live_replace >= 1);
+    ASSERT_EQ(F.link_close, 0);
+    F.idle = 0;
+    voice_conv_external_send();
+    ASSERT_EQ(voice_conv_state(), VCS_WORKING);
+    ASSERT_EQ(F.drop_words, 0);          /* the words in the box were just sent: not stripped */
+    ASSERT_EQ(F.link_close, 1);          /* the turn's link is closed */
+    ASSERT_EQ(F.cap_end, 1);
+    ASSERT_EQ(F.typing, 0);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_external_send_unducks(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    aud_event(VLN_DUCK);
+    ASSERT_EQ(F.volume, 18);
+    F.idle = 0;
+    voice_conv_external_send();
+    ASSERT_EQ(voice_conv_state(), VCS_WORKING);
+    ASSERT_TRUE(F.tts_stop >= 1);
+    ASSERT_EQ(F.volume, 100);            /* the duck is over once the speech it ducked is gone */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* A reply's times belong to that reply. Conversation 1 speaks reply A to the end (its time is stamped),
+ * 6 minutes pass, and conversation 2's first reply B is held for the notice: B is loaded but not playing,
+ * so a cut-in stops nothing and nothing restamps the times. "carry on" is then judged against B's own
+ * times (CONTINUE); against A's stale ones it would be plain text. */
+int test_vconv_win_new_reply_resets_times(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    tts_msg(VTT_DONE, F.speak_id, 0);    /* reply A read to the end: its time is stamped */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_FALSE(voice_conv_running());
+    voice_conv_test_advance(360000ul);   /* 6 minutes: past the phrase window */
+
+    F.notice_due_first = 1;
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_working();
+    const int speaks = F.tts_speak;
+    chat_finishes(VC_REPLY_B);           /* held for the notice: loaded, not playing */
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    ASSERT_EQ(F.tts_speak, speaks);
+    aud_event(VLN_CUT);                  /* the user talks over the held reply */
+    ASSERT_EQ(voice_conv_state(), VCS_HEARING);
+    aud_event(VLN_TURN_START);
+    live_msg(VLE_READY, "", NULL);
+    aud_event(VLN_TURN_END);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    live_msg(VLE_DONE, "", "carry on");  /* judged against B's times only */
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    ASSERT_EQ(F.tts_speak, speaks + 1);  /* CONTINUE: B is spoken */
+    ASSERT_TRUE(strstr(F.speak_text, "second answer") != NULL);
+    ASSERT_EQ(F.send_turn, 2);           /* "carry on" was not sent as a turn */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_progress_keeps_long_reply(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    const unsigned id = F.speak_id;
+    for (int i = 0; i < 22; i++) {       /* 11 minutes in 30-second steps */
+        voice_conv_test_advance(30000ul);
+        tts_msg(VTT_WORD, id, 5);
+        voice_conv_on_timer();
+        ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    }
+    /* a word of an older reply is no progress: 10 minutes after the last real one, Speaking ends */
+    voice_conv_test_advance(590000ul);
+    tts_msg(VTT_WORD, id + 50, 5);
+    voice_conv_test_advance(11000ul);
+    voice_conv_on_timer();
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* Progress is fed at most once a second: a second word 0.5 s after the first does not move the
+ * watchdog, so Speaking still ends 10 minutes after the first. */
+int test_vconv_win_progress_throttled(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    const unsigned id = F.speak_id;
+    tts_msg(VTT_WORD, id, 5);
+    voice_conv_test_advance(500ul);
+    tts_msg(VTT_WORD, id, 9);            /* inside the second: not fed */
+    voice_conv_test_advance(599600ul);
+    voice_conv_on_timer();
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_notice_kept_if_ended_first(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    F.notice_due_first = 1;
+    voice_conv_start(0);
+    to_working();
+    chat_finishes(VC_REPLY_A);           /* the notice is posted, the reply held */
+    ASSERT_EQ(F.tts_speak, 0);
+    ASSERT_EQ(F.notice_voice, 0);
+    voice_conv_event(VCE_END, VCX_OFF, 0);   /* the conversation ends before WM_VOICE_NOTICE runs */
+    pump();
+    ASSERT_EQ(F.notice_voice, 0);        /* nothing was shown: the notice is still owed */
+    ASSERT_TRUE(voice_ledger_all_zero());
+    F.notice_due_first = 1;
+    voice_conv_start(0);
+    to_working();
+    chat_finishes(VC_REPLY_A);           /* the next conversation's first reply raises it */
+    ASSERT_EQ(F.tts_speak, 0);
+    pump();
+    ASSERT_EQ(F.notice_voice, 1);
+    ASSERT_EQ(F.tts_speak, 1);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_end_never_dropped(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    to_speaking();
+    F.note[0] = '\0';
+    for (int i = 0; i < 30; i++) voice_conv_test_queue(VCE_TICK, 0, 0);   /* the queue is full */
+    voice_conv_test_queue(VCE_END, VCX_OFF, 0);                           /* the end must survive */
+    voice_conv_test_queue(VCE_END, VCX_SETTINGS, 0);                      /* the first end wins */
+    voice_conv_test_pump();
+    ASSERT_EQ(voice_conv_state(), VCS_IDLE);
+    ASSERT_FALSE(voice_conv_running());
+    ASSERT_TRUE(strstr(F.note, "settings changed") == NULL);   /* it was the OFF end that ran */
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+    vc_end(w);
+    TEST_END();
+}
+
+/* While an end is parked, a later end (here the one a send raises when the chat moved, which finds
+ * room in the queue the pump has begun to drain) does not jump ahead of it: the first end wins. */
+int test_vconv_win_parked_end_wins(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(0);
+    F.chat_differs = 1;
+    F.note[0] = '\0';
+    voice_conv_test_queue(VCE_SEND, 0, 0);                    /* its send raises END(CHAT_CHANGED) */
+    for (int i = 0; i < 23; i++) voice_conv_test_queue(VCE_TICK, 0, 0);   /* the queue is full */
+    voice_conv_test_queue(VCE_END, VCX_OFF, 0);               /* parked */
+    voice_conv_test_pump();
+    ASSERT_EQ(voice_conv_state(), VCS_IDLE);
+    ASSERT_TRUE(strstr(F.note, "chat changed") == NULL);      /* the parked OFF end ran first */
+    ASSERT_EQ(F.send_turn, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* A reply with nothing to say (empty speech text) stamps its times and fails before speaking, so the
+ * previous reply is still the last thing spoken. Within 2 s of that reply's end its own words heard
+ * back would be an echo; once the new reply has stamped its times the window is closed, and the words
+ * are the user's (sent as a turn). */
+int test_vconv_win_old_echo_not_matched_while_new_reply_loads(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    char said[600];
+    snprintf(said, sizeof said, "%s", F.speak_text);   /* reply A's speech text */
+    tts_msg(VTT_DONE, F.speak_id, 0);                  /* A ended just now */
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    to_working();
+    chat_finishes("");                                 /* B: nothing to say, fails before speaking */
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    ASSERT_EQ(F.send_turn, 2);
+    aud_event(VLN_TURN_START);
+    live_msg(VLE_READY, "", NULL);
+    aud_event(VLN_TURN_END);
+    ASSERT_EQ(voice_conv_state(), VCS_ENDING);
+    live_msg(VLE_DONE, "", said);                      /* A's words, heard back inside 2 s of its end */
+    ASSERT_EQ(F.send_turn, 3);                         /* not an echo: sent as the user's turn */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* ---- AI speech (Task 8a) ---- */
+
+static void tts_msg_hr(unsigned tok, VoiceTtsKind kind, unsigned id, size_t off, long hr)
+{
+    VoiceTtsMsg m;
+    memset(&m, 0, sizeof m);
+    m.token = tok;
+    m.kind = kind;
+    m.reply_id = id;
+    m.offset = off;
+    m.hr = hr;
+    voice_conv_on_tts(&m);
+}
+
+#define AI_NOTE_FMT "AI speech is off for this conversation: %s. Replies are read with Windows speech."
+
+/* One more reply: the user speaks and the chat answers with `reply`. */
+static void next_reply(const char *reply)
+{
+    to_working();
+    chat_finishes(reply);
+}
+
+static void start_ai(void)
+{
+    F.engine = VOICE_SPEECH_AI;
+}
+
+int test_vconv_win_ai_engine_started(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    ASSERT_EQ(F.ai_starts, 1);
+    ASSERT_EQ(F.win_starts, 0);
+    ASSERT_EQ(F.start_engine, VOICE_SPEECH_AI);
+    ASSERT_EQ(F.ai_speaks, 1);
+    ASSERT_EQ(F.ai_speak_from, (size_t)0);
+    ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);   /* no SAPI voice for AI speech */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_EQ(F.tts_quit, 1);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_ai_fallback_rest_of_reply(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    const unsigned ai = F.ai_tok;
+    const unsigned first = F.ai_speak_id;
+    char text[600];
+    snprintf(text, sizeof text, "%s", F.speak_text);
+    F.headers = 0;
+    F.notes = 0;
+    tts_msg_hr(ai, VTT_ERROR, first, 40, VOICE_AIS_HR_NET);
+    ASSERT_TRUE(strcmp(F.header, "AI speech failed: using Windows speech") == 0);
+    ASSERT_EQ(F.notes, 0);
+    ASSERT_EQ(F.tts_quit, 1);                          /* the AI context is gone */
+    ASSERT_EQ(F.ai_live, 0);
+    ASSERT_EQ(F.win_starts, 1);
+    ASSERT_TRUE(F.ai_quit_seq > 0 && F.ai_quit_seq < F.win_start_seq);   /* quit first, then start */
+    ASSERT_EQ(F.start_engine, VOICE_SPEECH_WINDOWS);
+    ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 1);
+    ASSERT_EQ(F.speak_from, (size_t)40);               /* the rest of the reply, with Windows speech */
+    ASSERT_TRUE(strcmp(F.speak_text, text) == 0);
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    ASSERT_TRUE(F.speak_id != first);
+    ASSERT_EQ(F.tts_token, F.win_tok);
+    tts_msg_hr(F.win_tok, VTT_DONE, F.speak_id, 0, 0);
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    /* the next reply goes back to AI speech, from 0 */
+    F.ai_starts = 0;
+    next_reply(VC_REPLY_B);
+    ASSERT_EQ(F.ai_starts, 1);
+    ASSERT_EQ(F.ai_speaks, 2);
+    ASSERT_EQ(F.ai_speak_from, (size_t)0);
+    ASSERT_EQ(F.tts_quit, 2);                          /* the Windows context was quit for it */
+    ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_ai_and_windows_fail(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    F.win_start_fail = 1;
+    F.ai_headers = 0;
+    F.win_starts = 0;
+    tts_msg_hr(F.ai_tok, VTT_ERROR, F.ai_speak_id, 10, VOICE_AIS_HR_STREAM);
+    ASSERT_EQ(F.win_starts, 1);                        /* the fallback tried Windows speech */
+    ASSERT_EQ(F.ai_headers, 1);                        /* the passing header came first */
+    ASSERT_TRUE(strstr(F.note, "Could not speak the reply: it is on screen") != NULL
+                || strstr(F.header, "Could not speak the reply: it is on screen") != NULL);
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    ASSERT_EQ(F.tts_quit, 1);
+    ASSERT_EQ(F.ai_live, 0);
+    voice_conv_event(VCE_PRESS, 0, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_ai_stale_error_ignored(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    const unsigned old_id = F.ai_speak_id;
+    tts_msg_hr(F.ai_tok, VTT_DONE, old_id, 0, 0);
+    next_reply(VC_REPLY_B);
+    ASSERT_TRUE(F.ai_speak_id != old_id);
+    F.headers = 0;
+    tts_msg_hr(F.ai_tok, VTT_ERROR, old_id, 0, 503);   /* an earlier reply, same AI token */
+    ASSERT_EQ(F.headers, 0);
+    ASSERT_EQ(F.tts_quit, 0);
+    ASSERT_EQ(F.win_starts, 0);
+    ASSERT_EQ(voice_conv_state(), VCS_SPEAKING);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_no_notice_with_ai(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    F.notice_due_first = 1;
+    voice_conv_start(0);
+    to_working();
+    chat_finishes(VC_REPLY_A);
+    pump();
+    ASSERT_EQ(F.notice_voice, 0);
+    ASSERT_EQ(F.ai_speaks, 1);                         /* spoken at once, nothing held */
+    /* and a fallback never raises it either */
+    tts_msg_hr(F.ai_tok, VTT_ERROR, F.ai_speak_id, 0, VOICE_AIS_HR_NET);
+    pump();
+    ASSERT_EQ(F.notice_voice, 0);
+    ASSERT_EQ(F.win_starts, 1);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_ai_passing_retries(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    const long hrs[3] = { VOICE_AIS_HR_NET, 429, 503 };
+    for (int i = 0; i < 3; i++) {
+        F.headers = 0;
+        F.notes = 0;
+        if (i == 0) {
+            to_speaking();   /* the conversation's own start is the one counted */
+        } else {
+            F.ai_starts = 0;
+            next_reply(VC_REPLY_B);
+        }
+        ASSERT_EQ(F.ai_starts, 1);                     /* every reply starts AI speech again */
+        tts_msg_hr(F.ai_tok, VTT_ERROR, F.ai_speak_id, 20, hrs[i]);
+        ASSERT_TRUE(strcmp(F.header, "AI speech failed: using Windows speech") == 0);
+        ASSERT_EQ(F.notes, 0);                         /* no chat note */
+        ASSERT_EQ(F.speak_from, (size_t)20);
+        tts_msg_hr(F.win_tok, VTT_DONE, F.speak_id, 0, 0);
+        ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    }
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    ASSERT_EQ(voice_ledger_underflow(), 0);
+    vc_end(w);
+    TEST_END();
+}
+
+static int note_is(const char *reason)
+{
+    char want[300];
+    snprintf(want, sizeof want, AI_NOTE_FMT, reason);
+    return strcmp(F.note, want) == 0;
+}
+
+int test_vconv_win_ai_fatal_note_once(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    F.notes = 0;
+    F.headers = 0;
+    tts_msg_hr(F.ai_tok, VTT_ERROR, F.ai_speak_id, 0, 401);
+    ASSERT_EQ(F.notes, 1);
+    ASSERT_TRUE(strcmp(F.note,
+        "AI speech is off for this conversation: the speech provider refused the key (HTTP 401). "
+        "Replies are read with Windows speech.") == 0);
+    ASSERT_TRUE(strcmp(F.header, "AI speech failed: using Windows speech") != 0);   /* no header */
+    ASSERT_EQ(F.win_starts, 1);
+    ASSERT_EQ(F.speak_from, (size_t)0);
+    tts_msg_hr(F.win_tok, VTT_DONE, F.speak_id, 0, 0);
+    F.ai_starts = 0;
+    for (int i = 0; i < 2; i++) {
+        next_reply(VC_REPLY_B);
+        ASSERT_EQ(F.ai_starts, 0);                     /* Windows contexts only */
+        ASSERT_EQ(F.ai_speaks, 1);
+        tts_msg_hr(F.win_tok, VTT_DONE, F.speak_id, 0, 0);
+    }
+    ASSERT_EQ(F.notes, 1);                             /* once */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    /* a new conversation tries AI speech again */
+    voice_conv_start(0);
+    to_speaking();
+    ASSERT_EQ(F.ai_starts, 1);
+    ASSERT_EQ(F.ai_speaks, 2);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_ai_fatal_resolve(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    snprintf(F.resolve_err, sizeof F.resolve_err, "%s", "Enter a speech API key");
+    voice_conv_start(0);
+    to_speaking();
+    tts_msg_hr(F.ai_tok, VTT_ERROR, F.ai_speak_id, 0, VOICE_AIS_HR_RESOLVE);
+    ASSERT_EQ(F.resolve_calls, 1);
+    ASSERT_EQ(F.notes >= 1, 1);
+    ASSERT_TRUE(note_is("Enter a speech API key"));
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+int test_vconv_win_ai_fatal_format(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    tts_msg_hr(F.ai_tok, VTT_ERROR, F.ai_speak_id, 0, VOICE_AIS_HR_FORMAT);
+    ASSERT_TRUE(note_is("unsupported audio format"));
+    ASSERT_EQ(F.resolve_calls, 0);                     /* only RESOLVE asks the op */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* Voice off with an AI context alive quits it during the end. The order against voice_audio_stop
+ * (voice_ais_quit_all first, R36) lives in voice_win.c, which the wintest does not link: it is an
+ * inspection item for Task 11. */
+int test_vconv_win_ai_context_quit_on_voice_off(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    ASSERT_EQ(F.ai_live, 1);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_EQ(F.ai_live, 0);
+    ASSERT_EQ(F.tts_quit, 1);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* A fallback while a cut-in's duck is on keeps the duck on the Windows context (M6). */
+int test_vconv_win_ai_fallback_keeps_duck(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(1);
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, voice_conv_capture_token()));
+    to_speaking();
+    aud_event(VLN_DUCK);
+    ASSERT_EQ(F.volume, 18);
+    tts_msg_hr(F.ai_tok, VTT_ERROR, F.ai_speak_id, 30, VOICE_AIS_HR_NET);
+    ASSERT_EQ(F.win_starts, 1);
+    ASSERT_EQ(F.volume, 18);                           /* re-ducked after begin_speak's reset to 100 */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* An AI start that fails at conversation start does not fall back there: nothing is spoken yet, so
+ * no header and no Windows context; the first reply tries AI speech (M2). */
+int test_vconv_win_ai_start_failure_waits_for_speech(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    F.ai_start_fail = 1;
+    voice_conv_start(0);
+    ASSERT_EQ(F.ai_starts, 1);
+    ASSERT_EQ(F.win_starts, 0);
+    ASSERT_EQ(F.ai_headers, 0);
+    F.ai_start_fail = 0;
+    to_speaking();
+    ASSERT_EQ(F.ai_starts, 2);                         /* begin_speak started AI speech */
+    ASSERT_EQ(F.ai_speaks, 1);
+    ASSERT_EQ(F.win_starts, 0);
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    ASSERT_TRUE(voice_ledger_all_zero());
+    vc_end(w);
+    TEST_END();
+}
+
+/* A setting that cannot work still writes the note when its error arrives while nothing is playing
+ * (the reply was stopped), once per conversation (M3). */
+int test_vconv_win_ai_fatal_while_not_playing(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    start_ai();
+    voice_conv_start(0);
+    to_speaking();
+    const unsigned id = F.ai_speak_id;
+    const unsigned ai = F.ai_tok;
+    voice_conv_event(VCE_PRESS, 0, 0);                 /* stops the speech: not playing */
+    ASSERT_EQ(voice_conv_state(), VCS_LISTENING);
+    F.notes = 0;
+    tts_msg_hr(ai, VTT_ERROR, id, 0, 401);
+    ASSERT_EQ(F.notes >= 1, 1);
+    ASSERT_TRUE(note_is("the speech provider refused the key (HTTP 401)"));
+    F.ai_starts = 0;
+    next_reply(VC_REPLY_B);
+    ASSERT_EQ(F.ai_starts, 0);                         /* Windows speech from here on */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
     ASSERT_TRUE(voice_ledger_all_zero());
     vc_end(w);
     TEST_END();

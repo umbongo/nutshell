@@ -19,6 +19,8 @@
 #include "voice_stt_win.h"
 #include "voice_transcript.h"
 #include "voice_tts_win.h"
+#include "voice_aispeech_win.h"
+#include "voice_aispeech.h"
 #include "voice_voices.h"
 #include "voice_voices_win.h"
 #include "wav.h"
@@ -653,6 +655,11 @@ int voice_send_pressed(void)
     return 1;
 }
 
+void voice_on_external_send(void)
+{
+    if (g_audio_up && voice_conv_running()) voice_conv_external_send();
+}
+
 void voice_on_chat_stop(void)
 {
     /* The Stop already cancelled the work: the conversation ends its turn. */
@@ -789,23 +796,69 @@ static int rc_voice_index(const Settings *s, size_t n, int *using_auto)
     return idx >= 0 ? idx : voice_choose_auto(g_rc_voices, n);
 }
 
-static int rc_tts_start(unsigned token)
+/* The speech router: a token held by an AI speech context goes to the AI engine, every other to
+ * SAPI, so the glue's engine choice (voice_conv_win.c) is the only place that picks one. */
+static int rc_tts_start(unsigned token, int engine)
 {
     const Settings *s = ui_current_settings();
     const size_t n = voice_voices_list(g_rc_voices, VOICE_INFO_MAX);
     int using_auto;
-    const int idx = rc_voice_index(s, n, &using_auto);
+    int idx;
+    if (engine == VOICE_SPEECH_AI) return voice_ais_start(g_main, token);
+    idx = rc_voice_index(s, n, &using_auto);
     return voice_tts_start(g_main, token, idx >= 0 ? g_rc_voices[idx].id : "");
 }
 
 static void rc_tts_speak(unsigned token, unsigned id, const char *text, size_t from)
 {
+    if (voice_ais_owns(token)) {
+        const Settings *s = ui_current_settings();
+        VoiceAisTarget t;
+        char err[160];
+        const char *key = "";
+        memset(&t, 0, sizeof t);
+        if (s && voice_ais_resolve(s, &t, err, sizeof err)) key = voice_ais_key(s, &t);
+        else t.url[0] = '\0';   /* the engine posts VTT_ERROR(RESOLVE) at once */
+        voice_ais_speak(token, id, text, from, &t, key);
+        return;
+    }
     voice_tts_speak(token, id, text, from);
 }
 
-static void rc_tts_stop(unsigned token) { voice_tts_stop(token); }
-static void rc_tts_volume(unsigned token, int percent) { voice_tts_volume(token, percent); }
-static void rc_tts_quit(unsigned token) { voice_tts_quit(token, 3000); }
+static void rc_tts_stop(unsigned token)
+{
+    if (voice_ais_owns(token)) voice_ais_stop(token);
+    else voice_tts_stop(token);
+}
+
+static void rc_tts_volume(unsigned token, int percent)
+{
+    if (voice_ais_owns(token)) voice_ais_volume(token, percent);
+    else voice_tts_volume(token, percent);
+}
+
+static void rc_tts_quit(unsigned token)
+{
+    if (voice_ais_owns(token)) voice_ais_quit(token, 3000);
+    else voice_tts_quit(token, 3000);
+}
+
+static int rc_speech_engine(void)
+{
+    const Settings *s = ui_current_settings();
+    return (s && s->voice_mode == VOICE_MODE_CONVERSATION && s->voice_speech_engine == VOICE_SPEECH_AI)
+               ? VOICE_SPEECH_AI : VOICE_SPEECH_WINDOWS;
+}
+
+/* 1 with the reason in out when AI speech cannot resolve on the current settings. */
+static int rc_ai_resolve_error(char *out, size_t cap)
+{
+    const Settings *s = ui_current_settings();
+    VoiceAisTarget t;
+    if (!s || !out || cap == 0) return 0;
+    out[0] = '\0';
+    return voice_ais_resolve(s, &t, out, cap) ? 0 : 1;
+}
 static int rc_lock_reg(void) { return voice_lock_register(g_main); }
 static void rc_lock_unreg(void) { voice_lock_unregister(g_main); }
 
@@ -893,10 +946,13 @@ static int rc_notice_voice(const char *voice_name)
  * woman's voice is installed; names the voice replies will use. */
 static int rc_notice_due(char *name, size_t cap)
 {
-    const Settings *s = ui_current_settings();
-    const size_t n = voice_voices_list(g_rc_voices, VOICE_INFO_MAX);
-    int using_auto;
-    const int idx = rc_voice_index(s, n, &using_auto);
+    const Settings *s;
+    size_t n;
+    int using_auto, idx;
+    if (rc_speech_engine() == VOICE_SPEECH_AI) return 0;   /* the notice is for Windows speech only */
+    s = ui_current_settings();
+    n = voice_voices_list(g_rc_voices, VOICE_INFO_MAX);
+    idx = rc_voice_index(s, n, &using_auto);
     if (!voice_notice_due(g_rc_voices, n, idx, using_auto, g_rc_notice_shown)) return 0;
     if (idx >= 0) voice_display_name(&g_rc_voices[idx], name, cap);
     else snprintf(name, cap, "%s", "the Windows default voice");
@@ -915,7 +971,8 @@ static const VoiceConvOps k_conv_ops = {
     rc_note, rc_header,
     rc_live_begin, rc_live_replace, rc_drop_words, rc_lock_typing, rc_send_caption, rc_mic_ui,
     rc_box_has_text, rc_notice_voice,
-    rc_notice_due, rc_level, NULL, rc_dialog_open, rc_chat_same
+    rc_notice_due, rc_level, NULL, rc_dialog_open, rc_chat_same,
+    rc_speech_engine, rc_ai_resolve_error
 };
 
 /* What window.c and the panel route to the conversation (each is a no-op with none running). */
@@ -938,8 +995,26 @@ void voice_on_tts(LPARAM lp)
 {
     VoiceTtsMsg *m = (VoiceTtsMsg *)lp;
     if (!m) return;
+    /* A Play sample that failed after it started: its message is the conversation's no concern
+     * (its token is never the conversation's), so the Settings page, if open, shows why. */
+    if (m->kind == VTT_ERROR && m->token == VOICE_AIS_SAMPLE_TOKEN) settings_voice_sample_failed(m->hr);
     voice_conv_on_tts(m);
     free(m);
+}
+
+/* WM_VOICE_AIS: a speech worker's report. */
+void voice_on_ais(LPARAM lp)
+{
+    VoiceAisMsg *m = (VoiceAisMsg *)lp;
+    if (!m) return;
+    voice_ais_on_msg(m);
+    free(m);
+}
+
+/* The done guard of an AI speech context (VOICE_AIS_TIMER_BASE + slot). */
+void voice_on_ais_timer(UINT_PTR id)
+{
+    voice_ais_on_timer(id);
 }
 
 void voice_on_turn_idle(void)
@@ -1010,6 +1085,7 @@ void voice_feature_apply(HWND main)
         g_voice_filter = NULL;
         voice_conv_event(VCE_END, VCX_OFF, 0);   /* capture ended, speech quit, link closed, lock unregistered */
         voice_tts_quit_all(3000);   /* every speech context: a Play sample, or a thread left after an error */
+        voice_ais_quit_all(3000);   /* R36: no AI speech push can begin once the audio thread is asked to stop */
         stop_everything();
         voice_stt_cancel_all();   /* an upload in flight is cancelled and joined */
         voice_live_reap(3000);    /* closes and joins every live session */
@@ -1027,6 +1103,7 @@ void voice_feature_shutdown(void)
     g_voice_filter = NULL;
     voice_conv_event(VCE_END, VCX_OFF, 0);
     voice_tts_quit_all(3000);   /* every speech context: a Play sample, or a thread left after an error */
+    voice_ais_quit_all(3000);   /* R36: before voice_audio_stop */
     stop_everything();
     voice_stt_cancel_all();
     voice_live_reap(3000);
@@ -1109,6 +1186,13 @@ void voice_on_audio_msg(WPARAM wp, LPARAM lp)
         if (c) on_captured(c);
         return;
     }
+    /* The render client's messages are the AI speech engine's alone (it frees the VoiceRenderMsg
+     * of VAM_PLAYED and VAM_PLAY_DONE, so nothing else may see those). */
+    if (wp == VAM_PLAYED || wp == VAM_PLAY_DONE || wp == VAM_RENDER_ERROR) {
+        voice_ais_on_audio((UINT)wp, lp);
+        return;
+    }
+    if (wp == VAM_RENDER_OPENED) return;   /* nothing waits for it: a speak pushes at once */
     /* The conversation's capture: its events, finished turns, opening report and level (the
      * glue frees a turn nobody wants). */
     if (wp == VAM_CONV_OPENED || wp == VAM_CONV_EVENT || wp == VAM_CONV_TURN) {

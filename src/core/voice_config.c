@@ -62,6 +62,16 @@ int voice_mode_from_json(const char *s)
     return (s && strcmp(s, "conversation") == 0) ? VOICE_MODE_CONVERSATION : VOICE_MODE_DICTATION;
 }
 
+const char *voice_speech_json(int e)
+{
+    return e == VOICE_SPEECH_AI ? "ai" : "windows";
+}
+
+int voice_speech_from_json(const char *s)
+{
+    return (s && strcmp(s, "ai") == 0) ? VOICE_SPEECH_AI : VOICE_SPEECH_WINDOWS;
+}
+
 int voice_pause_clamp(int ms)
 {
     if (ms < VOICE_PAUSE_MIN_MS) return VOICE_PAUSE_MIN_MS;
@@ -119,6 +129,22 @@ void voice_mode_enables(int voice_on, int mode, int ptt_mode, VoiceModeEnables *
     out->conversation = voice_on && conv;
 }
 
+void voice_speech_enables(int conversation_enabled, int engine, const char *provider,
+                          int key_shared, int uk_voice_installed, VoiceSpeechEnables *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!conversation_enabled) return;
+    const int ai = engine == VOICE_SPEECH_AI;
+    const int custom = provider && strcmp(provider, "custom") == 0;
+    out->speech = 1;
+    out->ai_rows = ai;
+    out->url = ai && custom;
+    out->key = ai && !key_shared;
+    out->style = ai && custom;
+    out->uk_line = !ai && !uk_voice_installed;
+    out->privacy = ai;
+}
+
 int voice_gain_clamp(int db)
 {
     if (db < VOICE_GAIN_MIN_DB) return VOICE_GAIN_MIN_DB;
@@ -155,6 +181,16 @@ void voice_settings_default(Settings *s)
     s->voice_pause_ms = VOICE_PAUSE_DEFAULT_MS;
     s->voice_windows_voice[0] = '\0';
     s->voice_windows_voice_name[0] = '\0';
+    s->voice_speech_engine = VOICE_SPEECH_WINDOWS;
+    (void)snprintf(s->voice_tts_provider, sizeof(s->voice_tts_provider), "%s",
+                   VOICE_AIS_DEFAULT_PROVIDER);
+    s->voice_tts_url[0] = '\0';
+    s->tts_api_key[0] = '\0';
+    s->tts_api_key_for[0] = '\0';
+    s->tts_api_key_enc_preserved[0] = '\0';
+    s->voice_ai_voice[0] = '\0';
+    s->voice_ai_tts_model[0] = '\0';
+    s->voice_ai_style[0] = '\0';
 }
 
 void voice_settings_validate(Settings *s)
@@ -166,6 +202,7 @@ void voice_settings_validate(Settings *s)
     if (s->voice_mic_delay_ms < VOICE_MIC_DELAY_MIN) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MIN;
     if (s->voice_mic_delay_ms > VOICE_MIC_DELAY_MAX) s->voice_mic_delay_ms = VOICE_MIC_DELAY_MAX;
     s->voice_mic_gain_db = voice_gain_clamp(s->voice_mic_gain_db);
+    if (s->voice_speech_engine != VOICE_SPEECH_AI) s->voice_speech_engine = VOICE_SPEECH_WINDOWS;
     if (s->voice_mode != VOICE_MODE_CONVERSATION) s->voice_mode = VOICE_MODE_DICTATION;
     s->voice_pause_ms = voice_pause_clamp(s->voice_pause_ms);
     if (s->voice_ptt_key < 0 || s->voice_ptt_key >= (int)VOICE_PTT_COUNT)
@@ -236,6 +273,14 @@ uint64_t voice_settings_digest(const Settings *s)
     h = fnv_int(h, s->voice_pause_ms);
     h = fnv_str(h, s->voice_windows_voice);
     h = fnv_str(h, s->voice_windows_voice_name);
+    h = fnv_int(h, s->voice_speech_engine);
+    h = fnv_str(h, s->voice_tts_provider);
+    h = fnv_str(h, s->voice_tts_url);
+    h = fnv_str(h, s->tts_api_key);
+    h = fnv_str(h, s->tts_api_key_for);
+    h = fnv_str(h, s->voice_ai_voice);
+    h = fnv_str(h, s->voice_ai_tts_model);
+    h = fnv_str(h, s->voice_ai_style);
     h = fnv_str(h, s->ai_provider);
     h = fnv_str(h, s->ai_api_key);
     h = fnv_str(h, s->ai_custom_url);

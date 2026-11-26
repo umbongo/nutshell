@@ -77,13 +77,19 @@ Write tests before implementation code. Include corner cases, positive and negat
 - **Hand off to sub-agents wherever possible, without letting the quality
   of the result suffer.** The purpose is to curate what enters the main
   session's context. A survey returns conclusions; an implementation
-  returns a diff and a test summary; a review returns ranked findings.
+  returns its commits, a diff stat and a test summary; a review returns
+  ranked findings.
   Raw file contents, transcripts and intermediate detail stay in the
   sub-agent. The main session keeps the decisions, the diffs it reviews,
   the reports and the key learnings.
 - **Choose the model for the job.** Opus for judgement: review, critique,
-  orchestrating a multi-step package. Sonnet for code and tests. Haiku for
+  a per-task orchestrator. Sonnet for code and tests. Haiku for
   mechanical, single-pattern work. A sub-agent may spawn its own.
+- **The main session runs a plan itself** (my rule of 2026-11-26): it
+  dispatches each task's implementer, reviewer and fixer and keeps the
+  plan's progress in a file. No sub-agent spans two tasks, because a
+  long-lived orchestrator was the largest token cost measured (the
+  `feature-workflow` skill, "Running a plan").
 - **Brief narrowly.** The files and cases the task touches, not the whole
   tree; what to return and in what shape. A brief that cannot be written
   clearly means the task is not understood well enough to hand off.
@@ -92,11 +98,13 @@ Write tests before implementation code. Include corner cases, positive and negat
   longer than the change. Say so in one line.
 - **Quality checks are sub-agents too.** A second opinion on a decision is
   the `critique` skill; a review of a diff is an Opus agent given the diff,
-  not a summary of it. Never poll a running agent; its completion
-  notification is the signal. I see the findings of every Opus review
-  before any is fixed: an orchestrator returns them to the main session
-  instead of fixing them itself, the main session shows them to me, and
-  the fixes then go ahead unless I say otherwise.
+  not a summary of it. A branch gets one final whole-branch review, by
+  whichever of Opus and Fable did not review its tasks, never two (my rule
+  of 2026-11-26). Never poll a running agent; its completion
+  notification is the signal. I see the findings of every Opus or Fable
+  review before any is fixed: the main session shows them to me before it
+  dispatches a fixer (a per-task orchestrator returns them instead of
+  fixing them itself), and the fixes then go ahead unless I say otherwise.
 - **Attribution**: every commit and pull request lists each model that
   touched the change and what it did (see "Git commits" below).
 

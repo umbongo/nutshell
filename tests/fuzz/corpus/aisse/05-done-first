@@ -1,0 +1,5 @@
+event: speech.audio.done
+data: {"type":"speech.audio.done","usage":{}}
+
+data: {"type":"speech.audio.delta","audio_data":"QUJDRA=="}
+

@@ -5,7 +5,7 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-11-21 (the ask states the merge count since the marker). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-26 (token use measured at every retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
@@ -54,6 +54,22 @@ worktrees and leaves the tree ready for a new session.
    `gh pr view N --json statusCheckRollup --jq '.statusCheckRollup[]|select(.name=="Native tests").detailsUrl'`,
    then `gh api repos/umbongo/nutshell/actions/jobs/<id>/logs | grep 'Tests
    Run'` (real libssh2, not the stub; logs expire). Without `gh`: not measured.
+   **Token use** (maintainer, 2026-11-26), on `automaton` only, where the
+   transcripts are: run `token-usage.py` (beside this file) with
+   `--since` the newest `docs/token-usage/*.json` file's `until` (never the
+   last retrospective's date: the windows must not overlap), `--until` now,
+   `--repo ~/nutshell --compare` that file, and save it there as
+   `YYYY-MM-DD-<scope>.json` (`--json`). Lead with what is comparable: the
+   controller's cost (main session plus orchestrators) per implementer
+   agent, the idle cache rewrites, the compactions and the sub-agent
+   start-up median; then the by-model shares, since the index does not
+   weigh Opus against Sonnet. The per-merge figure comes last: work and
+   merges fall in different windows (voice PR 3 was mostly spent before
+   2026-11-26 and merges after it), so name any pull request that
+   straddles the boundary. Say what changed in the loop between the two
+   files, and record the result in `docs/token-usage/README.md`. Claude
+   Code can delete transcripts after `cleanupPeriodDays` (30 by default);
+   if a window's early requests are gone, say so rather than compare.
 2. **Compact the notes document.** Move finished items to "Done" with the
    PR number and commit, keep "Open" in priority order, fix any counts.
    Do not delete history; the done list is the project's memory of why.

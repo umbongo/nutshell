@@ -155,7 +155,7 @@ WIN_ONLY_TESTS = tests/test_winhttp_open_win.c tests/test_icons.c tests/test_loc
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
                  tests/test_pw_reveal_win.c tests/test_telnet_io_win.c \
                  tests/test_ns_tip_win.c tests/test_settings_label_win.c \
-                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_stt_win.c tests/test_voice_net_win.c tests/test_voice_ptt_win.c tests/test_voice_ws_win.c tests/test_voice_live_win.c tests/test_voice_lock_win.c tests/test_voice_tts_win.c tests/test_voice_conv_win.c tests/ws_loopback_win.c tests/test_ns_slider_win.c tests/test_ns_draw_level_meter_win.c
+                 tests/test_notice_dlg_win.c tests/test_voice_audio_win.c tests/test_voice_render_win.c tests/test_voice_stt_win.c tests/test_voice_net_win.c tests/test_voice_ptt_win.c tests/test_voice_ws_win.c tests/test_voice_live_win.c tests/test_voice_lock_win.c tests/test_voice_tts_win.c tests/test_voice_aispeech_win.c tests/test_voice_conv_win.c tests/ws_loopback_win.c tests/http_loopback_win.c tests/test_ns_slider_win.c tests/test_ns_draw_level_meter_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -238,7 +238,7 @@ ifeq ($(origin FUZZ_CC),undefined)
 FUZZ_CC := $(firstword $(foreach c,clang clang-18 clang-17 clang-16,$(shell command -v $(c))))
 endif
 FUZZ_TIME    ?= 60
-FUZZ_TARGETS = json term exec_markers cmd_classify html url runcmd
+FUZZ_TARGETS = json term exec_markers cmd_classify html url runcmd aisse wavstream
 FUZZ_DIR     = build/fuzz
 FUZZ_BINS    = $(FUZZ_TARGETS:%=$(FUZZ_DIR)/%)
 FUZZ_CFLAGS  = $(TEST_CFLAGS) -Wno-ignored-attributes -Wno-unknown-warning-option
@@ -314,15 +314,16 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    tests/test_notice_dlg_win.c \
                    src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c \
-                   src/ui/voice_audio_win.c src/core/wav.c src/core/voice_vad.c src/core/voice_listen.c tests/test_voice_audio_win.c \
+                   src/ui/voice_audio_win.c src/core/wav.c src/core/voice_vad.c src/core/voice_listen.c src/core/voice_playq.c tests/test_voice_audio_win.c tests/test_voice_render_win.c \
                    src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/json_scan.c src/core/voice_lang.c src/core/voice_gate.c \
                    src/core/voice_config.c src/core/base64.c src/core/json_validate.c src/config/json_parser.c src/config/json_tokenizer.c src/core/vector.c \
                    tests/test_voice_stt_win.c src/ui/voice_net_win.c tests/test_voice_net_win.c src/core/voice_ptt.c tests/test_voice_ptt_win.c \
-                   src/ui/voice_ws_win.c tests/test_voice_ws_win.c tests/ws_loopback_win.c \
+                   src/ui/voice_ws_win.c tests/test_voice_ws_win.c tests/ws_loopback_win.c tests/http_loopback_win.c \
                    src/ui/voice_live_win.c src/core/voice_live.c src/core/voice_resample.c src/core/voice_sgate.c src/core/voice_ledger.c tests/test_voice_live_win.c src/ui/voice_lock_win.c tests/test_voice_lock_win.c \
                    src/ui/ns_slider.c src/core/ns_slider_math.c tests/test_ns_slider_win.c src/core/voice_level.c tests/test_ns_draw_level_meter_win.c \
                    src/ui/voice_tts_win.c src/ui/voice_voices_win.c src/core/voice_speak.c src/core/voice_voices.c tests/test_voice_tts_win.c \
                    src/ui/voice_conv_win.c src/core/voice_conv.c src/core/voice_echo.c src/core/voice_transcript.c tests/test_voice_conv_win.c \
+                   src/ui/voice_aispeech_win.c src/core/voice_aispeech.c src/core/voice_wavstream.c src/core/sse_line.c tests/test_voice_aispeech_win.c \
                    tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
@@ -498,7 +499,7 @@ selftest-wine: $(TARGET)
 		echo "[skip] selftest-wine needs wine and xvfb-run"; \
 	else \
 		set -e; \
-		for m in off voiceoff on conv sapi; do \
+		for m in off voiceoff on conv sapi ai; do \
 			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
 			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
 			case $$m in \
@@ -508,6 +509,7 @@ selftest-wine: $(TARGET)
 			voiceoff) cp tests/selftest/nutshell-ai-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			on) cp tests/selftest/nutshell-voice-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			conv|sapi) cp tests/selftest/nutshell-voice-conv.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			ai) cp tests/selftest/nutshell-voice-ai.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			esac; \
 			extra=; [ $$m = sapi ] && extra=--self-report-sapi; \
 			( cd $(SELFTEST_DIR)/$$m && WINEPREFIX=$(SELFTEST_PREFIX) WINEDEBUG=-all \

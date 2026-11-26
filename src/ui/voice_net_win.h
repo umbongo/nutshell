@@ -16,7 +16,7 @@
 typedef enum {
     VNK_STT_UPLOAD = 1,
     VNK_LIVE_WS    = 2,
-    VNK_TTS        = 3    /* a seam for a later change: declared, unused */
+    VNK_TTS        = 3    /* the AI speech fetch (streaming POST, ai_http_post_stream_ex) */
 } VoiceNetKind;
 
 /* voice_gate_on() or NULL with ERROR_ACCESS_DENIED; counts the open;

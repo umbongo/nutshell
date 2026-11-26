@@ -1,1 +1,6 @@
 tests/fixtures/*.bin binary
+
+# AI speech fixtures and fuzz seeds: raw stream bytes, never normalised
+tests/fixtures/voice_tts/* binary
+tests/fuzz/corpus/aisse/* binary
+tests/fuzz/corpus/wavstream/* binary

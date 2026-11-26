@@ -48,8 +48,12 @@ int ai_http_post_ct(const char *url, const char * const *headers,
  * void *, so this header stays free of windows.h): the call never opens or
  * closes it, so one session serves a first try and its retry. The timeouts are
  * resolve 10 s, connect 10 s and the given send and receive values (ms), set
- * on the session with WinHttpSetTimeouts; do not share the session between
- * concurrent calls. A NULL session fails with "No session". Off Windows it
+ * on the session with WinHttpSetTimeouts (a refusal is an error); do not share the
+ * session between concurrent calls. The request never follows a redirect (the
+ * bearer key must not move to another host): a 3xx is returned as -1 with
+ * status_code set and the error "Redirect refused (HTTP n)", and a refusal of
+ * that policy fails the call before anything is sent. A NULL session fails with
+ * "No session". Off Windows it
  * behaves as the stub of ai_http_post_ct.
  */
 int ai_http_post_ct_ex(void *session, const char *url, const char * const *headers,
@@ -97,6 +101,27 @@ int ai_http_post_stream(const char *url, const char * const *headers,
                         AiStreamCallback cb, void *userdata,
                         int *status_out, char *error, size_t error_size,
                         AiNetCancel *nc);
+
+/*
+ * ai_http_post_stream on a session the caller owns (a WinHTTP HINTERNET passed as
+ * void *): the call never opens or closes it. Timeouts: resolve 10 s, connect 10 s,
+ * send 30 s and receive recv_ms, set on the session. It never follows a redirect
+ * (WINHTTP_OPTION_REDIRECT_POLICY_NEVER), so a bearer key in `headers` is never
+ * re-sent to another host: a 3xx comes back as its status, rc -1, the body in
+ * `error`. Same callback, status and error contract as ai_http_post_stream; a NULL
+ * session fails with the error "No session". Do not share the session between
+ * concurrent calls. Off Windows it behaves as the stub of ai_http_post_stream.
+ */
+int ai_http_post_stream_ex(void *session, const char *url, const char * const *headers,
+                           const char *body, size_t body_len, int recv_ms,
+                           AiStreamCallback cb, void *userdata,
+                           int *status_out, char *error, size_t error_size,
+                           AiNetCancel *nc);
+
+/* TEST-ONLY seam: while on, the redirect-policy option of ai_http_post_stream_ex and of
+ * ai_http_post_ct_ex (the calls on a caller's session) is reported as refused (a no-op off
+ * Windows). */
+void ai_http_test_fail_redirect_policy(int on);
 
 /* Free the response body. Safe to call with NULL body. */
 void ai_http_response_free(AiHttpResponse *resp);

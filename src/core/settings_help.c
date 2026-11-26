@@ -575,6 +575,81 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "\nDefault: none, as Automatic is used.",
       "none, as Automatic is used",
       0, 0, 0u),
+    E(SH_VOICE_SPEECH, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Speech:",
+      NULL,
+      "Speech:\n\nWindows speech uses a voice installed on this PC. AI speech "
+      "sends each reply's text to the speech provider and plays the "
+      "AI-generated voice it returns. If AI speech fails, the rest of the "
+      "reply is read with Windows speech. Conversation mode only."
+      "\nDefault: Windows speech.",
+      "Windows speech",
+      0, 0, 0u),
+    E(SH_VOICE_TTS_PROVIDER, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Speech provider:",
+      NULL,
+      "Speech provider:\n\nWho turns the reply text into speech: Mistral "
+      "(Voxtral, English (UK) voices), or Custom (an OpenAI-compatible "
+      "/audio/speech, for example a Kokoro server on your network). Shown "
+      "when Speech is AI speech."
+      "\nDefault: Mistral.",
+      "Mistral",
+      0, 0, 0u),
+    E(SH_VOICE_TTS_URL, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Speech base URL:",
+      NULL,
+      "Speech base URL:\n\nThe address of the Custom speech server. A pasted "
+      "/audio/speech is trimmed. The text of each spoken reply, and the "
+      "speech key, go to this server. An http:// address is not encrypted."
+      "\nDefault: none.",
+      "none",
+      0, 0, 0u),
+    E(SH_VOICE_TTS_KEY, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Speech API key:",
+      NULL,
+      "Speech API key:\n\nShown only when the speech provider is not the "
+      "speech-to-text one. It is kept encrypted for this Windows user and "
+      "only for the provider it was entered for. When the providers are the "
+      "same, the speech-to-text key is used."
+      "\nDefault: none; the speech-to-text key is used when the provider is "
+      "the same.",
+      "none; the speech-to-text key is used when the provider is the same",
+      0, 0, 0u),
+    E(SH_VOICE_AI_VOICE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "AI voice:",
+      NULL,
+      "AI voice:\n\nThe voice the speech provider reads replies in. Empty "
+      "means the provider's default, which is Mary for Mistral. Custom needs "
+      "one, such as bf_emma on a Kokoro server."
+      "\nDefault: the provider's default (for Mistral, Mary, British English).",
+      "the provider's default (for Mistral, Mary, British English)",
+      0, 0, 0u),
+    E(SH_VOICE_AI_MODEL, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "AI speech model:",
+      NULL,
+      "AI speech model:\n\nThe speech model the provider uses. Empty means "
+      "the provider's default. Custom needs one, such as the model name your "
+      "server lists."
+      "\nDefault: the provider's default.",
+      "the provider's default",
+      0, 0, 0u),
+    E(SH_VOICE_AI_STYLE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Accent and style:",
+      NULL,
+      "Accent and style:\n\nCustom only. What you type here is sent to the "
+      "speech server as instructions, for example a calm British accent. "
+      "Leave it empty to send none."
+      "\nDefault: none.",
+      "none",
+      0, 0, 0u),
+    E(SH_VOICE_PLAY_SAMPLE, SETTINGS_PAGE_VOICE, SH_KIND_ACTION,
+      "Play sample",
+      NULL,
+      "Play sample\n\nSpeaks a short sentence with the chosen speech and "
+      "voice, using the values on this page before you press Save. It sends "
+      "that sentence to the speech provider when AI speech is chosen.",
+      NULL,
+      0, 0, 0u),
 
     /* AI_WEB */
     E(SH_AI_WEB_FETCH, SETTINGS_PAGE_AI_WEB, SH_KIND_SETTING,

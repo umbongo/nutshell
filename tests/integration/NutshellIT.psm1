@@ -747,6 +747,8 @@ function New-NutshellTestEnv {
         voice_mic_delay_ms = 150; voice_auto_send = $false
         voice_mode = "dictation"; voice_pause_ms = 1200
         voice_windows_voice = ""; voice_windows_voice_name = ""
+        voice_speech_engine = "windows"; voice_tts_provider = "mistral"; voice_tts_url = ""
+        tts_api_key = ""; voice_ai_voice = ""; voice_ai_tts_model = ""; voice_ai_style = ""
         voice_defaults_rev = 3   # internal marker, last in config_save() (not in the known-key table)
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }

@@ -1,4 +1,4 @@
-/* The selftest configs (the three files under tests/selftest) and the integration harness's
+/* The selftest configs (the files under tests/selftest) and the integration harness's
  * New-NutshellTestEnv (tests/integration/NutshellIT.psm1) must be complete: a
  * missing key shows the modal upgrade notice on every launch, which hangs
  * `make selftest-wine` and the harness. A new key in the loader's table must
@@ -55,6 +55,7 @@ int test_selftest_configs_complete(void)
         "tests/selftest/nutshell-ai-on.config",
         "tests/selftest/nutshell-voice-on.config",
         "tests/selftest/nutshell-voice-conv.config",
+        "tests/selftest/nutshell-voice-ai.config",
     };
     for (size_t f = 0; f < sizeof files / sizeof files[0]; f++) {
         char *t = slurp(files[f]);
@@ -99,6 +100,7 @@ int test_selftest_conv_config_mode(void)
     static const struct { const char *src; int mode; } cases[] = {
         { "tests/selftest/nutshell-voice-conv.config", VOICE_MODE_CONVERSATION },
         { "tests/selftest/nutshell-voice-on.config",   VOICE_MODE_DICTATION },
+        { "tests/selftest/nutshell-voice-ai.config",   VOICE_MODE_CONVERSATION },
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         char *t = slurp(cases[i].src);
@@ -117,6 +119,15 @@ int test_selftest_conv_config_mode(void)
             ASSERT_TRUE(c->settings.voice_enabled);
             ASSERT_TRUE(c->settings.ai_enabled);
             ASSERT_EQ(c->settings.voice_mode, cases[i].mode);
+            /* only the ai config speaks through the AI provider */
+            int is_ai = strstr(cases[i].src, "voice-ai.config") != NULL;
+            ASSERT_EQ(c->settings.voice_speech_engine, is_ai ? VOICE_SPEECH_AI : VOICE_SPEECH_WINDOWS);
+            if (is_ai) {
+                ASSERT_STR_EQ(c->settings.voice_tts_provider, "custom");
+                ASSERT_STR_EQ(c->settings.voice_tts_url, "http://127.0.0.1:9/v1");
+                ASSERT_STR_EQ(c->settings.voice_ai_tts_model, "kokoro");
+                ASSERT_STR_EQ(c->settings.voice_ai_voice, "bf_emma");
+            }
             config_free(c);
         }
         remove(tmp);

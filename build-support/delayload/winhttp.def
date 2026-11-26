@@ -4,7 +4,7 @@
 ; only the symbols nutshell.exe actually calls -- the AI panel's HTTP client
 ; (src/ui/ai_http_win.c) and its URL parsing (src/core/ai_tool_web_fetch.c,
 ; src/core/ai_tool_web_search.c) and the voice files
-; (src/ui/voice_stt_win.c through ai_http_win.c, src/ui/voice_net_win.c, and the live
+; (src/ui/voice_stt_win.c through ai_http_win.c, AI speech through ai_http_post_stream_ex, src/ui/voice_net_win.c, and the live
 ; transcription WebSocket client src/ui/voice_ws_win.c) -- so `dlltool --output-delaylib` can build
 ; a delay-import library for exactly what's used, no more. Hand-written,
 ; not gendef'd: gendef needs the real DLL and reads its whole export table,

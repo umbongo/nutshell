@@ -1,0 +1,2 @@
+event: speech.audio.delta
+data: {"type": "speech.audio.delta", "audio_data": "QUJD
