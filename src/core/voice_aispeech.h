@@ -91,6 +91,15 @@ int  voice_ais_failure_fatal(long hr);
 /* The reason for the chat note, no full stop: for RESOLVE it is resolve_err. */
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap);
 
+/* The most audio one request may deliver: 5 minutes of 24 kHz frames. A server that sends
+ * more (an endless body) fails that chunk as VOICE_AIS_HR_STREAM and the request is closed. */
+#define VOICE_AIS_MAX_FRAMES 7200000u
+/* 1 when `total` frames already taken plus `add` more pass VOICE_AIS_MAX_FRAMES (exactly the
+ * cap is allowed); the addition cannot wrap. */
+int  voice_ais_audio_over_cap(uint64_t total, uint64_t add);
+/* The same against any cap (the wintest seam lowers it): 1 when total + add > cap. */
+int  voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap);
+
 /* Mistral's stream, one SSE line at a time (lines from sse_line_feed). */
 typedef enum { VAIS_EV_NONE = 0, VAIS_EV_AUDIO, VAIS_EV_DONE, VAIS_EV_ERROR } VoiceAisEvKind;
 typedef struct { char event[64]; int audio_seen; } VoiceAisSse;

@@ -299,6 +299,17 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
     }
 }
 
+int voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap)
+{
+    if (total > cap) return 1;
+    return add > cap - total;
+}
+
+int voice_ais_audio_over_cap(uint64_t total, uint64_t add)
+{
+    return voice_ais_frames_over(total, add, VOICE_AIS_MAX_FRAMES);
+}
+
 /* ---- Mistral's events ---- */
 
 #define EV_DELTA "speech.audio.delta"

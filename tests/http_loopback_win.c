@@ -19,6 +19,7 @@ struct HttpLoop {
     HANDLE           thread;
     volatile LONG    stop;
     volatile LONG    requests;
+    volatile LONG64  endless_sent;   /* bytes an endless mode wrote */
     CRITICAL_SECTION lock;
     char             head[4096];
     unsigned char   *body;       /* the last request body */
@@ -154,6 +155,16 @@ static void send_sse(SOCKET s, const unsigned char *p, size_t n)
     send_all(s, "0\r\n\r\n", 5);
 }
 
+/* The endless modes: zero-filled 32 KiB chunks until a send fails (the client closed) or stop. */
+static void send_endless(HttpLoop *h, SOCKET s)
+{
+    static unsigned char zeros[32768];
+    while (!h->stop) {
+        if (send_chunk(s, zeros, sizeof(zeros)) != 0) return;
+        InterlockedExchangeAdd64(&h->endless_sent, (LONG64)sizeof(zeros));
+    }
+}
+
 static unsigned char *read_file(const char *path, size_t *n)
 {
     FILE *f = fopen(path, "rb");
@@ -259,6 +270,26 @@ static void answer(HttpLoop *h, SOCKET c)
         send_sse(c, (const unsigned char *)done, sizeof(done) - 1);
         break;
     }
+    case HLS_WAV_ENDLESS: {
+        HlAudio a;
+        memset(&a, 0, sizeof(a));
+        a.seconds = 0.01;
+        unsigned char *w = hl_wav_build(&a, 24000, &n);
+        if (!w) break;
+        if (send_head(c, "200 OK", "audio/wav", "", -1) == 0 && send_chunk(c, w, n) == 0)
+            send_endless(h, c);
+        free(w);
+        break;
+    }
+    case HLS_NOTWAV: {
+        static const char id3[] = "ID3\4\0\0\0\0\0\0 this is an mp3, not a WAV stream";
+        if (send_head(c, "200 OK", "audio/mpeg", "", (long)sizeof(id3) - 1) == 0)
+            send_all(c, id3, sizeof(id3) - 1);
+        break;
+    }
+    case HLS_500_ENDLESS:
+        if (send_head(c, "500 Internal Server Error", "text/plain", "", -1) == 0) send_endless(h, c);
+        break;
     case HLS_401: send_status_body(c, "401 Unauthorized", "{\"error\":\"invalid key\"}"); break;
     case HLS_404: send_status_body(c, "404 Not Found", "{\"error\":\"no such model\"}"); break;
     case HLS_422: send_status_body(c, "422 Unprocessable Entity", "{\"error\":\"unknown field\"}"); break;
@@ -363,6 +394,8 @@ const char *hl_request_body(HttpLoop *h, size_t *len)
     if (len) *len = h ? h->body_len : 0;
     return h && h->body ? (const char *)h->body : "";
 }
+
+unsigned long long hl_bytes_sent(HttpLoop *h) { return h ? (unsigned long long)h->endless_sent : 0; }
 
 int hl_requests(HttpLoop *h) { return h ? (int)h->requests : 0; }
 

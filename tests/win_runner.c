@@ -195,6 +195,8 @@ int test_voice_ais_mistral_capture(void);
 int test_voice_ais_sse_error_event(void);
 int test_voice_ais_sse_done_only(void);
 int test_voice_ais_badrate_is_format(void);
+int test_voice_ais_endless_audio_capped(void);
+int test_voice_ais_endless_error_body_capped(void);
 int test_voice_ais_second_header_fails(void);
 int test_voice_ais_empty_body_fails(void);
 int test_voice_ais_http_401(void);
@@ -655,6 +657,8 @@ int main(int argc, char **argv)
     failed += test_voice_ais_sse_error_event();
     failed += test_voice_ais_sse_done_only();
     failed += test_voice_ais_badrate_is_format();
+    failed += test_voice_ais_endless_audio_capped();
+    failed += test_voice_ais_endless_error_body_capped();
     failed += test_voice_ais_second_header_fails();
     failed += test_voice_ais_empty_body_fails();
     failed += test_voice_ais_http_401();

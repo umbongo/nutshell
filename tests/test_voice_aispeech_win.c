@@ -1124,6 +1124,54 @@ int test_voice_ais_partial_frame_fails(void)
     TEST_END();
 }
 
+/* F1: a Custom server that never stops sending audio. The worker fails the chunk as a stream
+ * failure once the cap's worth of audio has been taken, closes the request (the server's sends
+ * then fail) and queues no more than the cap. Wine moves this body at about 70 KB/s, so the
+ * test lowers the cap (the seam) to 10 s of audio; the real cap's arithmetic is a native test. */
+int test_voice_ais_endless_audio_capped(void)
+{
+    TEST_BEGIN();
+    const uint64_t cap_frames = 24000ull * 10;
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    HttpLoop *h = hl_start(HLS_WAV_ENDLESS, NULL);
+    ASSERT_NOT_NULL(h);
+    if (w && h) {
+        voice_ais_test_max_frames(cap_frames);
+        VoiceAisTarget t = vr_target(hl_port(h), VAIS_SHAPE_OPENAI);
+        ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+        const ULONGLONG t0 = GetTickCount64();
+        voice_ais_speak(VA_TOKEN, 1, "One. Two.", 0, &t, VR_KEY);
+        ASSERT_EQ(va_wait_end(1, 30000), 1);
+        ASSERT_TRUE(GetTickCount64() - t0 < 30000);
+        va_pump(100);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+        ASSERT_EQ(va_count(VTT_ERROR, 1), 1);
+        ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+        /* the server wrote at least the cap's bytes (2 per frame) and not an unbounded amount */
+        const unsigned long long cap_bytes = cap_frames * 2ull;
+        ASSERT_TRUE(hl_bytes_sent(h) >= cap_bytes);
+        ASSERT_TRUE(hl_bytes_sent(h) < cap_bytes + 32ull * 1024 * 1024);
+        /* the play queue holds no more than the cap's 10 s */
+        ASSERT_TRUE(voice_audio_render_queued_ms() <= 10000 + 100);
+        voice_ais_quit(VA_TOKEN, 3000);
+        ASSERT_EQ(voice_ledger_all_zero(), 1);
+        voice_ais_test_max_frames(0);
+    }
+    if (h) hl_stop(h);
+    va_end(w);
+    TEST_END();
+}
+
+/* F1: an error status with a body that never ends: the body read stops at 64 KB, the request is
+ * closed and the status still decides (500). */
+int test_voice_ais_endless_error_body_capped(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(vr_expect_custom(HLS_500_ENDLESS, 500), 0);
+    TEST_END();
+}
+
 /* A server that never answers: quit fires the request's token and returns well inside 4 s. */
 int test_voice_ais_quit_while_server_hangs(void)
 {

@@ -82,5 +82,7 @@ AiNetCancel *voice_ais_job_nc(void *job);
 
 /* TEST-ONLY seam, never product code: the cap on chunks per reply (0 restores the default). */
 void voice_ais_test_max_chunks(size_t n);
+/* TEST-ONLY seam: the cap on decoded frames per request (0 restores VOICE_AIS_MAX_FRAMES). */
+void voice_ais_test_max_frames(uint64_t n);
 
 #endif /* NUTSHELL_VOICE_AISPEECH_WIN_H */

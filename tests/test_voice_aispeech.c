@@ -595,6 +595,33 @@ int test_vais_failure_reasons(void)
     TEST_END();
 }
 
+/* The cap on the audio one request may deliver: 5 minutes at 24 kHz. */
+int test_vais_audio_cap(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((unsigned long)VOICE_AIS_MAX_FRAMES, 7200000UL);
+    ASSERT_EQ(voice_ais_audio_over_cap(0, 0), 0);
+    ASSERT_EQ(voice_ais_audio_over_cap(0, VOICE_AIS_MAX_FRAMES), 0);       /* exactly the cap */
+    ASSERT_EQ(voice_ais_audio_over_cap(0, (uint64_t)VOICE_AIS_MAX_FRAMES + 1), 1);
+    ASSERT_EQ(voice_ais_audio_over_cap(VOICE_AIS_MAX_FRAMES - 1, 1), 0);
+    ASSERT_EQ(voice_ais_audio_over_cap(VOICE_AIS_MAX_FRAMES - 1, 2), 1);
+    ASSERT_EQ(voice_ais_audio_over_cap(VOICE_AIS_MAX_FRAMES, 0), 0);
+    ASSERT_EQ(voice_ais_audio_over_cap(VOICE_AIS_MAX_FRAMES, 1), 1);
+    ASSERT_EQ(voice_ais_audio_over_cap(3600000, 3600000), 0);
+    ASSERT_EQ(voice_ais_audio_over_cap(3600000, 3600001), 1);
+    /* The addition must not wrap around to a small number. */
+    ASSERT_EQ(voice_ais_audio_over_cap(UINT64_MAX, 1), 1);
+    ASSERT_EQ(voice_ais_audio_over_cap(1, UINT64_MAX), 1);
+    ASSERT_EQ(voice_ais_audio_over_cap(UINT64_MAX, UINT64_MAX), 1);
+    ASSERT_EQ(voice_ais_audio_over_cap(UINT64_MAX - 5, 10), 1);
+    /* the general form, for the wintest's lowered cap */
+    ASSERT_EQ(voice_ais_frames_over(0, 100, 100), 0);
+    ASSERT_EQ(voice_ais_frames_over(0, 101, 100), 1);
+    ASSERT_EQ(voice_ais_frames_over(101, 0, 100), 1);
+    ASSERT_EQ(voice_ais_frames_over(UINT64_MAX, 1, 100), 1);
+    TEST_END();
+}
+
 /* ---- Mistral's events ---- */
 
 #define MAX_EV 64

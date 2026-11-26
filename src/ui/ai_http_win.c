@@ -9,6 +9,10 @@
 #include <windows.h>
 #include <winhttp.h>
 
+/* The most of a failed (300 or more) reply's body read before the request is closed; the
+ * status, not the body, decides the failure. */
+#define AI_HTTP_ERR_BODY_MAX (64u * 1024u)
+
 /* Parse a URL to extract host, path, port, and whether it's HTTPS. */
 static int parse_url(const char *url, wchar_t *host, size_t host_sz,
                      wchar_t *path, size_t path_sz,
@@ -455,11 +459,12 @@ static int ai_http_post_stream_impl(void *session, int recv_ms,
 
     /* On HTTP error, read body into the error buffer instead of streaming */
     if (http_status >= 300) {
-        size_t err_pos = 0;
+        size_t err_pos = 0, err_total = 0;
         char chunk_buf[4096];
         DWORD bytes_read;
         for (;;) {
             if (ai_nc_cancelled(nc)) break;   /* a fired token closed hRequest */
+            if (err_total >= AI_HTTP_ERR_BODY_MAX) break;   /* an endless error body: the status decides */
             DWORD avail = 0;
             if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
             if (avail == 0) break;
@@ -468,6 +473,7 @@ static int ai_http_post_stream_impl(void *session, int recv_ms,
             if (!WinHttpReadData(hRequest, chunk_buf, to_read, &bytes_read))
                 break;
             if (bytes_read == 0) break;
+            err_total += (size_t)bytes_read;
             /* Append to error buffer */
             if (error && err_pos + (size_t)bytes_read < error_size - 1) {
                 memcpy(error + err_pos, chunk_buf, (size_t)bytes_read);

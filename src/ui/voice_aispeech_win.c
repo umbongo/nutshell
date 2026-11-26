@@ -84,12 +84,14 @@ static unsigned g_serial;
 static unsigned g_gen = AIS_GEN_BASE;
 static VoiceAisFetch g_fetch;
 static size_t g_max_chunks = AIS_MAX_CHUNKS;
+static volatile LONG64 g_max_frames = VOICE_AIS_MAX_FRAMES;
 
 static void lock(void)   { EnterCriticalSection(&g_lock); }
 static void unlock(void) { LeaveCriticalSection(&g_lock); }
 
 void voice_ais_set_fetch(VoiceAisFetch f) { g_fetch = f; }
 void voice_ais_test_max_chunks(size_t n) { g_max_chunks = n ? n : AIS_MAX_CHUNKS; }
+void voice_ais_test_max_frames(uint64_t n) { g_max_frames = n ? (LONG64)n : (LONG64)VOICE_AIS_MAX_FRAMES; }
 
 /* ---- small helpers ---- */
 
@@ -338,6 +340,7 @@ typedef struct {
     int done;                           /* Mistral: speech.audio.done seen */
     int failed;                         /* an error event, a bad delta or a decoder error */
     int fmt_err;                        /* the decoder error was "unsupported audio format" */
+    uint64_t frames;                    /* decoded frames of this request, against VOICE_AIS_MAX_FRAMES */
     VoiceWavStream wav;
     SseLine sse;
     VoiceAisSse st;
@@ -356,7 +359,13 @@ static int fetch_feed(AisFetch *f, const unsigned char *p, size_t n)
             f->fmt_err = voice_wavs_error_is_format(&f->wav);
             return 1;
         }
-        if (got > 0 && !f->push(f->job, f->out, got)) { f->stopped = 1; return 1; }
+        if (got > 0) {
+            /* An endless body must not become endless queued audio: past the cap the request is
+             * closed (the stream callback's 1 ends the read) and the chunk fails as a stream. */
+            if (voice_ais_frames_over(f->frames, got, (uint64_t)g_max_frames)) { f->failed = 1; return 1; }
+            f->frames += got;
+            if (!f->push(f->job, f->out, got)) { f->stopped = 1; return 1; }
+        }
         p += k;
         n -= k;
     }

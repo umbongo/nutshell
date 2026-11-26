@@ -30,7 +30,10 @@ enum {
     HLS_429,
     HLS_HANG,           /* reads the request, never answers (until hl_stop) */
     HLS_302,            /* answers every request with a 302 to another path */
-    HLS_307             /* the same with a 307 (a POST would be re-sent to the new path) */
+    HLS_307,            /* the same with a 307 (a POST would be re-sent to the new path) */
+    HLS_WAV_ENDLESS,    /* 200, a WAV header, then silence until the client goes away (or hl_stop) */
+    HLS_NOTWAV,         /* 200 audio/mpeg whose body is an ID3 tag (HlAudio.sse_file: unused) */
+    HLS_500_ENDLESS     /* 500 with a body that never ends (until the client goes away or hl_stop) */
 };
 
 typedef struct {
@@ -52,6 +55,10 @@ const char *hl_request_head(HttpLoop *h);
 const char *hl_request_body(HttpLoop *h, size_t *len);
 /* How many requests have been read (answered or not). */
 int         hl_requests(HttpLoop *h);
+
+/* Bytes an endless mode (HLS_WAV_ENDLESS, HLS_500_ENDLESS) has written to the client, for a
+ * test that bounds it; 0 for every other mode. Valid until hl_stop. */
+unsigned long long hl_bytes_sent(HttpLoop *h);
 
 /* The WAV the audio modes send (one copy), so a test can compare byte for byte.
  * malloc'd; free() it. rate is in Hz. */
