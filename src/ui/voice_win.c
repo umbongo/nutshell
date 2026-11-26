@@ -995,6 +995,9 @@ void voice_on_tts(LPARAM lp)
 {
     VoiceTtsMsg *m = (VoiceTtsMsg *)lp;
     if (!m) return;
+    /* A Play sample that failed after it started: its message is the conversation's no concern
+     * (its token is never the conversation's), so the Settings page, if open, shows why. */
+    if (m->kind == VTT_ERROR && m->token == VOICE_AIS_SAMPLE_TOKEN) settings_voice_sample_failed(m->hr);
     voice_conv_on_tts(m);
     free(m);
 }

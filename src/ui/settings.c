@@ -1533,6 +1533,15 @@ static void voice_dev_take_list(SettingsDlgData *d, const VoiceDeviceList *l)
     SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
 }
 
+void settings_voice_sample_failed(long hr)
+{
+    SettingsDlgData *d = g_voice_dlg;   /* cleared in WM_DESTROY before the dialog's data is freed */
+    if (!d || !d->hDlg || !IsWindow(d->hDlg) || !d->hPage || d->cur_page != SETTINGS_PAGE_VOICE) return;
+    char note[256];
+    voice_ais_sample_failure_note(hr, note, sizeof(note));
+    voice_test_note(d, note);
+}
+
 int settings_voice_on_audio(WPARAM wp, LPARAM lp)
 {
     SettingsDlgData *d = g_voice_dlg;

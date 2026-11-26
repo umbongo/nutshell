@@ -326,6 +326,14 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
     }
 }
 
+void voice_ais_sample_failure_note(long hr, char *out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    char reason[160];
+    voice_ais_failure_reason(hr, NULL, reason, sizeof reason);
+    snprintf(out, cap, "Could not play the sample: %s", reason);
+}
+
 int voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap)
 {
     if (total > cap) return 1;

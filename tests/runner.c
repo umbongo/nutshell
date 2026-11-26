@@ -3050,6 +3050,7 @@ int test_vais_offset_complete(void);
 int test_vais_offset_estimate(void);
 int test_vais_offset_utf8(void);
 int test_vais_audio_cap(void);
+int test_vais_sample_failure_note(void);
 int test_vais_decoder_failure_hr(void);
 int test_vais_resolve_base_url_binding_boundary(void);
 int test_vais_resolve_refuses_userinfo_and_ipv6(void);
@@ -8728,6 +8729,7 @@ int main(void) {
     failed += test_vais_offset_estimate();
     failed += test_vais_offset_utf8();
     failed += test_vais_audio_cap();
+    failed += test_vais_sample_failure_note();
     failed += test_vais_decoder_failure_hr();
     failed += test_vais_resolve_base_url_binding_boundary();
     failed += test_vais_resolve_refuses_userinfo_and_ipv6();

@@ -734,6 +734,33 @@ int test_vais_decoder_failure_hr(void)
     TEST_END();
 }
 
+/* F2: the Voice page's note when a Play sample fails after it resolved and started. */
+int test_vais_sample_failure_note(void)
+{
+    TEST_BEGIN();
+    char o[200];
+    voice_ais_sample_failure_note(401, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the speech provider refused the key (HTTP 401)");
+    voice_ais_sample_failure_note(404, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the speech model or voice was not found (HTTP 404)");
+    voice_ais_sample_failure_note(VOICE_AIS_HR_NET, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the speech provider could not be reached");
+    voice_ais_sample_failure_note(VOICE_AIS_HR_FORMAT, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: unsupported audio format");
+    voice_ais_sample_failure_note(302, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the server redirected the request (HTTP 302): check the Base URL");
+    voice_ais_sample_failure_note(-99, o, sizeof o);      /* an unknown hr still gives a reason */
+    ASSERT_STR_EQ(o, "Could not play the sample: the speech request failed");
+    voice_ais_sample_failure_note(0, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the speech request failed");
+    char small[20];                                         /* cut, terminated, no overrun */
+    voice_ais_sample_failure_note(401, small, sizeof small);
+    ASSERT_EQ(strlen(small), sizeof small - 1);
+    voice_ais_sample_failure_note(401, small, 0);           /* no write */
+    voice_ais_sample_failure_note(401, NULL, 10);           /* no crash */
+    TEST_END();
+}
+
 /* ---- Mistral's events ---- */
 
 #define MAX_EV 64

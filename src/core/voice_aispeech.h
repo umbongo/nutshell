@@ -106,6 +106,10 @@ int  voice_ais_audio_over_cap(uint64_t total, uint64_t add);
 /* The same against any cap (the wintest seam lowers it): 1 when total + add > cap. */
 int  voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap);
 
+/* The Voice page's note for a Play sample that failed after it started:
+ * "Could not play the sample: <voice_ais_failure_reason(hr)>". Cut and terminated to cap. */
+void voice_ais_sample_failure_note(long hr, char *out, size_t cap);
+
 /* Mistral's stream, one SSE line at a time (lines from sse_line_feed). */
 typedef enum { VAIS_EV_NONE = 0, VAIS_EV_AUDIO, VAIS_EV_DONE, VAIS_EV_ERROR } VoiceAisEvKind;
 typedef struct { char event[64]; int audio_seen; } VoiceAisSse;
