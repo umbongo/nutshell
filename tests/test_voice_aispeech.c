@@ -363,6 +363,42 @@ int test_vais_binding_too_long_never_matches(void)
     TEST_END();
 }
 
+/* F4: the host the privacy line names is the host the request goes to. WinHTTP's URL parsing
+ * does not take userinfo or an IPv6 literal the way the line's reader does, so a Base URL whose
+ * authority has an "@" or a "[" is refused. An "@" or "[" after the authority is a path. */
+int test_vais_resolve_refuses_userinfo_and_ipv6(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200];
+    const char *const bad[] = {
+        "http://a:x@b.example/v1", "http://user@host/v1", "http://[::1]:8880/v1",
+        "https://u:p@h.example", "http://host@", "http://[::1]", "http://h[1]/v1",
+        "http://a@b?x=1", "http://a@b#frag"
+    };
+    base_settings(&s);
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        set_custom(&s, bad[i], "kokoro", "bf_emma");
+        err[0] = '\0';
+        ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+        ASSERT_STR_EQ(err, "The speech Base URL is not valid");
+    }
+    const char *const good[] = {
+        "http://host:8880/v1", "http://host", "https://h.example/v1/a@b", "http://h/v1/[x]",
+        "http://h.example?mail=a@b", "http://h.example#[x]"
+    };
+    for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
+        set_custom(&s, good[i], "kokoro", "bf_emma");
+        err[0] = '\0';
+        ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    }
+    set_custom(&s, "http://host:8880/v1", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "host:8880");
+    TEST_END();
+}
+
 /* ---- bodies ---- */
 
 static size_t json_member_count(const JsonNode *o)

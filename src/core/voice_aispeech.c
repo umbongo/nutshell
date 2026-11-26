@@ -58,18 +58,27 @@ static int blank(const char *s)
     return 1;
 }
 
-/* host[:port] of an http(s) URL, userinfo dropped. */
+/* host[:port] of an http(s) URL whose authority has no userinfo (authority_unreadable). */
 static void url_host(const char *url, char *out, size_t cap)
 {
     const char *p = strstr(url, "://");
     p = p ? p + 3 : url;
     size_t n = strcspn(p, "/?#");
-    const char *at = NULL;
-    for (size_t i = 0; i < n; i++)
-        if (p[i] == '@') at = p + i;
-    if (at) { n -= (size_t)(at + 1 - p); p = at + 1; }
     if (n + 1 > cap) n = cap ? cap - 1 : 0;
     if (cap) { memcpy(out, p, n); out[n] = '\0'; }
+}
+
+/* 1 when the authority (between "://" and the next "/", "?" or "#") has an "@" or a "[": a
+ * userinfo or an IPv6 literal, which the privacy line's reader and WinHTTP's URL parser read
+ * differently, so the line could name a host the request does not go to. */
+static int authority_unreadable(const char *url)
+{
+    const char *p = strstr(url, "://");
+    p = p ? p + 3 : url;
+    size_t n = strcspn(p, "/?#");
+    for (size_t i = 0; i < n; i++)
+        if (p[i] == '@' || p[i] == '[') return 1;
+    return 0;
 }
 
 void voice_ais_binding(const Settings *s, char *out, size_t cap)
@@ -138,6 +147,7 @@ int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t ca
         char base[512];
         if (blank(s->voice_tts_url)) { put_err(err, cap, "Enter the speech Base URL"); return 0; }
         if (!voice_base_url_normalise(s->voice_tts_url, base, sizeof base) ||
+            authority_unreadable(base) ||
             snprintf(t->url, sizeof t->url, "%s" SPEECH_SUFFIX, base) >= (int)sizeof t->url) {
             put_err(err, cap, "The speech Base URL is not valid");
             return 0;

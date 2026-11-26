@@ -3050,6 +3050,7 @@ int test_vais_offset_complete(void);
 int test_vais_offset_estimate(void);
 int test_vais_offset_utf8(void);
 int test_vais_audio_cap(void);
+int test_vais_resolve_refuses_userinfo_and_ipv6(void);
 int test_framework_skip_counts(void);
 int test_vais_capture_error_check_not_empty(void);
 int test_vais_sse_unknown_event_non_json_ignored(void);
@@ -8725,6 +8726,7 @@ int main(void) {
     failed += test_vais_offset_estimate();
     failed += test_vais_offset_utf8();
     failed += test_vais_audio_cap();
+    failed += test_vais_resolve_refuses_userinfo_and_ipv6();
     failed += test_framework_skip_counts();
     failed += test_vais_capture_error_check_not_empty();
     failed += test_vais_sse_unknown_event_non_json_ignored();
