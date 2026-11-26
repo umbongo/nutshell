@@ -98,7 +98,9 @@ Write tests before implementation code. Include corner cases, positive and negat
   longer than the change. Say so in one line.
 - **Quality checks are sub-agents too.** A second opinion on a decision is
   the `critique` skill; a review of a diff is an Opus agent given the diff,
-  not a summary of it. Never poll a running agent; its completion
+  not a summary of it. A branch gets one final whole-branch review, by
+  whichever of Opus and Fable did not review its tasks, never two (my rule
+  of 2026-11-26). Never poll a running agent; its completion
   notification is the signal. I see the findings of every Opus or Fable
   review before any is fixed: the main session shows them to me before it
   dispatches a fixer (a per-task orchestrator returns them instead of
