@@ -153,6 +153,12 @@ int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t ca
             return 0;
         }
         url_host(base, t->host, sizeof t->host);
+        char bind[CFG_STR_MAX];
+        voice_ais_binding(s, bind, sizeof bind);
+        if (bind[0] == '\0') {          /* "custom " + base does not fit: no key could ever match */
+            put_err(err, cap, "The speech Base URL is too long");
+            return 0;
+        }
         if (s->voice_ai_tts_model[0] == '\0') {
             put_err(err, cap, "Enter the speech model your server uses");
             return 0;

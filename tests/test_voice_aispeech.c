@@ -353,7 +353,9 @@ int test_vais_binding_too_long_never_matches(void)
     s.tts_api_key_for[sizeof s.tts_api_key_for - 1] = '\0';
     ASSERT_EQ(strlen(s.tts_api_key_for), sizeof s.tts_api_key_for - 1);
     snprintf(s.tts_api_key, sizeof s.tts_api_key, "secret");
-    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    /* F6: resolve used to succeed here and send with no key; now it says why it cannot. */
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+    ASSERT_STR_EQ(err, "The speech Base URL is too long");
     ASSERT_STR_EQ(voice_ais_key(&s, &t), "");
     /* A small buffer is also "" rather than a cut string. */
     set_custom(&s, "http://a/v1", "kokoro", "bf_emma");
@@ -396,6 +398,42 @@ int test_vais_resolve_refuses_userinfo_and_ipv6(void)
     set_custom(&s, "http://host:8880/v1", "kokoro", "bf_emma");
     ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
     ASSERT_STR_EQ(t.host, "host:8880");
+    TEST_END();
+}
+
+/* F6: "custom " + the base must fit the key binding (CFG_STR_MAX with its NUL), or a typed key
+ * could never match and the request would go out with no Authorization header. */
+int test_vais_resolve_base_url_binding_boundary(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200], b[CFG_STR_MAX], url[CFG_STR_MAX];
+    base_settings(&s);
+    const size_t longest = CFG_STR_MAX - 1 - strlen("custom ");     /* 248 */
+    for (size_t n = longest - 1; n <= longest + 1; n++) {
+        memcpy(url, "http://", 7);
+        memset(url + 7, 'h', n - 7);
+        url[n] = '\0';
+        set_custom(&s, url, "kokoro", "bf_emma");
+        snprintf(s.tts_api_key, sizeof s.tts_api_key, "secret");
+        voice_ais_binding(&s, b, sizeof b);
+        if (n <= longest) {
+            ASSERT_EQ(strlen(b), n + 7);
+            snprintf(s.tts_api_key_for, sizeof s.tts_api_key_for, "%s", b);
+            err[0] = '\0';
+            ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+            ASSERT_STR_EQ(voice_ais_key(&s, &t), "secret");     /* the typed key matches */
+        } else {
+            ASSERT_STR_EQ(b, "");
+            ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+            ASSERT_STR_EQ(err, "The speech Base URL is too long");
+        }
+    }
+    /* a base that does not normalise is "not valid", not "too long" */
+    set_custom(&s, "ftp://x", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+    ASSERT_STR_EQ(err, "The speech Base URL is not valid");
     TEST_END();
 }
 
