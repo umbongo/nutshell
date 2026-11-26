@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-26 (the main session runs the plan; no long-lived orchestrator). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-26 (one final review, by the model that did not review the tasks; before that, the main session runs the plan). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules live in CLAUDE.md ("Software Development Rules", "Branches, pull
 requests and the merge gate"); this skill walks through them in order, and
 CLAUDE.md wins where they disagree. History and rationale: the retrospectives.
@@ -45,8 +45,13 @@ there, so the main session, as its controller, shows the findings and its
 rulings before it dispatches a fixer; unless told otherwise, the fixes then
 go ahead ("Running a plan" covers a per-task orchestrator). Every review is
 run by a model other than the one that wrote the code, Opus or Fable
-(maintainer, 2026-11-25). Finish means push and open or update the draft
-PR (step 5), never merge.
+(maintainer, 2026-11-25). **A branch gets one final whole-branch review,
+by whichever of the two did not review its tasks** (maintainer,
+2026-11-26): Opus per task means a Fable final, Fable per task an Opus
+final. Never a second final review when every task was reviewed. A
+re-review of a fix wave's diff is scoped to that diff and is not a second
+final. Finish means push and open or update the draft PR (step 5), never
+merge.
 
 ## Running a plan
 
@@ -55,7 +60,7 @@ the controller for `superpowers:subagent-driven-development`: it dispatches
 every agent the plan needs as a background agent and takes their
 completion notifications. That is each task's implementer, reviewer and
 fixer, and the work after the last task: the version bump, build and
-verification (a Sonnet agent), the final reviews, the fix wave and its
+verification (a Sonnet agent), the final review, the fix wave and its
 re-review. No sub-agent spans two of these jobs.
 
 - **Why** (measured over 2026-11-21 to 26, `docs/token-usage/`): the
@@ -80,8 +85,8 @@ re-review. No sub-agent spans two of these jobs.
   it receives the report (commits, a diff stat, the test summary line,
   open questions) and the reviewer's ranked findings.
 - **The check before the merge** (step 5) comes last, after the fix wave,
-  when nothing else is pending. On a branch that had the two blind final
-  reviews it is the diff stat and the cited hunks, not the whole diff
+  when nothing else is pending. On a branch that had its final review
+  it is the diff stat and the cited hunks, not the whole diff
   (PR 3's is about 15,000 lines, most of a compaction).
 - **Briefs carry the task, not the documents:** the task's section of the
   plan and the rulings it cites, pasted or by path and line range, never
@@ -146,11 +151,11 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
    - **Non-empty**: step 6 applies in full.
 
    Before the maintainer merges, the main session checks the diff
-   (maintainer, 2026-11-26). A branch that had the two blind final reviews
-   has been read in full by them, so the main session reads
+   (maintainer, 2026-11-26). A branch that had its final review
+   has been read in full by it, so the main session reads
    `git diff --stat origin/main...HEAD`, compares it with the files the
    plan's tasks named, reads in full any file no task named, and reads the
-   hunks the reviews' findings cite and the fixes made to them. A branch
+   hunks the review's findings cite and the fixes made to them. A branch
    with no final review (a small fix, docs, a config change) is still read
    in full. Stage new files by path and read every `??` line first (CLAUDE.md, "Git
    commits"). A PR stacked on an unmerged branch is retargeted to `main`

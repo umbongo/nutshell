@@ -4,6 +4,24 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-26 — one final review, by the model that did not review the tasks
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-fable-5-2 (main session).
+
+While PR #120 (AI speech) waited on its final review the maintainer ruled: "if the each task
+has been tested by opus the final test should be with Fable (likewise, of fable tests the tasks
+then opus tests the full integration), we dont ever need to run more than 1 final test as long
+as the tasks were tested." This replaces the Fable and Opus pair of blind final reviews used on
+PR #117. PR #120 ran that way: Opus per task, one Fable high final, an Opus re-review of the
+fix diff only.
+
+- **CLAUDE.md**, "Software Development Rules", quality checks: one final whole-branch review,
+  by whichever of Opus and Fable did not review the tasks.
+- **`skills/feature-workflow/SKILL.md`**: Allocation states the rule and that a fix wave's
+  re-review is not a second final; "Running a plan" and step 5 say "its final review" where
+  they said "the two blind final reviews".
+
 ## 2026-11-26 — the main session runs a plan; token use is measured
 
 Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
