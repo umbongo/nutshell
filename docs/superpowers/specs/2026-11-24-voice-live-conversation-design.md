@@ -2244,6 +2244,34 @@ version of this subsection; the rest supersede it.
   3 skipped, the Mistral capture fixtures), 253 `wintest` (6 skipped: 5 Wine WinHTTP limits and
   the capture fixture).
 
+### Found in the final review (PR 3, 2026-11-26)
+
+- **Who reviewed:** the whole branch at 85a4fe2 by claude-fable-5-2 at high effort: 0 Critical,
+  3 Important, 9 Minor. The fixes (six commits, 7d7c2b5 to 2fc2fc1, claude-sonnet-5-5) were
+  re-reviewed by claude-opus-5-5: approved, 0 Critical or Important, 7 Minor, all deferred.
+- **The capture gate (R33) was waived** by the maintainer on 2026-11-26: PR 3 merges on the
+  provisional fixtures, and the parser is first proven by the Windows hand checks.
+- **Fixed in v1.3.1:**
+  - One speech request's decoded audio is capped at 5 minutes at 24 kHz (7,200,000 frames,
+    `VOICE_AIS_MAX_FRAMES`); past it the chunk fails as a passing failure and the request is
+    closed. The body of a response with status 300 or more is read to 64 KB at most.
+  - A Play sample that fails after it was sent writes `Could not play the sample: <reason>` in
+    the note under the meter (it showed nothing).
+  - HTTP 400 and 300-399 are failures that cannot work (the once-per-conversation note, no
+    retry): `the speech provider refused the request (HTTP 400)`, `the server redirected the
+    request (HTTP <n>): check the Base URL`.
+  - A Custom base URL with `@` or `[` in its authority is refused (`The speech Base URL is not
+    valid`), so the privacy line always names the host the request goes to. An IPv6 literal is
+    therefore not usable.
+  - Audio that is not WAV at the start of a 200 response is `unsupported audio format` (cannot
+    work), as section 8.5 says; a stream that breaks after frames stays a passing failure.
+  - A Custom base URL too long for the key binding (249 bytes or more) is refused: `The speech
+    Base URL is too long`.
+- **Counts after the fixes:** native suite 4,620 run, 0 failed, 3 skipped (the three Mistral
+  capture tests), also under `SAN=1`; `wintest` 257 run, 0 failed, 6 skipped (Wine cannot
+  abort a synchronous WinHTTP call or a blocked handshake, and the Mistral capture test has no
+  capture).
+
 ## 17. Critique (2026-11-24, claude-fable-5-2 high)
 
 Each finding in one line, then the main session's disposition.

@@ -778,8 +778,9 @@ Open, in priority order:
       conversation spanning the 49.7-day wrap only) [fixed in code in PR 3; hand check pending].
 - [ ] **AI speech (PR 3 of live voice): nothing run on Windows.** Built and tested here under
       Wine and the native suite with no real audio device and no live provider; the Mistral
-      capture (plan Task 0) is not taken, so the parser is built against the SDK shape with
-      provisional fixtures. Each line is its own check.
+      capture (plan Task 0) was waived by the maintainer on 2026-11-26, so the parser, built
+      against the SDK shape with provisional fixtures, is first proven by these hand checks.
+      Each line is its own check.
       (a) Mistral `voice_1787` and the other English (UK) voices: accent, time to the first
       word, no gap or click between chunks, the duck, stop latency.
       (b) Kokoro-FastAPI with `bf_emma`, and with no key.
@@ -812,10 +813,46 @@ Open, in priority order:
       (`ai_chat_send.c:739-771`) launches a turn the conversation never sees; it stays in
       Listening and the reply is not spoken. Should: Working on the launch, or a held-only
       card blocks the start. Follow-up.
-      (s) A Play sample that resolves but then fails (401/404/422) may show nothing on the
-      page: check.
+      (s) A failed Play sample with a wrong key shows `Could not play the sample: the speech
+      provider refused the key (HTTP 401)` in the note under the meter (v1.3.1).
       (t) The speech-to-text upload now refuses redirects ("Redirect refused (HTTP n)"): check
       each built-in provider live.
+      (u) A short one-sentence reply right after the PC wakes or the output device changes: the
+      reply must be heard before the header returns to Listening, and Stop must still stop it.
+      The done guard (`src/ui/voice_aispeech_win.c:797-826`) is armed at the worker's exit
+      whether or not playback has begun, and does not flush; a render endpoint that takes more
+      than 2 s to open would post `VTT_DONE` first. Cannot happen under Wine. Follow-up if
+      seen: re-arm while audio is queued, flush when the guard ends a reply.
+      (v) Save Settings with a Custom speech URL near 248 bytes and a long key: the save must
+      succeed. The bound-key blob is about 1,019 of `CFG_BLOB_MAX` 1,024 at maximum lengths
+      (`src/config/loader.c:347-365`); a real DPAPI blob one block larger would abort the whole
+      save.
+      (w) If Mistral answers `response_format: "wav"` with raw PCM in its first delta, the first
+      reply gives "AI speech is off for this conversation: unsupported audio format" (before
+      v1.3.1 every reply failed in passing). That is the capture's question (R25) answered by
+      ear: report it and the fix is the `pcm` path.
+- [ ] Follow-ups from the final review of AI speech, not built:
+      a valid WAV `data` chunk size is ignored (R25), so a finite WAV with a trailing LIST or
+      id3 chunk has the trailer played as PCM and an odd trailer length fails the reply after it
+      was heard (`src/core/voice_wavstream.c:88-97`; spec section 8.4 says only 0 and
+      0xFFFFFFFF mean "until the end").
+      The typed-key decision in `src/ui/settings.c` (`voice_tts_key_touched`,
+      `voice_tts_key_bound`, the reset in `voice_page_read`) has no test; move it to a pure
+      function in `src/core/voice_aispeech.c`.
+      `The speech Base URL is too long` also refuses a keyless Custom server, or one sharing the
+      speech-to-text key, where the binding is never read (`src/core/voice_aispeech.c:155-161`):
+      refuse only when the speech key is its own and one is typed.
+      `settings_voice_sample_failed` (`src/ui/settings.c:1539`) drops the failure when another
+      Settings page is showing; drop the `cur_page` condition.
+      The redirect reason says "check the Base URL" for Mistral too, which has no Base URL row
+      (`src/core/voice_aispeech.c:321-322`).
+      `http://host?x=a@b` passes the authority check but `parse_url`
+      (`src/ui/ai_http_win.c:36-46`) ends the host only at `:` or `/`, so the connect fails;
+      refuse `?` and `#` in a base, and correct the comment at `src/core/voice_aispeech.c:71-73`.
+      `test_voice_ais_sse_error_event`'s first half would pass with the error event ignored;
+      split or rename it. Only the native parser tests cover the error event.
+      The 5-minute cap counts decoded frames, so a Mistral stream that never ends and carries no
+      audio stays open until the user stops it or the 10-minute Speaking watchdog fires.
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
