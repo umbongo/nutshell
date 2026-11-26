@@ -4,6 +4,64 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-26 — the main session runs a plan; token use is measured
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-opus-5-5 (main session, measurement, the first edits); claude-fable-5-2 (critique; main session for the two later points).
+
+The maintainer asked for a cheaper development loop and for token use to be compared before
+and after at the next retrospective. Measured over 2026-11-21 to 26 (`docs/token-usage/`):
+long-lived Opus orchestrators were the largest cost, and their 5-minute sub-agent cache expired
+while they waited on implementers.
+
+- **CLAUDE.md**, "Software Development Rules": the main session runs a plan itself and no
+  sub-agent spans two tasks; an implementation returns commits, a diff stat and a test summary;
+  every Opus or Fable review's findings are shown first.
+- **`skills/feature-workflow/SKILL.md`**: new "Running a plan" (the ledger, a lean main
+  session, fix rounds, the work after the last task, the diff read before merge, per-task
+  orchestrators, the 1-hour cache setting left unset); Allocation and step 4 follow it.
+- **`skills/checkpoint/SKILL.md`** step 1 and the new **`skills/checkpoint/token-usage.py`**:
+  every retrospective measures token use from the newest `docs/token-usage/*.json` file's
+  `until` and compares it.
+- **`memory/MEMORY.md`**: the next retrospective's comparison and its baseline; the cache
+  lifetimes and the 56k sub-agent start-up.
+
+Critique (Fable 5.2, high effort, one round; the decision did not change, so no second round):
+1. The "after" window overlapped the baseline. Accepted: it starts at the baseline's `until`.
+2. Per-merge figures are skewed by voice PR 3 straddling the boundary. Accepted: leads with
+   controller cost per implementer agent, names straddling PRs.
+3. "Orchestrator share falls" cannot fail and the index is model-blind. Accepted: the test is
+   the controller (main + orchestrators); by-model shares and the reviewer-rule shift are stated.
+4. The main session holds more than briefs and reports, and will compact. Accepted: it may
+   read only the lines a finding cites, delegates code questions, logs mid-run instructions
+   in the ledger; the expected saving is restated as 14-17%.
+5. The ledger was the plan's checkboxes. Accepted: the plan-execution skill's
+   `.superpowers/sdd/<plan>/progress.md`, with a line per dispatch and per return.
+6. Task 11, final reviews and fix wave were not covered. Accepted: the main session dispatches
+   them; the whole-diff read comes last and may compact.
+7. Contradictions ("returns a diff", "Opus review", fix-round resumes, a per-task
+   orchestrator's fix loop, the maintainer's review-memory file, no changelog entry). Accepted,
+   all fixed.
+8. Misclassified roles, a missing baseline row, no compaction count, README totals wrong.
+   Accepted: fix before review, orchestrator by structure, rows kept, compactions counted,
+   README rebuilt from the JSON.
+9. Trim the skill and tool listings too (about 5%). Accepted as a follow-up, not here: they
+   come from plugins and connectors outside this repository's settings, which is the
+   maintainer's call.
+Later the same day the maintainer settled the two open points ("make these changes"), with
+no second critique since the maintainer decided them:
+- **`skills/feature-workflow/SKILL.md`** step 5 and "Running a plan": a branch that had the
+  two blind final reviews is not read in full again by the main session; it reads the diff
+  stat, any file no task named and the hunks the findings cite. A branch with no final review
+  is still read in full.
+- **`memory/MEMORY.md`**: the start-up trim in `~/nutshell/.claude/settings.local.json`
+  (finding 9, now done): synced skills, claude.ai connectors, playwright and three synced
+  plugins off for nutshell sessions; 54.3k to 45.6k on a headless start.
+
+- Not verified, left so: the 30-day transcript deletion (October transcripts still exist,
+  so the skill says "can delete"); how subscription limits weigh models and 1-hour writes;
+  whether compaction requests appear in the counts.
+
 ## 2026-11-23 — the `v1.2.89` backup branch
 
 Session: https://claude.ai/code/session_01AHuBtDU8oXSVxrKcPYYtQG, on `automaton`.
