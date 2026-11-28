@@ -54,6 +54,19 @@ int think_mode_body_cap(ThinkMode m, int line_h, int open_cap);
  * and extended): no scrollbar, trailing blank lines trimmed.  0 otherwise. */
 int think_mode_follows_tail(ThinkMode m);
 
+/* 1 when the wheel over the mode's body scrolls the body itself (compact,
+ * extended, open), 0 for collapsed (no body) and out-of-range modes. */
+int think_mode_wheel_scrolls(ThinkMode m);
+
+/* The box's scroll offset after its content or size changed (streamed text,
+ * a mode change, a resize), by the chat list's stick-to-bottom rule
+ * (stick_scroll_on_layout): stick (1 = the reader is at the bottom) follows
+ * the tail, otherwise the offset is kept, clamped to the new range.  full_h
+ * is the wrapped text height, vis_h the box's visible height.  Collapsed
+ * (and an out-of-range mode) has no body: 0. */
+int think_box_settle_scroll(ThinkMode m, int stick, int scroll_y, int full_h,
+                            int vis_h);
+
 /* Scroll offset that puts the last lines in view: max(0, full_h - vis_h). */
 int think_compact_offset(int full_h, int vis_h);
 

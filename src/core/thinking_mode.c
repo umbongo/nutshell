@@ -1,4 +1,5 @@
 #include "thinking_mode.h"
+#include "stick_scroll.h"
 
 #include <string.h>
 
@@ -69,6 +70,20 @@ int think_mode_body_cap(ThinkMode m, int line_h, int open_cap)
 int think_mode_follows_tail(ThinkMode m)
 {
     return m == THINK_MODE_COMPACT || m == THINK_MODE_EXTENDED;
+}
+
+int think_mode_wheel_scrolls(ThinkMode m)
+{
+    return m == THINK_MODE_COMPACT || m == THINK_MODE_EXTENDED ||
+           m == THINK_MODE_OPEN;
+}
+
+int think_box_settle_scroll(ThinkMode m, int stick, int scroll_y, int full_h,
+                            int vis_h)
+{
+    if (!think_mode_wheel_scrolls(m)) return 0;
+    return stick_scroll_on_layout(stick, scroll_y,
+                                  think_compact_offset(full_h, vis_h));
 }
 
 int think_compact_offset(int full_h, int vis_h)

@@ -514,14 +514,12 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
              * geometry recompute (measure, paint, hover, hit-test) is
              * harmless. */
             int vis_h = out->body.h;
-            int max_scroll = (full_h > vis_h) ? full_h - vis_h : 0;
-            if (think_mode_follows_tail(mode))
-                item->u.ai.thinking_scroll_y =
-                    think_compact_offset(full_h, vis_h);   /* last lines */
-            else
-                item->u.ai.thinking_scroll_y = stick_scroll_on_layout(
-                    item->u.ai.thinking_autoscroll,
-                    item->u.ai.thinking_scroll_y, max_scroll);
+            /* Compact, extended and open all follow the same rule: stuck
+             * (the default) shows the last lines, released holds the
+             * reader's place. */
+            item->u.ai.thinking_scroll_y = think_box_settle_scroll(
+                mode, item->u.ai.thinking_autoscroll,
+                item->u.ai.thinking_scroll_y, full_h, vis_h);
         }
     }
     if (out_full_body_h) *out_full_body_h = full_h;
@@ -966,6 +964,10 @@ static void clv_apply_thinking_pref(ChatListView *lv, int pref,
         if (it->type != CHAT_ITEM_AI_TEXT) continue;
         if (pref == THINK_PREF_OPEN) it->u.ai.thinking_autoscroll = 1;
         if (pref == THINK_PREF_COLLAPSED) it->u.ai.thinking_scroll_y = 0;
+        /* A collapsed row forgets its place: reopened, it follows the tail. */
+        if (pref == THINK_PREF_COLLAPSED ||
+            it->u.ai.thinking_mode == THINK_MODE_COLLAPSED)
+            it->u.ai.thinking_autoscroll = 1;
         it->dirty = 1;
     }
     /* A click re-lays out every Thinking row. Not pinned to the bottom, the
@@ -2061,9 +2063,9 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             DeleteObject(bg_br2);
 
             int vis_h = tl.body.h;
-            /* Only the open box scrolls, so only it has a scrollbar; the
-             * compact and extended boxes show their last lines (the offset build_thinking_
-             * layout settled) and reach the full text width. */
+            /* Only the open box has a scrollbar; the compact and extended
+             * boxes scroll by the wheel without one (the offset
+             * build_thinking_layout settled) and reach the full text width. */
             const int scrolls = tmode == THINK_MODE_OPEN && full_h > vis_h;
             int sb_w = scrolls ? ns_scale(6, CLV_DPI(lv)) : 0;
             RECT clip_rc = body_rc;
@@ -4659,8 +4661,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         int scroll_amount = ns_scale(40, CLV_DPI(lv));  /* ~3 lines per notch */
 
-        /* Check if cursor is over an open thinking box (the compact and extended boxes
-         * have no inner scroll: the wheel goes to the list) */
+        /* Check if cursor is over a thinking box that scrolls (compact,
+         * extended, open): a wheel up holds the reader's place, back at the
+         * bottom it follows the stream again */
         {
             POINT pt;
             pt.x = GET_X_LPARAM(lParam);
@@ -4676,7 +4679,8 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                 if (wh == 0) { wi = wi->next; continue; }
                 if (wi->type == CHAT_ITEM_AI_TEXT && wi->u.ai.thinking_text
                     && wi->u.ai.thinking_text[0]
-                    && wi->u.ai.thinking_mode == THINK_MODE_OPEN
+                    && think_mode_wheel_scrolls(
+                           (ThinkMode)wi->u.ai.thinking_mode)
                     && pt.y >= wy && pt.y < wy + wh) {
                     int side_pad2 = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
                     int box_left = side_pad2 + lv->ai_indent;

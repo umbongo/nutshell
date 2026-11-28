@@ -4207,6 +4207,9 @@ int test_thinking_trimmed_len(void);
 int test_thinking_label_colour(void);
 int test_thinking_follows_tail(void);
 int test_thinking_theme_tokens_distinct(void);
+int test_thinking_box_wheel_modes(void);
+int test_thinking_box_scroll_follow_hold_resume(void);
+int test_thinking_box_scroll_mode_change_holds_place(void);
 
 /* test_settings_help.c */
 int test_settings_help_table_matches_enum(void);
@@ -9084,6 +9087,9 @@ int main(void) {
     failed += test_thinking_label_colour();
     failed += test_thinking_follows_tail();
     failed += test_thinking_theme_tokens_distinct();
+    failed += test_thinking_box_wheel_modes();
+    failed += test_thinking_box_scroll_follow_hold_resume();
+    failed += test_thinking_box_scroll_mode_change_holds_place();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();
     failed += test_settings_help_labels_and_pages();

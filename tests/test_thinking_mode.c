@@ -1,6 +1,7 @@
 /* tests/test_thinking_mode.c -- the Thinking row's display mode model. */
 #include "test_framework.h"
 #include "thinking_mode.h"
+#include "stick_scroll.h"
 #include "ui_theme.h"
 #include "theme.h"
 #include <math.h>
@@ -182,6 +183,95 @@ int test_thinking_theme_tokens_distinct(void)
                 ASSERT_TRUE(think_rgb_dist(col[a], col[b]) >=
                             THINK_MIN_MODE_DIST);
     }
+    TEST_END();
+}
+
+/* The box's own scroll state while reasoning streams (compact and extended):
+ * the same stick-to-bottom rule as the chat list.  box_wheel() is what the
+ * wheel handler does: scroll, then stick = stick_scroll_after_user(). */
+typedef struct { int stick; int y; } BoxScroll;
+
+static void box_append(BoxScroll *b, ThinkMode m, int full_h, int vis_h)
+{
+    b->y = think_box_settle_scroll(m, b->stick, b->y, full_h, vis_h);
+}
+
+static void box_wheel_to(BoxScroll *b, int y, int full_h, int vis_h)
+{
+    int max = full_h > vis_h ? full_h - vis_h : 0;
+    b->y = y < 0 ? 0 : (y > max ? max : y);
+    b->stick = stick_scroll_after_user(b->y, max);
+}
+
+int test_thinking_box_wheel_modes(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(!think_mode_wheel_scrolls(THINK_MODE_COLLAPSED));
+    ASSERT_TRUE(think_mode_wheel_scrolls(THINK_MODE_COMPACT));
+    ASSERT_TRUE(think_mode_wheel_scrolls(THINK_MODE_EXTENDED));
+    ASSERT_TRUE(think_mode_wheel_scrolls(THINK_MODE_OPEN));
+    ASSERT_TRUE(!think_mode_wheel_scrolls((ThinkMode)-1));
+    ASSERT_TRUE(!think_mode_wheel_scrolls((ThinkMode)9));
+    TEST_END();
+}
+
+int test_thinking_box_scroll_follow_hold_resume(void)
+{
+    TEST_BEGIN();
+    const int vis = 80;
+    BoxScroll b = { 1, 0 };
+    /* streaming appends while at the bottom follow the tail */
+    box_append(&b, THINK_MODE_COMPACT, 60, vis);       /* fits: offset 0 */
+    ASSERT_EQ(b.y, 0);
+    box_append(&b, THINK_MODE_COMPACT, 200, vis);
+    ASSERT_EQ(b.y, 120);
+    box_append(&b, THINK_MODE_COMPACT, 260, vis);
+    ASSERT_EQ(b.y, 180);
+    /* a scroll up stops following... */
+    box_wheel_to(&b, 100, 260, vis);
+    ASSERT_EQ(b.stick, 0);
+    ASSERT_EQ(b.y, 100);
+    /* ...and later appends do not move the view */
+    box_append(&b, THINK_MODE_COMPACT, 320, vis);
+    ASSERT_EQ(b.y, 100);
+    box_append(&b, THINK_MODE_COMPACT, 500, vis);
+    ASSERT_EQ(b.y, 100);
+    /* scrolling back to the bottom resumes following */
+    box_wheel_to(&b, 10000, 500, vis);
+    ASSERT_EQ(b.stick, 1);
+    ASSERT_EQ(b.y, 420);
+    box_append(&b, THINK_MODE_COMPACT, 560, vis);
+    ASSERT_EQ(b.y, 480);
+    TEST_END();
+}
+
+int test_thinking_box_scroll_mode_change_holds_place(void)
+{
+    TEST_BEGIN();
+    /* compact (80 px box) to extended (400 px box) while released: the
+     * reader's offset is kept, only re-clamped to the new range */
+    BoxScroll b = { 1, 0 };
+    box_append(&b, THINK_MODE_COMPACT, 1000, 80);
+    box_wheel_to(&b, 300, 1000, 80);
+    ASSERT_EQ(b.stick, 0);
+    box_append(&b, THINK_MODE_EXTENDED, 1000, 400);
+    ASSERT_EQ(b.y, 300);
+    /* the box grows past the reader's offset: clamped to the new maximum */
+    box_append(&b, THINK_MODE_EXTENDED, 600, 400);
+    ASSERT_EQ(b.y, 200);
+    /* a following box stays on the tail across the mode change */
+    BoxScroll f = { 1, 0 };
+    box_append(&f, THINK_MODE_COMPACT, 1000, 80);
+    ASSERT_EQ(f.y, 920);
+    box_append(&f, THINK_MODE_EXTENDED, 1000, 400);
+    ASSERT_EQ(f.y, 600);
+    /* collapsed has no body: offset 0 whatever the state */
+    box_append(&f, THINK_MODE_COLLAPSED, 1000, 0);
+    ASSERT_EQ(f.y, 0);
+    /* content that fits the box leaves nothing to scroll */
+    BoxScroll s = { 0, 50 };
+    box_append(&s, THINK_MODE_COMPACT, 40, 80);
+    ASSERT_EQ(s.y, 0);
     TEST_END();
 }
 
