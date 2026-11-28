@@ -5045,6 +5045,58 @@ static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len
     return CMD_UNKNOWN;
 }
 
+static CmdSafetyLevel classify_cisco_nxos_segment(const char *seg, size_t seg_len,
+                                                    char *reason_buf, size_t reason_buf_size);
+static CmdSafetyLevel classify_cisco_asa_segment(const char *seg, size_t seg_len,
+                                                   char *reason_buf, size_t reason_buf_size);
+
+/* ----- "do CMD" on NX-OS and ASA -----
+ * "do CMD" runs an exec-mode command from configuration mode. The IOS
+ * segment classifier already strips the "do" words and rates CMD by the IOS
+ * rules; NX-OS and ASA used to reach it only through their final delegation,
+ * so CMD never met their own tables ("do install all" on NX-OS, "do failover
+ * active" on ASA). Here CMD is rated by the platform's own segment
+ * classifier as well, and the stricter of the two results wins, so this can
+ * only ever raise a level, never lower one. Called with a segment whose
+ * first word is "do". */
+
+typedef CmdSafetyLevel (*CiscoSegFn)(const char *seg, size_t seg_len,
+                                     char *reason_buf, size_t reason_buf_size);
+
+static CmdSafetyLevel classify_cisco_do(const char *seg, size_t seg_len, CiscoSegFn own,
+                                         char *reason_buf, size_t reason_buf_size)
+{
+    char old_reason[256] = "";
+    char new_reason[256] = "";
+    CmdSafetyLevel old_level =
+        classify_cisco_ios_segment(seg, seg_len, old_reason, sizeof old_reason);
+    const char *p = seg;
+    const char *t;
+    size_t tl;
+    const char *inner = NULL;
+    CmdSafetyLevel new_level = CMD_READ;
+    const char *why = old_reason;
+    CmdSafetyLevel out = old_level;
+
+    /* Skip every leading "do"; a loop, so a long chain cannot deepen the stack. */
+    for (;;) {
+        const char *q = p;
+        if (!next_token(&q, &t, &tl)) break;
+        if (!tok_eq_ci(t, tl, "do")) { inner = t; break; }
+        p = q;
+    }
+    if (inner) {
+        new_level = own(inner, seg_len - (size_t)(inner - seg), new_reason, sizeof new_reason);
+        if (new_level > old_level) {
+            out = new_level;
+            why = new_reason;
+        }
+    }
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "%s", why);
+    return out;
+}
+
 /* ----- Per-segment Cisco NX-OS classification (inherits IOS + extras) ----- */
 
 static CmdSafetyLevel classify_cisco_nxos_segment(const char *seg, size_t seg_len,
@@ -5058,6 +5110,10 @@ static CmdSafetyLevel classify_cisco_nxos_segment(const char *seg, size_t seg_le
 
     if (!next_token(&p, &tok1_start, &tok1_len))
         return CMD_READ;
+
+    if (tok_eq_ci(tok1_start, tok1_len, "do"))
+        return classify_cisco_do(seg, seg_len, classify_cisco_nxos_segment,
+                                 reason_buf, reason_buf_size);
 
     /* NX-OS specific critical: reload module */
     if (tok_eq_ci(tok1_start, tok1_len, "reload")) {
@@ -5233,6 +5289,10 @@ static CmdSafetyLevel classify_cisco_asa_segment(const char *seg, size_t seg_len
 
     if (!next_token(&p, &tok1_start, &tok1_len))
         return CMD_READ;
+
+    if (tok_eq_ci(tok1_start, tok1_len, "do"))
+        return classify_cisco_do(seg, seg_len, classify_cisco_asa_segment,
+                                 reason_buf, reason_buf_size);
 
     /* ASA specific critical: no failover, failover active/reload-standby/
      * reset, no crypto map/access-group/nat/object-group/route/

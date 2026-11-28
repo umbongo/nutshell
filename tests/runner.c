@@ -726,6 +726,7 @@ int test_classify_open_quote_first_word_overrun(void);
 int test_ios_configure_terminal_prefixes(void);
 int test_ios_debug(void);
 int test_ios_do(void);
+int test_nxos_asa_do_own_tables(void);
 int test_crontab(void);
 int test_cmd_classify_probes(void);
 int test_nxos_asa_debug_aligned(void);
@@ -5762,6 +5763,7 @@ int main(void) {
     failed += test_ios_configure_terminal_prefixes();
     failed += test_ios_debug();
     failed += test_ios_do();
+    failed += test_nxos_asa_do_own_tables();
     failed += test_crontab();
     failed += test_cmd_classify_probes();
     failed += test_nxos_asa_debug_aligned();

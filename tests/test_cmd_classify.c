@@ -4865,6 +4865,114 @@ int test_ios_do(void) {
     TEST_END();
 }
 
+/* "do CMD" on NX-OS and ASA: the inner command is classified by that
+ * platform's own table, never looser than the IOS rules did before. `today`
+ * pins the classification before the change (both platforms used the IOS
+ * rules for the inner command); `nxos` and `asa` are the required levels
+ * now. A row where nxos < today or asa < today would be a loosening. */
+typedef struct {
+    const char *cmd;
+    int today;
+    int nxos;
+    int asa;
+} DoRow;
+
+int test_nxos_asa_do_own_tables(void) {
+    TEST_BEGIN();
+    static const DoRow rows[] = {
+        /* read-only */
+        { "do show version", 0, 0, 0 },
+        { "do show running-config", 0, 0, 0 },
+        { "do SHOW VERSION", 0, 0, 0 },
+        { "Do Show Ip Route", 0, 0, 0 },
+        { "do   show   version", 0, 0, 0 },
+        { "do\tshow version", 0, 0, 0 },
+        { "do show version | include x", 0, 0, 0 },
+        { "do show tech-support", 0, 0, 0 },
+        { "do ping 1.1.1.1", 0, 0, 0 },
+        { "do terminal length 0", 0, 0, 0 },
+        /* disruptive or config-changing, same as before */
+        { "do reload", 3, 3, 3 },
+        { "do reload module 3", 3, 3, 3 },
+        { "do write erase", 3, 3, 3 },
+        { "do write memory", 2, 2, 2 },
+        { "do copy running-config startup-config", 3, 3, 3 },
+        { "do copy tftp: flash:", 2, 2, 2 },
+        { "do clear counters", 2, 2, 2 },
+        { "do clear ip route *", 3, 3, 3 },
+        { "do clear arp", 2, 2, 2 },
+        { "do erase startup-config", 3, 3, 3 },
+        { "do delete flash:x", 3, 3, 3 },
+        { "do conf t", 2, 2, 2 },
+        { "do debug all", 3, 3, 3 },
+        { "do shutdown", 3, 3, 3 },
+        { "do enable secret x", 2, 2, 2 },
+        { "do install activate x", 3, 3, 3 },
+        /* unknown, nested and malformed */
+        { "do xyz", 1, 1, 1 },
+        { "do sh run", 1, 1, 1 },
+        { "do", 1, 1, 1 },
+        { "do ", 1, 1, 1 },
+        { "do do", 1, 1, 1 },
+        { "do do show version", 0, 0, 0 },
+        { "do do reload", 3, 3, 3 },
+        { "do show; reload", 3, 3, 3 },
+        { "do show version && do reload", 3, 3, 3 },
+        /* NX-OS table: stricter than IOS for these */
+        { "do install all", 1, 3, 1 },
+        { "do do do install all", 1, 3, 1 },
+        { "do system switchover", 1, 3, 1 },
+        { "do poweroff module 3", 1, 3, 1 },
+        { "do run bash", 1, 3, 1 },
+        { "do boot nxos bootflash:x", 2, 3, 2 },
+        { "do guestshell destroy", 1, 3, 1 },
+        { "do guestshell enable", 1, 2, 1 },
+        { "do rollback running-config checkpoint x", 1, 3, 1 },
+        { "do checkpoint x", 1, 2, 1 },
+        { "do feature bgp", 1, 2, 1 },
+        { "do no feature bgp", 2, 3, 2 },
+        { "do no vpc", 2, 3, 2 },
+        { "do vpc role preempt", 1, 3, 1 },
+        { "do switchto vdc x", 1, 2, 1 },
+        { "do vdc x", 1, 2, 1 },
+        /* ASA table: stricter than IOS for these */
+        { "do failover active", 1, 1, 3 },
+        { "do failover reload-standby", 1, 1, 3 },
+        { "do no failover", 2, 2, 3 },
+        { "do nat (a,b) x", 1, 1, 2 },
+        { "do crypto key zeroize rsa", 2, 2, 3 },
+        { "do capture x", 1, 1, 2 },
+        { "do shun 1.1.1.1", 1, 1, 2 },
+        { "do access-group x in interface y", 1, 1, 2 },
+        { "do route outside 0 0 1.1.1.1", 1, 1, 2 },
+        { "do clear xlate", 2, 2, 3 },
+        { "do clear configure all", 2, 2, 3 },
+        { "do configure factory-default", 2, 2, 3 },
+        /* NX-OS rates "reload" critical before its IOS "cancel" exception, so
+         * the stricter NX-OS answer now wins here; ASA keeps the IOS READ. */
+        { "do reload cancel", 0, 3, 0 },
+    };
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        /* never looser than today, whatever the row says */
+        ASSERT_TRUE(rows[i].nxos >= rows[i].today);
+        ASSERT_TRUE(rows[i].asa >= rows[i].today);
+        ASSERT_TRUE(cls_is(rows[i].cmd, CMD_PLATFORM_CISCO_NXOS, (CmdSafetyLevel)rows[i].nxos));
+        ASSERT_TRUE(cls_is(rows[i].cmd, CMD_PLATFORM_CISCO_ASA, (CmdSafetyLevel)rows[i].asa));
+        /* IOS itself is unchanged */
+        ASSERT_TRUE(cls_is(rows[i].cmd, CMD_PLATFORM_CISCO_IOS, (CmdSafetyLevel)rows[i].today));
+    }
+    /* The reason names the winning rule, never blank. */
+    {
+        char why[256] = "";
+        CmdSafetyLevel lv = cmd_classify_ex("do install all", CMD_PLATFORM_CISCO_NXOS, why, sizeof why);
+        ASSERT_EQ((int)lv, (int)CMD_CRITICAL);
+        ASSERT_NOT_NULL(strstr(why, "install"));
+    }
+    /* The own-table rule applies to the platform it belongs to only. */
+    ASSERT_TRUE(cls_is("do install all", CMD_PLATFORM_LINUX, CMD_UNKNOWN));
+    TEST_END();
+}
+
 int test_nxos_asa_debug_aligned(void) {
     TEST_BEGIN();
     ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));
