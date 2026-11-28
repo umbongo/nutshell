@@ -1245,6 +1245,24 @@ int test_sel_block_wide_and_combining_edges(void)
     TEST_END();
 }
 
+/* Insert-character moves cells right without raising the row's len: the
+ * block copy must see what the highlight shows, as the stream copy does. */
+int test_sel_block_copy_past_row_len(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(2, 10, 0);
+    feed(t, "abc\r\x1b[5@");                           /* five blanks, then abc; len stays 3 */
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 4, 0, 9));
+    ASSERT_TRUE(block_copy_is(&s, t, " abc"));
+    /* After delete-character the row can be longer than len says, too. */
+    feed(t, "\x1b[2;1Hwxyz123456\x1b[2;1H\x1b[2P");     /* "yz123456" shifted left */
+    ASSERT_TRUE(bdrag(&s, t, 1, 0, 1, 7));
+    ASSERT_TRUE(block_copy_is(&s, t, "yz123456"));
+    term_free(t);
+    TEST_END();
+}
+
 /* Across the scrollback and the screen. */
 int test_sel_block_across_scrollback(void)
 {

@@ -2299,6 +2299,7 @@ int test_sel_block_click_selects_nothing(void);
 int test_sel_block_short_rows(void);
 int test_sel_block_trailing_empty_lines_dropped(void);
 int test_sel_block_wide_and_combining_edges(void);
+int test_sel_block_copy_past_row_len(void);
 int test_sel_block_across_scrollback(void);
 int test_sel_block_extend_keeps_block(void);
 int test_sel_block_cleared_by_plain_click(void);
@@ -7334,6 +7335,7 @@ int main(void) {
     failed += test_sel_block_short_rows();
     failed += test_sel_block_trailing_empty_lines_dropped();
     failed += test_sel_block_wide_and_combining_edges();
+    failed += test_sel_block_copy_past_row_len();
     failed += test_sel_block_across_scrollback();
     failed += test_sel_block_extend_keeps_block();
     failed += test_sel_block_cleared_by_plain_click();

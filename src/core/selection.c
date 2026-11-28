@@ -436,9 +436,8 @@ static void sel_copy_block(const Selection *s, const Terminal *t, SelBuf *b)
         if (ln != first) sb_put(b, "\r\n", 2);
         int c0 = s->start.col, c1 = s->end.col;
         if (c1 > t->cols - 1) c1 = t->cols - 1;
-        int len = r->len < t->cols ? r->len : t->cols;
-        while (c1 + 1 < len && selection_is_combining(r->cells[c1 + 1].codepoint)) c1++;
-        if (c1 > len - 1) c1 = len - 1;            /* nothing written past len */
+        /* Not r->len: insert-character moves cells right without raising it. */
+        while (c1 + 1 < t->cols && selection_is_combining(r->cells[c1 + 1].codepoint)) c1++;
         while (c0 <= c1 && selection_is_combining(r->cells[c0].codepoint)) c0++;
         size_t keep = b->len;
         for (int c = c0; c <= c1; c++) {
