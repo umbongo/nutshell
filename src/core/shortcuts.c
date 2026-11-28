@@ -1,4 +1,5 @@
 #include "shortcuts.h"
+#include "app_font.h"
 #include "resource.h"   /* IDM_* -- -Isrc/ui is on both build paths */
 #include <string.h>
 
@@ -11,6 +12,10 @@
 #define S7 "Mouse"
 
 #define NO_SESSION "with no live session: the menu"
+
+/* The default font size as text, from the constant Ctrl+0 resets to. */
+#define SC_STR_(x) #x
+#define SC_STR(x)  SC_STR_(x)
 
 static const Shortcut TABLE[] = {
     /* 1. Sessions and tabs */
@@ -41,7 +46,8 @@ static const Shortcut TABLE[] = {
     { S3, "PgUp",       "History up a page; vim and less get it", "", 0u, 0 },
     { S3, "PgDn",       "History down a page; vim and less get it", "", 0u, 0 },
     { S3, "Ctrl+PgUp, Ctrl+PgDn", "Sent to the program, always", "", 0u, 0 },
-    { S3, "Ctrl+=, Ctrl+-, Ctrl+0", "Zoom the terminal font in, out or reset", "US layout", 0u, 0 },
+    { S3, "Ctrl+=, Ctrl+-, Ctrl+0",
+      "Zoom the terminal font in, out, reset to " SC_STR(APP_FONT_DEFAULT_SIZE) " pt", "US layout", 0u, 0 },
 
     /* 4. Keys the terminal sends to the shell */
     { S4, "Ctrl+Space",      "NUL (0x00)", "", 0u, 0 },

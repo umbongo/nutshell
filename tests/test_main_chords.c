@@ -169,6 +169,27 @@ int test_main_chords_zoom_reset_sizes(void)
     TEST_END();
 }
 
+/* The sheet says Ctrl+0 resets the terminal font to the size the code resets
+ * it to (it is also the Settings font size, so the sheet names the number). */
+int test_main_chords_sheet_names_the_reset_size(void)
+{
+    TEST_BEGIN();
+    char want[16];
+    snprintf(want, sizeof(want), "%d pt", zoom_reset_size(0));
+    size_t n = 0;
+    const Shortcut *t = shortcuts_table(&n);
+    int rows = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (strstr(t[i].chord, "Ctrl+0") == NULL || (t[i].flags & SC_AI)) continue;
+        rows++;
+        if (strstr(t[i].action, want) == NULL)
+            printf("  \"%s\" does not say \"%s\"\n", t[i].action, want);
+        ASSERT_TRUE(strstr(t[i].action, want) != NULL);
+    }
+    ASSERT_EQ(rows, 1);
+    TEST_END();
+}
+
 /* Each chord the code handles is in the shortcut table, so the sheet and
  * the README list it. */
 int test_main_chords_are_in_the_shortcut_table(void)

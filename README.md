@@ -452,7 +452,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **PgUp** | History up a page; vim and less get it | |
 | **PgDn** | History down a page; vim and less get it | |
 | **Ctrl+PgUp, Ctrl+PgDn** | Sent to the program, always | |
-| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the terminal font in, out or reset | US layout |
+| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the terminal font in, out, reset to 10 pt | US layout |
 
 #### Keys the terminal sends to the shell
 
