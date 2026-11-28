@@ -243,3 +243,78 @@ int test_term_tab_reset_resize_alt(void) {
     term_free(t);
     TEST_END();
 }
+
+/* ---- review follow-ups: pending wrap, wrapped flag, wide tab stops ---- */
+
+static bool stop_at(const Terminal *t, int col) {
+    return (t->tab_stops[col / 8] >> (col % 8)) & 1;
+}
+
+int test_term_hts_in_pending_wrap(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 0);
+    feed(t, "\x1B[1;1HXXXXXXXXXX");        /* pending wrap: col == cols */
+    ASSERT_EQ(t->cursor.col, 10);
+    ASSERT_TRUE(!stop_at(t, 9));
+    feed(t, "\x1BH");                       /* HTS acts on the last column */
+    ASSERT_TRUE(stop_at(t, 9));
+    feed(t, "\x1B[1;1H\x1B[2I");
+    ASSERT_EQ(t->cursor.col, 9);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_tbc_in_pending_wrap(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 0);
+    feed(t, "\x1B[1;10H\x1BH");            /* stop at col 9 */
+    ASSERT_TRUE(stop_at(t, 9));
+    feed(t, "\x1B[1;1HXXXXXXXXXX");
+    ASSERT_EQ(t->cursor.col, 10);
+    feed(t, "\x1B[0g");                     /* clears the last column's stop */
+    ASSERT_TRUE(!stop_at(t, 9));
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrap_flag_below_region(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 5, 20);
+    feed(t, "\x1B[2;5r\x1B[10;1HXXXXXY");  /* wrap stays on the last row */
+    ASSERT_EQ(t->cursor.row, 9);
+    ASSERT_TRUE(!t->lines[term_screen_to_phys(t, 9)]->wrapped);
+    ASSERT_TRUE(!t->lines[term_screen_to_phys(t, 8)]->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrap_flag_region_scroll(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 10, 20);
+    feed(t, "\x1B[2;5r\x1B[5;1HXXXXXXXXXXY");
+    ASSERT_EQ(t->cursor.row, 4);
+    /* the new line, which the region scroll left on the bottom row */
+    ASSERT_TRUE(t->lines[term_screen_to_phys(t, 4)]->wrapped);
+    ASSERT_TRUE(!t->lines[term_screen_to_phys(t, 3)]->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_tab_past_2048_columns(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 2100, 0);
+    feed(t, "\x1B[1;2040H");               /* col 2039 */
+    feed(t, "\t");  ASSERT_EQ(t->cursor.col, 2040);
+    feed(t, "\t");  ASSERT_EQ(t->cursor.col, 2048);   /* past the stored stops */
+    feed(t, "\t");  ASSERT_EQ(t->cursor.col, 2056);
+    feed(t, "\x1B[1;2045H\x1B[I");
+    ASSERT_EQ(t->cursor.col, 2048);
+    feed(t, "\x1B[2I");
+    ASSERT_EQ(t->cursor.col, 2064);
+    feed(t, "\x1B[1;2050H\x1B[I");
+    ASSERT_EQ(t->cursor.col, 2056);
+    feed(t, "\x1B[1;2090H\x1B[3I");
+    ASSERT_EQ(t->cursor.col, 2099);        /* last column */
+    term_free(t);
+    TEST_END();
+}

@@ -51,6 +51,11 @@ static bool tab_is_stop(const Terminal *term, int col) {
     return (term->tab_stops[col / 8] >> (col % 8)) & 1u;
 }
 
+/* The column an in-place edit acts on: the last one while a wrap is pending. */
+static int pending_wrap_col(const Terminal *term) {
+    return term->cursor.col < term->cols ? term->cursor.col : term->cols - 1;
+}
+
 static void tab_set(Terminal *term, int col, bool on) {
     if (col < 0 || col >= TERM_TAB_COLS) return;
     if (on) term->tab_stops[col / 8] |= (uint8_t)(1u << (col % 8));
@@ -89,18 +94,24 @@ static void term_put_char(Terminal *term, uint32_t c) {
     if (term->cursor.col >= term->cols) {
         // Auto-wrap
         term->cursor.col = 0;
+        bool moved = false;
         /* The line feed a wrap implies, as LF and IND do it: scroll the
          * region from its bottom row, otherwise just move down (a cursor
          * below the region on the last row stays). */
         if (term->cursor.row == term->scroll_bot) {
             term_scroll_up(term, term->scroll_top, term->scroll_bot, 1);
+            moved = true;
         } else if (term->cursor.row < term->rows - 1) {
             term->cursor.row++;
+            moved = true;
         }
-        
-        // Mark new line as wrapped
-        TermRow *row = get_screen_row(term, term->cursor.row);
-        if (row) row->wrapped = true;
+
+        /* Mark the new line as wrapped, unless the cursor stayed on its
+         * row (below the region, last row): that row is no continuation. */
+        if (moved) {
+            TermRow *row = get_screen_row(term, term->cursor.row);
+            if (row) row->wrapped = true;
+        }
     }
 
     TermRow *row = get_screen_row(term, term->cursor.row);
@@ -444,7 +455,7 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
             break;
         case 'g': { // TBC - Tab Clear: 0 the stop at the cursor, 3 all
             int mode = get_param(term, 0, 0);
-            if (mode == 0) tab_set(term, term->cursor.col, false);
+            if (mode == 0) tab_set(term, pending_wrap_col(term), false);
             else if (mode == 3) memset(term->tab_stops, 0, sizeof term->tab_stops);
             break;
         }
@@ -804,8 +815,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == 'H') {
                     /* HTS — Horizontal Tab Set */
-                    if (term->cursor.col < term->cols)
-                        tab_set(term, term->cursor.col, true);
+                    tab_set(term, pending_wrap_col(term), true);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == 'c') {
                     /* RIS — only the tab stops are reset here; the rest of a

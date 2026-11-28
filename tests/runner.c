@@ -854,6 +854,11 @@ int test_term_wrap_inside_region_moves_down(void);
 int test_term_alt_screen_keeps_region(void);
 int test_term_alt_screen_region_resize(void);
 int test_term_alt_screen_grow_then_scrolls(void);
+int test_term_hts_in_pending_wrap(void);
+int test_term_tbc_in_pending_wrap(void);
+int test_term_wrap_flag_below_region(void);
+int test_term_wrap_flag_region_scroll(void);
+int test_term_tab_past_2048_columns(void);
 int test_term_alt_screen_region_repeat(void);
 /* test_term_underline.c */
 int test_term_underline_typical_cell(void);
@@ -7910,6 +7915,11 @@ int main(void) {
     failed += test_term_alt_screen_keeps_region();
     failed += test_term_alt_screen_region_resize();
     failed += test_term_alt_screen_grow_then_scrolls();
+    failed += test_term_hts_in_pending_wrap();
+    failed += test_term_tbc_in_pending_wrap();
+    failed += test_term_wrap_flag_below_region();
+    failed += test_term_wrap_flag_region_scroll();
+    failed += test_term_tab_past_2048_columns();
     failed += test_term_alt_screen_region_repeat();
     failed += test_term_underline_typical_cell();
     failed += test_term_underline_stays_inside_cell();
