@@ -320,6 +320,10 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
         }
         if (got != 0) {
             free(body);
+            if (got == WEB_FETCH_GET_NO_TLS)
+                return fetch_fail(result_buf, result_len,
+                                  "A secure connection could not be set up: TLS 1.2 or newer "
+                                  "is not available on this system, so nothing was sent");
             return fetch_fail(result_buf, result_len, "HTTP request failed");
         }
 
@@ -492,6 +496,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     HINTERNET session = NULL, connect = NULL, req = NULL;
     int own_session = 0;   /* opened here, so closed here */
     int armed = 0;         /* req is registered on nc: fire may close it */
+    int tls_refused = 0;   /* no session: TLS 1.2 could not be enforced */
     char *buf = NULL;
     size_t len = 0, cap = 0;
     const size_t max_body = (size_t)AI_TOOL_RESULT_MAX * 4;
@@ -500,7 +505,10 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         session = fetch->session;
     } else {
         session = ns_winhttp_open(WIDEN(AI_TOOL_USER_AGENT));
-        if (!session) goto fail;
+        if (!session) {
+            tls_refused = (GetLastError() == NS_ERR_TLS_UNAVAILABLE);
+            goto fail;
+        }
         if (fetch) fetch->session = session;   /* kept for the next hop */
         else own_session = 1;
     }
@@ -625,7 +633,7 @@ fail:
     if (connect) WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);   /* a shared one stays for wf_end() */
     *status = 0;
-    return -1;
+    return tls_refused ? WEB_FETCH_GET_NO_TLS : -1;
 }
 
 /* Stateless: every hop opens and closes its own session. */

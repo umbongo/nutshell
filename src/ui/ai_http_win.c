@@ -145,8 +145,7 @@ static int ai_http_post_impl(const char *url, const char * const *headers,
     const int own = session == NULL;
     HINTERNET hSession = own ? ns_winhttp_open(NULL) : (HINTERNET)session;
     if (!hSession) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed: %lu",
-                 GetLastError());
+        ns_winhttp_failure_text(GetLastError(), resp->error, sizeof(resp->error));
         return -1;
     }
 
@@ -354,8 +353,7 @@ static int ai_http_post_stream_impl(void *session, int recv_ms,
 
     HINTERNET hSession = own ? ns_winhttp_open(NULL) : (HINTERNET)session;
     if (!hSession) {
-        if (error) snprintf(error, error_size, "WinHttpOpen failed: %lu",
-                            GetLastError());
+        if (error) ns_winhttp_failure_text(GetLastError(), error, error_size);
         return -1;
     }
 
@@ -545,8 +543,7 @@ static int ai_http_get_impl(const char *url, const char * const *headers,
 
     HINTERNET hSession = ns_winhttp_open(NULL);
     if (!hSession) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed: %lu",
-                 GetLastError());
+        ns_winhttp_failure_text(GetLastError(), resp->error, sizeof(resp->error));
         return -1;
     }
 

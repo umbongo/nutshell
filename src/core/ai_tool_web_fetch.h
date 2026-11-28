@@ -9,6 +9,10 @@
 #define WEB_FETCH_MAX_REDIRECTS 5      /* redirects followed: up to 6 requests */
 #define WEB_FETCH_MAX_ADDRS     32     /* addresses one host may resolve to */
 
+/* get() returns this (instead of -1) when TLS 1.2 or newer could not be
+ * enforced, so the refusal can say so. */
+#define WEB_FETCH_GET_NO_TLS (-2)
+
 /* What the portable hop loop needs from the platform. The loop checks every
  * address a host resolves to before it calls get() for that host, so a
  * backend only has to do the network work. */
@@ -18,7 +22,8 @@ typedef struct WebFetchBackend {
      * the total found (may exceed max), or -1 when resolution fails. */
     int (*resolve)(void *ctx, const char *host, NetAddr *out, int max);
     /* One GET that never follows redirects. Returns 0 when a response arrived
-     * (any status), -1 on failure or cancel. *location is the Location header
+     * (any status), -1 on failure or cancel, WEB_FETCH_GET_NO_TLS when no secure
+     * connection could be set up. *location is the Location header
      * or "". *body is malloc'd (caller frees), at most AI_TOOL_RESULT_MAX * 4. */
     int (*get)(void *ctx, const NetUrlParts *url, int timeout_ms,
                volatile int *cancel, int *status,

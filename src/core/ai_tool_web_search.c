@@ -458,7 +458,13 @@ static int ws_get(const char *url, volatile int *cancel, AiNetCancel *nc,
 
     HINTERNET session =
         ns_winhttp_open(L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)");
-    if (!session) { *err = "WinHttpOpen failed"; return -1; }
+    if (!session) {
+        *err = (GetLastError() == NS_ERR_TLS_UNAVAILABLE)
+            ? "A secure connection could not be set up: TLS 1.2 or newer is "
+              "not available on this system, so nothing was sent"
+            : "WinHttpOpen failed";
+        return -1;
+    }
     (void)WinHttpSetTimeouts(session, WS_RESOLVE_MS, WS_CONNECT_MS,
                              WS_IO_MS, WS_IO_MS);
 

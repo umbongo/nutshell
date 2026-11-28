@@ -31,6 +31,7 @@ typedef struct {
     FkResp resp[FK_MAX_RESP];
     int    nresp;
     int    get_fail;        /* the get returns -1 instead of a response */
+    int    get_fail_code;   /* ...or this code, when non-zero */
     int    cancel_in_get;   /* the get raises the cancel flag */
     AiNetCancel *nc_target;  /* token the hooks below fire */
     int    fire_in_get;     /* the get fires nc_target (after answering) */
@@ -114,7 +115,8 @@ static int fk_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     f->now += f->step;
     if (f->cancel_in_get && cancel) *cancel = 1;
     if (f->fire_in_get && f->nc_target) ai_nc_fire(f->nc_target);
-    if (f->get_fail || f->nresp == 0) return -1;
+    if (f->get_fail || f->nresp == 0)
+        return f->get_fail_code ? f->get_fail_code : -1;
 
     const FkResp *r = &f->resp[idx < f->nresp ? idx : f->nresp - 1];
     *status = r->status;
@@ -768,6 +770,28 @@ int test_web_fetch_get_failure(void)
     ASSERT_NOT_NULL(buf);
     if (buf) ASSERT_TRUE(strstr(buf, "HTTP request failed") != NULL);
     ASSERT_EQ(f.gets, 1);
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_get_no_tls_says_so(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    f.get_fail = 1;
+    f.get_fail_code = WEB_FETCH_GET_NO_TLS;
+    char *buf;
+    int rc = fk_run(&ctx, "https://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) {
+        ASSERT_TRUE(strstr(buf, "secure connection could not be set up") != NULL);
+        ASSERT_TRUE(strstr(buf, "HTTP request failed") == NULL);
+    }
+    ASSERT_EQ(f.gets, 1);
+    ASSERT_EQ(f.ends, 1);
     free(buf);
     TEST_END();
 }
