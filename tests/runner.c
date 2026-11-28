@@ -4224,6 +4224,12 @@ int test_settings_help_every_id_in_settings_c(void);
 int test_settings_help_ai_enable_entry(void);
 int test_settings_help_voice_entries(void);
 
+/* test_profile_help.c */
+int test_profile_help_table_matches_enum(void);
+int test_profile_help_texts_shape(void);
+int test_profile_help_fields_say_what_empty_means(void);
+int test_profile_help_every_editable_field_is_mapped(void);
+
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
 int test_sl_scale_144_is_one_and_half(void);
@@ -9128,6 +9134,10 @@ int main(void) {
     failed += test_thinking_label_colour();
     failed += test_thinking_follows_tail();
     failed += test_thinking_theme_tokens_distinct();
+    failed += test_profile_help_table_matches_enum();
+    failed += test_profile_help_texts_shape();
+    failed += test_profile_help_fields_say_what_empty_means();
+    failed += test_profile_help_every_editable_field_is_mapped();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();
     failed += test_settings_help_labels_and_pages();
