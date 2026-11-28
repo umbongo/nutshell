@@ -121,6 +121,10 @@ typedef struct {
     int        primary_lines_count;
     int        primary_lines_start;
     TermCursor primary_cursor;
+    /* The primary screen's scroll region, saved while the alternate screen is
+     * up; term_alt_screen_exit() restores it if it still fits the screen. */
+    int        primary_scroll_top;
+    int        primary_scroll_bot;
     /* Set when the buffer swaps (e.g. alt-screen exit) so the renderer knows
      * the display buffer shadow is stale and must be fully invalidated. */
     bool full_redraw_needed;

@@ -83,3 +83,60 @@ int test_term_wrap_inside_region_moves_down(void) {
     term_free(t);
     TEST_END();
 }
+
+/* ---- F2: scroll region across the alternate screen ---- */
+
+int test_term_alt_screen_keeps_region(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 10, 20);
+    feed(t, "\x1B[3;7r");
+    feed(t, "\x1B[?1049h");
+    ASSERT_EQ(t->scroll_top, 0);
+    ASSERT_EQ(t->scroll_bot, 9);
+    feed(t, "\x1B[?1049l");
+    ASSERT_EQ(t->scroll_top, 2);
+    ASSERT_EQ(t->scroll_bot, 6);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_alt_screen_region_resize(void) {
+    TEST_BEGIN();
+    /* fits after the resize: kept */
+    Terminal *t = term_init(10, 10, 20);
+    feed(t, "\x1B[3;7r\x1B[?1049h");
+    ASSERT_TRUE(term_resize(t, 8, 10));
+    feed(t, "\x1B[?1049l");
+    ASSERT_EQ(t->scroll_top, 2);
+    ASSERT_EQ(t->scroll_bot, 6);
+    term_free(t);
+    /* no longer fits: full screen */
+    t = term_init(10, 10, 20);
+    feed(t, "\x1B[3;9r\x1B[?1049h");
+    ASSERT_TRUE(term_resize(t, 6, 10));
+    feed(t, "\x1B[?1049l");
+    ASSERT_EQ(t->scroll_top, 0);
+    ASSERT_EQ(t->scroll_bot, 5);
+    term_free(t);
+    /* grown: kept */
+    t = term_init(10, 10, 20);
+    feed(t, "\x1B[3;9r\x1B[?1049h");
+    ASSERT_TRUE(term_resize(t, 14, 10));
+    feed(t, "\x1B[?1049l");
+    ASSERT_EQ(t->scroll_top, 2);
+    ASSERT_EQ(t->scroll_bot, 8);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_alt_screen_region_repeat(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 10, 20);
+    feed(t, "\x1B[3;7r");
+    feed(t, "\x1B[?1049h\x1B[2;4r\x1B[?1049h");   /* second enter ignored */
+    feed(t, "\x1B[?1049l\x1B[?1049l");            /* second leave ignored */
+    ASSERT_EQ(t->scroll_top, 2);
+    ASSERT_EQ(t->scroll_bot, 6);
+    term_free(t);
+    TEST_END();
+}

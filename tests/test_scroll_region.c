@@ -498,7 +498,7 @@ int test_sr_alt_screen_resets(void) {
     t->scroll_top = 5;
     t->scroll_bot = 20;
 
-    /* Enter alt screen should reset scroll region */
+    /* Enter alt screen starts with the full region */
     term_process(t, "\x1B[?1049h", 8);
     ASSERT_EQ(t->scroll_top, 0);
     ASSERT_EQ(t->scroll_bot, 23);
@@ -508,10 +508,10 @@ int test_sr_alt_screen_resets(void) {
     ASSERT_EQ(t->scroll_top, 1);
     ASSERT_EQ(t->scroll_bot, 9);
 
-    /* Exit alt screen should reset scroll region */
+    /* Exit alt screen restores the primary's region (5..20), not the alt's */
     term_process(t, "\x1B[?1049l", 8);
-    ASSERT_EQ(t->scroll_top, 0);
-    ASSERT_EQ(t->scroll_bot, 23);
+    ASSERT_EQ(t->scroll_top, 5);
+    ASSERT_EQ(t->scroll_bot, 20);
 
     term_free(t);
     TEST_END();

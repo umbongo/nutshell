@@ -107,6 +107,8 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->insert_mode      = false;
     term->scroll_top       = 0;
     term->scroll_bot       = rows - 1;
+    term->primary_scroll_top = 0;
+    term->primary_scroll_bot = rows - 1;
     term->alt_screen_active   = false;
     term->primary_lines       = NULL;
     term->full_redraw_needed  = false;
@@ -786,6 +788,8 @@ void term_alt_screen_enter(Terminal *term)
     term->primary_lines_count     = term->lines_count;
     term->primary_lines_start     = term->lines_start;
     term->primary_cursor          = term->cursor;
+    term->primary_scroll_top      = term->scroll_top;
+    term->primary_scroll_bot      = term->scroll_bot;
     term->primary_lines_recycled  = term->lines_recycled;
     term->lines_recycled          = 0;
     term->epoch++;
@@ -833,8 +837,17 @@ void term_alt_screen_exit(Terminal *term)
     term->primary_lines   = NULL;
     term->alt_screen_active = false;
     term->scrollback_offset = 0;
-    term->scroll_top = 0;
-    term->scroll_bot = term->rows - 1;
+    /* The primary's region comes back, unless a resize on the alternate
+     * screen left it outside the screen. */
+    if (term->primary_scroll_top >= 0 &&
+        term->primary_scroll_top < term->primary_scroll_bot &&
+        term->primary_scroll_bot < term->rows) {
+        term->scroll_top = term->primary_scroll_top;
+        term->scroll_bot = term->primary_scroll_bot;
+    } else {
+        term->scroll_top = 0;
+        term->scroll_bot = term->rows - 1;
+    }
 
     /* Reset SGR attributes so text after alt screen exit uses defaults,
      * not whatever colors the alt-screen application (e.g. man/less) set. */
