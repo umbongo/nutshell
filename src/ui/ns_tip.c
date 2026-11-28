@@ -10,6 +10,16 @@
 #include <commctrl.h>
 #include <string.h>
 
+void ns_tip_set_dpi(HWND tip, int dpi, HFONT font)
+{
+    if (!tip) return;
+    if (font) SendMessageA(tip, WM_SETFONT, (WPARAM)font, FALSE);
+    SendMessageA(tip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)ns_scale(360, dpi));
+    int m = ns_scale(SP_XS, dpi);
+    RECT margin = { m, m, m, m };
+    SendMessageA(tip, TTM_SETMARGIN, 0, (LPARAM)&margin);
+}
+
 HWND ns_tip_create(HWND owner, int dpi, HFONT font, const ThemeTokens *tokens)
 {
     HWND tip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL,
@@ -29,10 +39,7 @@ HWND ns_tip_create(HWND owner, int dpi, HFONT font, const ThemeTokens *tokens)
     }
     if (font) SendMessageA(tip, WM_SETFONT, (WPARAM)font, FALSE);
 
-    SendMessageA(tip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)ns_scale(360, dpi));
-    int m = ns_scale(SP_XS, dpi);
-    RECT margin = { m, m, m, m };
-    SendMessageA(tip, TTM_SETMARGIN, 0, (LPARAM)&margin);
+    ns_tip_set_dpi(tip, dpi, NULL);
     SendMessageA(tip, TTM_SETDELAYTIME, TTDT_INITIAL, MAKELPARAM(500, 0));
     SendMessageA(tip, TTM_SETDELAYTIME, TTDT_RESHOW, MAKELPARAM(100, 0));
     SendMessageA(tip, TTM_SETDELAYTIME, TTDT_AUTOPOP, MAKELPARAM(32767, 0));

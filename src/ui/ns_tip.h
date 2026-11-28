@@ -18,6 +18,10 @@
  * Returns NULL on failure. */
 HWND ns_tip_create(HWND owner, int dpi, HFONT font, const ThemeTokens *tokens);
 
+/* Re-apply the DPI-dependent settings after a monitor move: the maximum
+ * width and margins ns_tip_create set, and the font (borrowed). */
+void ns_tip_set_dpi(HWND tip, int dpi, HFONT font);
+
 /* Add `tool` (a window) as a tool: TTF_IDISHWND | TTF_SUBCLASS, hwnd is the
  * tool's parent and uId the tool. Changes no window style. Non-zero on
  * success. */

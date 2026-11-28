@@ -227,6 +227,22 @@ void settings_initial_placement(const SettingsMetrics *m, int target_rows,
     if (win_y) *win_y = place_axis(work_y, work_h, ch + nc_h);
 }
 
+void settings_min_window_size(const SettingsMetrics *m, int nc_w, int nc_h,
+                              int *w, int *h)
+{
+    if (!m) return;
+    if (w) *w = m->min_w + nc_w;
+    if (h) *h = m->min_h + nc_h;
+}
+
+int settings_scroll_rescale(int pos, int old_dpi, int new_dpi)
+{
+    if (pos <= 0) return 0;
+    if (old_dpi <= 0 || new_dpi <= 0) return pos;
+    long long v = (long long)pos * new_dpi + old_dpi / 2;
+    return (int)(v / old_dpi);
+}
+
 /* ---- Scrolling -------------------------------------------------------------- */
 
 int settings_scroll_max(int view_h, int content_h)

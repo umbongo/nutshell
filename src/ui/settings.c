@@ -2271,6 +2271,57 @@ static void voice_page_read(SettingsDlgData *d, Settings *s)
 
 /* ---- Main window procedure ------------------------------------------------ */
 
+/* AdjustWindowRectExForDpi is Windows 10 1607+; resolved at run time, with
+ * the system-DPI call as the fallback. */
+static void settings_adjust_rect(RECT *rc, DWORD style, int dpi)
+{
+    typedef BOOL (WINAPI *AdjustForDpi_fn)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    static AdjustForDpi_fn pfn = NULL;
+    static int resolved = 0;
+    if (!resolved) {
+        HMODULE h = GetModuleHandleA("user32.dll");
+        if (h) pfn = (AdjustForDpi_fn)(void (*)(void))GetProcAddress(h, "AdjustWindowRectExForDpi");
+        resolved = 1;
+    }
+    if (pfn && pfn(rc, style, FALSE, 0, (UINT)dpi)) return;
+    AdjustWindowRect(rc, style, FALSE);
+}
+
+/* After d->dpi changed: re-fetch every font from the cache at the new DPI
+ * and redo what was sized from the DPI when the controls were created. */
+static void dpi_refresh_fonts(SettingsDlgData *d)
+{
+    d->hDlgFont = ns_font(FONT_BODY, d->dpi);
+    d->hBoldFont = ns_font(FONT_TITLE, d->dpi);
+    if (d->hDlgFont)
+        EnumChildWindows(d->hDlg, SetFontProc, (LPARAM)d->hDlgFont);
+    if (d->hBoldFont && d->hPageTitle)
+        SendMessage(d->hPageTitle, WM_SETFONT, (WPARAM)d->hBoldFont, TRUE);
+    for (size_t vi = 0; vi < sizeof(d->hVoiceHead) / sizeof(d->hVoiceHead[0]); vi++)
+        if (d->hBoldFont && d->hVoiceHead[vi])
+            SendMessage(d->hVoiceHead[vi], WM_SETFONT, (WPARAM)d->hBoldFont, TRUE);
+    ns_tip_set_dpi(d->hTip, d->dpi, d->hDlgFont);
+
+    SettingsMetrics m;
+    settings_metrics_init(&m, d->dpi);
+    SendMessage(d->hNav, LB_SETITEMHEIGHT, 0, (LPARAM)MAKELONG(m.nav_item_h, 0));
+    HWND hLang = GetDlgItem(d->hPage, IDC_VOICE_LANG);
+    if (hLang)
+        SendMessage(hLang, CB_SETDROPPEDWIDTH, (WPARAM)ns_scale(170, d->dpi), 0);
+
+    HWND hEdit = GetDlgItem(d->hPage, IDC_AI_SYSTEM_NOTES);
+    if (hEdit && d->hDlgFont) {
+        HDC hdc = GetDC(hEdit);
+        HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)d->hDlgFont);
+        TEXTMETRIC tm;
+        GetTextMetrics(hdc, &tm);
+        d->sys_notes_line_h = tm.tmHeight + tm.tmExternalLeading;
+        if (d->sys_notes_line_h < 1) d->sys_notes_line_h = 16;
+        SelectObject(hdc, old);
+        ReleaseDC(hEdit, hdc);
+    }
+}
+
 /* ---- Keyboard path: Tab order and F1 help --------------------------------
  * The dialog is a plain window, not a dialog box, so it does its own key
  * navigation. The order and the stepping are in settings_tab (portable,
@@ -3413,15 +3464,43 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mmi = (MINMAXINFO *)lParam;
-        int ddpi = d ? d->dpi : 96;
+        /* The monitor the dialog is on: before WM_CREATE has stored it, ask
+         * the window. The frame is measured at that DPI too, not the system's. */
+        int ddpi = d ? d->dpi : get_window_dpi(hwnd);
         SettingsMetrics m;
         settings_metrics_init(&m, ddpi);
         RECT wr = {0, 0, m.min_w, m.min_h};
-        AdjustWindowRect(&wr, (DWORD)GetWindowLong(hwnd, GWL_STYLE), FALSE);
-        mmi->ptMinTrackSize.x = wr.right - wr.left;
-        mmi->ptMinTrackSize.y = wr.bottom - wr.top;
+        settings_adjust_rect(&wr, (DWORD)GetWindowLong(hwnd, GWL_STYLE), ddpi);
+        int mw = 0, mh = 0;
+        settings_min_window_size(&m, (int)(wr.right - wr.left) - m.min_w,
+                                 (int)(wr.bottom - wr.top) - m.min_h, &mw, &mh);
+        mmi->ptMinTrackSize.x = mw;
+        mmi->ptMinTrackSize.y = mh;
         return 0;
     }
+
+    case WM_DPICHANGED:
+        if (d) {
+            /* Moved to a monitor with another scale: fonts at the new DPI
+             * come from the shared cache (never ns_font_flush(): the main
+             * window, disabled behind this one, still uses its own), every
+             * pixel size is recomputed from d->dpi by relayout(), and the
+             * window takes the rectangle Windows suggests. */
+            int old_dpi = d->dpi;
+            help_pop_hide(d);
+            d->dpi = (int)HIWORD(wParam);
+            d->scroll = settings_scroll_rescale(d->scroll, old_dpi, d->dpi);
+            dpi_refresh_fonts(d);
+            const RECT *sr = (const RECT *)lParam;
+            if (sr)
+                SetWindowPos(hwnd, NULL, sr->left, sr->top,
+                             sr->right - sr->left, sr->bottom - sr->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            relayout(hwnd, d);   /* WM_SIZE does not fire when the size is unchanged */
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+        break;
 
     case WM_AI_MODELS_DONE: {
         FetchModelsCtx *ctx = (FetchModelsCtx *)lParam;

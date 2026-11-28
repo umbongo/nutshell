@@ -674,3 +674,114 @@ int test_sl_initial_negative_origin(void) {
     ASSERT_EQ(wy, -76);
     TEST_END();
 }
+
+/* ---- A DPI change (WM_DPICHANGED): the same layout at 96/120/144/192 ---- */
+
+static const int k_dpis[] = { 96, 120, 144, 192 };
+#define N_DPIS ((int)(sizeof(k_dpis) / sizeof(k_dpis[0])))
+
+int test_sl_dpi_metrics_scale_with_dpi(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        ASSERT_EQ(m.dpi, k_dpis[i]);
+        ASSERT_EQ(m.nav_w, ns_scale(168, k_dpis[i]));
+        ASSERT_EQ(m.label_w, ns_scale(168, k_dpis[i]));
+        ASSERT_EQ(m.row_h, ns_scale(30, k_dpis[i]));
+        ASSERT_EQ(m.min_w, ns_scale(620, k_dpis[i]));
+        /* A row's control always fits in its row, at every scale. */
+        ASSERT_TRUE(m.ctrl_h <= m.row_h);
+        ASSERT_TRUE(m.btn_h <= m.btnbar_h);
+    }
+    TEST_END();
+}
+
+int test_sl_dpi_min_size_scales(void) {
+    TEST_BEGIN();
+    SettingsMetrics prev;
+    settings_metrics_init(&prev, 96);
+    for (int i = 1; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        ASSERT_TRUE(m.min_w > prev.min_w);
+        ASSERT_TRUE(m.min_h > prev.min_h);
+        /* The scale is the DPI ratio, to within a pixel of rounding. */
+        int want_w = 620 * k_dpis[i] / 96;
+        ASSERT_TRUE(m.min_w >= want_w - 1 && m.min_w <= want_w + 1);
+        prev = m;
+    }
+    TEST_END();
+}
+
+int test_sl_dpi_min_window_adds_the_frame(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        int w = 0, h = 0;
+        settings_min_window_size(&m, ns_scale(16, k_dpis[i]),
+                                 ns_scale(39, k_dpis[i]), &w, &h);
+        ASSERT_EQ(w, m.min_w + ns_scale(16, k_dpis[i]));
+        ASSERT_EQ(h, m.min_h + ns_scale(39, k_dpis[i]));
+    }
+    int w = 7, h = 7;
+    settings_min_window_size(NULL, 1, 1, &w, &h);
+    ASSERT_EQ(w, 7);                      /* a NULL metrics writes nothing */
+    settings_min_window_size(NULL, 1, 1, NULL, NULL);   /* and nulls are safe */
+    TEST_END();
+}
+
+int test_sl_dpi_min_size_regions_dont_overlap(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        SettingsRect nav, content, buttons;
+        settings_layout_regions(m.min_w, m.min_h, &m, &nav, &content, &buttons);
+        ASSERT_EQ(nav.x + nav.w, content.x);              /* side by side   */
+        ASSERT_EQ(content.x + content.w, m.min_w);        /* no clipping    */
+        ASSERT_EQ(nav.y + nav.h, buttons.y);              /* nav above bar  */
+        ASSERT_EQ(content.y + content.h, buttons.y);
+        ASSERT_EQ(buttons.y + buttons.h, m.min_h);
+        ASSERT_TRUE(content.w > m.label_w + m.gap + 2 * m.pad);  /* a control fits */
+        /* The Save/Cancel pair and the footer fit the bar. */
+        ASSERT_TRUE(2 * m.btn_w + m.gap + 2 * m.pad < buttons.w);
+    }
+    TEST_END();
+}
+
+int test_sl_dpi_rows_stay_inside_the_page(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        SettingsRect nav, content, buttons;
+        settings_layout_regions(m.min_w, m.min_h, &m, &nav, &content, &buttons);
+        for (int row = 0; row < 20; row++) {
+            SettingsRect l, c;
+            settings_row_rects(row, content.w, 0, 0, &m, &l, &c);
+            ASSERT_TRUE(l.x >= 0 && c.x >= l.x + l.w);      /* no overlap   */
+            ASSERT_TRUE(c.x + c.w <= content.w);            /* no clipping  */
+            ASSERT_TRUE(l.y == c.y && c.h <= m.row_h);
+        }
+    }
+    TEST_END();
+}
+
+int test_sl_scroll_rescale(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_rescale(0, 96, 192), 0);
+    ASSERT_EQ(settings_scroll_rescale(100, 96, 192), 200);
+    ASSERT_EQ(settings_scroll_rescale(200, 192, 96), 100);
+    ASSERT_EQ(settings_scroll_rescale(100, 96, 144), 150);
+    ASSERT_EQ(settings_scroll_rescale(100, 120, 120), 100);
+    ASSERT_EQ(settings_scroll_rescale(-5, 96, 192), 0);        /* never negative */
+    ASSERT_EQ(settings_scroll_rescale(100, 0, 192), 100);      /* bad dpi: unchanged */
+    ASSERT_EQ(settings_scroll_rescale(100, 96, 0), 100);
+    /* There and back again returns to within a pixel. */
+    int there = settings_scroll_rescale(333, 96, 120);
+    int back = settings_scroll_rescale(there, 120, 96);
+    ASSERT_TRUE(back >= 332 && back <= 334);
+    TEST_END();
+}

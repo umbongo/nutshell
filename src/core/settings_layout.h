@@ -113,6 +113,18 @@ void settings_initial_placement(const SettingsMetrics *m, int target_rows,
                                 int *client_w, int *client_h,
                                 int *win_x, int *win_y);
 
+/* The smallest outer window size the dialog may be dragged to on the monitor
+ * whose metrics are `m`: the minimum client size plus the window frame
+ * (nc_w, nc_h) measured at that monitor's DPI. Writes nothing for a NULL
+ * `m`; either out pointer may be NULL. (WM_GETMINMAXINFO.) */
+void settings_min_window_size(const SettingsMetrics *m, int nc_w, int nc_h,
+                              int *w, int *h);
+
+/* A scroll offset in pixels at old_dpi, expressed at new_dpi (the page is
+ * laid out again at the new scale after a monitor move, so the same rows stay
+ * in view). Never negative; an offset is returned unchanged for a dpi <= 0. */
+int settings_scroll_rescale(int pos, int old_dpi, int new_dpi);
+
 /* Maximum scroll offset. 0 when the content fits. Never negative. */
 int settings_scroll_max(int view_h, int content_h);
 
