@@ -27,11 +27,11 @@ static const ChatMsgItem *turn_start(const ChatMsgItem *it)
     return it;
 }
 
-/* Scan the turn from `start` (never a USER row except as a head row that is
- * itself a user row: those are skipped). Returns the last text row and sets
- * *open and *tail. */
+/* Scan the turn from `start` (a USER row there is skipped). Returns the last
+ * text row, sets *open, and sets *end to the row after the turn (the next
+ * USER row, or NULL at the end of the list). */
 static const ChatMsgItem *turn_scan(const ChatMsgItem *start, int tail_busy,
-                                    int *open)
+                                    int *open, const ChatMsgItem **end)
 {
     const ChatMsgItem *last = NULL;
     const ChatMsgItem *it = start;
@@ -42,6 +42,7 @@ static const ChatMsgItem *turn_scan(const ChatMsgItem *start, int tail_busy,
         else if (it->type == CHAT_ITEM_COMMAND && cmd_open(it)) *open = 1;
         if (!it->next && tail_busy) *open = 1;
     }
+    if (end) *end = it;
     return last;
 }
 
@@ -58,7 +59,7 @@ int chat_turn_carries_button(const ChatMsgList *list, int item_id, int tail_busy
     const ChatMsgItem *row = find_row(list, item_id);
     if (!row || !chat_turn_is_text(row)) return 0;
     int open;
-    const ChatMsgItem *last = turn_scan(turn_start(row), tail_busy, &open);
+    const ChatMsgItem *last = turn_scan(turn_start(row), tail_busy, &open, NULL);
     return last == row && !open;
 }
 
@@ -70,15 +71,11 @@ int chat_turn_refresh(ChatMsgList *list, int on, int tail_busy)
     while (it) {
         /* One turn: [it, end) where end is the next USER row. */
         ChatMsgItem *first = it;
-        ChatMsgItem *last = NULL;
-        int open = 0;
-        if (it->type == CHAT_ITEM_USER) it = it->next;
-        for (; it && it->type != CHAT_ITEM_USER; it = it->next) {
-            if (chat_turn_is_text(it)) last = it;
-            else if (it->type == CHAT_ITEM_COMMAND && cmd_open(it)) open = 1;
-            if (!it->next && tail_busy) open = 1;
-        }
-        for (ChatMsgItem *r = first; r != it; r = r->next) {
+        int open;
+        const ChatMsgItem *end;
+        const ChatMsgItem *last = turn_scan(first, tail_busy, &open, &end);
+        ChatMsgItem *r = first;
+        for (; r != end; r = r->next) {
             if (r->type != CHAT_ITEM_AI_TEXT) continue;
             int want = on && !open && r == last;
             if (r->u.ai.turn_btn != want) {
@@ -87,6 +84,8 @@ int chat_turn_refresh(ChatMsgList *list, int on, int tail_busy)
                 changed++;
             }
         }
+        /* always advance, whatever the scan reported */
+        it = (r == first) ? first->next : r;
     }
     return changed;
 }

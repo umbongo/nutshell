@@ -2604,6 +2604,17 @@ int test_chat_turn_stopped(void);
 int test_chat_turn_status_after_reply_keeps_button(void);
 int test_chat_turn_refresh_off_clears(void);
 int test_chat_turn_text_join(void);
+int test_chat_turn_refresh_open_turn(void);
+int test_chat_turn_flag_moves(void);
+int test_chat_turn_no_user_row_at_head(void);
+int test_chat_turn_consecutive_user_rows(void);
+int test_chat_turn_user_row_at_tail_busy(void);
+int test_chat_turn_quoted_command_does_not_open(void);
+int test_chat_turn_code_only_reply(void);
+int test_chat_turn_join_rules(void);
+int test_chat_turn_thinking_and_status_rows_keep_button(void);
+int test_chat_turn_status_rows_terminate(void);
+
 /* test_chat_msg.c */
 int test_chat_msg_list_init(void);
 int test_chat_msg_append_user(void);
@@ -7566,6 +7577,18 @@ int main(void) {
     failed += test_chat_turn_status_after_reply_keeps_button();
     failed += test_chat_turn_refresh_off_clears();
     failed += test_chat_turn_text_join();
+    failed += test_chat_turn_refresh_open_turn();
+    failed += test_chat_turn_flag_moves();
+    failed += test_chat_turn_no_user_row_at_head();
+    failed += test_chat_turn_consecutive_user_rows();
+    failed += test_chat_turn_user_row_at_tail_busy();
+    failed += test_chat_turn_quoted_command_does_not_open();
+    failed += test_chat_turn_code_only_reply();
+    failed += test_chat_turn_join_rules();
+    failed += test_chat_turn_thinking_and_status_rows_keep_button();
+    failed += test_chat_turn_status_rows_terminate();
+
+    printf("\n--- Chat Message List ---\n");
     failed += test_chat_msg_list_init();
     failed += test_chat_msg_append_user();
     failed += test_chat_msg_append_order();
