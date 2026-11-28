@@ -652,6 +652,7 @@ void ai_chat_apply_dpi(AiChatData *d, int dpi)
 
     HFONT old_chat = d->hChatFont, old_bold = d->hBoldFont, old_mono = d->hMonoFont;
     if (d->hChatList) {
+        chat_listview_set_dpi(d->hChatList, (UINT)dpi);
         int h = app_font_px_height(d->ui_font_size, dpi);
         d->hChatFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
