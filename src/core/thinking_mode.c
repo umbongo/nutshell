@@ -118,6 +118,16 @@ unsigned int think_mode_label_colour(const ThemeChatColors *chat, ThinkMode m)
     }
 }
 
+unsigned int think_mode_pill_colour(const ThemeChatColors *chat, ThinkMode m)
+{
+    switch (m) {
+    case THINK_MODE_COMPACT:  return chat->thinking_compact_pill;
+    case THINK_MODE_EXTENDED: return chat->thinking_extended_pill;
+    case THINK_MODE_OPEN:     return chat->thinking_open_pill;
+    default:                  return chat->thinking_collapsed_pill;
+    }
+}
+
 size_t think_trimmed_len(const char *s, size_t len)
 {
     if (!s) return 0;

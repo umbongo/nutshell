@@ -68,10 +68,11 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                         * 0x6BAAFF (L* 68.8) managed only 2.38:1 and was the
                         * brightest blue in the window. */
             0xEA6262, /* stop_btn — soft coral red */
-            0x7091C3, /* thinking_compact — link toward white, 5.82:1 on bg_primary */
-            0x818181, /* thinking_collapsed — text_dim eased toward bg, 4.81:1 (quietest) */
-            0xC4AE5E, /* thinking_open — warning toward white, 8.53:1 (strongest) */
-            0x68AE79, /* thinking_extended — success toward white, 7.06:1 */
+            0xBDD8ED, /* thinking_compact — pastel sky blue text */
+            0xCCBA8B, /* thinking_collapsed — pastel sand text, warm rather than grey */
+            0xB1B8EF, /* thinking_open — pastel periwinkle text */
+            0x7ACAB5, /* thinking_extended — pastel teal text */
+            0, 0, 0, 0, /* pills: none on a dark theme, the label is the pastel text */
         },
     },
     {
@@ -106,10 +107,14 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                                            * bg_primary (9.19, 6.73, 4.73) */
             0x6C90BD, /* send_btn — a muted steel blue (L* 59), near the accent's hue */
             0xBF7D7D, /* stop_btn — rose pink */
-            0x2D62B2, /* thinking_compact — link toward text_main, 5.51:1 on bg_primary */
-            0x6D6D72, /* thinking_collapsed — text_dim eased toward bg, 4.73:1 (quietest) */
-            0x684D0E, /* thinking_open — warning toward text_main, 7.26:1 (strongest) */
-            0x1C6832, /* thinking_extended — success toward text_main, 6.27:1 */
+            0x1D1D1F, /* thinking_compact — text_main, drawn on the pill below */
+            0x1D1D1F, /* thinking_collapsed — text_main */
+            0x1D1D1F, /* thinking_open — text_main */
+            0x1D1D1F, /* thinking_extended — text_main */
+            0xF0E3B6, /* thinking_collapsed_pill — pastel sand */
+            0xDAE9FF, /* thinking_compact_pill — pastel sky blue */
+            0x8FDAC6, /* thinking_extended_pill — pastel mint */
+            0xC3C9FD, /* thinking_open_pill — pastel periwinkle */
         },
     },
     {
@@ -140,10 +145,11 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
             0x8FBC6A, 0xD4AA4A, 0xD08375,
             0x7E91A2, /* send_btn — dusty steel blue */
             0xC4756B, /* stop_btn — earthy terracotta */
-            0xB4A1C1, /* thinking_compact — info toward white, 5.86:1 on bg_primary */
-            0x979790, /* thinking_collapsed — text_dim eased toward bg, 4.75:1 (quietest) */
-            0xDBC99F, /* thinking_open — warning toward white, 8.56:1 (strongest) */
-            0xADBDA0, /* thinking_extended — success toward white, 7.03:1 */
+            0xB5DAE8, /* thinking_compact — pastel sky blue text */
+            0xCABB84, /* thinking_collapsed — pastel sand text, warm rather than grey */
+            0xB1B8EF, /* thinking_open — pastel periwinkle text */
+            0xB1CAB7, /* thinking_extended — pastel sage text */
+            0, 0, 0, 0, /* pills: none on a dark theme, the label is the pastel text */
         },
     },
     {
@@ -182,10 +188,14 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                                            * bg_primary */
             0x78929E, /* send_btn — misty blue */
             0xBC7F7A, /* stop_btn — dusty rose */
-            0x72568F, /* thinking_compact — info toward black, 5.47:1 on bg_primary */
-            0x5A6E70, /* thinking_collapsed — text_dim eased toward bg, 4.83:1 (quietest) */
-            0x684B06, /* thinking_open — warning toward black, 7.24:1 (strongest) */
-            0x21653F, /* thinking_extended — success toward black, 6.28:1 */
+            0x354F52, /* thinking_compact — text_main, drawn on the pill below */
+            0x354F52, /* thinking_collapsed — text_main */
+            0x354F52, /* thinking_open — text_main */
+            0x354F52, /* thinking_extended — text_main */
+            0xDACC98, /* thinking_collapsed_pill — pastel sand */
+            0xCDEEF8, /* thinking_compact_pill — pastel sky blue */
+            0xDBEED2, /* thinking_extended_pill — pastel pale sage */
+            0xC3C9FD, /* thinking_open_pill — pastel periwinkle */
         },
     },
 };

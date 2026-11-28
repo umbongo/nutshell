@@ -2026,6 +2026,28 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         SetTextColor(hdc, RGB_FROM_THEME(
             think_mode_label_colour(&lv->theme->chat, tmode)));
         SelectObject(hdc, lv->hFont ? lv->hFont : GetStockObject(DEFAULT_GUI_FONT));
+        /* Light themes: a pastel pill behind the label (the label itself is
+         * text_main there).  Painted only over the label's own rectangle
+         * grown by a pixel or two into the padding around it; no layout
+         * rectangle changes.  0 = no pill (dark themes). */
+        {
+            const unsigned int pill =
+                think_mode_pill_colour(&lv->theme->chat, tmode);
+            if (pill) {
+                SIZE tsz = { 0, 0 };
+                GetTextExtentPoint32A(hdc, "Thinking", 8, &tsz);
+                const int gx = ns_scale(2, CLV_DPI(lv));
+                const int gy = ns_scale(1, CLV_DPI(lv));
+                const int tw = tsz.cx < tl.label.w ? (int)tsz.cx : tl.label.w;
+                RECT pill_rc = { think_label_rc.left - gx,
+                                 think_label_rc.top - gy,
+                                 think_label_rc.left + tw + gx,
+                                 think_label_rc.bottom + gy };
+                ns_draw_round_fill(hdc, &pill_rc,
+                    ns_type_pill(pill_rc.bottom - pill_rc.top),
+                    RGB_FROM_THEME(pill), 255);
+            }
+        }
         DrawTextA(hdc, "Thinking", -1, &think_label_rc,
                   DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
 

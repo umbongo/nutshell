@@ -4207,6 +4207,8 @@ int test_thinking_trimmed_len(void);
 int test_thinking_label_colour(void);
 int test_thinking_follows_tail(void);
 int test_thinking_theme_tokens_distinct(void);
+int test_thinking_theme_pill_tokens_set(void);
+int test_thinking_pill_colour(void);
 int test_thinking_box_wheel_modes(void);
 int test_thinking_wheel_takes(void);
 int test_thinking_box_scroll_follow_hold_resume(void);
@@ -9088,6 +9090,8 @@ int main(void) {
     failed += test_thinking_label_colour();
     failed += test_thinking_follows_tail();
     failed += test_thinking_theme_tokens_distinct();
+    failed += test_thinking_theme_pill_tokens_set();
+    failed += test_thinking_pill_colour();
     failed += test_thinking_box_wheel_modes();
     failed += test_thinking_wheel_takes();
     failed += test_thinking_box_scroll_follow_hold_resume();

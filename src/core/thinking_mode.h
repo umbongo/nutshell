@@ -99,8 +99,14 @@ int think_compact_offset(int full_h, int vis_h);
  * NULL gives 0. */
 size_t think_trimmed_len(const char *s, size_t len);
 
-/* The label colour for the mode (each of the four modes has its own token; collapsed is the quietest, open the strongest).
- * An out of range mode picks the collapsed one. */
+/* The label text colour for the mode (each of the four modes has its own
+ * token): pastel text on a dark theme, text_main on a light theme, where
+ * think_mode_pill_colour() gives the pill behind it.  An out of range mode
+ * picks the collapsed one. */
 unsigned int think_mode_label_colour(const ThemeChatColors *chat, ThinkMode m);
+
+/* The pill painted behind the label (light themes), 0 = none.  An out of
+ * range mode picks the collapsed one. */
+unsigned int think_mode_pill_colour(const ThemeChatColors *chat, ThinkMode m);
 
 #endif

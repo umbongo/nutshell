@@ -141,24 +141,82 @@ int test_thinking_follows_tail(void)
     TEST_END();
 }
 
-/* Smallest RGB distance (Euclidean, 0..255 per channel) between any two of the
- * four mode colours on one theme. */
-#define THINK_MIN_MODE_DIST 40.0
+/* ---- colour maths (test-only) -------------------------------------- */
 
-static double think_rgb_dist(unsigned int a, unsigned int b)
+static double cm_lin(unsigned int c, int sh)
 {
-    double s = 0.0;
-    for (int sh = 16; sh >= 0; sh -= 8) {
-        double d = (double)((a >> sh) & 0xFFu) - (double)((b >> sh) & 0xFFu);
-        s += d * d;
-    }
-    return sqrt(s);
+    double v = (double)((c >> sh) & 0xFFu) / 255.0;
+    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
 }
 
-/* Every theme gives each of the four modes its own colour: pairwise at least
- * THINK_MIN_MODE_DIST apart, each readable (WCAG 4.5:1) on the chat surface
- * the label is drawn on (bg_primary), and the strength rises with the mode:
- * collapsed is the quietest, open the strongest (contrast on that surface). */
+static double cm_f(double t)
+{
+    return t > 0.008856 ? cbrt(t) : 7.787 * t + 16.0 / 116.0;
+}
+
+/* Linear RGB (already clamped to 0..1) to CIELAB, D65. */
+static void cm_lab(const double rgb[3], double lab[3])
+{
+    double x = (0.4124 * rgb[0] + 0.3576 * rgb[1] + 0.1805 * rgb[2]) / 0.95047;
+    double y = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    double z = (0.0193 * rgb[0] + 0.1192 * rgb[1] + 0.9505 * rgb[2]) / 1.08883;
+    lab[0] = 116.0 * cm_f(y) - 16.0;
+    lab[1] = 500.0 * (cm_f(x) - cm_f(y));
+    lab[2] = 200.0 * (cm_f(y) - cm_f(z));
+}
+
+/* Machado, Oliveira and Fernandes (2009), severity 1.0, applied to linear
+ * RGB.  kind 0 normal vision, 1 protanopia, 2 deuteranopia. */
+static void cm_sim_lab(unsigned int c, int kind, double lab[3])
+{
+    static const double prot[3][3] = {
+        { 0.152286, 1.052583, -0.204868 },
+        { 0.114503, 0.786281,  0.099216 },
+        { -0.003882, -0.048116, 1.051998 } };
+    static const double deut[3][3] = {
+        { 0.367322, 0.860646, -0.227968 },
+        { 0.280085, 0.672501,  0.047413 },
+        { -0.011820, 0.042940, 0.968881 } };
+    double v[3] = { cm_lin(c, 16), cm_lin(c, 8), cm_lin(c, 0) };
+    double o[3];
+    for (int i = 0; i < 3; i++) {
+        const double *row = kind == 1 ? prot[i] : deut[i];
+        o[i] = kind == 0 ? v[i] : row[0] * v[0] + row[1] * v[1] + row[2] * v[2];
+        if (o[i] < 0.0) o[i] = 0.0;
+        if (o[i] > 1.0) o[i] = 1.0;
+    }
+    cm_lab(o, lab);
+}
+
+/* CIE76 distance between two colours as seen with the given vision. */
+static double cm_de76(unsigned int a, unsigned int b, int kind)
+{
+    double la[3], lb[3];
+    cm_sim_lab(a, kind, la);
+    cm_sim_lab(b, kind, lb);
+    return sqrt((la[0] - lb[0]) * (la[0] - lb[0]) +
+                (la[1] - lb[1]) * (la[1] - lb[1]) +
+                (la[2] - lb[2]) * (la[2] - lb[2]));
+}
+
+/* The smallest CIE76 distance any two of the four mode colours are apart
+ * under the vision kind. */
+#define THINK_MIN_MODE_DE76 15.0
+
+/* What tells the four modes apart on a theme: the pill background where the
+ * theme has pills (light themes), else the label text (dark themes). */
+static unsigned int think_marker(const ThemeChatColors *c, ThinkMode m)
+{
+    const unsigned int pill = think_mode_pill_colour(c, m);
+    return pill ? pill : think_mode_label_colour(c, m);
+}
+
+/* Every theme gives the four modes their own colour, told apart by normal,
+ * protan and deutan vision (CIE76 >= THINK_MIN_MODE_DE76 for every pair, the
+ * Machado 2009 matrices at severity 1.0).  Dark themes draw pastel text
+ * (L* 74..88, modest chroma, warm collapsed) on bg_primary at >= 4.5:1; light
+ * themes draw text_main on a pastel pill at >= 4.5:1, the pill clearly off
+ * bg_primary; a dark theme has no pill. */
 int test_thinking_theme_tokens_distinct(void)
 {
     TEST_BEGIN();
@@ -168,21 +226,79 @@ int test_thinking_theme_tokens_distinct(void)
     };
     for (int i = 0; i < NUM_UI_THEMES; i++) {
         const ThemeColors *t = ui_theme_get(i);
+        double bg[3];
+        cm_sim_lab(t->bg_primary, 0, bg);
+        const int light_theme = bg[0] > 50.0;
         unsigned int col[4];
-        double prev = 0.0;
         for (int k = 0; k < 4; k++) {
-            col[k] = think_mode_label_colour(&t->chat, order[k]);
-            ASSERT_TRUE(col[k] != 0);
-            const double r = theme_contrast(col[k], t->bg_primary);
-            ASSERT_TRUE(r >= 4.5);
-            ASSERT_TRUE(r > prev);   /* strictly stronger with each mode */
-            prev = r;
+            const unsigned int label = think_mode_label_colour(&t->chat, order[k]);
+            const unsigned int pill = think_mode_pill_colour(&t->chat, order[k]);
+            col[k] = think_marker(&t->chat, order[k]);
+            ASSERT_TRUE(label != 0);
+            if (light_theme) {
+                ASSERT_TRUE(pill != 0);
+                ASSERT_EQ(label, t->text_main);
+                ASSERT_TRUE(theme_contrast(label, pill) >= 4.5);
+                ASSERT_TRUE(cm_de76(pill, t->bg_primary, 0) >= 8.0);
+            } else {
+                double lab[3];
+                ASSERT_EQ(pill, 0u);
+                ASSERT_TRUE(theme_contrast(label, t->bg_primary) >= 4.5);
+                cm_sim_lab(label, 0, lab);
+                ASSERT_TRUE(lab[0] >= 74.0 && lab[0] <= 88.0);
+                ASSERT_TRUE(sqrt(lab[1] * lab[1] + lab[2] * lab[2]) <= 45.0);
+            }
+        }
+        /* collapsed is warm, not grey: a clearly positive b* (yellow side) */
+        {
+            double lab[3];
+            cm_sim_lab(col[0], 0, lab);
+            ASSERT_TRUE(lab[2] >= 10.0);
         }
         for (int a = 0; a < 4; a++)
             for (int b = a + 1; b < 4; b++)
-                ASSERT_TRUE(think_rgb_dist(col[a], col[b]) >=
-                            THINK_MIN_MODE_DIST);
+                for (int kind = 0; kind < 3; kind++)
+                    ASSERT_TRUE(cm_de76(col[a], col[b], kind) >=
+                                THINK_MIN_MODE_DE76);
     }
+    TEST_END();
+}
+
+/* Every theme sets the pill fields (appended to ThemeChatColors): non-zero on
+ * the light themes, zero on the dark ones. */
+int test_thinking_theme_pill_tokens_set(void)
+{
+    TEST_BEGIN();
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *t = ui_theme_get(i);
+        double bg[3];
+        cm_sim_lab(t->bg_primary, 0, bg);
+        const int light_theme = bg[0] > 50.0;
+        const unsigned int p[4] = {
+            t->chat.thinking_collapsed_pill, t->chat.thinking_compact_pill,
+            t->chat.thinking_extended_pill, t->chat.thinking_open_pill };
+        for (int k = 0; k < 4; k++)
+            ASSERT_TRUE(light_theme ? p[k] != 0 : p[k] == 0);
+    }
+    TEST_END();
+}
+
+/* The accessor: each mode's own pill token, collapsed for out of range. */
+int test_thinking_pill_colour(void)
+{
+    TEST_BEGIN();
+    ThemeChatColors c;
+    memset(&c, 0, sizeof c);
+    c.thinking_collapsed_pill = 0x0A0A0A;
+    c.thinking_compact_pill   = 0x0B0B0B;
+    c.thinking_extended_pill  = 0x0C0C0C;
+    c.thinking_open_pill      = 0x0D0D0D;
+    ASSERT_EQ(think_mode_pill_colour(&c, THINK_MODE_COLLAPSED), 0x0A0A0Au);
+    ASSERT_EQ(think_mode_pill_colour(&c, THINK_MODE_COMPACT), 0x0B0B0Bu);
+    ASSERT_EQ(think_mode_pill_colour(&c, THINK_MODE_EXTENDED), 0x0C0C0Cu);
+    ASSERT_EQ(think_mode_pill_colour(&c, THINK_MODE_OPEN), 0x0D0D0Du);
+    ASSERT_EQ(think_mode_pill_colour(&c, (ThinkMode)7), 0x0A0A0Au);
+    ASSERT_EQ(think_mode_pill_colour(&c, (ThinkMode)-1), 0x0A0A0Au);
     TEST_END();
 }
 
