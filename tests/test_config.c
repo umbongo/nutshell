@@ -3393,7 +3393,7 @@ int test_config_keys_match_saved_file(void)
     size_t n = 0;
     const ConfigSettingKey *keys = config_setting_keys(&n);
     ASSERT_TRUE(n <= CFG_KEYS_MAX);
-    ASSERT_EQ(n, (size_t)69);
+    ASSERT_EQ(n, (size_t)70);
     /* the table plus the internal voice_defaults_rev marker, always last */
     ASSERT_EQ(vec_size(&jset->as.obj.keys), n + 1u);
     ASSERT_STR_EQ((const char *)vec_get(&jset->as.obj.keys, n), "voice_defaults_rev");

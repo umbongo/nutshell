@@ -141,6 +141,30 @@ int test_vlisten_hold_emits_nothing(void)
     TEST_END();
 }
 
+/* The microphone held while a reply plays: what it heard is never part of the next turn,
+ * even when the hold ends in the middle of loud sound. */
+int test_vlisten_hold_audio_not_in_next_turn(void)
+{
+    TEST_BEGIN();
+    LT t;
+    int resume;
+    lt_init(&t, 500);
+    voice_listen_set_mode(&t.l, VLM_LISTEN);
+    lt_run(&t, 100, NONE_DB, 0.0, -60.0);
+    voice_listen_set_mode(&t.l, VLM_HOLD);
+    lt_run(&t, 40, -20.0, 0.4, -60.0);           /* the loudspeaker, heard */
+    resume = t.win;
+    voice_listen_set_mode(&t.l, VLM_LISTEN);     /* listening resumes at once */
+    lt_run(&t, 2, NONE_DB, 0.0, -60.0);          /* fewer than the ring holds: older audio would show */
+    lt_run(&t, 40, -20.0, 0.4, -60.0);           /* the user */
+    lt_run(&t, 60, NONE_DB, 0.0, -60.0);
+    ASSERT_EQ(t.unknown, 0);
+    ASSERT_TRUE(t.naudio > 0);
+    ASSERT_TRUE(t.first_audio >= resume);
+    ASSERT_EQ(lt_count(&t, VLN_TURN_START), 1);
+    TEST_END();
+}
+
 int test_vlisten_cough_abandoned(void)
 {
     TEST_BEGIN();

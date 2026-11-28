@@ -60,6 +60,7 @@ typedef struct {     /* every effect the glue has; the real table calls the modu
     int  (*chat_same)(void);                            /* 0 when the panel's chat is no longer the conversation's */
     int  (*speech_engine)(void);                        /* VOICE_SPEECH_* read at conversation start; NULL = Windows */
     int  (*ai_resolve_error)(char *out, size_t cap);    /* 1 with the resolve error in out when AI speech cannot resolve */
+    const char *(*ai_provider)(void);                   /* the configured AI speech provider id, for the failure wording; NULL = unknown */
 } VoiceConvOps;
 
 /* Registers the real table and the main window (timer, pause checks, WM_VOICE_NOTICE).
@@ -71,6 +72,7 @@ void voice_conv_set_ops(const VoiceConvOps *ops);
 
 int  voice_conv_running(void);
 VoiceConvState voice_conv_state(void);
+void voice_conv_set_mute_speaking(int on);          /* the setting, read by the next voice_conv_start */
 void voice_conv_start(int live);                    /* from voice_win.c after the busy checks */
 void voice_conv_event(VoiceConvEvent ev, int a, int b);  /* feed + carry out, with now = GetTickCount */
 void voice_conv_on_audio(UINT kind, LPARAM lp);     /* VAM_CONV_* and VAM_LEVEL/VAM_ERROR for it */

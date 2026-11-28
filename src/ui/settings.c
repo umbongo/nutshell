@@ -1321,6 +1321,7 @@ static void voice_enable_sync(SettingsDlgData *d)
         voice_row_enable(d, IDC_VOICE_MIC_DELAY, en.mic_delay);
         voice_row_enable(d, IDC_VOICE_AUTO_SEND, en.auto_send);
         voice_row_enable(d, IDC_VOICE_PAUSE, en.conversation);
+        voice_row_enable(d, IDC_VOICE_MUTE_SPEAKING, en.conversation);
         voice_row_enable(d, IDC_VOICE_WIN_VOICE, en.conversation);
         voice_row_enable(d, IDC_VOICE_PLAY_SAMPLE, en.conversation);
         if (d->hVoiceHead[2]) EnableWindow(d->hVoiceHead[2], en.conversation ? TRUE : FALSE);
@@ -1554,7 +1555,7 @@ void settings_voice_sample_failed(long hr)
     SettingsDlgData *d = g_voice_dlg;   /* cleared in WM_DESTROY before the dialog's data is freed */
     if (!d || !d->hDlg || !IsWindow(d->hDlg) || !d->hPage || d->cur_page != SETTINGS_PAGE_VOICE) return;
     char note[256];
-    voice_ais_sample_failure_note(hr, note, sizeof(note));
+    voice_ais_sample_failure_note_for(voice_ais_page_provider(d) ? voice_ais_page_provider(d)->id : NULL, hr, note, sizeof(note));
     voice_test_note(d, note);
 }
 
@@ -2234,6 +2235,8 @@ static void voice_page_read(SettingsDlgData *d, Settings *s)
     s->voice_mic_gain_db = voice_gain_now(d);
     s->voice_auto_send = (IsDlgButtonChecked(d->hPage, IDC_VOICE_AUTO_SEND)
                           == BST_CHECKED) ? 1 : 0;
+    s->voice_conv_mute_speaking = (IsDlgButtonChecked(d->hPage, IDC_VOICE_MUTE_SPEAKING)
+                                   == BST_CHECKED) ? 1 : 0;
     {
         /* Speech (PR 3). A provider the page shows no selection for (an unknown id,
          * R38) keeps the stored id. A voice or model equal to Mistral's default is
@@ -3153,6 +3156,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 SendMessage(ed, EM_SETLIMITTEXT, 8, 0);
                 HWND secs = make_hint(nd, "seconds");
                 add_ctrl(nd, lbl, ed, secs, SETTINGS_PAGE_VOICE, 140, 70, 1, 0, 1, 0);
+            }
+            {
+                HWND chk = make_check2(nd, IDC_VOICE_MUTE_SPEAKING, SH_VOICE_MUTE_SPEAKING);
+                SendMessage(chk, BM_SETCHECK,
+                            vs->voice_conv_mute_speaking ? BST_CHECKED : BST_UNCHECKED, 0);
+                add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
             }
             {
                 HWND lbl = make_label2(nd, SH_VOICE_SPEECH);

@@ -555,6 +555,17 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "applies in Conversation mode only.\nDefault: 1.2 seconds.",
       "1.2 seconds",
       0, 0, 0u),
+    E(SH_VOICE_MUTE_SPEAKING, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Mute the microphone while a reply is spoken",
+      NULL,
+      "Mute the microphone while a reply is spoken\n\nWhile the assistant is "
+      "speaking, nothing the microphone picks up is used, so the assistant's "
+      "own voice cannot interrupt it. Listening starts again when the reply "
+      "ends. To interrupt a reply, press the voice key (Right Shift unless "
+      "you changed it). Turn this on if replies keep cutting themselves off "
+      "on this PC.\nDefault: Off.",
+      "Off",
+      0, 0, 0u),
     E(SH_VOICE_WIN_VOICE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Windows voice:",
       NULL,
@@ -683,12 +694,14 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Search URL:",
       NULL,
       "Search URL:\n\nYour own search endpoint, used when Search Engine is "
-      "Custom and shown only then. Give the address without a query "
-      "string: Nutshell adds ?q= and the query, and reads the reply as "
-      "DuckDuckGo API JSON. When it returns no results, the search is "
-      "retried on DuckDuckGo's HTML page, and left empty with Custom "
-      "chosen, searches go to DuckDuckGo (API); either way the query can "
-      "reach DuckDuckGo.\nDefault: empty.",
+      "Custom and shown only then. Nutshell adds the search words as q= "
+      "(after ?, or after & when the address already has a ?) and "
+      "encodes special characters. An address with # is not accepted, "
+      "and spaces are not allowed in it. The reply is read as DuckDuckGo "
+      "API JSON; with no results, the search is retried on DuckDuckGo's "
+      "HTML page. Left empty with Custom chosen, searches go to "
+      "DuckDuckGo (API); either way the query can reach "
+      "DuckDuckGo.\nDefault: empty.",
       "empty",
       0, 0, 0u),
     E(SH_AI_MAX_RESULTS, SETTINGS_PAGE_AI_WEB, SH_KIND_SETTING,

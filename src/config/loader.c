@@ -585,6 +585,7 @@ static const ConfigSettingKey k_setting_keys[] = {
     CK("voice_auto_send",               NULL, NULL, SH_VOICE_AUTO_SEND, "Voice: send automatically"),
     CK("voice_mode",                    NULL, NULL, SH_VOICE_MODE, "Voice: mode"),
     CK("voice_pause_ms",                NULL, NULL, SH_VOICE_PAUSE, "Voice: pause before sending"),
+    CK("voice_conv_mute_speaking",      NULL, NULL, SH_VOICE_MUTE_SPEAKING, "Voice: mute the microphone while a reply is spoken"),
     CK("voice_windows_voice",           NULL, NULL, SH_VOICE_WIN_VOICE, "Voice: Windows voice"),
     CK("voice_windows_voice_name",      NULL, NULL, SH_VOICE_WIN_VOICE_NAME, "Voice: Windows voice name"),
     CK("voice_speech_engine",           NULL, NULL, SH_VOICE_SPEECH, "Voice: speech"),
@@ -1041,6 +1042,8 @@ Config *config_load_report(const char *path, ConfigLoadReport *rep)
         s->voice_mode = voice_mode_from_json(json_obj_str(jset, "voice_mode"));
         s->voice_pause_ms = voice_pause_clamp((int)json_obj_num(jset, "voice_pause_ms",
                                                                 (double)s->voice_pause_ms));
+        s->voice_conv_mute_speaking = json_obj_bool(jset, "voice_conv_mute_speaking",
+                                                    s->voice_conv_mute_speaking);
         if ((sv = json_obj_str(jset, "voice_windows_voice"))) {
             field_copy(s->voice_windows_voice, sizeof(s->voice_windows_voice), sv);
         }
@@ -1442,6 +1445,7 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, voice_mode_json(s->voice_mode));
     fputs(",\n", f);
     fprintf(f, "    \"voice_pause_ms\": %d,\n", voice_pause_round(s->voice_pause_ms));
+    fprintf(f, "    \"voice_conv_mute_speaking\": %s,\n", s->voice_conv_mute_speaking ? "true" : "false");
     fputs("    \"voice_windows_voice\": ", f);
     fprint_json_str(f, s->voice_windows_voice);
     fputs(",\n", f);

@@ -745,7 +745,7 @@ function New-NutshellTestEnv {
         voice_mic_gain_db = 0
         voice_ptt_key = "right_shift"; voice_ptt_mode = "toggle"
         voice_mic_delay_ms = 150; voice_auto_send = $false
-        voice_mode = "dictation"; voice_pause_ms = 1200
+        voice_mode = "dictation"; voice_pause_ms = 1200; voice_conv_mute_speaking = $false
         voice_windows_voice = ""; voice_windows_voice_name = ""
         voice_speech_engine = "windows"; voice_tts_provider = "mistral"; voice_tts_url = ""
         tts_api_key = ""; voice_ai_voice = ""; voice_ai_tts_model = ""; voice_ai_style = ""

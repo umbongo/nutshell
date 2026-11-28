@@ -12,7 +12,10 @@
  * exactly 24,000 Hz. Stereo is averaged ((L + R) / 2, a half rounds away from
  * zero). Float is clamped to [-1, 1] and scaled by 32,767, a half rounding
  * away from zero (0.5 gives 16384); NaN is silence. The `data` chunk size is
- * ignored: the decoder reads to the end of the stream.
+ * honoured (spec 8.4): only 0 and 0xFFFFFFFF mean "to the end of the stream".
+ * Any other size is rounded down to whole frames and the bytes after it (a
+ * LIST or id3 trailer) are skipped, never played and never an error; a size
+ * larger than the bytes that arrive just plays what arrives.
  *
  * Output buffer: voice_wavs_feed() needs cap >= voice_wavs_out_max(n). A
  * smaller cap is a caller error: nothing is written, nothing is consumed and
@@ -30,6 +33,9 @@
 
 #define VOICE_WAVS_RATE 24000
 #define VOICE_WAVS_HDR_MAX 4096
+/* The most that may follow a finite data chunk (a LIST or id3 trailer is far smaller); more is
+ * audio the header did not declare. */
+#define VOICE_WAVS_TRAILER_MAX 65536u
 
 typedef enum { VWS_HEADER = 0, VWS_DATA, VWS_ERROR } VoiceWavState;
 typedef enum { VWS_RAW_NONE = 0, VWS_RAW_F32_MONO } VoiceWavRaw;
@@ -46,6 +52,9 @@ typedef struct {
     size_t win_head;                   /* next slot to write */
     size_t win_n;                      /* bytes held, up to 12 */
     uint64_t frames;                   /* output samples produced */
+    int bounded;                       /* 1: a finite data size is being counted down */
+    uint64_t data_left;                /* bytes of the data chunk still to take */
+    uint64_t trailer;                  /* bytes skipped after the declared end of the data */
 } VoiceWavStream;
 
 void   voice_wavs_init(VoiceWavStream *w, VoiceWavRaw raw);
@@ -57,6 +66,16 @@ VoiceWavState voice_wavs_state(const VoiceWavStream *w);
 /* 1: in VWS_DATA, no partial frame, frames > 0. */
 int    voice_wavs_finish_ok(const VoiceWavStream *w);
 uint64_t voice_wavs_frames(const VoiceWavStream *w);
+/* 1: the declared data size was finite and all of it has been delivered. "To the end" sizes
+ * (0 and 0xFFFFFFFF) are never done. */
+int    voice_wavs_done(const VoiceWavStream *w);
+/* Bytes skipped after the declared end (a count, never content). */
+uint64_t voice_wavs_trailer(const VoiceWavStream *w);
+/* What to do once the data is done: keep reading, end as a success, or fail because more than
+ * VOICE_WAVS_TRAILER_MAX bytes followed. Not done: always CONTINUE (the caller's own end-of-
+ * stream check applies). */
+typedef enum { VWS_AFTER_CONTINUE = 0, VWS_AFTER_END_OK, VWS_AFTER_FAIL } VoiceWavAfter;
+VoiceWavAfter voice_wavs_after_end(const VoiceWavStream *w, int stream_ended);
 /* "" or a static reason; never any of the stream's content. */
 const char *voice_wavs_error(const VoiceWavStream *w);
 /* 1 for "unsupported audio format". */

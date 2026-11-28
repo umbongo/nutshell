@@ -330,6 +330,37 @@ int test_vais_key_binding(void)
     TEST_END();
 }
 
+/* "Too long" matters only when a key of its own is typed: a keyless Custom server, or one that
+ * shares the speech-to-text key, never reads the binding. */
+int test_vais_too_long_only_with_own_typed_key(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200], url[CFG_STR_MAX];
+    base_settings(&s);
+    memcpy(url, "http://", 7);
+    memset(url + 7, 'h', 245);
+    url[252] = '\0';
+    set_custom(&s, url, "kokoro", "bf_emma");
+    /* no key typed: usable */
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(voice_ais_key(&s, &t), "");
+    /* a typed own key cannot be bound: refused */
+    snprintf(s.tts_api_key, sizeof s.tts_api_key, "secret");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+    ASSERT_STR_EQ(err, "The speech Base URL is too long");
+    ASSERT_TRUE(strstr(err, "secret") == NULL);
+    /* the speech-to-text key at the same base is used: usable even with an own key typed */
+    snprintf(s.voice_stt_provider, sizeof s.voice_stt_provider, "custom");
+    snprintf(s.voice_stt_url, sizeof s.voice_stt_url, "%s", url);
+    snprintf(s.stt_api_key, sizeof s.stt_api_key, "stt-key");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_EQ(t.key_from, VAIS_KEY_STT);
+    ASSERT_STR_EQ(voice_ais_key(&s, &t), "stt-key");
+    TEST_END();
+}
+
 int test_vais_binding_too_long_never_matches(void)
 {
     TEST_BEGIN();
@@ -365,6 +396,53 @@ int test_vais_binding_too_long_never_matches(void)
     TEST_END();
 }
 
+/* The Base URL comes from a settings file or a paste. WinHTTP's parser in ai_http_win.c ends the
+ * host only at ":" or "/", so a "?" or "#" would make the connect fail; and a space, a control
+ * character, a backslash, an empty host or a port that is not 1 to 65535 would not be read the
+ * way the privacy line reads it. All are refused up front, as "not valid". */
+int test_vais_resolve_refuses_hostile_base_urls(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200];
+    const char *const bad[] = {
+        "http://h.example?mail=a@b", "http://h.example#[x]", "http://h?x=1", "http://h#f",
+        "http://h/v1?key=1", "http://h/v1#frag", "http://h?", "http://h#", "http://h/v1/?",
+        "HTTP://h/v1", "Https://h/v1", "ftp://h/v1", "//h/v1", "h/v1", "http:/h/v1", "http://",
+        "https://", "http:///v1", "http://:8880/v1", "http://h:abc/v1",
+        "http://h:0/v1", "http://h:65536/v1", "http://h:99999999999/v1", "http://h:80:81/v1",
+        "http://h :80/v1", "http://h ost/v1", "http://h/v 1", "http://h\tost/v1", "http://h/v1\x01",
+        "http://h\n/v1", "http://h/v1\r\nHost: x", "http://h\\v1", "http://h/v1\\x",
+        "http://h\x7f/v1", "http://\xc3\xa9.example/v1", "http://[::1]/v1", "http://u:p@h/v1"
+    };
+    base_settings(&s);
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        set_custom(&s, bad[i], "kokoro", "bf_emma");
+        err[0] = '\0';
+        ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+        ASSERT_TRUE(strcmp(err, "The speech Base URL is not valid") == 0 ||
+                    strcmp(err, "Enter the speech Base URL") == 0);
+    }
+    /* what is accepted, and the host the privacy line names */
+    set_custom(&s, "http://h.example./v1", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h.example.");
+    ASSERT_STR_EQ(t.url, "http://h.example./v1/audio/speech");
+    set_custom(&s, "http://h:65535", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h:65535");
+    /* an empty port means the default, as parse_url reads it (atoi of "" is 0): accepted, and the
+     * host the line names is "h" */
+    set_custom(&s, "http://h:/v1", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h");
+    set_custom(&s, "http://h:", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h");
+    TEST_END();
+}
+
 /* F4: the host the privacy line names is the host the request goes to. WinHTTP's URL parsing
  * does not take userinfo or an IPv6 literal the way the line's reader does, so a Base URL whose
  * authority has an "@" or a "[" is refused. An "@" or "[" after the authority is a path. */
@@ -388,7 +466,8 @@ int test_vais_resolve_refuses_userinfo_and_ipv6(void)
     }
     const char *const good[] = {
         "http://host:8880/v1", "http://host", "https://h.example/v1/a@b", "http://h/v1/[x]",
-        "http://h.example?mail=a@b", "http://h.example#[x]"
+        "http://h.example.", "http://h.example./v1", "http://localhost:8880/v1/",
+        "  http://h/v1  ", "http://h/v1/audio/speech"
     };
     for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
         set_custom(&s, good[i], "kokoro", "bf_emma");
@@ -690,6 +769,26 @@ int test_vais_failure_reasons(void)
     TEST_END();
 }
 
+/* The wall-clock cap on one request, beside the frame-count cap: a stream that never ends and
+ * carries no audio is closed too. Elapsed time is a wrap-safe unsigned difference of ticks. */
+int test_vais_request_time_cap(void)
+{
+    TEST_BEGIN();
+    const uint64_t cap = VOICE_AIS_MAX_REQUEST_MS;
+    ASSERT_TRUE(cap >= 60000u);                          /* not shorter than a minute */
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000, cap), 0);
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000 + cap - 1, cap), 0);   /* below */
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000 + cap, cap), 0);       /* at: allowed */
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000 + cap + 1, cap), 1);   /* above */
+    ASSERT_EQ(voice_ais_request_too_long(0, UINT64_MAX, cap), 1);
+    /* across a wrap of the tick counter: start just before it, now just after it */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, 4, cap), 0);      /* 10 ms elapsed */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, cap - 7, cap), 0);   /* cap - 1 ms */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, cap - 6, cap), 0);   /* exactly cap */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, cap - 5, cap), 1);   /* cap + 1 ms */
+    TEST_END();
+}
+
 /* The cap on the audio one request may deliver: 5 minutes at 24 kHz. */
 int test_vais_audio_cap(void)
 {
@@ -735,6 +834,26 @@ int test_vais_decoder_failure_hr(void)
 }
 
 /* F2: the Voice page's note when a Play sample fails after it resolved and started. */
+/* Mistral has no Base URL row, so its redirect reason does not send the user to one. */
+int test_vais_redirect_reason_per_provider(void)
+{
+    TEST_BEGIN();
+    char o[200];
+    voice_ais_failure_reason_for("mistral", 301, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 301)");
+    voice_ais_failure_reason_for("custom", 301, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 301): check the Base URL");
+    voice_ais_failure_reason_for(NULL, 308, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 308): check the Base URL");
+    voice_ais_failure_reason_for("mistral", 401, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the speech provider refused the key (HTTP 401)");
+    voice_ais_sample_failure_note_for("mistral", 302, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the server redirected the request (HTTP 302)");
+    voice_ais_sample_failure_note_for("custom", 302, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the server redirected the request (HTTP 302): check the Base URL");
+    TEST_END();
+}
+
 int test_vais_sample_failure_note(void)
 {
     TEST_BEGIN();

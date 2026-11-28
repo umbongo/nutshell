@@ -713,33 +713,35 @@ int test_term_erase_seq(void) {
     /* the other erases, with the cursor away from home: not counted */
     feed_str(t, "\x1b[J\x1b[0J\x1b[1J\x1b[K\x1b[2K");
     ASSERT_EQ((int)t->erase_seq, 1);
-    feed_str(t, "\x1b[3J\x1b" "c");                         /* ED 3 and RIS are not handled: nothing */
+    feed_str(t, "\x1b[3J");                                 /* ED 3 is not handled: nothing */
     ASSERT_EQ((int)t->erase_seq, 1);
+    feed_str(t, "\x1b" "c");                                /* RIS is a full reset: counts like ED 2 */
+    ASSERT_EQ((int)t->erase_seq, 2);
     feed_str(t, "\x1b[2J\x1b[2J");
-    ASSERT_EQ((int)t->erase_seq, 3);
+    ASSERT_EQ((int)t->erase_seq, 4);
 
     /* ED 0 with the cursor at row 0, column 0 (`clear` as ESC[H ESC[J) counts */
     feed_str(t, "\x1b[H\x1b[J");
-    ASSERT_EQ((int)t->erase_seq, 4);
-    feed_str(t, "\x1b[H\x1b[0J");
     ASSERT_EQ((int)t->erase_seq, 5);
+    feed_str(t, "\x1b[H\x1b[0J");
+    ASSERT_EQ((int)t->erase_seq, 6);
     /* ED 0 anywhere else (row 0 column 1, row 1 column 0) and ED 1 at home do not */
     feed_str(t, "\x1b[1;2H\x1b[J\x1b[2;1H\x1b[J\x1b[H\x1b[1J");
-    ASSERT_EQ((int)t->erase_seq, 5);
+    ASSERT_EQ((int)t->erase_seq, 6);
     /* nothing that only moves the cursor counts: CUU, CUP, RI, DECSC/DECRC, DECSTBM */
     feed_str(t, "\r\n\r\nx\x1b[A\x1b[1;1H\x1b[3;3H\x1b" "M\x1b" "7\x1b[H\x1b" "8\x1b[r\x1b[2;4r\x1b[r");
-    ASSERT_EQ((int)t->erase_seq, 5);
+    ASSERT_EQ((int)t->erase_seq, 6);
 
     /* on the alternate screen it is not counted (ED 2 or the home ED 0); back
      * on the primary it is */
     feed_str(t, "\x1b[?1049h\x1b[2J\x1b[H\x1b[J");
-    ASSERT_EQ((int)t->erase_seq, 5);
-    feed_str(t, "\x1b[?1049l\x1b[2J");
     ASSERT_EQ((int)t->erase_seq, 6);
+    feed_str(t, "\x1b[?1049l\x1b[2J");
+    ASSERT_EQ((int)t->erase_seq, 7);
 
     /* a resize does not touch it */
     ASSERT_TRUE(term_resize(t, 6, 25));
-    ASSERT_EQ((int)t->erase_seq, 6);
+    ASSERT_EQ((int)t->erase_seq, 7);
     term_free(t);
     TEST_END();
 }

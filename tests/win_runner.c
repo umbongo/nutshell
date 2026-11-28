@@ -197,10 +197,12 @@ int test_voice_ais_custom_wav_done(void);
 int test_voice_ais_custom_no_key(void);
 int test_voice_ais_mistral_sse(void);
 int test_voice_ais_mistral_capture(void);
-int test_voice_ais_sse_error_event(void);
+int test_voice_ais_sse_wav_then_error_event(void);
+int test_voice_ais_sse_error_fixture_is_format(void);
 int test_voice_ais_sse_done_only(void);
 int test_voice_ais_badrate_is_format(void);
 int test_voice_ais_endless_audio_capped(void);
+int test_voice_ais_request_time_capped(void);
 int test_voice_ais_not_wav_is_format(void);
 int test_voice_ais_http_302_redirect(void);
 int test_voice_ais_endless_error_body_capped(void);
@@ -276,6 +278,8 @@ int test_thread_join_all_finish(void);
 int test_thread_join_is_bounded(void);
 int test_thread_join_full_list_closes_handle(void);
 int test_ai_nc_fire_wakes_blocked_winhttp_call(void);
+int test_web_fetch_trickling_head_ends_at_hop_deadline(void);
+int test_web_fetch_trickling_head_ends_on_cancel_flag(void);
 
 /* test_settings_label_win.c */
 int test_settings_label_win_labels_fit_column(void);
@@ -666,10 +670,12 @@ int main(int argc, char **argv)
     failed += test_voice_ais_custom_no_key();
     failed += test_voice_ais_mistral_sse();
     failed += test_voice_ais_mistral_capture();
-    failed += test_voice_ais_sse_error_event();
+    failed += test_voice_ais_sse_wav_then_error_event();
+    failed += test_voice_ais_sse_error_fixture_is_format();
     failed += test_voice_ais_sse_done_only();
     failed += test_voice_ais_badrate_is_format();
     failed += test_voice_ais_endless_audio_capped();
+    failed += test_voice_ais_request_time_capped();
     failed += test_voice_ais_not_wav_is_format();
     failed += test_voice_ais_http_302_redirect();
     failed += test_voice_ais_endless_error_body_capped();
@@ -744,6 +750,8 @@ int main(int argc, char **argv)
     failed += test_thread_join_is_bounded();
     failed += test_thread_join_full_list_closes_handle();
     failed += test_ai_nc_fire_wakes_blocked_winhttp_call();
+    failed += test_web_fetch_trickling_head_ends_at_hop_deadline();
+    failed += test_web_fetch_trickling_head_ends_on_cancel_flag();
     failed += test_ns_slider_win_keys_and_notify();
     failed += test_ns_draw_level_meter_win_zones_fill_and_hold();
     failed += run_ns_tip_tests();

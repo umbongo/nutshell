@@ -281,6 +281,16 @@ static void answer(HttpLoop *h, SOCKET c)
         free(w);
         break;
     }
+    case HLS_SSE_KEEPALIVE:
+        /* Slow and audio-free: only a wall-clock cap can end it (an unthrottled audio stream
+         * trips the frame cap first and queues minutes of audio). */
+        if (send_head(c, "200 OK", "text/event-stream", "", -1) == 0) {
+            while (!h->stop) {
+                if (send_chunk(c, ": keep-alive\n\n", 14) != 0) break;
+                Sleep(50);
+            }
+        }
+        break;
     case HLS_NOTWAV: {
         static const char id3[] = "ID3\4\0\0\0\0\0\0 this is an mp3, not a WAV stream";
         if (send_head(c, "200 OK", "audio/mpeg", "", (long)sizeof(id3) - 1) == 0)
@@ -290,6 +300,20 @@ static void answer(HttpLoop *h, SOCKET c)
     case HLS_500_ENDLESS:
         if (send_head(c, "500 Internal Server Error", "text/plain", "", -1) == 0) send_endless(h, c);
         break;
+    case HLS_TRICKLE_HEAD: {
+        /* A head that never completes in time: every byte restarts WinHTTP's
+         * receive timeout, so only a watchdog ends the wait. */
+        static const char head[] = "HTTP/1.1 200 OK\r\nX-Pad: ";
+        for (size_t i = 0; i < sizeof(head) - 1 && !h->stop; i++) {
+            if (send_all(c, head + i, 1) != 0) return;
+            Sleep(100);
+        }
+        for (int i = 0; i < 600 && !h->stop; i++) {
+            if (send_all(c, "a", 1) != 0) return;
+            Sleep(100);
+        }
+        break;
+    }
     case HLS_401: send_status_body(c, "401 Unauthorized", "{\"error\":\"invalid key\"}"); break;
     case HLS_404: send_status_body(c, "404 Not Found", "{\"error\":\"no such model\"}"); break;
     case HLS_422: send_status_body(c, "422 Unprocessable Entity", "{\"error\":\"unknown field\"}"); break;

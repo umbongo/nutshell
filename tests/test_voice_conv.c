@@ -1729,3 +1729,355 @@ int test_vconv_ai_failed_header_text(void)
     ASSERT_STR_EQ(voice_conv_header_text(VCH_AI_FAILED), "AI speech failed: using Windows speech");
     TEST_END();
 }
+
+/* ---- Mute the microphone while speech plays (the setting on) ---- */
+
+/* Like goto_state(..., SPEAKING), with the mute setting on at start. */
+static unsigned long goto_speaking_muted(VoiceConv *c, int live, VoiceConvOut *at_speaking)
+{
+    unsigned long t = 0;
+    voice_ledger_reset();
+    voice_conv_init(c);
+    run(c, VCE_START, live, 1, 0);
+    run(c, VCE_TURN_START, 0, 0, t += 10);
+    if (live) run(c, VCE_LINK_READY, 0, 0, t += 10);
+    run(c, VCE_TURN_END, 0, 0, t += 100);
+    if (live) run(c, VCE_LINK_FINAL, 0, 0, t += 100); else run(c, VCE_BATCH_OK, 0, 0, t += 100);
+    run(c, VCE_TRANSCRIPT, VTC_TEXT, 0, t += 10);
+    run(c, VCE_SENT, VSS_SENT, 0, t += 10);
+    *at_speaking = run(c, VCE_CHAT_IDLE, 1, 0, t += 1000);
+    return t;
+}
+
+int test_vconv_mute_speaking_holds_the_listener(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    goto_speaking_muted(&c, 1, &o);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_REPLY | VCA_MODE_HOLD));
+    ASSERT_EQ(o.actions & VCA_MODE_SPEAK, 0u);
+    ASSERT_EQ(o.header, VCH_SPEAKING_MUTED);
+    ASSERT_STR_EQ(voice_conv_header_text(VCH_SPEAKING_MUTED),
+        "Microphone off while the assistant speaks. Press the voice key to interrupt.");
+    TEST_END();
+}
+
+int test_vconv_mute_off_sends_the_speak_mode(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_WORKING, 1);
+    o = run(&c, VCE_CHAT_IDLE, 1, 0, t + 1000);
+    ASSERT_TRUE(has(o, VCA_SPEAK_REPLY | VCA_MODE_SPEAK));
+    ASSERT_EQ(o.actions & VCA_MODE_HOLD, 0u);
+    ASSERT_EQ(o.header, VCH_SPEAKING);
+    TEST_END();
+}
+
+int test_vconv_mute_speaking_ignores_the_listener(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 1, &o);
+    o = run(&c, VCE_DUCK, 0, 0, t += 10);
+    ASSERT_EQ(o.actions, 0u); ASSERT_EQ(o.header, VCH_NONE);
+    o = run(&c, VCE_TURN_START, 0, 0, t += 10);
+    ASSERT_EQ(o.actions, 0u); ASSERT_EQ(o.header, VCH_NONE);
+    ASSERT_EQ(c.turn, 0);
+    ASSERT_EQ(c.typing, 0);
+    o = run(&c, VCE_CUT, 0, 0, t += 10);
+    ASSERT_EQ(o.actions, 0u); ASSERT_EQ(o.header, VCH_NONE);
+    o = run(&c, VCE_UNDUCK, 0, 0, t += 10);
+    ASSERT_EQ(o.actions, 0u);
+    o = run(&c, VCE_TURN_ABANDON, 0, 0, t += 10);
+    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(c.turn, 0);
+    TEST_END();
+}
+
+int test_vconv_mute_off_still_cuts_in(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    o = run(&c, VCE_DUCK, 0, 0, t += 10);
+    ASSERT_TRUE(has(o, VCA_DUCK));
+    o = run(&c, VCE_CUT, 0, 0, t += 10);
+    ASSERT_EQ(c.state, VCS_HEARING);
+    ASSERT_TRUE(has(o, VCA_STOP_SPEECH));
+    TEST_END();
+}
+
+int test_vconv_mute_speech_done_listens_after_the_guard(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    t += 5000;
+    o = run(&c, VCE_SPEECH_DONE, 0, 0, t);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(o.header, VCH_NONE);
+    ASSERT_EQ(voice_conv_next_deadline(&c, t), (long)VOICE_CONV_MUTE_GUARD_MS);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS - 1);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(o.actions, 0u);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_MODE_LISTEN));
+    ASSERT_EQ(o.header, VCH_LISTENING);
+    ASSERT_EQ(c.muted, 0);
+    TEST_END();
+}
+
+int test_vconv_mute_guard_ignores_the_microphone(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    o = run(&c, VCE_TURN_START, 0, 0, t + 100);
+    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    o = run(&c, VCE_SPEECH_DONE, 0, 0, t + 200);   /* a repeated report does not move the guard */
+    ASSERT_EQ(o.actions, 0u);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    TEST_END();
+}
+
+int test_vconv_mute_off_speech_done_listens_at_once(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 0);
+    o = run(&c, VCE_SPEECH_DONE, 0, 0, t + 100);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_MODE_LISTEN));
+    TEST_END();
+}
+
+int test_vconv_mute_speech_failed_mid_reply_starts_the_guard(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    t += 100;
+    o = run(&c, VCE_SPEECH_FAILED, 0, 0, t);
+    ASSERT_EQ(c.state, VCS_SPEAKING);          /* the microphone stays held */
+    ASSERT_EQ(o.note, VCN_NO_SPEECH);          /* the note shows as before */
+    ASSERT_EQ(o.actions & VCA_MODE_LISTEN, 0u);
+    ASSERT_EQ(c.muted, 1);
+    ASSERT_EQ(voice_conv_next_deadline(&c, t), (long)VOICE_CONV_MUTE_GUARD_MS);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS - 1);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(o.actions, 0u);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_MODE_LISTEN));
+    ASSERT_EQ(o.note, VCN_NONE);
+    TEST_END();
+}
+
+int test_vconv_mute_speech_failed_in_the_guard_changes_nothing(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    o = run(&c, VCE_SPEECH_FAILED, 0, 0, t + 100);   /* a late engine error */
+    ASSERT_EQ(o.actions, 0u);
+    ASSERT_EQ(o.note, VCN_NONE);
+    ASSERT_EQ(o.header, VCH_NONE);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(voice_conv_next_deadline(&c, t + 100), (long)VOICE_CONV_MUTE_GUARD_MS - 100);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS - 1);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_MODE_LISTEN));
+    ASSERT_EQ(o.note, VCN_NONE);
+    TEST_END();
+}
+
+int test_vconv_mute_off_speech_failed_listens_at_once(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 0);
+    o = run(&c, VCE_SPEECH_FAILED, 0, 0, t + 100);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_MODE_LISTEN));
+    ASSERT_EQ(o.note, VCN_NO_SPEECH);
+    TEST_END();
+}
+
+int test_vconv_mute_resumed_held_reply_is_muted(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    o = run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, t += 500);   /* cut off mid-reply: held */
+    ASSERT_TRUE(has(o, VCA_HOLD_REPLY));
+    ASSERT_EQ(c.muted, 0);
+    o = run(&c, VCE_RESUME, 0, 0, t += 500);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_CONTINUE | VCA_MODE_HOLD));
+    ASSERT_EQ(o.actions & VCA_MODE_SPEAK, 0u);
+    ASSERT_EQ(o.header, VCH_SPEAKING_MUTED);
+    ASSERT_EQ(c.muted, 1);
+    TEST_END();
+}
+
+int test_vconv_mute_spoken_phrases_are_muted(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = 0;
+    /* the "something went wrong" phrase */
+    voice_ledger_reset();
+    voice_conv_init(&c);
+    run(&c, VCE_START, 0, 1, 0);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_TURN_END, 0, 0, t += 100);
+    run(&c, VCE_BATCH_OK, 0, 0, t += 100);
+    run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, t += 10);
+    run(&c, VCE_SENT, VSS_SENT, 0, t += 10);
+    o = run(&c, VCE_CHAT_IDLE, 1, 1, t += 1000);
+    ASSERT_TRUE(has(o, VCA_SPEAK_PHRASE | VCA_MODE_HOLD));
+    ASSERT_EQ(o.phrase, VCPH_WENT_WRONG);
+    ASSERT_EQ(o.header, VCH_SPEAKING_MUTED);
+    /* the refusal's phrase */
+    t = 0;
+    voice_ledger_reset();
+    voice_conv_init(&c);
+    run(&c, VCE_START, 0, 1, 0);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_TURN_END, 0, 0, t += 100);
+    run(&c, VCE_BATCH_OK, 0, 0, t += 100);
+    run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, t += 10);
+    o = run(&c, VCE_SENT, VSS_BUSY, 0, t += 10);
+    ASSERT_TRUE(has(o, VCA_SPEAK_PHRASE | VCA_MODE_HOLD));
+    ASSERT_EQ(o.phrase, VCPH_NOT_SENT);
+    ASSERT_EQ(o.header, VCH_SPEAKING_MUTED);
+    TEST_END();
+}
+
+int test_vconv_mute_external_send_in_the_guard(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    o = run(&c, VCE_EXTERNAL_SEND, 0, 0, t + 100);   /* the user types and sends */
+    ASSERT_EQ(c.state, VCS_WORKING);
+    ASSERT_EQ(o.header, VCH_WORKING);
+    ASSERT_EQ(c.muted, 0);
+    ASSERT_EQ(c.guard, 0);
+    o = run(&c, VCE_TICK, 0, 0, t + VOICE_CONV_MUTE_GUARD_MS);   /* the guard does not fire */
+    ASSERT_EQ(c.state, VCS_WORKING);
+    ASSERT_EQ(o.actions, 0u);
+    o = run(&c, VCE_TICK, 0, 0, t + 5000);
+    ASSERT_EQ(c.state, VCS_WORKING);
+    ASSERT_EQ(o.actions & VCA_MODE_LISTEN, 0u);
+    TEST_END();
+}
+
+int test_vconv_mute_the_key_interrupts_the_reply(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 1, &o);
+    o = run(&c, VCE_PRESS, 0, 0, t + 500);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_STOP_SPEECH | VCA_MODE_LISTEN));
+    ASSERT_EQ(o.header, VCH_LISTENING);
+    ASSERT_EQ(c.muted, 0);
+    ASSERT_TRUE(voice_conv_active(&c));
+    /* a later reply is muted again */
+    TEST_END();
+}
+
+int test_vconv_mute_the_key_during_the_guard(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    o = run(&c, VCE_PRESS, 0, 0, t + 100);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_MODE_LISTEN));
+    ASSERT_EQ(c.guard, 0);
+    ASSERT_EQ(voice_conv_next_deadline(&c, t + 100) > 300, 1);
+    TEST_END();
+}
+
+int test_vconv_mute_stop_escape_and_end_still_work(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    o = run(&c, VCE_STOP, 0, 0, t + 10);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_STOP_SPEECH | VCA_MODE_LISTEN));
+    t = goto_speaking_muted(&c, 0, &o);
+    o = run(&c, VCE_ESCAPE, 0, 0, t + 10);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_TRUE(has(o, VCA_STOP_SPEECH | VCA_MODE_LISTEN));
+    t = goto_speaking_muted(&c, 0, &o);
+    o = run(&c, VCE_END, VCX_PANEL_CLOSED, 0, t + 10);
+    ASSERT_EQ(c.state, VCS_IDLE);
+    ASSERT_TRUE(has(o, VCA_STOP_SPEECH | VCA_CLOSE_CAPTURE | VCA_ENGINE_STOP));
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_mute_next_reply_is_muted_again(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_TURN_END, 0, 0, t += 100);
+    run(&c, VCE_BATCH_OK, 0, 0, t += 100);
+    run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, t += 10);
+    run(&c, VCE_SENT, VSS_SENT, 0, t += 10);
+    o = run(&c, VCE_CHAT_IDLE, 1, 0, t += 1000);
+    ASSERT_TRUE(has(o, VCA_MODE_HOLD));
+    ASSERT_EQ(o.header, VCH_SPEAKING_MUTED);
+    TEST_END();
+}
+
+int test_vconv_mute_pause_in_the_guard_does_not_hold_the_reply(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_speaking_muted(&c, 0, &o);
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    o = run(&c, VCE_PAUSE, VCP_BACKGROUND, 0, t + 50);
+    ASSERT_EQ(o.actions & VCA_HOLD_REPLY, 0u);
+    ASSERT_EQ(c.held, 0);
+    ASSERT_EQ(c.muted, 0);
+    TEST_END();
+}
+
+int test_vconv_mute_repeat_phrase_keeps_the_muted_header(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = 0;
+    voice_ledger_reset();
+    voice_conv_init(&c);
+    run(&c, VCE_START, 0, 1, 0);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_TURN_END, 0, 0, t += 100);
+    run(&c, VCE_BATCH_OK, 0, 0, t += 100);
+    o = run(&c, VCE_TRANSCRIPT, VTC_REPEAT, 0, t += 10);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_REPEAT | VCA_MODE_HOLD));
+    ASSERT_EQ(o.header, VCH_SPEAKING_MUTED);
+    TEST_END();
+}

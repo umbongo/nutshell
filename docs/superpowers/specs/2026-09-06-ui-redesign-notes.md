@@ -531,6 +531,16 @@ Done, in order (details in the commit messages and the specs named):
   Ctrl+Shift+Tab and Ctrl+0, and the main-window chords forwarded from the AI panel; Settings
   has a Tab order, F1 help, `WM_DPICHANGED`, `WM_GETMINMAXINFO`, no Debugging overflow and
   help tips in the profile editor. Approve/deny keys were decided against on 2026-11-28.
+- v1.3.7 (PR pending; second combined close-out build of 2026-11-28, hand checks in
+  `docs/test-log/v1.3.7-*.md`): Alt+drag block selection; `ESC c` is a full reset; EL, ED,
+  ECH, DCH and ICH keep `TermRow.len` right, with the reflow rule for a row followed by a
+  continuation; the Session Manager's empty list shows its hint; `web_search` URL-encodes its
+  query; `web_fetch` has a watchdog that closes the request at the hop's deadline or on
+  cancel; `winhttp_open` fails closed when TLS 1.2 cannot be enforced; AI speech honours a
+  finite WAV size, refuses `?` and `#` in a speech Base URL, has a wall-clock cap and a
+  clearer redirect reason, and a one-line triple-backtick span in a list item no longer
+  opens a fence. New setting "Mute the microphone while a reply is spoken" (the maintainer's
+  request of 2026-11-28, a fallback for PCs where echo cancellation does not work).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -789,9 +799,7 @@ Open, in priority order:
       10 minutes is cut silently by the Speaking watchdog ("continue" resumes it; refreshing
       the clock on each spoken word would avoid it) [fixed in code in PR 3; hand check pending]; a Hearing or Ending watchdog expiry
       restarts the 3-minute silence clock, against the rule that a failed turn must not, so
-      with uploads hanging a noisy room can keep a conversation alive [fixed in code in PR 3; hand check pending]; a list item or
-      indented line that starts with a one-line triple-backtick span opens a fence and the
-      rest of the reply is not read (fails closed); after a pause cuts an approval
+      with uploads hanging a noisy room can keep a conversation alive [fixed in code in PR 3; hand check pending]; after a pause cuts an approval
       announcement the header returns to "Working..." although a card waits, and the
       announcement is not repeated; Settings is destroyed before its owner is re-enabled, so
       Windows may activate another application for a moment and the conversation would show
@@ -880,27 +888,11 @@ Open, in priority order:
       v1.3.1 every reply failed in passing). That is the capture's question (R25) answered by
       ear: report it and the fix is the `pcm` path.
 - [ ] Follow-ups from the final review of AI speech, not built:
-      a valid WAV `data` chunk size is ignored (R25), so a finite WAV with a trailing LIST or
-      id3 chunk has the trailer played as PCM and an odd trailer length fails the reply after it
-      was heard (`src/core/voice_wavstream.c:88-97`; spec section 8.4 says only 0 and
-      0xFFFFFFFF mean "until the end").
       The typed-key decision in `src/ui/settings.c` (`voice_tts_key_touched`,
       `voice_tts_key_bound`, the reset in `voice_page_read`) has no test; move it to a pure
       function in `src/core/voice_aispeech.c`.
-      `The speech Base URL is too long` also refuses a keyless Custom server, or one sharing the
-      speech-to-text key, where the binding is never read (`src/core/voice_aispeech.c:155-161`):
-      refuse only when the speech key is its own and one is typed.
       `settings_voice_sample_failed` (`src/ui/settings.c:1539`) drops the failure when another
       Settings page is showing; drop the `cur_page` condition.
-      The redirect reason says "check the Base URL" for Mistral too, which has no Base URL row
-      (`src/core/voice_aispeech.c:321-322`).
-      `http://host?x=a@b` passes the authority check but `parse_url`
-      (`src/ui/ai_http_win.c:36-46`) ends the host only at `:` or `/`, so the connect fails;
-      refuse `?` and `#` in a base, and correct the comment at `src/core/voice_aispeech.c:71-73`.
-      `test_voice_ais_sse_error_event`'s first half would pass with the error event ignored;
-      split or rename it. Only the native parser tests cover the error event.
-      The 5-minute cap counts decoded frames, so a Mistral stream that never ends and carries no
-      audio stays open until the user stops it or the 10-minute Speaking watchdog fires.
 - [ ] Live dictation follow-ups (PR #112, parked minors; nothing run on Windows): an error
       followed by a ready timeout gives two chat lines; a READY and the 10 s timeout landing
       at the same moment shows "stopped" instead of "unavailable"; teardown can stall the UI
@@ -982,11 +974,8 @@ Open, in priority order:
       the four v1.2.74 review leftovers (a font left selected in one header paint path, the
       status dot's size written twice, the rounds note's spare row, two "web_fetch is off"
       rows in one round).
-- [ ] Terminal escapes (PR #94's nano work): replay vim, htop, mc and less against tmux as
-      nano was. Since v1.3.3 the tab stops (HT, CHT `CSI I`, CBT `CSI Z`, HTS, TBC), auto-wrap
-      inside a scroll region and the alternate screen keeping the primary's scroll region are
-      done. Left: `ESC c` (RIS) resets only the tab stops; a full reset also clears the
-      screen, the attributes, the modes, the scroll region and the cursor.
+- [ ] Terminal escapes: replay `mc` against tmux as vim, htop and less were (PR #128; mc is not
+      installed on `automaton`); ED 3 (erase scrollback) is not handled.
 - [ ] Terminal attributes (found 2026-11-12 while checking this list): underline is drawn
       since v1.3.3 (Windows hand check not run: `printf '\033[4munderlined\033[0m plain\n'`
       at 100 % and 150 % scaling, on a line with a missing glyph too, and a line under
@@ -1004,15 +993,6 @@ Open, in priority order:
       measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200 columns); a user-supplied
       issue log can hold a typed secret, so `term.rx`/`term.key` payloads are never printed
       and tests use synthetic text.
-- [ ] web_search does not URL-encode the query (`src/core/ai_tool_web_search.c`, all four
-      URL builders): a query with spaces, `&`, `#` or `+` reaches DuckDuckGo or the custom
-      URL mangled; found 2026-11-13.
-- [ ] web_fetch: a watchdog that closes the request handle at hop end or on cancel; one
-      hop can still exceed its timeout against a trickling server (the final review of
-      the guard rails branch; the header wait is bounded, the body loop checks the hop's
-      clock only between reads).
-- [ ] winhttp_open: fail closed when TLS 1.2 cannot be enforced (today the session keeps
-      the OS defaults if the TLS 1.2-only retry is refused).
 - [ ] `ssh_channel_write` blocks the UI thread for up to its 5 s send timeout per write
       when the remote window is full (found by PR #79, left alone). The same class of
       symptom as #79's lost input: keys stop while the UI thread waits. Move SSH writes off
@@ -1038,7 +1018,7 @@ Open, in priority order:
       the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
       combining marks and the reflow drop order in PR #76; middle-click now extends, so
       middle-button paste is off the list; the scrollback-size setting and lazy allocation
-      shipped in PR #93): Alt+drag block selection (mouse reporting to applications: see
+      shipped in PR #93): mouse reporting to applications is what is left (see
       "Local shell follow-ups").
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
@@ -1122,7 +1102,20 @@ Open, in priority order:
       provenance, secret scanning -- the settings changes need the maintainer's
       say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
       destination filter shipped in PR #85.
-- [ ] Older review findings: Session Manager phantom row.
+- [ ] v1.3.7 follow-ups (second combined close-out build of 2026-11-28; hand checks in
+      `docs/test-log/v1.3.7-*.md`): Alt+drag block selection is in the README but not on
+      the in-app shortcut sheet (a row or note for it breaks the one-page rule at 1080p:
+      the maintainer decides); a block selection is cleared by output anywhere in its rows;
+      web fetch keeps a few-instruction window between its last check and a WinHTTP call on
+      a handle the watchdog may close (the design `ai_netcancel.h` already accepts for
+      cancel); the custom search URL may still be `http://`; a finite WAV size that is
+      fully delivered on a connection the server keeps open waits for the close, the
+      receive timeout or the 6-minute cap; the AI speech time cap does not cover an error
+      body; with "Mute the microphone while a reply is spoken" on, anything said during a
+      reply or the 300 ms after it is lost, and a key press just after that ends the
+      conversation instead of interrupting; the Wine harness's source list
+      (`WIN_TEST_SRCS`) must gain every new `src/core` file a harness-linked `src/ui` file
+      calls, and nothing checks that before the build.
 - [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
       device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
       than device rulesets -- keep detecting on strict-locked sessions and add a
@@ -1177,11 +1170,6 @@ Open, in priority order:
 - [ ] Wide characters: the parser gives every codepoint one cell, ConPTY and most terminals
       give East Asian wide characters and most emoji two, so such rows drift from the shell's
       idea of the cursor column. Pre-existing; needs a width table and two-cell rendering.
-- [ ] Parser quirk (pre-existing, left alone by the ConPTY resize spec because fixing it changes
-      SSH rendering): EL and ED never update `TermRow.len`, so `len` can exceed the written
-      width. The `wrapped` half was settled by PR #74: a whole-row erase (EL 2, EL 0 from
-      column 0, EL 1 to the last column, ED over a whole row) clears it, and a line feed
-      never does, by design (readline moves onto a continuation row with a bare LF).
 - [ ] v1.3.5 follow-ups (combined close-out build of 2026-11-28; hand checks in
       `docs/test-log/v1.3.5-*.md`): an empty key path makes the SSH login ask for a
       passphrase and report "Wrong passphrase for ." (found in the Settings review, in the

@@ -45,6 +45,7 @@ void ai_nc_init(AiNetCancel *c)
     c->h = 0;
     c->close = NULL;
     c->closing = 0;
+    c->expired = 0;
 }
 
 int ai_nc_arm(AiNetCancel *c, uintptr_t h, AiNcCloseFn close)
@@ -57,6 +58,7 @@ int ai_nc_arm(AiNetCancel *c, uintptr_t h, AiNcCloseFn close)
     }
     c->h = h;
     c->close = close;
+    __atomic_store_n(&c->expired, 0, __ATOMIC_RELEASE);   /* a new hop starts clean */
     nc_unlock(c);
     return 0;
 }
@@ -94,8 +96,38 @@ void ai_nc_fire(AiNetCancel *c)
     }
 }
 
+int ai_nc_expire(AiNetCancel *c)
+{
+    if (!c) return 0;
+    nc_lock(c);
+    /* Set under the lock, before the close: the worker that reads it sees a
+     * handle it must not touch again, closed or about to be. */
+    __atomic_store_n(&c->expired, 1, __ATOMIC_RELEASE);
+    uintptr_t   h = c->h;
+    AiNcCloseFn close = c->close;
+    c->h = 0;
+    c->close = NULL;
+    if (h && close) __atomic_store_n(&c->closing, 1, __ATOMIC_RELEASE);
+    nc_unlock(c);
+    if (!(h && close)) return 0;
+    close(h);
+    __atomic_store_n(&c->closing, 0, __ATOMIC_RELEASE);
+    return 1;
+}
+
 int ai_nc_cancelled(const AiNetCancel *c)
 {
     if (!c) return 0;
     return __atomic_load_n(&c->cancelled, __ATOMIC_ACQUIRE) ? 1 : 0;
+}
+
+int ai_nc_expired(const AiNetCancel *c)
+{
+    if (!c) return 0;
+    return __atomic_load_n(&c->expired, __ATOMIC_ACQUIRE) ? 1 : 0;
+}
+
+int ai_nc_ended(const AiNetCancel *c)
+{
+    return ai_nc_cancelled(c) || ai_nc_expired(c);
 }

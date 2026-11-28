@@ -313,7 +313,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/notice_dlg.c src/core/notice.c src/core/notice_layout.c src/core/opt_feature.c \
                    src/core/winhttp_open.c src/core/ai_gate.c tests/test_winhttp_open_win.c \
                    tests/test_notice_dlg_win.c \
-                   src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
+                   src/ui/thread_join.c src/core/ai_netcancel.c src/core/ai_watchdog.c src/core/ai_tool_web_fetch.c src/core/net_guard.c src/core/paste_filter.c src/core/html_util.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c \
                    src/ui/voice_audio_win.c src/core/wav.c src/core/voice_vad.c src/core/voice_listen.c src/core/voice_playq.c tests/test_voice_audio_win.c tests/test_voice_render_win.c \
                    src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/json_scan.c src/core/voice_lang.c src/core/voice_gate.c \

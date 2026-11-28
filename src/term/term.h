@@ -183,8 +183,8 @@ typedef struct {
      * escape sequence, between the two. An ED 0 that reaches the home position
      * any other way (a transient prompt's \r ESC[1A ESC[J) is not counted.
      * Nothing else bumps it: no cursor move (CUP, CUU, RI, DECRC), no other
-     * erase. ED 3 and RIS (ESC c) are not handled by the parser, so they bump
-     * nothing and move nothing; the alternate screen does not touch it; a
+     * erase. ED 3 is not handled by the parser, so it bumps
+     * nothing and moves nothing; RIS (ESC c, term_reset) counts like ED 2; the alternate screen does not touch it; a
      * failed term_resize leaves it, a committed one does not touch it.
      * after_cup_home: the parser's memory of that "straight after" (true from
      * a CUP/HVP that homed the cursor until the next byte that is not the
@@ -209,6 +209,12 @@ void term_free(Terminal *term);
 bool term_resize(Terminal *term, int rows, int cols);
 void term_process(Terminal *term, const char *data, size_t len);
 void term_scroll(Terminal *term);
+/* RIS (ESC c), a full reset: leaves the alternate screen, blanks the primary
+ * screen, and restores the attributes, cursor (shown, at home), saved cursor,
+ * full-screen scroll region, tab stops and the modes the terminal keeps
+ * (application cursor keys, insert, bracketed paste). Keeps the scrollback and
+ * the title; bumps erase_seq like ED 2; asks for a full redraw. */
+void term_reset(Terminal *term);
 /* Tab stops back to the default, every 8 columns (term_init, RIS). */
 void term_tabs_reset(Terminal *term);
 void term_scroll_up(Terminal *term, int top, int bot, int n);

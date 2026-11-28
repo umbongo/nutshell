@@ -83,6 +83,21 @@ static void tab_backward(Terminal *term, int n) {
     }
 }
 
+/* TermRow.len after an erase. len is the highest column written, plus one
+ * (term_put_char); a cell erased since, codepoint 0, is not content, whatever
+ * background it was given. Erasing columns from `from` to the end of the row
+ * cuts len to from, then past any erased cell the cut left at the end. */
+static void row_erase_tail_len(TermRow *row, int from) {
+    int n = row->len < from ? row->len : from;
+    while (n > 0 && row->cells[n - 1].codepoint == 0) n--;
+    row->len = n;
+}
+
+/* Erasing columns 0 .. last: len is 0 when no content is left past them. */
+static void row_erase_head_len(TermRow *row, int last) {
+    if (row->len <= last + 1) row->len = 0;
+}
+
 static void clamp_cursor(Terminal *term) {
     if (term->cursor.row < 0) term->cursor.row = 0;
     if (term->cursor.row >= term->rows) term->cursor.row = term->rows - 1;
@@ -485,6 +500,7 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                         cr0->cells[c].codepoint = 0;
                         cr0->cells[c].attr = term->current_attr;
                     }
+                    row_erase_tail_len(cr0, term->cursor.col);
                     if (term->cursor.col == 0) cr0->wrapped = false;   /* whole row erased */
                     cr0->dirty = true;
                 }
@@ -527,6 +543,7 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                         cr1->cells[c].codepoint = 0;
                         cr1->cells[c].attr = term->current_attr;
                     }
+                    row_erase_head_len(cr1, cc);
                     if (cc >= term->cols - 1) cr1->wrapped = false;    /* whole row erased */
                     cr1->dirty = true;
                 }
@@ -573,6 +590,8 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     row->cells[c].codepoint = 0;
                     row->cells[c].attr = term->current_attr;
                 }
+                if (n == 1) row_erase_head_len(row, cc);
+                else        row_erase_tail_len(row, start);   /* EL 0 and EL 2 */
                 /* A whole-row erase ends the soft wrap onto this row (spec
                  * 2026-10-20 section 2.4): EL 2, EL 0 from column 0, or EL 1
                  * to the last column. Cursor motion never touches the flag -- readline moves
@@ -687,6 +706,15 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     ich_row->cells[ic].codepoint = 0;
                     ich_row->cells[ic].attr = term->current_attr;
                 }
+                /* Content at or right of the cursor moves right by n; what
+                 * passes the last column is lost. Blanks past the content
+                 * are not content. */
+                if (term->cursor.col < ich_row->len) {
+                    int nl = ich_row->len + ich_n;
+                    if (nl > term->cols) nl = term->cols;
+                    while (nl > 0 && ich_row->cells[nl - 1].codepoint == 0) nl--;
+                    ich_row->len = nl;
+                }
                 ich_row->dirty = true;
             }
             break;
@@ -704,6 +732,12 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     dch_row->cells[dc].codepoint = 0;
                     dch_row->cells[dc].attr = term->current_attr;
                 }
+                /* Content right of the deleted cells moves left by n; the
+                 * cells before the cursor stay. */
+                if (term->cursor.col < dch_row->len) {
+                    int nl = dch_row->len - dch_n;
+                    row_erase_tail_len(dch_row, nl > term->cursor.col ? nl : term->cursor.col);
+                }
                 dch_row->dirty = true;
             }
             break;
@@ -718,6 +752,9 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     ech_row->cells[ec].codepoint = 0;
                     ech_row->cells[ec].attr = term->current_attr;
                 }
+                /* An erase that reaches the row's content ends it there. */
+                if (term->cursor.col + ech_n >= ech_row->len)
+                    row_erase_tail_len(ech_row, term->cursor.col);
                 ech_row->dirty = true;
             }
             break;
@@ -818,9 +855,8 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     tab_set(term, pending_wrap_col(term), true);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == 'c') {
-                    /* RIS — only the tab stops are reset here; the rest of a
-                     * full reset is not implemented. */
-                    term_tabs_reset(term);
+                    /* RIS — full reset (term_reset) */
+                    term_reset(term);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == '7') {
                     /* DECSC — Save Cursor */
