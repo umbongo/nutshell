@@ -108,6 +108,191 @@ int test_pairs_tool_round_ok(void)
     TEST_END();
 }
 
+/* ---- a stopped reply never leaves two user turns in a row ------------------ */
+
+#define STOP_MARK "[reply stopped by the user]"
+
+/* The roles of a request body in order, as one letter each: s system (OpenAI
+ * style), u user, a assistant, t tool. */
+static void body_roles(const char *body, char *out, size_t cap)
+{
+    size_t n = 0;
+    const char *p = body;
+    while ((p = strstr(p, "\"role\":\"")) != NULL && n + 1 < cap) {
+        p += 8;
+        out[n++] = *p;
+    }
+    out[n] = '\0';
+}
+
+static int roles_have_uu(const char *roles)
+{
+    return strstr(roles, "uu") != NULL;
+}
+
+/* Builds the body for `provider` and returns its role letters in `roles`;
+ * 1 on success. */
+static int roles_for(const AiConversation *c, const char *provider, char *roles,
+                     size_t cap, char *body, size_t body_cap)
+{
+    if (ai_build_request_body_frame(c, NULL, NULL, NULL, body, body_cap, 0,
+                                    provider) == 0)
+        return 0;
+    body_roles(body, roles, cap);
+    return 1;
+}
+
+int test_stopped_reply_before_any_text(void)
+{
+    TEST_BEGIN();
+    static char body[65536];
+    char roles[64];
+    static const char *const providers[] = { "openai", "anthropic" };
+    for (int k = 0; k < 2; k++) {
+        AiConversation *c = new_conv();   /* SYS, "go" */
+        ASSERT_NOT_NULL(c);
+        if (!c) continue;
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, "", 0), 1);
+        ASSERT_EQ(ai_conv_add(c, AI_ROLE_USER, "again please"), 0);
+        ASSERT_TRUE(roles_for(c, providers[k], roles, sizeof roles, body, sizeof body));
+        ASSERT_TRUE(!roles_have_uu(roles));
+        /* nothing the user typed is lost */
+        ASSERT_NOT_NULL(strstr(body, "\"go\""));
+        ASSERT_NOT_NULL(strstr(body, "again please"));
+        ASSERT_NOT_NULL(strstr(body, STOP_MARK));
+        free_conv(c);
+    }
+    TEST_END();
+}
+
+int test_stopped_reply_after_partial_text(void)
+{
+    TEST_BEGIN();
+    static char body[65536];
+    char roles[64];
+    static const char *const providers[] = { "openai", "anthropic" };
+    for (int k = 0; k < 2; k++) {
+        AiConversation *c = new_conv();
+        ASSERT_NOT_NULL(c);
+        if (!c) continue;
+        const char *partial = "The logs are under /var/log/ngi";
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, partial, strlen(partial)), 1);
+        const AiMessage *last = &c->messages[c->msg_count - 1];
+        ASSERT_EQ((int)last->role, (int)AI_ROLE_ASSISTANT);
+        /* the partial text is kept, then the marker */
+        ASSERT_EQ(strncmp(ai_msg_content(last), partial, strlen(partial)), 0);
+        ASSERT_NOT_NULL(strstr(ai_msg_content(last), STOP_MARK));
+        ai_conv_add(c, AI_ROLE_USER, "carry on");
+        ASSERT_TRUE(roles_for(c, providers[k], roles, sizeof roles, body, sizeof body));
+        ASSERT_TRUE(!roles_have_uu(roles));
+        ASSERT_NOT_NULL(strstr(body, "/var/log/ngi"));
+        free_conv(c);
+    }
+    TEST_END();
+}
+
+int test_stopped_reply_twice_is_one_turn(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        int before = c->msg_count;
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, "part", 4), 1);
+        ASSERT_EQ(c->msg_count, before + 1);
+        /* Stop again with nothing in flight: the last turn is the assistant's */
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, "", 0), 0);
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, "more", 4), 0);
+        ASSERT_EQ(c->msg_count, before + 1);
+        ASSERT_EQ(ai_conv_add_stopped_reply(NULL, "x", 1), 0);
+    }
+    free_conv(c);
+    TEST_END();
+}
+
+int test_stopped_reply_in_a_tool_round(void)
+{
+    TEST_BEGIN();
+    static char body[65536];
+    char roles[64];
+    static const char *const providers[] = { "openai", "anthropic" };
+    for (int k = 0; k < 2; k++) {
+        /* (a) the stop drops the open tool turn: the conversation ends on the
+         * user's turn again and the stopped reply is recorded there */
+        AiConversation *c = new_conv();
+        AiToolCall calls[1];
+        ASSERT_NOT_NULL(c);
+        if (!c) continue;
+        ASSERT_EQ(add_asst(c, 1, calls), 0);
+        ASSERT_EQ(ai_conv_drop_open_tool_turn(c), 1);
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, "", 0), 1);
+        ai_conv_add(c, AI_ROLE_USER, "next");
+        ASSERT_TRUE(roles_for(c, providers[k], roles, sizeof roles, body, sizeof body));
+        ASSERT_TRUE(!roles_have_uu(roles));
+        free_conv(c);
+
+        /* (b) the stop comes after the results: the conversation ends on a
+         * tool turn and there is nothing to record */
+        c = new_conv();
+        ASSERT_NOT_NULL(c);
+        if (!c) continue;
+        ASSERT_EQ(add_asst(c, 1, calls), 0);
+        ASSERT_EQ(add_results(c, calls, 0, 1), 0);
+        int n = c->msg_count;
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, "", 0), 0);
+        ASSERT_EQ(c->msg_count, n);
+        ai_conv_add(c, AI_ROLE_USER, "next");
+        ASSERT_TRUE(roles_for(c, providers[k], roles, sizeof roles, body, sizeof body));
+        /* A results turn that goes out as a user message (Anthropic, or text
+         * form without tools) is followed by the typed message as it always
+         * was; the builder adds no "stopped" turn there, since nothing was
+         * stopped. */
+        ASSERT_TRUE(strstr(body, STOP_MARK) == NULL);
+        free_conv(c);
+    }
+    TEST_END();
+}
+
+/* The body builder is the last guard: two user turns in a row in the
+ * conversation (a stop that recorded nothing, a note after a user turn) are
+ * sent with a short assistant turn between, never back to back. */
+int test_body_never_sends_two_user_turns_in_a_row(void)
+{
+    TEST_BEGIN();
+    static char body[65536];
+    char roles[64];
+    static const char *const providers[] = { "openai", "anthropic", "deepseek" };
+    for (int k = 0; k < 3; k++) {
+        AiConversation *c = new_conv();        /* SYS, "go" */
+        ASSERT_NOT_NULL(c);
+        if (!c) continue;
+        ai_conv_add(c, AI_ROLE_USER, "second try");
+        ai_conv_add(c, AI_ROLE_USER, "third try");
+        ASSERT_TRUE(roles_for(c, providers[k], roles, sizeof roles, body, sizeof body));
+        ASSERT_TRUE(!roles_have_uu(roles));
+        ASSERT_NOT_NULL(strstr(body, "\"go\""));
+        ASSERT_NOT_NULL(strstr(body, "second try"));
+        ASSERT_NOT_NULL(strstr(body, "third try"));
+        ASSERT_NOT_NULL(strstr(body, STOP_MARK));
+        /* the conversation itself is untouched */
+        ASSERT_EQ(c->msg_count, 4);
+        free_conv(c);
+    }
+    /* A well-formed alternation gets no placeholder. */
+    {
+        AiConversation *c = new_conv();
+        ASSERT_NOT_NULL(c);
+        if (c) {
+            ai_conv_add(c, AI_ROLE_ASSISTANT, "hi");
+            ai_conv_add(c, AI_ROLE_USER, "more");
+            ASSERT_TRUE(roles_for(c, "openai", roles, sizeof roles, body, sizeof body));
+            ASSERT_TRUE(strstr(body, STOP_MARK) == NULL);
+        }
+        free_conv(c);
+    }
+    TEST_END();
+}
+
 /* A conversation stored the way it was before parts: one parts-less results
  * message per call. Each stands for one part with its own id. */
 int test_pairs_legacy_tool_messages_ok(void)

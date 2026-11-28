@@ -7,6 +7,10 @@
 
 #include "ai_prompt.h"
 
+/* The line that ends a stopped reply, and the whole assistant turn the body
+ * builder puts between two user turns that follow each other. */
+#define AI_STOPPED_REPLY_TEXT "[reply stopped by the user]"
+
 /* 1 while some assistant turn with tool calls is followed, up to the end of
  * the conversation, only by AI_ROLE_TOOL turns whose parts answer fewer of
  * its calls than it made (this covers "the last message is such a turn").
@@ -111,6 +115,17 @@ int ai_conv_launch_snapshot(AiConversation *conv, const char *text, size_t len,
  * question of a request that offers run_command, which spec decision 22
  * forbids). Leaves frame->delim alone. frame NULL: no-op. conv NULL: none. */
 void ai_conv_snapshot_frame(const AiConversation *conv, AiBodyFrame *frame);
+
+/* Record a reply the user stopped (the Stop button) so the next typed message
+ * does not follow a user turn directly. Only when the conversation's last
+ * message is a USER turn (the reply was never stored): appends an assistant
+ * turn holding the partial text streamed so far, if any, then the line
+ * "[reply stopped by the user]". Returns 1 when appended, 0 when nothing was
+ * owed (a NULL conv, an empty conversation, the last message is not a USER
+ * turn: a second Stop, or a stop after a tool round whose results are the last
+ * turn), the conversation is full, or -1 when an allocation failed. `partial`
+ * may be NULL or empty (`len` 0). */
+int ai_conv_add_stopped_reply(AiConversation *conv, const char *partial, size_t len);
 
 /* The status row that says why a request body could not be built (the builder
  * returns 0 for pairing, overflow and allocation alike): the pairing text when

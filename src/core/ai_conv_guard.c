@@ -275,3 +275,28 @@ const char *ai_body_failure_text(const AiConversation *conv)
 {
     return ai_body_failure_text_for(conv, NULL, NULL);
 }
+
+int ai_conv_add_stopped_reply(AiConversation *conv, const char *partial, size_t len)
+{
+    static const char mark[] = AI_STOPPED_REPLY_TEXT;
+    if (!conv || conv->msg_count <= 0) return 0;
+    if (conv->messages[conv->msg_count - 1].role != AI_ROLE_USER) return 0;
+    if (conv->msg_count >= AI_MAX_MESSAGES) return 0;
+    if (!partial) len = 0;
+    while (len > 0 && (partial[len - 1] == ' ' || partial[len - 1] == '\n' ||
+                       partial[len - 1] == '\r' || partial[len - 1] == '\t'))
+        len--;
+    char *text = (char *)malloc(len + sizeof mark + 2);
+    if (!text) return -1;
+    size_t n = 0;
+    if (len > 0) {
+        memcpy(text, partial, len);
+        n = len;
+        text[n++] = '\n';
+        text[n++] = '\n';
+    }
+    memcpy(text + n, mark, sizeof mark);
+    int rc = ai_conv_add(conv, AI_ROLE_ASSISTANT, text);
+    free(text);
+    return rc == 0 ? 1 : -1;
+}

@@ -450,6 +450,16 @@ void ai_chat_cancel_active_stream(AiChatData *d)
 {
     if (!d) return;
 
+    /* A reply that was in flight is recorded as stopped below, with the text
+     * streamed so far. Taken now: the reset further down clears the buffer. */
+    int was_streaming = d->active_state && d->active_state->busy;
+    char *partial = NULL;
+    if (was_streaming && d->stream_content_len > 0) {
+        size_t plen = strlen(d->stream_content);
+        partial = (char *)malloc(plen + 1);
+        if (partial) memcpy(partial, d->stream_content, plen + 1);
+    }
+
     /* Abort and orphan this session's stream only -- another tab's reply
      * keeps running -- and put the session back to idle. */
     ai_chat_abort_session_stream(d, d->active_state, 0);
@@ -485,6 +495,13 @@ void ai_chat_cancel_active_stream(AiChatData *d)
         ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
         ai_conv_snapshot_trim(&d->conv);   /* R40: after every pop */
     }
+
+    /* The reply was never stored: keep what streamed, so the next message does
+     * not follow a user turn directly (a no-op unless the conversation ends on
+     * a user turn, so a second Stop adds nothing). */
+    if (was_streaming)
+        (void)ai_conv_add_stopped_reply(&d->conv, partial, partial ? strlen(partial) : 0);
+    free(partial);
 
     /* Update UI */
     ai_chat_update_context_bar(d);
