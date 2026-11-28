@@ -155,7 +155,7 @@ int test_vlisten_hold_audio_not_in_next_turn(void)
     lt_run(&t, 40, -20.0, 0.4, -60.0);           /* the loudspeaker, heard */
     resume = t.win;
     voice_listen_set_mode(&t.l, VLM_LISTEN);     /* listening resumes at once */
-    lt_run(&t, 100, NONE_DB, 0.0, -60.0);
+    lt_run(&t, 2, NONE_DB, 0.0, -60.0);          /* fewer than the ring holds: older audio would show */
     lt_run(&t, 40, -20.0, 0.4, -60.0);           /* the user */
     lt_run(&t, 60, NONE_DB, 0.0, -60.0);
     ASSERT_EQ(t.unknown, 0);
