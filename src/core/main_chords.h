@@ -15,6 +15,7 @@
 #define MCHORD_VK_TAB   0x09
 #define MCHORD_VK_SPACE 0x20
 #define MCHORD_VK_F11   0x7A
+#define MCHORD_VK_NUMPAD0 0x60
 
 typedef enum {
     MCHORD_NONE = 0,

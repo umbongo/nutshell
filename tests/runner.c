@@ -1606,6 +1606,7 @@ int test_zoom_zero_term_h(void);
 /* test_main_chords.c */
 int test_main_chords_tab_next_and_prev(void);
 int test_main_chords_zoom_reset(void);
+int test_main_chords_numpad_zero_resets_the_zoom(void);
 int test_main_chords_existing_chords(void);
 int test_main_chords_ai_panel_needs_the_assistant_on(void);
 int test_main_chords_forwarded_from_panel(void);
@@ -7130,6 +7131,7 @@ int main(void) {
     failed += test_zoom_zero_term_h();
     failed += test_main_chords_tab_next_and_prev();
     failed += test_main_chords_zoom_reset();
+    failed += test_main_chords_numpad_zero_resets_the_zoom();
     failed += test_main_chords_existing_chords();
     failed += test_main_chords_ai_panel_needs_the_assistant_on();
     failed += test_main_chords_forwarded_from_panel();

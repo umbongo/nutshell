@@ -3,6 +3,7 @@
 #include "app_font.h"
 #include "ns_type.h"
 #include "shortcuts.h"
+#include <stdio.h>
 #include <string.h>
 
 /* classify(vk, shift, ctrl, alt, ai_on) */
@@ -29,6 +30,18 @@ int test_main_chords_zoom_reset(void)
     ASSERT_EQ(main_chord_classify('0', 1, 1, 0, 0), MCHORD_NONE);
     ASSERT_EQ(main_chord_classify('0', 0, 1, 1, 0), MCHORD_NONE);   /* AltGr+0 */
     ASSERT_EQ(main_chord_classify('1', 0, 1, 0, 0), MCHORD_NONE);
+    TEST_END();
+}
+
+/* Ctrl+Numpad 0 resets the zoom like Ctrl+0 (Ctrl+Numpad +/- zoom already). */
+int test_main_chords_numpad_zero_resets_the_zoom(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(main_chord_classify(MCHORD_VK_NUMPAD0, 0, 1, 0, 0), MCHORD_ZOOM_RESET);
+    ASSERT_EQ(main_chord_classify(MCHORD_VK_NUMPAD0, 0, 0, 0, 0), MCHORD_NONE);  /* a plain 0 */
+    ASSERT_EQ(main_chord_classify(MCHORD_VK_NUMPAD0, 1, 1, 0, 0), MCHORD_NONE);
+    ASSERT_EQ(main_chord_classify(MCHORD_VK_NUMPAD0, 0, 1, 1, 0), MCHORD_NONE);
+    ASSERT_EQ(main_chord_classify(MCHORD_VK_NUMPAD0 + 1, 0, 1, 0, 0), MCHORD_NONE);  /* Numpad 1 */
     TEST_END();
 }
 

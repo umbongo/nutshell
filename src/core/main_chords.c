@@ -22,7 +22,7 @@ MainChord main_chord_classify(unsigned vk, int shift, int ctrl, int alt, int ai_
         }
     }
     if (vk == MCHORD_VK_TAB) return MCHORD_TAB_NEXT;
-    if (vk == '0')           return MCHORD_ZOOM_RESET;
+    if (vk == '0' || vk == MCHORD_VK_NUMPAD0) return MCHORD_ZOOM_RESET;
     return MCHORD_NONE;
 }
 
