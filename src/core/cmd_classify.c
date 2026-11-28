@@ -8368,8 +8368,11 @@ static void reason_finalize(const char *command, CmdSafetyLevel level,
     size_t n;
     if (!reason_buf || reason_buf_size == 0) return;
     n = strlen(reason_buf);
-    while (n > 0 && (reason_buf[n - 1] == ' ' || reason_buf[n - 1] == ':')) n--;
-    if (n < strlen(reason_buf)) {
+    /* Bare means ": " at the end (a prefix with nothing after it). A reason
+     * whose last word ends in a colon because the COMMAND does ("bootflash:")
+     * is left as it is. */
+    if (n >= 2 && reason_buf[n - 1] == ' ' && reason_buf[n - 2] == ':') {
+        while (n > 0 && (reason_buf[n - 1] == ' ' || reason_buf[n - 1] == ':')) n--;
         /* "<prefix>: " with nothing after it */
         char tmp[256];
         snprintf(tmp, sizeof tmp, "%.*s", (int)(n < sizeof tmp ? n : sizeof tmp - 1), reason_buf);

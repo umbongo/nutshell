@@ -5041,6 +5041,29 @@ int test_class_reasons_never_blank(void) {
     TEST_END();
 }
 
+/* A command that itself ends in a colon (an IOS file system, a label) leaves
+ * a reason ending in a colon: that is the command, not a bare prefix. */
+int test_class_reason_keeps_a_colon_the_command_has(void) {
+    TEST_BEGIN();
+    static const struct { const char *cmd; CmdPlatform pl; } rows[] = {
+        { "bootflash:", CMD_PLATFORM_CISCO_IOS },
+        { "bootflash:", CMD_PLATFORM_CISCO_NXOS },
+        { "flash:", CMD_PLATFORM_CISCO_IOS },
+        { "foo:", CMD_PLATFORM_LINUX },
+        { "sh -c \"foo:\"", CMD_PLATFORM_LINUX },
+    };
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        char why[256] = "";
+        CmdSafetyLevel lv = cmd_classify_ex(rows[i].cmd, rows[i].pl, why, sizeof why);
+        if (strstr(why, "nothing more specific") != NULL)
+            printf("  [%s] level %d reason [%s]\n", rows[i].cmd, (int)lv, why);
+        ASSERT_TRUE(strstr(why, "nothing more specific") == NULL);
+        ASSERT_TRUE(why[0] != '\0');
+        ASSERT_TRUE(strlen(why) > 2 && why[strlen(why) - 1] == ':');   /* as the rules wrote it */
+    }
+    TEST_END();
+}
+
 int test_nxos_asa_debug_aligned(void) {
     TEST_BEGIN();
     ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));

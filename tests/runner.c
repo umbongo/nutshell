@@ -728,6 +728,7 @@ int test_ios_debug(void);
 int test_ios_do(void);
 int test_nxos_asa_do_own_tables(void);
 int test_class_reasons_never_blank(void);
+int test_class_reason_keeps_a_colon_the_command_has(void);
 int test_crontab(void);
 int test_cmd_classify_probes(void);
 int test_nxos_asa_debug_aligned(void);
@@ -5778,6 +5779,7 @@ int main(void) {
     failed += test_ios_do();
     failed += test_nxos_asa_do_own_tables();
     failed += test_class_reasons_never_blank();
+    failed += test_class_reason_keeps_a_colon_the_command_has();
     failed += test_crontab();
     failed += test_cmd_classify_probes();
     failed += test_nxos_asa_debug_aligned();
