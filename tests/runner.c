@@ -1546,6 +1546,14 @@ int test_vt_scroll_down_region_beyond_64_moves_marker(void);
 int test_vt_il_beyond_64_moves_marker(void);
 int test_vt_dl_beyond_64_moves_marker(void);
 
+/* test_pty_size.c */
+int test_pty_size_first_send(void);
+int test_pty_size_unchanged_sends_nothing(void);
+int test_pty_size_changed_during_connect(void);
+int test_pty_size_one_dimension_differs(void);
+int test_pty_size_not_recorded_until_sent(void);
+int test_pty_size_invalid_and_null(void);
+
 /* test_connect_anim.c */
 int test_anim_dots_zero_elapsed(void);
 int test_anim_dots_just_under_interval(void);
@@ -7055,6 +7063,14 @@ int main(void) {
     failed += test_color_mixed_semicolon_colon_256();
     failed += test_color_colon_rgb_trailing_extra_params();
     failed += test_color_bold_colon_rgb_underline_one_feed();
+
+    printf("\n--- Pty size ---\n");
+    failed += test_pty_size_first_send();
+    failed += test_pty_size_unchanged_sends_nothing();
+    failed += test_pty_size_changed_during_connect();
+    failed += test_pty_size_one_dimension_differs();
+    failed += test_pty_size_not_recorded_until_sent();
+    failed += test_pty_size_invalid_and_null();
 
     printf("\n--- Connect Animation ---\n");
     failed += test_anim_dots_zero_elapsed();

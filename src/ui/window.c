@@ -5864,6 +5864,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     SessionIo io = session_io_ssh(s->ssh, s->channel);
                     io.last_input_tick = &s->last_term_input_tick;
                     s->io = io;
+                    /* The grid may have changed while connecting: the pty was
+                     * requested with the size snapshotted at connect start and
+                     * resizes in between were skipped (no transport yet). Send
+                     * the current size; ssh_pty_resize() sends nothing when it
+                     * is the size the pty already has. */
+                    if (s->io.ctx && s->io.resize)
+                        (void)s->io.resize(s->io.ctx, s->term->cols, s->term->rows);
                     term_process(s->term, "\r\nConnected.\r\n", 14);
                 }
                 /* Keep a log the user already started from the File menu
