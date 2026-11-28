@@ -5,6 +5,7 @@
 #include "session_manager.h"
 #include "../core/app_font.h"
 #include "ns_font.h"
+#include "ns_tokens.h"
 #include "../core/ns_scale.h"
 #include "../core/ui_theme.h"
 #include "../core/edit_scroll.h"
@@ -68,6 +69,9 @@ typedef struct {
 
 /* ---- Helpers ---- */
 
+/* Shown in the list while no session is saved. */
+#define SESSMGR_EMPTY_TEXT "No sessions yet. Click New to add one."
+
 /* Paint a single owner-drawn session row: theme bg, server icon, name. */
 static void paint_session_row(LPDRAWITEMSTRUCT dis, const ThemeColors *theme)
 {
@@ -85,6 +89,27 @@ static void paint_session_row(LPDRAWITEMSTRUCT dis, const ThemeColors *theme)
     FillRect(hdc, &rc, br);
     DeleteObject(br);
 
+    UINT dpi = (UINT)get_window_dpi(GetParent(dis->hwndItem));
+    if (dpi == 0) dpi = 96;
+
+    /* A negative item id is the listbox asking for its focus rectangle when
+     * it has no items: there is no row to draw, so no icon and no name. With
+     * nothing saved, say so instead. */
+    if ((INT)dis->itemID < 0) {
+        if (SendMessage(dis->hwndItem, LB_GETCOUNT, 0, 0) == 0) {
+            RECT msg_rc = rc;
+            msg_rc.left  += ns_scale(8, (int)dpi);
+            msg_rc.right -= ns_scale(8, (int)dpi);
+            HFONT old_font = (HFONT)SelectObject(hdc, ns_font(FONT_BODY, (int)dpi));
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, theme_cr(ns_tokens()->text_dim));
+            DrawTextA(hdc, SESSMGR_EMPTY_TEXT, -1, &msg_rc,
+                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+            SelectObject(hdc, old_font);
+        }
+        return;
+    }
+
     int row_h = rc.bottom - rc.top;
     int pad   = 4;
     int icon_sz = row_h - pad * 2;
@@ -96,11 +121,9 @@ static void paint_session_row(LPDRAWITEMSTRUCT dis, const ThemeColors *theme)
         rc.left + pad + icon_sz,
         rc.top + (row_h - icon_sz) / 2 + icon_sz
     };
-    UINT dpi = (UINT)get_window_dpi(GetParent(dis->hwndItem));
-    if (dpi == 0) dpi = 96;
     ns_icon_draw(hdc, NS_ICON_SERVER, &icon_rc, fg, dpi);
 
-    if ((INT)dis->itemID >= 0) {
+    {
         char text[256];
         text[0] = '\0';
         SendMessageA(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
