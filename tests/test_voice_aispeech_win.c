@@ -983,10 +983,11 @@ static int vr_expect_stream_fail_hr(int mode, long want_hr)   /* 0 when every ch
 
 static int vr_expect_stream_fail(int mode) { return vr_expect_stream_fail_hr(mode, VOICE_AIS_HR_STREAM); }
 
-/* A stream of valid WAV audio that then ends in an error event is a passing stream failure. The
- * canned error fixture's first delta is raw PCM, not WAV, so (F5) it fails as an unsupported format
- * instead; both are checked. */
-int test_voice_ais_sse_error_event(void)
+/* A stream of valid WAV audio, then an error event, then the done event: the error must end it
+ * as a passing stream failure. The done event after it is the discriminator: with the error
+ * event ignored the stream would end in done and play to the end, so a stream that merely stops
+ * (no done) proves nothing. */
+int test_voice_ais_sse_wav_then_error_event(void)
 {
     TEST_BEGIN();
     static const char *const path = TEST_TMP_DIR "/nutshell_vais_wavthenerr.sse";
@@ -999,8 +1000,22 @@ int test_voice_ais_sse_error_event(void)
     ASSERT_NOT_NULL(fix);
     const char *first_end = fix ? strstr(fix, "\n\n") : NULL;
     ASSERT_NOT_NULL(first_end);
-    if (w && first_end) {
-        ASSERT_EQ(vr_write(path, fix, (size_t)(first_end - fix) + 2, err_ev, sizeof(err_ev) - 1), 1);
+    ASSERT_TRUE(first_end == NULL || strstr(first_end + 2, "speech.audio.done") != NULL);
+    char *mix = NULL;
+    size_t total = 0;
+    if (first_end) {
+        const size_t head = (size_t)(first_end - fix) + 2, rest = n - head;
+        mix = (char *)malloc(head + sizeof(err_ev) - 1 + rest + 1);
+        ASSERT_NOT_NULL(mix);
+        if (mix) {                          /* delta, the error event, then the fixture's done */
+            memcpy(mix, fix, head);
+            memcpy(mix + head, err_ev, sizeof(err_ev) - 1);
+            memcpy(mix + head + sizeof(err_ev) - 1, fix + head, rest);
+            total = head + sizeof(err_ev) - 1 + rest;
+        }
+    }
+    if (w && first_end && mix) {
+        ASSERT_EQ(vr_write(path, mix, total, NULL, 0), 1);
         HttpLoop *h = NULL;
         ASSERT_EQ(vr_mistral_file(w, &h, path, VR_KEY), 1);
         va_pump(100);
@@ -1009,9 +1024,18 @@ int test_voice_ais_sse_error_event(void)
         if (h) hl_stop(h);
         voice_ais_quit(VA_TOKEN, 3000);
     }
+    free(mix);
     free(fix);
     remove(path);
     va_end(w);
+    TEST_END();
+}
+
+/* The canned error fixture's first delta is raw PCM, not WAV, so (F5) it fails as an unsupported
+ * format rather than as a stream failure. */
+int test_voice_ais_sse_error_fixture_is_format(void)
+{
+    TEST_BEGIN();
     ASSERT_EQ(vr_expect_stream_fail_hr(HLS_SSE_ERROR, VOICE_AIS_HR_FORMAT), 0);
     TEST_END();
 }
