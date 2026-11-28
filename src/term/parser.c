@@ -46,6 +46,38 @@ static TermRow *get_screen_row(Terminal *term, int screen_row) {
     return row;
 }
 
+static bool tab_is_stop(const Terminal *term, int col) {
+    if (col >= TERM_TAB_COLS) return col % 8 == 0;
+    return (term->tab_stops[col / 8] >> (col % 8)) & 1u;
+}
+
+static void tab_set(Terminal *term, int col, bool on) {
+    if (col < 0 || col >= TERM_TAB_COLS) return;
+    if (on) term->tab_stops[col / 8] |= (uint8_t)(1u << (col % 8));
+    else    term->tab_stops[col / 8] &= (uint8_t)~(1u << (col % 8));
+}
+
+/* Move forward n tab stops; the last column when none is left. */
+static void tab_forward(Terminal *term, int n) {
+    int last = term->cols - 1;
+    while (n-- > 0 && term->cursor.col < last) {
+        int c = term->cursor.col + 1;
+        while (c < last && !tab_is_stop(term, c)) c++;
+        term->cursor.col = c;
+    }
+    if (term->cursor.col > last) term->cursor.col = last;
+}
+
+/* Move back n tab stops; column 0 when none is left. */
+static void tab_backward(Terminal *term, int n) {
+    if (term->cursor.col >= term->cols) term->cursor.col = term->cols - 1;
+    while (n-- > 0 && term->cursor.col > 0) {
+        int c = term->cursor.col - 1;
+        while (c > 0 && !tab_is_stop(term, c)) c--;
+        term->cursor.col = c;
+    }
+}
+
 static void clamp_cursor(Terminal *term) {
     if (term->cursor.row < 0) term->cursor.row = 0;
     if (term->cursor.row >= term->rows) term->cursor.row = term->rows - 1;
@@ -404,11 +436,16 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
             term->cursor.col -= get_param(term, 0, 1);
             clamp_cursor(term);
             break;
-        case 'Z': { // CBT - Back to the previous 8-column tab stop, Ps times
-            int tabs = get_param(term, 0, 1);
-            while (tabs-- > 0 && term->cursor.col > 0)
-                term->cursor.col = (term->cursor.col - 1) / 8 * 8;
-            clamp_cursor(term);
+        case 'I': // CHT - Forward Ps tab stops
+            tab_forward(term, get_param(term, 0, 1));
+            break;
+        case 'Z': // CBT - Back Ps tab stops
+            tab_backward(term, get_param(term, 0, 1));
+            break;
+        case 'g': { // TBC - Tab Clear: 0 the stop at the cursor, 3 all
+            int mode = get_param(term, 0, 0);
+            if (mode == 0) tab_set(term, term->cursor.col, false);
+            else if (mode == 3) memset(term->tab_stops, 0, sizeof term->tab_stops);
             break;
         }
         case 'H': // CUP - Cursor Position
@@ -728,9 +765,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                 } else if (c == '\b') {
                     if (term->cursor.col > 0) term->cursor.col--;
                 } else if (c == '\t') {
-                    int next_tab = (term->cursor.col / 8 + 1) * 8;
-                    if (next_tab >= term->cols) next_tab = term->cols - 1;
-                    term->cursor.col = next_tab;
+                    tab_forward(term, 1);
                 } else if (c >= 0x20) {
                     term_put_char_utf8(term, c);
                 }
@@ -766,6 +801,16 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     } else if (term->cursor.row < term->rows - 1) {
                         term->cursor.row++;
                     }
+                    term->state = TERM_STATE_NORMAL;
+                } else if (c == 'H') {
+                    /* HTS — Horizontal Tab Set */
+                    if (term->cursor.col < term->cols)
+                        tab_set(term, term->cursor.col, true);
+                    term->state = TERM_STATE_NORMAL;
+                } else if (c == 'c') {
+                    /* RIS — only the tab stops are reset here; the rest of a
+                     * full reset is not implemented. */
+                    term_tabs_reset(term);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == '7') {
                     /* DECSC — Save Cursor */

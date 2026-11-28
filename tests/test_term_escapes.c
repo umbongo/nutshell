@@ -140,3 +140,88 @@ int test_term_alt_screen_region_repeat(void) {
     term_free(t);
     TEST_END();
 }
+
+/* ---- F3: settable tab stops ---- */
+
+int test_term_tab_defaults(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 0);
+    feed(t, "\t");  ASSERT_EQ(t->cursor.col, 8);
+    feed(t, "\t");  ASSERT_EQ(t->cursor.col, 16);
+    feed(t, "\t");  ASSERT_EQ(t->cursor.col, 19);   /* no stop left: last column */
+    feed(t, "\x1B[1;1H\x1B[3I");  ASSERT_EQ(t->cursor.col, 19);
+    feed(t, "\x1B[1;1H\x1B[2I");  ASSERT_EQ(t->cursor.col, 16);
+    feed(t, "\x1B[I");            ASSERT_EQ(t->cursor.col, 19);
+    feed(t, "\x1B[Z");            ASSERT_EQ(t->cursor.col, 16);
+    feed(t, "\x1B[2Z");           ASSERT_EQ(t->cursor.col, 0);
+    feed(t, "\x1B[Z");            ASSERT_EQ(t->cursor.col, 0);   /* CBT at column 0 */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_tab_hts_and_tbc(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 40, 0);
+    feed(t, "\x1B[1;4H\x1BH");                       /* HTS at col 3 */
+    feed(t, "\x1B[1;1H\t");   ASSERT_EQ(t->cursor.col, 3);
+    feed(t, "\t");            ASSERT_EQ(t->cursor.col, 8);
+    feed(t, "\x1B[Z");        ASSERT_EQ(t->cursor.col, 3);
+    feed(t, "\x1B[g");                               /* clear at cursor (col 3) */
+    feed(t, "\x1B[1;1H\t");   ASSERT_EQ(t->cursor.col, 8);
+    feed(t, "\x1B[0g");                              /* clear col 8 */
+    feed(t, "\x1B[1;1H\t");   ASSERT_EQ(t->cursor.col, 16);
+    feed(t, "\x1B[2g\x1B[1;1H\t");                   /* other parameters ignored */
+    ASSERT_EQ(t->cursor.col, 16);
+    feed(t, "\x1B[1;9H\x1BH");                       /* put col 8 back */
+    feed(t, "\x1B[1;1H\t");   ASSERT_EQ(t->cursor.col, 8);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_tab_clear_all(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 40, 0);
+    feed(t, "\x1B[3g");
+    feed(t, "\t");            ASSERT_EQ(t->cursor.col, 39);   /* last column */
+    feed(t, "\x1B[1;1H\x1B[5I");  ASSERT_EQ(t->cursor.col, 39);
+    feed(t, "\x1B[Z");        ASSERT_EQ(t->cursor.col, 0);
+    /* a stop at the last column */
+    feed(t, "\x1B[1;40H\x1BH\x1B[1;1H\t");
+    ASSERT_EQ(t->cursor.col, 39);
+    feed(t, "\x1B[1;1H\x1B[1;20H\x1BH\x1B[1;1H\t");
+    ASSERT_EQ(t->cursor.col, 19);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_tab_cht_count_beyond_stops(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 30, 0);
+    feed(t, "\x1B[65535I");
+    ASSERT_EQ(t->cursor.col, 29);
+    feed(t, "\x1B[65535Z");
+    ASSERT_EQ(t->cursor.col, 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_tab_reset_resize_alt(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 0);
+    feed(t, "\x1B[3g\x1B[1;4H\x1BH");               /* only a stop at col 3 */
+    feed(t, "\x1B[?1049h\x1B[1;1H\t");               /* alt screen shares them */
+    ASSERT_EQ(t->cursor.col, 3);
+    feed(t, "\x1B[1;6H\x1BH\x1B[?1049l");            /* ...and set ones persist */
+    feed(t, "\x1B[1;1H\x1B[2I");
+    ASSERT_EQ(t->cursor.col, 5);
+    /* resize keeps the stops, new columns get every 8 */
+    ASSERT_TRUE(term_resize(t, 5, 40));
+    feed(t, "\x1B[1;1H\t");   ASSERT_EQ(t->cursor.col, 3);
+    feed(t, "\x1B[1;10H\t");  ASSERT_EQ(t->cursor.col, 24);   /* 16 was cleared; 24 is new */
+    feed(t, "\x1B[1;1H\x1B[3I");  ASSERT_EQ(t->cursor.col, 24);
+    /* ESC c restores the defaults */
+    feed(t, "\x1B" "c");
+    feed(t, "\x1B[1;1H\t");   ASSERT_EQ(t->cursor.col, 8);
+    term_free(t);
+    TEST_END();
+}
