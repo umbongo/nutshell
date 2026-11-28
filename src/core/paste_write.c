@@ -29,7 +29,10 @@ static int flush_buf(const char *buf, size_t len, PasteWriteFn write_fn,
     while (off < len) {
         int rc = write_fn(ctx, buf + off, len - off);
         if (rc == 0 && zeros < PW_ZERO_RETRIES) { zeros++; continue; }
-        write_agg_add(agg, rc, len - off);
+        /* A short write that the loop completes is not a failure: note it as
+         * the full write it was asked to be. Only a write that stops the
+         * paste (rc <= 0, below) counts against the aggregate. */
+        write_agg_add(agg, rc, (rc > 0 && (size_t)rc < len - off) ? (size_t)rc : len - off);
         if (rc <= 0) return 1;
         zeros = 0;
         if ((size_t)rc > len - off) rc = (int)(len - off);

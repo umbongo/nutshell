@@ -34,7 +34,8 @@ typedef struct {
  * of at most max_chunk bytes (values under 4 are raised to 4, so a whole
  * UTF-8 sequence always fits). A chunk never ends inside a UTF-8 sequence
  * that is complete in the input. Each write call is noted in agg
- * (rc, bytes wanted); a short write continues with the rest, a write that
+ * (rc, bytes wanted); a short write continues with the rest and counts as a
+ * failure only if it ends the paste, a write that
  * returns a negative value stops the paste at once, and one that returns 0
  * stops it after 8 retries in a row (the rest would fail the same way).
  *

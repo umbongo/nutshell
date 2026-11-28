@@ -1581,6 +1581,7 @@ int test_paste_write_result_short_then_complete(void);
 int test_paste_write_zero_then_success_completes(void);
 int test_paste_write_zero_nine_times_stops(void);
 int test_paste_write_negative_stops_at_once(void);
+int test_paste_write_short_then_stop_is_one_failure(void);
 
 /* test_pty_size.c */
 int test_pty_size_first_send(void);
@@ -7136,6 +7137,7 @@ int main(void) {
     failed += test_paste_write_zero_then_success_completes();
     failed += test_paste_write_zero_nine_times_stops();
     failed += test_paste_write_negative_stops_at_once();
+    failed += test_paste_write_short_then_stop_is_one_failure();
 
     printf("\n--- Pty size ---\n");
     failed += test_pty_size_first_send();

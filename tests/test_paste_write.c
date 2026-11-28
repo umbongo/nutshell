@@ -163,7 +163,7 @@ int test_paste_write_failure_stops(void)
     TEST_END();
 }
 
-/* A short write continues with the rest and is flagged. */
+/* A short write continues with the rest; once completed it is not a failure. */
 int test_paste_write_short_write_continues(void)
 {
     TEST_BEGIN();
@@ -173,7 +173,7 @@ int test_paste_write_short_write_continues(void)
     ASSERT_EQ(paste_write_chunked("0123456789", 10, 0, rec_write, &r, 16, &a), (size_t)10);
     ASSERT_TRUE(memcmp(r.data, "0123456789", 10) == 0);
     ASSERT_EQ(r.calls, 4);
-    ASSERT_TRUE(a.bad > 0u);
+    ASSERT_EQ(a.bad, 0u);
     TEST_END();
 }
 
@@ -297,5 +297,21 @@ int test_paste_write_negative_stops_at_once(void)
     ASSERT_EQ(res.accepted, (size_t)0);
     ASSERT_EQ(res.stopped, 1);
     ASSERT_EQ(r.calls, 1);
+    TEST_END();
+}
+
+/* A short write followed by a stop is one failure. */
+int test_paste_write_short_then_stop_is_one_failure(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.short_cap = 3;
+    r.fail_after = 2;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("0123456789", 10, 0, rec_write, &r, 16, &a);
+    ASSERT_EQ(res.accepted, (size_t)6);
+    ASSERT_EQ(res.stopped, 1);
+    ASSERT_EQ(a.bad, 1u);
+    ASSERT_EQ(a.rc, -1);
     TEST_END();
 }
