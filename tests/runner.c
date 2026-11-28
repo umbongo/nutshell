@@ -871,6 +871,10 @@ int test_term_tab_clear_all(void);
 int test_term_tab_cht_count_beyond_stops(void);
 int test_term_tab_reset_resize_alt(void);
 int test_term_ris_full_reset(void);
+int test_term_el_updates_len(void);
+int test_term_ed_updates_len(void);
+int test_term_erase_with_background_len(void);
+int test_term_el_extract_and_reflow(void);
 
 /* test_term_fuzz.c */
 int test_term_fuzz_incomplete_esc(void);
@@ -7948,6 +7952,10 @@ int main(void) {
     failed += test_term_tab_cht_count_beyond_stops();
     failed += test_term_tab_reset_resize_alt();
     failed += test_term_ris_full_reset();
+    failed += test_term_el_updates_len();
+    failed += test_term_ed_updates_len();
+    failed += test_term_erase_with_background_len();
+    failed += test_term_el_extract_and_reflow();
     failed += test_term_fuzz_incomplete_esc();
     failed += test_term_fuzz_incomplete_csi();
     failed += test_term_fuzz_csi_no_params();

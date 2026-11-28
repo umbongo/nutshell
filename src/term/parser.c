@@ -83,6 +83,21 @@ static void tab_backward(Terminal *term, int n) {
     }
 }
 
+/* TermRow.len after an erase. len is the highest column written, plus one
+ * (term_put_char); a cell erased since, codepoint 0, is not content, whatever
+ * background it was given. Erasing columns from `from` to the end of the row
+ * cuts len to from, then past any erased cell the cut left at the end. */
+static void row_erase_tail_len(TermRow *row, int from) {
+    int n = row->len < from ? row->len : from;
+    while (n > 0 && row->cells[n - 1].codepoint == 0) n--;
+    row->len = n;
+}
+
+/* Erasing columns 0 .. last: len is 0 when no content is left past them. */
+static void row_erase_head_len(TermRow *row, int last) {
+    if (row->len <= last + 1) row->len = 0;
+}
+
 static void clamp_cursor(Terminal *term) {
     if (term->cursor.row < 0) term->cursor.row = 0;
     if (term->cursor.row >= term->rows) term->cursor.row = term->rows - 1;
@@ -485,6 +500,7 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                         cr0->cells[c].codepoint = 0;
                         cr0->cells[c].attr = term->current_attr;
                     }
+                    row_erase_tail_len(cr0, term->cursor.col);
                     if (term->cursor.col == 0) cr0->wrapped = false;   /* whole row erased */
                     cr0->dirty = true;
                 }
@@ -527,6 +543,7 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                         cr1->cells[c].codepoint = 0;
                         cr1->cells[c].attr = term->current_attr;
                     }
+                    row_erase_head_len(cr1, cc);
                     if (cc >= term->cols - 1) cr1->wrapped = false;    /* whole row erased */
                     cr1->dirty = true;
                 }
@@ -573,6 +590,8 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     row->cells[c].codepoint = 0;
                     row->cells[c].attr = term->current_attr;
                 }
+                if (n == 1) row_erase_head_len(row, cc);
+                else        row_erase_tail_len(row, start);   /* EL 0 and EL 2 */
                 /* A whole-row erase ends the soft wrap onto this row (spec
                  * 2026-10-20 section 2.4): EL 2, EL 0 from column 0, or EL 1
                  * to the last column. Cursor motion never touches the flag -- readline moves

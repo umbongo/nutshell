@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "term.h"
+#include "term_extract.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -384,6 +385,118 @@ int test_term_ris_full_reset(void) {
     feed(t, "\x1B[1;1HQ");
     ASSERT_EQ(cp(t, 0, 0), (uint32_t)'Q');
     ASSERT_EQ(cp(t, 0, 1), 0u);
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- EL and ED keep TermRow.len at the row's content width ----
+ * len is the highest column written, plus one (never counting a cell erased
+ * since): term_put_char raises it, a whole-row erase sets it to 0. An erase
+ * with a background colour leaves coloured blanks, which are not content. */
+
+static int row_len(Terminal *t, int row) {
+    return t->lines[term_screen_to_phys(t, row)]->len;
+}
+
+int test_term_el_updates_len(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    /* EL 0 with content before, at and after the cursor */
+    feed(t, "\x1B[1;1Habcdefgh\x1B[1;4H\x1B[K");
+    ASSERT_EQ(row_len(t, 0), 3);
+    feed(t, "\x1B[1;1H\x1B[K");                    /* at the start: all gone */
+    ASSERT_EQ(row_len(t, 0), 0);
+    feed(t, "\x1B[2;1Habc\x1B[2;8H\x1B[K");        /* cursor past the content */
+    ASSERT_EQ(row_len(t, 1), 3);
+    /* EL 0 over a gap of never-written cells does not leave len on a blank */
+    feed(t, "\x1B[3;1Ha\x1B[3;5Hb\x1B[3;4H\x1B[K");
+    ASSERT_EQ(row_len(t, 2), 1);
+
+    /* EL 1: content before, at and after the cursor */
+    feed(t, "\x1B[4;1Habcdefgh\x1B[4;4H\x1B[1K");
+    ASSERT_EQ(row_len(t, 3), 8);                   /* content after remains */
+    feed(t, "\x1B[4;7H\x1B[1K");                   /* up to the cursor, h (col 8) stays */
+    ASSERT_EQ(row_len(t, 3), 8);
+    feed(t, "\x1B[4;8H\x1B[1K");                   /* now h is erased too */
+    ASSERT_EQ(row_len(t, 3), 0);
+    feed(t, "\x1B[5;1Habc\x1B[5;9H\x1B[1K");       /* erase past the content */
+    ASSERT_EQ(row_len(t, 4), 0);
+
+    /* EL 2 */
+    feed(t, "\x1B[1;1Hhello\x1B[2K");
+    ASSERT_EQ(row_len(t, 0), 0);
+
+    /* the pending-wrap state (cursor.col == cols) */
+    feed(t, "\x1B[2J\x1B[1;1HXXXXXXXXXX\x1B[K");   /* EL 0 acts on the last column */
+    ASSERT_EQ(row_len(t, 0), 9);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_ed_updates_len(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 20);
+    /* ED 0 from the middle of row 1: that row is cut, the rows below are empty */
+    feed(t, "\x1B[1;1Haaaaaaaa\x1B[2;1Hbbbbbbbb\x1B[3;1Hcccccccc\x1B[2;4H\x1B[J");
+    ASSERT_EQ(row_len(t, 0), 8);
+    ASSERT_EQ(row_len(t, 1), 3);
+    ASSERT_EQ(row_len(t, 2), 0);
+    /* ED 0 from column 0 */
+    feed(t, "\x1B[2;1H\x1B[J");
+    ASSERT_EQ(row_len(t, 1), 0);
+
+    /* ED 1: the rows above are empty, the cursor row loses its start */
+    feed(t, "\x1B[1;1Haaaaaaaa\x1B[2;1Hbbbbbbbb\x1B[3;1Hcccccccc\x1B[3;4H\x1B[1J");
+    ASSERT_EQ(row_len(t, 0), 0);
+    ASSERT_EQ(row_len(t, 1), 0);
+    ASSERT_EQ(row_len(t, 2), 8);                   /* content past the cursor stays */
+    feed(t, "\x1B[3;10H\x1B[1J");                  /* the whole row */
+    ASSERT_EQ(row_len(t, 2), 0);
+
+    /* ED 2, ED 0 in the pending-wrap state touches nothing on its own row */
+    feed(t, "\x1B[1;1Hxxxxxxxxxx\x1B[J");
+    ASSERT_EQ(row_len(t, 0), 10);
+    feed(t, "\x1B[2J");
+    for (int r = 0; r < 4; r++) ASSERT_EQ(row_len(t, r), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_erase_with_background_len(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 10, 20);
+    /* Erased cells take the current background but are not content. */
+    feed(t, "\x1B[1;1Habcdef\x1B[44m\x1B[1;3H\x1B[K");
+    ASSERT_EQ(row_len(t, 0), 2);
+    ASSERT_EQ(t->lines[term_screen_to_phys(t, 0)]->cells[5].attr.bg_mode, (uint8_t)COLOR_ANSI16);
+    feed(t, "\x1B[2;1Habc\x1B[2K");
+    ASSERT_EQ(row_len(t, 1), 0);
+    /* a written space is content, an erased cell is not */
+    feed(t, "\x1B[0m\x1B[3;1Ha  \x1B[3;3H\x1B[K");
+    ASSERT_EQ(row_len(t, 2), 2);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_el_extract_and_reflow(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    feed(t, "abcdefgh\x1B[1;3H\x1B[K\r\nnext");
+    char buf[128];
+    size_t n = term_extract_visible(t, buf, sizeof buf);
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strncmp(buf, "ab\nnext", 7) == 0);
+
+    /* Narrower than the old content, wider than the new: the row must not
+     * wrap onto a second row for text that was erased. */
+    ASSERT_TRUE(term_resize(t, 5, 4));
+    ASSERT_EQ(row_len(t, 0), 2);
+    TermRow *r1 = t->lines[term_screen_to_phys(t, 1)];
+    ASSERT_TRUE(!r1->wrapped);
+    ASSERT_EQ(r1->cells[0].codepoint, (uint32_t)'n');
+    n = term_extract_visible(t, buf, sizeof buf);
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strncmp(buf, "ab\nnext", 7) == 0);
     term_free(t);
     TEST_END();
 }
