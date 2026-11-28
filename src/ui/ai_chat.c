@@ -1991,9 +1991,9 @@ next_coalesce:;
             void *lost;
             while ((lost = ai_stream_table_lost_owner(&d->streams)) != NULL) {
                 if (lost == (void *)d->active_state) {
-                    ai_chat_cancel_active_stream(d);
+                    ai_chat_cancel_active_stream_why(d, AI_REPLY_LOST);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                    "[the AI reply was lost]");
+                                    AI_LOST_STATUS_TEXT);
                     if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 } else {
                     ai_chat_abort_session_stream(d, (AiSessionState *)lost, 0);

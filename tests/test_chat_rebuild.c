@@ -1287,3 +1287,21 @@ int test_rebuild_replay_stopped_partial_never_yields_a_command(void) {
     }
     TEST_END();
 }
+
+/* A lost reply is drawn with its own status row, not "[cancelled]". */
+int test_rebuild_replay_lost_reply_row(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(ai_conv_add_ended_reply(&conv, "", 0, AI_REPLY_LOST), 1);
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, NULL, NULL);
+    char out[512];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out, "U:go\nS:[the AI reply was lost]\n");
+    chat_msg_list_clear(&list);
+    ai_conv_reset(&conv);
+    TEST_END();
+}

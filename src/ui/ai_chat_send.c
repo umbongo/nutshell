@@ -448,6 +448,12 @@ void ai_chat_drain_stream_messages(HWND hwnd)
  * Safe to call even when no stream is active. */
 void ai_chat_cancel_active_stream(AiChatData *d)
 {
+    ai_chat_cancel_active_stream_why(d, AI_REPLY_STOPPED);
+}
+
+/* The same, recording why the reply ended (Stop, or a lost stream). */
+void ai_chat_cancel_active_stream_why(AiChatData *d, AiReplyEnd why)
+{
     if (!d) return;
 
     /* A reply that was in flight is recorded as stopped below, with the text
@@ -508,7 +514,7 @@ void ai_chat_cancel_active_stream(AiChatData *d)
      * not follow a user turn directly (a no-op unless the conversation ends on
      * a user turn, so a second Stop adds nothing). */
     if (was_streaming)
-        (void)ai_conv_add_stopped_reply(&d->conv, partial, partial ? strlen(partial) : 0);
+        (void)ai_conv_add_ended_reply(&d->conv, partial, partial ? strlen(partial) : 0, why);
     free(partial);
 
     /* Update UI */

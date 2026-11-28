@@ -240,6 +240,43 @@ int test_stopped_reply_rule_is_one_function(void)
     TEST_END();
 }
 
+/* A reply that was lost (its stream ended without a final message) is not one
+ * the user stopped: its own marker, its own status row. */
+int test_lost_reply_has_its_own_text(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_add_ended_reply(c, "", 0, AI_REPLY_LOST), 1);
+        const AiMessage *m = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(ai_msg_content(m), "[reply lost]");
+        ASSERT_STR_EQ(ai_msg_stop_status(m), "[the AI reply was lost]");
+        ASSERT_EQ(ai_msg_stop_has_text(m), 0);
+    }
+    free_conv(c);
+    c = new_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_add_ended_reply(c, "half a", 6, AI_REPLY_LOST), 1);
+        const AiMessage *m = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(ai_msg_content(m), "half a");
+        ASSERT_STR_EQ(ai_msg_stop_status(m), "[the AI reply was lost]");
+        ASSERT_EQ(ai_msg_stop_has_text(m), 1);
+        ASSERT_EQ(ai_conv_add_ended_reply(c, "", 0, AI_REPLY_STOPPED), 0);
+    }
+    free_conv(c);
+    c = new_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_EQ(ai_conv_add_ended_reply(c, "", 0, AI_REPLY_STOPPED), 1);
+        ASSERT_STR_EQ(ai_msg_content(&c->messages[c->msg_count - 1]), STOP_MARK);
+        ASSERT_STR_EQ(ai_msg_stop_status(&c->messages[c->msg_count - 1]), "[cancelled]");
+    }
+    free_conv(c);
+    TEST_END();
+}
+
 int test_stopped_reply_twice_is_one_turn(void)
 {
     TEST_BEGIN();

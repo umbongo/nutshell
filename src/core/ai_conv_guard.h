@@ -128,6 +128,20 @@ void ai_conv_snapshot_frame(const AiConversation *conv, AiBodyFrame *frame);
  * may be NULL or empty (`len` 0). */
 int ai_conv_add_stopped_reply(AiConversation *conv, const char *partial, size_t len);
 
+/* Why a reply ended without being stored. */
+typedef enum {
+    AI_REPLY_STOPPED = 1,   /* the user pressed Stop */
+    AI_REPLY_LOST = 2       /* its stream ended without a final message */
+} AiReplyEnd;
+#define AI_LOST_REPLY_TEXT "[reply lost]"
+#define AI_LOST_STATUS_TEXT "[the AI reply was lost]"
+
+/* ai_conv_add_stopped_reply with a reason: AI_REPLY_STOPPED is the same call;
+ * AI_REPLY_LOST records "[reply lost]" (or the partial text) and its status row
+ * says the reply was lost. Same return values. */
+int ai_conv_add_ended_reply(AiConversation *conv, const char *partial, size_t len,
+                            AiReplyEnd why);
+
 /* The status row that stands for a stopped turn, in the chat as live and in a
  * rebuild: "[cancelled]". */
 #define AI_STOPPED_STATUS_TEXT "[cancelled]"

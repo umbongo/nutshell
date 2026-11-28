@@ -12,6 +12,7 @@
 #ifdef _WIN32
 
 #include "ai_prompt.h"
+#include "ai_conv_guard.h"
 #include "thinking_mode.h"
 #include "ai_tools.h"
 #include "ai_tool_web_search.h"
@@ -645,6 +646,7 @@ void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state,
                                   int keep_free);
 void ai_chat_drain_stream_messages(HWND hwnd);
 void ai_chat_cancel_active_stream(AiChatData *d);
+void ai_chat_cancel_active_stream_why(AiChatData *d, AiReplyEnd why);
 void ai_chat_send_user_message(AiChatData *d);
 VoiceSendStatus ai_chat_send_user_message_ex(AiChatData *d, int voice_turn);
 void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
