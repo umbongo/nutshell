@@ -35,7 +35,8 @@ typedef struct {
  * UTF-8 sequence always fits). A chunk never ends inside a UTF-8 sequence
  * that is complete in the input. Each write call is noted in agg
  * (rc, bytes wanted); a short write continues with the rest, a write that
- * returns 0 or less stops the paste (the rest would fail the same way).
+ * returns a negative value stops the paste at once, and one that returns 0
+ * stops it after 8 retries in a row (the rest would fail the same way).
  *
  * Returns the number of bytes handed to write_fn and accepted. The _ex form
  * also reports the expected total and whether the paste stopped; a stopped

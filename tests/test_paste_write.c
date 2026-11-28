@@ -12,11 +12,15 @@ typedef struct {
     int    calls;
     int    fail_after;   /* writes allowed before returning -1; < 0 = never */
     size_t short_cap;    /* when > 0, accept at most this many bytes per call */
+    int    zeros_left;   /* calls that return 0 (nothing taken) before taking data */
+    int    neg_rc;       /* when nonzero, every call returns this */
 } Rec;
 
 static int rec_write(void *ctx, const char *d, size_t len)
 {
     Rec *r = (Rec *)ctx;
+    if (r->neg_rc) { r->calls++; return r->neg_rc; }
+    if (r->zeros_left > 0) { r->zeros_left--; r->calls++; return 0; }
     if (r->fail_after >= 0 && r->calls >= r->fail_after) { r->calls++; return -1; }
     size_t take = (r->short_cap > 0 && len > r->short_cap) ? r->short_cap : len;
     if (r->calls < 64) r->sizes[r->calls] = take;
@@ -240,5 +244,58 @@ int test_paste_write_result_short_then_complete(void)
     ASSERT_EQ(res.accepted, (size_t)10);
     ASSERT_EQ(res.expected, (size_t)10);
     ASSERT_EQ(res.stopped, 0);
+    TEST_END();
+}
+
+/* A 0 return is retried: one 0 then success completes the paste. */
+int test_paste_write_zero_then_success_completes(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.zeros_left = 1;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("hello", 5, 0, rec_write, &r, 16, &a);
+    ASSERT_EQ(res.accepted, (size_t)5);
+    ASSERT_EQ(res.stopped, 0);
+    ASSERT_EQ(r.calls, 2);
+    ASSERT_EQ(a.bad, 0u);
+    TEST_END();
+}
+
+/* Eight retries are allowed (nine calls in all); the ninth 0 stops, and the
+ * stop is a failure. Eight zeros then success still completes. */
+int test_paste_write_zero_nine_times_stops(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.zeros_left = 8;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("hello", 5, 0, rec_write, &r, 16, &a);
+    ASSERT_EQ(res.accepted, (size_t)5);
+    ASSERT_EQ(res.stopped, 0);
+    ASSERT_EQ(r.calls, 9);
+
+    rec_init(&r);
+    r.zeros_left = 9;
+    write_agg_init(&a);
+    res = paste_write_chunked_ex("hello", 5, 0, rec_write, &r, 16, &a);
+    ASSERT_EQ(res.accepted, (size_t)0);
+    ASSERT_EQ(res.stopped, 1);
+    ASSERT_EQ(r.calls, 9);
+    ASSERT_EQ(a.bad, 1u);
+    TEST_END();
+}
+
+/* A negative return stops at once, with no retry. */
+int test_paste_write_negative_stops_at_once(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.neg_rc = -1;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("hello", 5, 0, rec_write, &r, 16, &a);
+    ASSERT_EQ(res.accepted, (size_t)0);
+    ASSERT_EQ(res.stopped, 1);
+    ASSERT_EQ(r.calls, 1);
     TEST_END();
 }

@@ -4,6 +4,11 @@
 
 #define PW_BUF_MAX PASTE_WRITE_CHUNK
 
+/* A transport may return 0 for "nothing taken right now" (libssh2 in blocking
+ * mode when the remote window is full). Retry that this many times in a row
+ * before treating it as a stop; a negative return stops at once. */
+#define PW_ZERO_RETRIES 8
+
 /* Length of the UTF-8 sequence that starts with lead byte b, as the lead
  * byte declares it; 1 for ASCII and for a stray continuation byte. */
 static size_t utf8_declared_len(unsigned char b)
@@ -20,10 +25,13 @@ static int flush_buf(const char *buf, size_t len, PasteWriteFn write_fn,
                      void *ctx, WriteAgg *agg, size_t *accepted)
 {
     size_t off = 0;
+    int zeros = 0;
     while (off < len) {
         int rc = write_fn(ctx, buf + off, len - off);
+        if (rc == 0 && zeros < PW_ZERO_RETRIES) { zeros++; continue; }
         write_agg_add(agg, rc, len - off);
         if (rc <= 0) return 1;
+        zeros = 0;
         if ((size_t)rc > len - off) rc = (int)(len - off);
         off += (size_t)rc;
         *accepted += (size_t)rc;
