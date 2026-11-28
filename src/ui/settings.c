@@ -214,6 +214,7 @@ typedef struct {
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
     int      demo;        /* --ui-demo: 1 = settings-debug (debugging ticked in memory), 2 = settings-voice (AI and voice ticked, no device list); Save never writes */
     HWND     tip_focus;   /* the control whose F1 help is showing, or NULL */
+    int      cues_shown;  /* keyboard focus cues have been switched on (first Tab or F1) */
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
     struct FetchModelsCtx *models;   /* the Refresh Models request in flight (UI's reference), or NULL */
     ThreadJoinList models_thread;    /* its thread's handle, kept so closing can join it */
@@ -608,6 +609,12 @@ static void draw_nav_item(SettingsDlgData *d, LPDRAWITEMSTRUCT dis)
     unsigned int fg = selected ? th->bg_primary
                      : (e->is_header ? th->text_dim : th->text_main);
     SetTextColor(hdc, theme_cr(fg));
+
+    /* The keyboard focus is on the list: ring its row (the list clears
+     * ODS_FOCUS / sets ODS_NOFOCUSRECT while the cues are hidden). */
+    if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT) &&
+        !e->is_header)
+        ns_draw_focus_ring(hdc, &rc, theme_cr(ns_tokens()->focus), d->dpi);
 
     HFONT useFont = e->is_header ? d->hBoldFont : d->hDlgFont;
     HGDIOBJ old = useFont ? SelectObject(hdc, useFont) : NULL;
@@ -2397,6 +2404,12 @@ static void tab_move(SettingsDlgData *d, int dir)
     int next = settings_tab_step(order, count, cur_idx, dir);
     if (next >= 0) {
         SetFocus(hw[next]);
+        /* As a dialog does: Tab into a single-line edit selects its text. */
+        char cls[16];
+        GetClassNameA(hw[next], cls, (int)sizeof(cls));
+        if (_stricmp(cls, "Edit") == 0 &&
+            !(GetWindowLongPtr(hw[next], GWL_STYLE) & ES_MULTILINE))
+            SendMessage(hw[next], EM_SETSEL, 0, -1);
         /* A control scrolled out of the page is still "visible" (clipped):
          * bring the new focus into view. */
         if (d->cur_page >= 0 && IsChild(d->hPage, hw[next])) {
@@ -2460,6 +2473,14 @@ static int settings_key_pretranslate(HWND hwnd, const MSG *msg)
     int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     int alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
     if (ctrl || alt) return 0;
+
+    /* Nothing here calls IsDialogMessage, so the controls are never told to
+     * show focus cues: the first Tab or F1 switches them on. */
+    if (!d->cues_shown && (msg->wParam == VK_TAB || msg->wParam == VK_F1)) {
+        d->cues_shown = 1;
+        SendMessage(hwnd, WM_CHANGEUISTATE,
+                    MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+    }
 
     switch (msg->wParam) {
     case VK_TAB: {
