@@ -1720,6 +1720,8 @@ int test_ai_provider_models_deepseek(void);
 int test_ai_provider_models_moonshot(void);
 int test_ai_provider_models_unknown(void);
 int test_ai_provider_models_url_known(void);
+int test_ai_models_url_from_base(void);
+int test_ai_models_url_from_base_buffer_limits(void);
 int test_ai_provider_models_url_unknown(void);
 int test_ai_build_auth_headers_anthropic(void);
 int test_ai_build_auth_headers_openai(void);
@@ -6567,6 +6569,8 @@ int main(void) {
     failed += test_ai_provider_models_moonshot();
     failed += test_ai_provider_models_unknown();
     failed += test_ai_provider_models_url_known();
+    failed += test_ai_models_url_from_base();
+    failed += test_ai_models_url_from_base_buffer_limits();
     failed += test_ai_provider_models_url_unknown();
     failed += test_ai_build_auth_headers_anthropic();
     failed += test_ai_build_auth_headers_openai();
