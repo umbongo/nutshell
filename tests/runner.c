@@ -870,6 +870,7 @@ int test_term_tab_hts_and_tbc(void);
 int test_term_tab_clear_all(void);
 int test_term_tab_cht_count_beyond_stops(void);
 int test_term_tab_reset_resize_alt(void);
+int test_term_ris_full_reset(void);
 
 /* test_term_fuzz.c */
 int test_term_fuzz_incomplete_esc(void);
@@ -7946,6 +7947,7 @@ int main(void) {
     failed += test_term_tab_clear_all();
     failed += test_term_tab_cht_count_beyond_stops();
     failed += test_term_tab_reset_resize_alt();
+    failed += test_term_ris_full_reset();
     failed += test_term_fuzz_incomplete_esc();
     failed += test_term_fuzz_incomplete_csi();
     failed += test_term_fuzz_csi_no_params();

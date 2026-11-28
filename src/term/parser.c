@@ -818,9 +818,8 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     tab_set(term, pending_wrap_col(term), true);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == 'c') {
-                    /* RIS — only the tab stops are reset here; the rest of a
-                     * full reset is not implemented. */
-                    term_tabs_reset(term);
+                    /* RIS — full reset (term_reset) */
+                    term_reset(term);
                     term->state = TERM_STATE_NORMAL;
                 } else if (c == '7') {
                     /* DECSC — Save Cursor */

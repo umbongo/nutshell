@@ -503,6 +503,41 @@ void term_tabs_reset(Terminal *term) {
         term->tab_stops[c / 8] |= (uint8_t)(1u << (c % 8));
 }
 
+/* RIS (ESC c): leave the alternate screen, then blank the primary screen and
+ * put every piece of state the parser keeps back to its term_init value. The
+ * scrollback and the window title stay (xterm keeps both). */
+void term_reset(Terminal *term) {
+    if (!term) return;
+    term_alt_screen_exit(term);
+
+    memset(&term->current_attr, 0, sizeof(term->current_attr));
+    for (int r = 0; r < term->rows; r++) {
+        TermRow *row = term->lines[term_screen_to_phys(term, r)];
+        if (!row) continue;
+        term_row_fill(row, term->cols, term->current_attr);
+        term_row_stamp(term, row);
+    }
+
+    term->cursor.row = 0;
+    term->cursor.col = 0;
+    term->cursor.visible = true;
+    term->saved_cursor.row = 0;
+    term->saved_cursor.col = 0;
+    term->saved_cursor.visible = true;
+    term->scroll_top = 0;
+    term->scroll_bot = term->rows - 1;
+    term->primary_scroll_top = 0;
+    term->primary_scroll_bot = term->rows - 1;
+    term->app_cursor_keys = false;
+    term->insert_mode = false;
+    term->bracketed_paste_mode = false;
+    term_tabs_reset(term);
+
+    term->erase_seq++;              /* a whole-screen erase, as ED 2 counts */
+    term->after_cup_home = false;
+    term->full_redraw_needed = true;
+}
+
 void term_scroll(Terminal *term) {
     if (term->lines_count < term->lines_capacity) {
         /* Buffer not full: append new line. The slot past the live part is
