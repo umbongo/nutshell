@@ -1779,32 +1779,6 @@ static size_t build_body_core(const AiConversation *conv,
 
         /* ---- Normal message (system/user/assistant without tool_calls) ---- */
 
-        /* Two user turns that follow each other in the conversation (a reply
-         * the user stopped before anything was stored, then the next message)
-         * would go out back to back, which some providers reject. A short
-         * assistant turn goes between them. The conversation is not changed,
-         * and a tool results turn is not a user turn here, so the flow after
-         * a tool round is as it was. */
-        if (msg->role == AI_ROLE_USER && i > msg_start &&
-            conv->messages[i - 1].role == AI_ROLE_USER) {
-            if (emitted) {
-                if (pos + 1 >= buf_size) return 0;
-                buf[pos++] = ',';
-            }
-            int sn = snprintf(buf + pos, buf_size - pos,
-                              "{\"role\":\"assistant\",\"content\":\"%s\"",
-                              AI_STOPPED_REPLY_TEXT);
-            if (sn < 0 || pos + (size_t)sn >= buf_size) return 0;
-            pos += (size_t)sn;
-            if (is_moonshot || deepseek_reasoning) {
-                pos = emit_reasoning_field(NULL, buf, buf_size, pos);
-                if (pos == 0) return 0;
-            }
-            if (pos + 1 >= buf_size) return 0;
-            buf[pos++] = '}';
-            emitted = 1;
-        }
-
         if (emitted) {
             if (pos + 1 >= buf_size) return 0;
             buf[pos++] = ',';
