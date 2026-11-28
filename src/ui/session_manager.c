@@ -93,22 +93,9 @@ static void paint_session_row(LPDRAWITEMSTRUCT dis, const ThemeColors *theme)
     if (dpi == 0) dpi = 96;
 
     /* A negative item id is the listbox asking for its focus rectangle when
-     * it has no items: there is no row to draw, so no icon and no name. With
-     * nothing saved, say so instead. */
-    if ((INT)dis->itemID < 0) {
-        if (SendMessage(dis->hwndItem, LB_GETCOUNT, 0, 0) == 0) {
-            RECT msg_rc = rc;
-            msg_rc.left  += ns_scale(8, (int)dpi);
-            msg_rc.right -= ns_scale(8, (int)dpi);
-            HFONT old_font = (HFONT)SelectObject(hdc, ns_font(FONT_BODY, (int)dpi));
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, theme_cr(ns_tokens()->text_dim));
-            DrawTextA(hdc, SESSMGR_EMPTY_TEXT, -1, &msg_rc,
-                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
-            SelectObject(hdc, old_font);
-        }
-        return;
-    }
+     * it has no items: there is no row to draw, so no icon and no name. The
+     * empty-list text is painted by list_empty_proc, not here. */
+    if ((INT)dis->itemID < 0) return;
 
     int row_h = rc.bottom - rc.top;
     int pad   = 4;
@@ -143,6 +130,47 @@ static void paint_session_row(LPDRAWITEMSTRUCT dis, const ThemeColors *theme)
     if (focus) DrawFocusRect(hdc, &rc);
 }
 
+/* Subclass of the session list: while it holds no item, WM_PAINT shows
+ * SESSMGR_EMPTY_TEXT in the dim text colour on the list's own background.
+ * The list owner-draws only its rows, so without this the text would vanish
+ * at the next repaint. ref is the dialog's const ThemeColors *. */
+#define SESSMGR_LIST_SUBCLASS_ID 1
+
+static LRESULT CALLBACK list_empty_proc(HWND hList, UINT m, WPARAM wp, LPARAM lp,
+                                        UINT_PTR id, DWORD_PTR ref)
+{
+    if (m == WM_PAINT && SendMessage(hList, LB_GETCOUNT, 0, 0) == 0) {
+        const ThemeColors *theme = (const ThemeColors *)ref;
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hList, &ps);
+        RECT rc;
+        GetClientRect(hList, &rc);
+        HBRUSH br = CreateSolidBrush(theme_cr(theme->bg_secondary));
+        FillRect(hdc, &rc, br);
+        DeleteObject(br);
+
+        int dpi = get_window_dpi(GetParent(hList));
+        if (dpi <= 0) dpi = 96;
+        int row_h = (int)SendMessage(hList, LB_GETITEMHEIGHT, 0, 0);
+        if (row_h <= 0) row_h = ns_scale(24, dpi);
+        RECT msg_rc = rc;
+        msg_rc.left  += ns_scale(8, dpi);
+        msg_rc.right -= ns_scale(8, dpi);
+        msg_rc.bottom = msg_rc.top + row_h;
+        HFONT old_font = (HFONT)SelectObject(hdc, ns_font(FONT_BODY, dpi));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, theme_cr(ns_tokens()->text_dim));
+        DrawTextA(hdc, SESSMGR_EMPTY_TEXT, -1, &msg_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        SelectObject(hdc, old_font);
+        EndPaint(hList, &ps);
+        return 0;
+    }
+    if (m == WM_NCDESTROY)
+        RemoveWindowSubclass(hList, list_empty_proc, id);
+    return DefSubclassProc(hList, m, wp, lp);
+}
+
 /* Rebuild the listbox from cfg->profiles.  Falls back to host if name is empty. */
 static void list_rebuild(HWND hList, const Config *cfg)
 {
@@ -153,6 +181,8 @@ static void list_rebuild(HWND hList, const Config *cfg)
         const char *label = (pr->name[0] != '\0') ? pr->name : pr->host;
         SendMessageA(hList, LB_ADDSTRING, 0, (LPARAM)label);
     }
+    /* The empty-list text paints only while the count is zero. */
+    InvalidateRect(hList, NULL, TRUE);
 }
 
 /* ANSI (the display names and command lines local_shell.c builds are all
@@ -689,6 +719,8 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             }
         }
 
+        SetWindowSubclass(GetDlgItem(hwnd, IDC_LIST_SESSIONS), list_empty_proc,
+                          SESSMGR_LIST_SUBCLASS_ID, (DWORD_PTR)st->theme);
         list_rebuild(GetDlgItem(hwnd, IDC_LIST_SESSIONS), st->cfg);
         form_clear(hwnd, st);
         toggle_kind_fields(hwnd);
