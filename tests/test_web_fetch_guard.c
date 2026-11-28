@@ -796,6 +796,28 @@ int test_web_fetch_get_no_tls_says_so(void)
     TEST_END();
 }
 
+int test_web_fetch_get_hop_timeout_says_so(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    f.get_fail = 1;
+    f.get_fail_code = WEB_FETCH_GET_TIMEOUT;
+    char *buf;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) {
+        ASSERT_TRUE(strstr(buf, "did not answer in time") != NULL);
+        ASSERT_TRUE(strstr(buf, "HTTP request failed") == NULL);
+    }
+    ASSERT_EQ(f.gets, 1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+    TEST_END();
+}
+
 int test_web_fetch_cancel_after_resolve(void)
 {
     TEST_BEGIN();

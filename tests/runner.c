@@ -3429,6 +3429,7 @@ int test_web_fetch_describe(void);
 int test_web_fetch_deadline_passed_inside_on_hop(void);
 int test_web_fetch_get_failure(void);
 int test_web_fetch_get_no_tls_says_so(void);
+int test_web_fetch_get_hop_timeout_says_so(void);
 int test_web_fetch_cancel_after_resolve(void);
 /* test_ai_netcancel.c */
 int test_ai_nc_fire_before_arm_refuses(void);
@@ -8296,6 +8297,7 @@ int main(void) {
     failed += test_web_fetch_deadline_passed_inside_on_hop();
     failed += test_web_fetch_get_failure();
     failed += test_web_fetch_get_no_tls_says_so();
+    failed += test_web_fetch_get_hop_timeout_says_so();
     failed += test_web_fetch_cancel_after_resolve();
     failed += test_ai_nc_fire_before_arm_refuses();
     failed += test_ai_nc_fire_closes_armed_handle_once();

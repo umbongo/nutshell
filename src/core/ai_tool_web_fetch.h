@@ -13,6 +13,10 @@
  * enforced, so the refusal can say so. */
 #define WEB_FETCH_GET_NO_TLS (-2)
 
+/* get() returns this when the hop ran out of its own time and the request was
+ * closed at its deadline (not a cancel, not the whole fetch's deadline). */
+#define WEB_FETCH_GET_TIMEOUT (-3)
+
 /* What the portable hop loop needs from the platform. The loop checks every
  * address a host resolves to before it calls get() for that host, so a
  * backend only has to do the network work. */
@@ -23,8 +27,8 @@ typedef struct WebFetchBackend {
     int (*resolve)(void *ctx, const char *host, NetAddr *out, int max);
     /* One GET that never follows redirects. Returns 0 when a response arrived
      * (any status), -1 on failure or cancel, WEB_FETCH_GET_NO_TLS when no secure
-     * connection could be set up. *location is the Location header
-     * or "". *body is malloc'd (caller frees), at most AI_TOOL_RESULT_MAX * 4. */
+     * connection could be set up, WEB_FETCH_GET_TIMEOUT when the hop's own time
+     * ran out. *location is the Location header or "". *body is malloc'd (caller frees), at most AI_TOOL_RESULT_MAX * 4. */
     int (*get)(void *ctx, const NetUrlParts *url, int timeout_ms,
                volatile int *cancel, int *status,
                char *location, size_t location_cap,

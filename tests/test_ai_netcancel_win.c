@@ -251,7 +251,7 @@ int test_web_fetch_trickling_head_ends_at_hop_deadline(void)
         ASSERT_NOT_NULL(t);
         DWORD w = t ? WaitForSingleObject(t, 8000) : WAIT_FAILED;
         ASSERT_EQ((int)w, (int)WAIT_OBJECT_0);        /* far inside the 60 s trickle */
-        ASSERT_EQ(a.rc, -1);
+        ASSERT_EQ(a.rc, WEB_FETCH_GET_TIMEOUT);       /* the hop's own deadline, not a failure */
         ASSERT_EQ(a.status, 0);
         ASSERT_TRUE(a.ms >= 600);                     /* it waited for the hop's 700 ms */
         ASSERT_TRUE(a.ms < 4000);

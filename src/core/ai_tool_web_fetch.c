@@ -325,6 +325,9 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
                 return fetch_fail(result_buf, result_len,
                                   "A secure connection could not be set up: TLS 1.2 or newer "
                                   "is not available on this system, so nothing was sent");
+            if (got == WEB_FETCH_GET_TIMEOUT)
+                return fetch_fail(result_buf, result_len,
+                                  "The page did not answer in time");
             return fetch_fail(result_buf, result_len, "HTTP request failed");
         }
 
@@ -511,6 +514,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     AiWatchdog *wd = NULL; /* closes req at hop_end or on the cancel flag */
     int armed = 0;         /* req is registered on tok: it may be closed from elsewhere */
     int tls_refused = 0;   /* no session: TLS 1.2 could not be enforced */
+    int timed_out = 0;     /* the hop's own time ran out */
     char *buf = NULL;
     size_t len = 0, cap = 0;
     const size_t max_body = (size_t)AI_TOOL_RESULT_MAX * 4;
@@ -664,6 +668,12 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     return 0;
 
 fail:
+    /* Read before anything else can change them: did this hop run out of its
+     * own time (the watchdog closed req, the hop's end passed, or WinHTTP's own
+     * timeout fired) rather than being cancelled or failing outright? */
+    timed_out = !(cancel && *cancel) && !ai_nc_cancelled(tok) &&
+                (ai_nc_expired(tok) || (unsigned long long)GetTickCount64() >= hop_end ||
+                 GetLastError() == ERROR_WINHTTP_TIMEOUT);
     free(buf);
     (void)ai_wd_stop(wd);   /* NULL when never started; joined before the disarm */
     if (req) {
@@ -673,7 +683,8 @@ fail:
     if (connect) WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);   /* a shared one stays for wf_end() */
     *status = 0;
-    return tls_refused ? WEB_FETCH_GET_NO_TLS : -1;
+    if (tls_refused) return WEB_FETCH_GET_NO_TLS;
+    return timed_out ? WEB_FETCH_GET_TIMEOUT : -1;
 }
 
 /* Stateless: every hop opens and closes its own session. */
