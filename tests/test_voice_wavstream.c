@@ -467,3 +467,88 @@ int test_vwav_wipe(void)
     ASSERT_EQ(memcmp(&w, zero, sizeof w), 0);
     TEST_END();
 }
+
+/* A finite data chunk size is honoured (spec 8.4: only 0 and 0xFFFFFFFF mean
+ * "to the end"); bytes after it are a trailer and are never played. */
+static size_t feed_whole(unsigned char *b, size_t n, int16_t *out, VoiceWavStream *w)
+{
+    voice_wavs_init(w, VWS_RAW_NONE);
+    return voice_wavs_feed(w, b, n, out, voice_wavs_out_max(n));
+}
+
+int test_vwav_data_size_honoured(void)
+{
+    TEST_BEGIN();
+    unsigned char b[400];
+    int16_t out[100];
+    VoiceWavStream w;
+    size_t o, i, h;
+    /* smaller than what arrives: 20 samples declared, 50 sent; the rest is a trailer */
+    o = mkhdr(b, 1, 16, 1, 24000, 40, 0);
+    h = o;
+    for (i = 0; i < 50; i++) o = p16(b, o, (unsigned)(i + 1));
+    ASSERT_EQ(feed_whole(b, o, out, &w), 20);
+    ASSERT_EQ(out[19], 20);
+    ASSERT_EQ(voice_wavs_state(&w), VWS_DATA);
+    ASSERT_EQ(voice_wavs_finish_ok(&w), 1);
+    ASSERT_EQ(voice_wavs_frames(&w), 20);
+    /* an id3-style trailer of odd length after the chunk is not an error */
+    o = h + 40;
+    memcpy(b + o, "ID3", 3);
+    o += 3;
+    ASSERT_EQ(feed_whole(b, o, out, &w), 20);
+    ASSERT_EQ(voice_wavs_finish_ok(&w), 1);
+    /* a trailer holding a RIFF....WAVE window is a trailer, not a second header */
+    o = h + 40;
+    memcpy(b + o, "RIFF\1\2\3\4WAVE", 12);
+    o += 12;
+    ASSERT_EQ(feed_whole(b, o, out, &w), 20);
+    ASSERT_EQ(voice_wavs_state(&w), VWS_DATA);
+    /* larger than what arrives: all of it plays, the stream is not an error */
+    o = mkhdr(b, 1, 16, 1, 24000, 1000, 0);
+    for (i = 0; i < 30; i++) o = p16(b, o, (unsigned)(i + 1));
+    ASSERT_EQ(feed_whole(b, o, out, &w), 30);
+    ASSERT_EQ(voice_wavs_state(&w), VWS_DATA);
+    /* a huge even size and a huge odd size: bytes that arrive, whole frames only */
+    o = mkhdr(b, 1, 16, 1, 24000, 0xFFFFFFFEu, 0);
+    for (i = 0; i < 30; i++) o = p16(b, o, (unsigned)(i + 1));
+    ASSERT_EQ(feed_whole(b, o, out, &w), 30);
+    o = mkhdr(b, 1, 16, 1, 24000, 0xFFFFFFFDu, 0);
+    for (i = 0; i < 30; i++) o = p16(b, o, (unsigned)(i + 1));
+    ASSERT_EQ(feed_whole(b, o, out, &w), 30);
+    ASSERT_EQ(voice_wavs_state(&w), VWS_DATA);
+    /* an odd size for 16-bit samples: the half sample is dropped */
+    o = mkhdr(b, 1, 16, 1, 24000, 41, 0);
+    for (i = 0; i < 50; i++) o = p16(b, o, (unsigned)(i + 1));
+    ASSERT_EQ(feed_whole(b, o, out, &w), 20);
+    ASSERT_EQ(voice_wavs_finish_ok(&w), 1);
+    /* a size smaller than one frame: no samples, not finishable, no error */
+    o = mkhdr(b, 1, 16, 2, 24000, 3, 0);
+    for (i = 0; i < 10; i++) o = p16(b, o, 7);
+    ASSERT_EQ(feed_whole(b, o, out, &w), 0);
+    ASSERT_EQ(voice_wavs_state(&w), VWS_DATA);
+    ASSERT_EQ(voice_wavs_finish_ok(&w), 0);
+    /* stereo float: 5 frames of 8 bytes declared, 10 sent */
+    o = mkhdr(b, 3, 32, 2, 24000, 40, 0);
+    for (i = 0; i < 20; i++) o = pf32(b, o, 0.5f);
+    ASSERT_EQ(feed_whole(b, o, out, &w), 5);
+    TEST_END();
+}
+
+int test_vwav_data_size_split_everywhere(void)
+{
+    TEST_BEGIN();
+    unsigned char b[400];
+    size_t o, i;
+    /* 40 samples declared, then 10 more samples and an odd trailer: every
+     * split of the header and of the data/trailer border gives the same 40 */
+    o = mkhdr(b, 1, 16, 1, 24000, 80, 5);
+    for (i = 0; i < 50; i++) o = p16(b, o, (unsigned)(i * 321) & 0xFFFF);
+    b[o++] = 'x';
+    ASSERT_EQ(split_case(b, o, 40), 0);
+    /* odd size, stereo */
+    o = mkhdr(b, 1, 16, 2, 24000, 83, 0);
+    for (i = 0; i < 60; i++) o = p16(b, o, (unsigned)(i * 77) & 0xFFFF);
+    ASSERT_EQ(split_case(b, o, 20), 0);
+    TEST_END();
+}

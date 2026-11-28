@@ -12,7 +12,10 @@
  * exactly 24,000 Hz. Stereo is averaged ((L + R) / 2, a half rounds away from
  * zero). Float is clamped to [-1, 1] and scaled by 32,767, a half rounding
  * away from zero (0.5 gives 16384); NaN is silence. The `data` chunk size is
- * ignored: the decoder reads to the end of the stream.
+ * honoured (spec 8.4): only 0 and 0xFFFFFFFF mean "to the end of the stream".
+ * Any other size is rounded down to whole frames and the bytes after it (a
+ * LIST or id3 trailer) are skipped, never played and never an error; a size
+ * larger than the bytes that arrive just plays what arrives.
  *
  * Output buffer: voice_wavs_feed() needs cap >= voice_wavs_out_max(n). A
  * smaller cap is a caller error: nothing is written, nothing is consumed and
@@ -46,6 +49,8 @@ typedef struct {
     size_t win_head;                   /* next slot to write */
     size_t win_n;                      /* bytes held, up to 12 */
     uint64_t frames;                   /* output samples produced */
+    int bounded;                       /* 1: a finite data size is being counted down */
+    uint64_t data_left;                /* bytes of the data chunk still to take */
 } VoiceWavStream;
 
 void   voice_wavs_init(VoiceWavStream *w, VoiceWavRaw raw);

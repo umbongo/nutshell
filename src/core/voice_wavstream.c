@@ -97,6 +97,14 @@ static int parse_header(VoiceWavStream *w, size_t *data_off)
             w->fmt_tag = tag;
             w->bits = bits;
             w->channels = ch;
+            /* only 0 and 0xFFFFFFFF mean "to the end"; any other size is
+             * kept, as whole frames (the size is at most 32 bits, so the
+             * 64-bit count cannot overflow) */
+            if (size != 0 && size != 0xFFFFFFFFu) {
+                uint64_t fs = (uint64_t)ch * (bits / 8);
+                w->bounded = 1;
+                w->data_left = size - size % fs;
+            }
             *data_off = (size_t)body;
             return 1;
         }
@@ -155,6 +163,10 @@ static size_t process(VoiceWavStream *w, const unsigned char *p, size_t n,
 {
     size_t fs = (size_t)w->channels * (w->bits / 8), k, produced = 0;
 
+    if (w->bounded) {                  /* bytes past the chunk are a trailer */
+        if ((uint64_t)n > w->data_left) n = (size_t)w->data_left;
+        w->data_left -= n;
+    }
     /* second-header window over the raw bytes, before any is decoded */
     for (k = 0; k < n; k++) {
         w->win[w->win_head] = p[k];
