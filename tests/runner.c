@@ -1546,6 +1546,12 @@ int test_vt_scroll_down_region_beyond_64_moves_marker(void);
 int test_vt_il_beyond_64_moves_marker(void);
 int test_vt_dl_beyond_64_moves_marker(void);
 
+/* test_log_open_error.c */
+int test_log_open_error_names_path_and_reason(void);
+int test_log_open_error_no_errno_and_no_path(void);
+int test_log_open_error_truncates_safely(void);
+int test_log_open_error_long_path_fits_notice(void);
+
 /* test_paste_write.c */
 int test_paste_write_empty(void);
 int test_paste_write_one_byte(void);
@@ -4350,6 +4356,7 @@ int test_notice_msg_every_id_has_title_and_text(void);
 int test_notice_msg_voice_british_names_the_voice(void);
 int test_notice_msg_session_not_found_formats_name(void);
 int test_notice_msg_text_args(void);
+int test_notice_msg_log_start_failed(void);
 int test_notice_msg_title_args(void);
 int test_notice_msg_long_arg_truncates(void);
 int test_notice_msg_bad_id(void);
@@ -7074,6 +7081,12 @@ int main(void) {
     failed += test_color_mixed_semicolon_colon_256();
     failed += test_color_colon_rgb_trailing_extra_params();
     failed += test_color_bold_colon_rgb_underline_one_feed();
+
+    printf("\n--- Log open error ---\n");
+    failed += test_log_open_error_names_path_and_reason();
+    failed += test_log_open_error_no_errno_and_no_path();
+    failed += test_log_open_error_truncates_safely();
+    failed += test_log_open_error_long_path_fits_notice();
 
     printf("\n--- Paste write ---\n");
     failed += test_paste_write_empty();
@@ -9985,6 +9998,7 @@ int main(void) {
         failed += test_notice_msg_voice_british_names_the_voice();
         failed += test_notice_msg_session_not_found_formats_name();
         failed += test_notice_msg_text_args();
+        failed += test_notice_msg_log_start_failed();
         failed += test_notice_msg_title_args();
         failed += test_notice_msg_long_arg_truncates();
         failed += test_notice_msg_bad_id();

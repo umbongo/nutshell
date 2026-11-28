@@ -13,6 +13,7 @@
 #include "config.h"
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <stdio.h>
 #include <time.h>
 #include <stdint.h>
@@ -40,6 +41,7 @@
 #include "clipboard.h"
 #include "paste_filter.h"
 #include "paste_write.h"
+#include "log_open_error.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
 #include "voice_audio_win.h"
@@ -3019,12 +3021,21 @@ static void on_log_toggle(int index, void *user_data) {
                             ? s->conn_profile.name : s->conn_profile.host;
         time_t now = time(NULL);
         char path[512];
+        /* As open_session_log() does: the folder may not exist yet. */
+        CreateDirectoryA(dir, NULL);
         log_format_filename(name, dir,
                             g_config ? g_config->settings.log_format : NULL,
                             localtime(&now), path, sizeof(path));
+        errno = 0;
         s->session_log = fopen(path, "ab");
         if (s->session_log) {
             tabs_set_logging(g_hwndTabs, tidx, 1);
+        } else {
+            /* Say so: the indicator stays off and the user is told why. */
+            const int open_err = errno;
+            char why[768];
+            (void)log_open_error_text(path, open_err, why, sizeof(why));
+            (void)notice_dlg_msg(GetParent(g_hwndTabs), NOTICE_MSG_LOG_START_FAILED, why, g_theme);
         }
     }
     (void)index;
