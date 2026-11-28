@@ -878,6 +878,15 @@ int test_term_tab_hts_and_tbc(void);
 int test_term_tab_clear_all(void);
 int test_term_tab_cht_count_beyond_stops(void);
 int test_term_tab_reset_resize_alt(void);
+int test_term_ris_full_reset(void);
+int test_term_el_updates_len(void);
+int test_term_ed_updates_len(void);
+int test_term_erase_with_background_len(void);
+int test_term_el_extract_and_reflow(void);
+int test_term_erase_keeps_continuation_on_resize(void);
+int test_term_extract_wrapped_pair_after_erase(void);
+int test_term_ech_dch_match_el_on_resize(void);
+int test_term_ich_raises_len(void);
 
 /* test_term_fuzz.c */
 int test_term_fuzz_incomplete_esc(void);
@@ -8254,6 +8263,15 @@ int main(void) {
     failed += test_term_tab_clear_all();
     failed += test_term_tab_cht_count_beyond_stops();
     failed += test_term_tab_reset_resize_alt();
+    failed += test_term_ris_full_reset();
+    failed += test_term_el_updates_len();
+    failed += test_term_ed_updates_len();
+    failed += test_term_erase_with_background_len();
+    failed += test_term_el_extract_and_reflow();
+    failed += test_term_erase_keeps_continuation_on_resize();
+    failed += test_term_extract_wrapped_pair_after_erase();
+    failed += test_term_ech_dch_match_el_on_resize();
+    failed += test_term_ich_raises_len();
     failed += test_term_fuzz_incomplete_esc();
     failed += test_term_fuzz_incomplete_csi();
     failed += test_term_fuzz_csi_no_params();

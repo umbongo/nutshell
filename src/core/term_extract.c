@@ -200,6 +200,15 @@ static size_t row_emit(const TermRow *row, int upto, char *out)
     return n;
 }
 
+/* Cells of `row` that count when it is joined to the row `next` below (-1:
+ * none): a row with a continuation is whole, since an erase may have cut len
+ * under the width the line wrapped at. */
+static int join_cells(const Terminal *term, const TermRow *row, int next)
+{
+    const TermRow *nx = next >= 0 ? row_at(term, next) : NULL;
+    return nx && nx->wrapped ? term->cols : row->len;
+}
+
 /* Cells up to and including the last that is not blank: what the writer
  * trims a row to. */
 static int row_trimmed_cells(const TermRow *row)
@@ -238,7 +247,7 @@ char *term_extract_abs_range_dup(const Terminal *term, uint64_t first, uint64_t 
     size_t cap = 2;
     for (int r = s; r < e; r++) {
         const TermRow *row = row_at(term, r);
-        if (row) cap += row_emit(row, row->len, NULL) + 1;
+        if (row) cap += row_emit(row, join_cells(term, row, r + 1 < e ? r + 1 : -1), NULL) + 1;
     }
     char *buf = malloc(cap);
     if (!buf) return NULL;
@@ -253,7 +262,7 @@ char *term_extract_abs_range_dup(const Terminal *term, uint64_t first, uint64_t 
             for (; r < e; r++) {
                 row = row_at(term, r);
                 if (r > s && (!row || !row->wrapped)) break;
-                if (row) n += row_emit(row, row->len, buf + n);
+                if (row) n += row_emit(row, join_cells(term, row, r + 1 < e ? r + 1 : -1), buf + n);
             }
             buf[n] = '\0';
             if (strstr(buf, echo)) s = r;
