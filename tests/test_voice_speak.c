@@ -1,5 +1,7 @@
 #include "test_framework.h"
 #include "voice_speak.h"
+#include "markdown.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -245,8 +247,10 @@ int test_vspeak_tilde_fence(void)
 {
     TEST_BEGIN();
     ASSERT_TRUE(speak_eq("A.\n~~~\nrm -rf x\n```\n~~~\nB.", "A. The code is on screen. B."));
-    /* a shorter or different-char fence does not close */
-    ASSERT_TRUE(speak_eq("````\nx\n```\ny\n````\nok.", "The code is on screen. ok."));
+    /* a different-char fence does not close a tilde fence; a backtick fence is closed, as on screen,
+     * by any column-0 line starting with three backticks */
+    ASSERT_TRUE(speak_eq("~~~\nx\n```\ny\n~~~\nok.", "The code is on screen. ok."));
+    ASSERT_TRUE(speak_eq("````\nx\n```\ny\n````\nok.", "The code is on screen. y The code is on screen."));
     TEST_END();
 }
 
@@ -298,8 +302,41 @@ int test_vspeak_one_line_triple_backtick_span_is_not_a_fence(void)
     ASSERT_TRUE(speak_eq("- ```bash\n  rm x\n  ```\nDone.", "The code is on screen. Done."));
     ASSERT_TRUE(speak_eq("```\nrm x\n```\nDone.", "The code is on screen. Done."));
     ASSERT_TRUE(speak_eq("~~~a`b\nrm x\n~~~\nDone.", "The code is on screen. Done."));
-    /* a fence closed by a line with a trailing backtick is not closed by it */
-    ASSERT_TRUE(speak_eq("```\nrm x\n``` `\nstill code\n```\nDone.", "The code is on screen. Done."));
+    TEST_END();
+}
+
+/* In column 0 the speech follows the chat renderer: any line starting with three backticks
+ * toggles a code block, whatever follows the run. */
+int test_vspeak_column0_fence_follows_renderer(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(speak_eq("```x``` y\nrm -rf build\n```\nDone, that is all.",
+                         "The code is on screen. Done, that is all."));
+    ASSERT_TRUE(speak_eq("```bash `cmd`\nSECRETCODE\n```\nAfter.", "The code is on screen. After."));
+    /* a closing line with a trailing backtick closes on screen, so the prose after it is read */
+    ASSERT_TRUE(speak_eq("```\nrm x\n``` `\nstill prose\n```\nDone.",
+                         "The code is on screen. still prose The code is on screen."));
+    TEST_END();
+}
+
+/* Pin the speech code to md_classify_line: a first line that the renderer calls a fence hides
+ * the line after it; any other line leaves it spoken. */
+int test_vspeak_column0_fence_agrees_with_classifier(void)
+{
+    TEST_BEGIN();
+    static const char *lines[] = {
+        "```", "```c", "```x``` y", "``` `", "``", "`` `", "` ``` `", "text ```", "````", "```\t", NULL
+    };
+    for (int i = 0; lines[i]; i++) {
+        int fence = md_classify_line(lines[i], 0).type == MD_LINE_CODE_FENCE;
+        char in[64];
+        snprintf(in, sizeof in, "%s\nSECRETLINE", lines[i]);
+        char *r = voice_speak_text(in);
+        ASSERT_NOT_NULL(r);
+        int hidden = r && strstr(r, "SECRETLINE") == NULL;
+        ASSERT_EQ(hidden, fence);
+        free(r);
+    }
     TEST_END();
 }
 
