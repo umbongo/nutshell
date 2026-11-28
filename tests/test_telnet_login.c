@@ -220,6 +220,27 @@ int test_tn_login_deadline_across_tick_wrap(void)
     TEST_END();
 }
 
+/* On a 64-bit host tn_login_init stores an unwrapped deadline, so this sets
+ * the wrapped 32-bit value a Windows build holds: t0 + 20000 wrapped to a
+ * small number. A plain >= would fire at once; the login must stay armed
+ * until the deadline is really reached. */
+int test_tn_login_wrapped_deadline_not_early(void)
+{
+    TEST_BEGIN();
+    const unsigned long t0 = 0xFFFFFF00ul;
+    TnLogin l;
+    tn_login_init(&l, 1, 1, t0);
+    l.deadline_ms = TICK32(t0 + 20000u);
+    ASSERT_TRUE(l.deadline_ms < t0);              /* really wrapped */
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 100u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 1);
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 19999u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 1);
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 20000u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 0);
+    TEST_END();
+}
+
 int test_tn_login_settle_across_tick_wrap(void)
 {
     TEST_BEGIN();
