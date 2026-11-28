@@ -30,6 +30,9 @@ static void drop_ctx(VoiceRead *r)
 {
     r->ctx = 0;
     r->ready = 0;
+    /* Whatever the dropped context still has queued carries its old serial;
+     * a new one means nothing of it can match the next context. */
+    r->serial++;
 }
 
 VoiceReadOut voice_read_on_press(VoiceRead *r, const VoiceReadPress *p)
@@ -83,6 +86,7 @@ VoiceReadOut voice_read_on_started(VoiceRead *r, int ok)
         return o;
     }
     r->ctx = 1;
+    r->ready = 0;
     if (r->engine == VOICE_SPEECH_AI) {
         r->ready = 1;
         r->state = VRS_SPEAKING;
@@ -156,8 +160,7 @@ void voice_read_error_text(int engine, long hr, const char *resolve_err, char *o
     } else if (hr == 0) {
         strcpy(reason, "AI speech did not start");
     } else {
-        voice_ais_failure_reason(hr, resolve_err, reason, sizeof reason - 1);
-        reason[sizeof reason - 2] = '\0';
+        voice_ais_failure_reason(hr, resolve_err, reason, sizeof reason);
     }
     out[0] = '\0';
     n = 0;

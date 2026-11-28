@@ -185,7 +185,16 @@ int test_vread_start_refused(void)
     VoiceReadOut o = voice_read_on_started(&r, 0);
     ASSERT_EQ(o.actions, VRA_ERROR | VRA_VIEW);
     ASSERT_EQ(o.hr, 0L);
+    ASSERT_EQ(o.err_engine, VOICE_SPEECH_AI);
     ASSERT_EQ(r.state, VRS_IDLE); ASSERT_EQ(r.ctx, 0);
+    {
+        VoiceRead w; voice_read_init(&w);
+        VoiceReadPress q = P(7, VOICE_SPEECH_WINDOWS);
+        voice_read_on_press(&w, &q);
+        o = voice_read_on_started(&w, 0);
+        ASSERT_EQ(o.actions, VRA_ERROR | VRA_VIEW);
+        ASSERT_EQ(o.err_engine, VOICE_SPEECH_WINDOWS);
+    }
     TEST_END();
 }
 
@@ -286,5 +295,116 @@ int test_vread_error_text(void)
     ASSERT_STR_EQ(b, "Could not read the reply aloud: Enter a speech API key.");
     voice_read_error_text(VOICE_SPEECH_AI, 401, NULL, b, 10);
     ASSERT_EQ((int)strlen(b), 9);
+    TEST_END();
+}
+
+/* A reader speaking item `id` on the Windows engine, after its READY. */
+static void speaking_win(VoiceRead *r, int id)
+{
+    VoiceReadPress p = P(id, VOICE_SPEECH_WINDOWS);
+    voice_read_init(r);
+    voice_read_on_press(r, &p);
+    voice_read_on_started(r, 1);
+    voice_read_on_engine(r, VRM_READY, 0, 0);
+}
+
+int test_vread_late_reply_windows(void)
+{
+    TEST_BEGIN();
+    VoiceRead r; speaking_win(&r, 7);
+    ASSERT_EQ(r.serial, 1u);
+    VoiceReadPress p = P(9, VOICE_SPEECH_WINDOWS);
+    VoiceReadOut o = voice_read_on_press(&r, &p);
+    ASSERT_EQ(o.actions, VRA_STOP | VRA_SPEAK | VRA_VIEW);
+    ASSERT_EQ(o.serial, 2u);
+    ASSERT_EQ(voice_read_on_engine(&r, VRM_DONE, 1u, 0).actions, 0u);
+    ASSERT_EQ(r.state, VRS_SPEAKING); ASSERT_EQ(r.item_id, 9);
+    ASSERT_EQ(voice_read_on_engine(&r, VRM_ERROR, 1u, 401).actions, 0u);
+    ASSERT_EQ(r.ctx, 1);
+    TEST_END();
+}
+
+int test_vread_error_zero_while_speaking(void)
+{
+    TEST_BEGIN();
+    VoiceRead r; speaking_win(&r, 7);
+    VoiceReadOut o = voice_read_on_engine(&r, VRM_ERROR, 0, (long)0x80004005);
+    ASSERT_EQ(o.actions, VRA_RELEASE | VRA_ERROR | VRA_VIEW);
+    ASSERT_EQ(o.err_engine, VOICE_SPEECH_WINDOWS);
+    ASSERT_EQ(r.ctx, 0); ASSERT_EQ(r.state, VRS_IDLE);
+    TEST_END();
+}
+
+int test_vread_held_not_ready_press_waits(void)
+{
+    TEST_BEGIN();
+    for (int other = 0; other < 2; other++) {
+        VoiceRead r; voice_read_init(&r);
+        VoiceReadPress p = P(7, VOICE_SPEECH_WINDOWS);
+        voice_read_on_press(&r, &p);
+        voice_read_on_started(&r, 1);
+        voice_read_on_stop(&r, VRX_ESCAPE);
+        ASSERT_EQ(r.ctx, 1); ASSERT_EQ(r.ready, 0);
+        if (other) p = P(9, VOICE_SPEECH_WINDOWS);
+        VoiceReadOut o = voice_read_on_press(&r, &p);
+        ASSERT_EQ(o.actions, VRA_VIEW);
+        ASSERT_EQ(r.state, VRS_STARTING); ASSERT_EQ(r.item_id, p.item_id);
+        o = voice_read_on_engine(&r, VRM_READY, 0, 0);
+        ASSERT_EQ(o.actions, VRA_SPEAK);
+        ASSERT_EQ(r.state, VRS_SPEAKING);
+    }
+    TEST_END();
+}
+
+int test_vread_messages_after_hard_stop_of_unready(void)
+{
+    TEST_BEGIN();
+    VoiceRead r; voice_read_init(&r);
+    VoiceReadPress p = P(7, VOICE_SPEECH_WINDOWS);
+    voice_read_on_press(&r, &p);
+    voice_read_on_started(&r, 1);
+    VoiceReadOut o = voice_read_on_stop(&r, VRX_SETTINGS);
+    ASSERT_EQ(o.actions, VRA_STOP | VRA_RELEASE | VRA_VIEW);
+    ASSERT_EQ(voice_read_on_engine(&r, VRM_READY, 0, 0).actions, 0u);
+    ASSERT_EQ(r.ready, 0); ASSERT_EQ(r.state, VRS_IDLE);
+    ASSERT_EQ(voice_read_on_engine(&r, VRM_ERROR, 0, -1).actions, 0u);
+    TEST_END();
+}
+
+int test_vread_old_context_messages_cannot_reach_new(void)
+{
+    TEST_BEGIN();
+    /* AI reading A (serial 1); press B on Windows: RELEASE|START. */
+    {
+        VoiceRead r; speaking_ai(&r, 7);
+        VoiceReadPress p = P(9, VOICE_SPEECH_WINDOWS);
+        VoiceReadOut o = voice_read_on_press(&r, &p);
+        ASSERT_EQ(o.actions, VRA_STOP | VRA_RELEASE | VRA_START | VRA_VIEW);
+        voice_read_on_started(&r, 1);
+        ASSERT_EQ(r.state, VRS_STARTING);
+        ASSERT_EQ(voice_read_on_engine(&r, VRM_ERROR, 1u, 401).actions, 0u);
+        ASSERT_EQ(voice_read_on_engine(&r, VRM_DONE, 1u, 0).actions, 0u);
+        ASSERT_EQ(r.ctx, 1); ASSERT_EQ(r.state, VRS_STARTING);
+        o = voice_read_on_engine(&r, VRM_READY, 0, 0);
+        ASSERT_EQ(o.actions, VRA_SPEAK);
+        ASSERT_EQ(o.serial, 3u);
+    }
+    /* Windows context released by Settings, fresh start: its queued
+     * ERROR(0) and READY arrive before the new context has started. */
+    {
+        VoiceRead r; voice_read_init(&r);
+        VoiceReadPress p = P(7, VOICE_SPEECH_WINDOWS);
+        voice_read_on_press(&r, &p);
+        voice_read_on_started(&r, 1);
+        voice_read_on_stop(&r, VRX_SETTINGS);
+        VoiceReadOut o = voice_read_on_press(&r, &p);
+        ASSERT_EQ(o.actions, VRA_START | VRA_VIEW);
+        ASSERT_EQ(voice_read_on_engine(&r, VRM_ERROR, 0, -1).actions, 0u);
+        ASSERT_EQ(voice_read_on_engine(&r, VRM_READY, 0, 0).actions, 0u);
+        ASSERT_EQ(r.state, VRS_STARTING); ASSERT_EQ(r.ctx, 0);
+        voice_read_on_started(&r, 1);
+        ASSERT_EQ(r.ctx, 1); ASSERT_EQ(r.ready, 0);
+        ASSERT_EQ(voice_read_on_engine(&r, VRM_READY, 0, 0).actions, VRA_SPEAK);
+    }
     TEST_END();
 }

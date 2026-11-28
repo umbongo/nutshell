@@ -3927,6 +3927,11 @@ int test_vread_empty_reply(void);
 int test_vread_engine_change_restarts(void);
 int test_vread_unexpected_messages(void);
 int test_vread_error_text(void);
+int test_vread_late_reply_windows(void);
+int test_vread_error_zero_while_speaking(void);
+int test_vread_held_not_ready_press_waits(void);
+int test_vread_messages_after_hard_stop_of_unready(void);
+int test_vread_old_context_messages_cannot_reach_new(void);
 /* test_voice_ptt.c */
 int test_voice_classify_right_ctrl(void);
 int test_voice_classify_left_ctrl_and_altgr_are_not_ptt(void);
@@ -8759,6 +8764,11 @@ int main(void) {
     failed += test_vread_engine_change_restarts();
     failed += test_vread_unexpected_messages();
     failed += test_vread_error_text();
+    failed += test_vread_late_reply_windows();
+    failed += test_vread_error_zero_while_speaking();
+    failed += test_vread_held_not_ready_press_waits();
+    failed += test_vread_messages_after_hard_stop_of_unready();
+    failed += test_vread_old_context_messages_cannot_reach_new();
     failed += test_voice_ptt_capture_ended_first();
     failed += test_voice_ptt_escape_out_of_panel_keeps_recording();
     failed += test_voice_ptt_live_cap();
