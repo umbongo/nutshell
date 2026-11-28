@@ -492,7 +492,11 @@ endif
 # been. Three runs: off (AI off, voice ticked in the file: the dependency keeps
 # it off, so no mmdevapi.dll), voiceoff (AI on, voice off) and on (both on:
 # mmdevapi.dll must have been requested), plus conv, sapi, ai and dictai (Dictation,
-# AI speech configured, nothing pressed: no speech context, no sapi.dll). Uses $(TARGET) as it stands: a UPX-packed exe
+# AI speech configured, nothing pressed, -nc so no AI panel: an idle launch
+# creates no speech context and requests neither sapi.dll nor wtsapi32.dll; AI
+# speech contexts take no ledger entry, so voice-speech-contexts is the only line
+# that would show one; that a press alone starts speech is proven by the
+# voice_read_win unit tests, not by this run). Uses $(TARGET) as it stands: a UPX-packed exe
 # (make release) works as well as an unpacked one. A private Wine prefix
 # keeps the shared ~/.wine untouched; the first run takes a minute.
 SELFTEST_DIR    = build/selftest

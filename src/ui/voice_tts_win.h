@@ -82,6 +82,7 @@ unsigned voice_tts_gen(unsigned token);
 void voice_tts_quit_all(unsigned wait_ms);
 
 int  voice_tts_running(void);   /* 1 while any speech thread is held */
+int  voice_tts_count(void);     /* how many context slots are in use (UI thread; a pure read) */
 
 /* Play sample: start (VOICE_TTS_SAMPLE_TOKEN), speak "Hello. This is how replies
  * will sound.", and the thread quits itself after VTT_DONE or VTT_ERROR; the UI

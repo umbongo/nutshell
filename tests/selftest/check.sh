@@ -17,11 +17,20 @@
 # "ai" (Conversation, AI speech configured, nothing spoken yet) requests
 # winhttp, riched20, msftedit and mmdevapi (mapped), never sapi/wtsapi32, and
 # opens no render client and no speech request: `voice-resources: 0`.
-# "dictai" (Dictation, Voice on, AI speech configured, nothing pressed: the Read
-# aloud button has created no speech context, `voice-speech-contexts: 0`, and
-# requested neither sapi nor wtsapi32).
-# Every mode: the report has a `voice-net-opens: N` line and N is 0 (all three are
-# idle launches).
+# "dictai" (Dictation, Voice on, AI speech configured, nothing pressed, run with
+# -nc so no AI panel and no Read aloud button exist): an idle launch with AI
+# speech configured creates no speech context (`voice-speech-contexts: 0`) and
+# requests neither sapi.dll nor wtsapi32.dll. AI speech contexts take no
+# resource-ledger entry, so this line is the only thing in the report that would
+# show one. At launch Dictation never reads the speech engine setting, so this
+# follows the same code path as "on"; that only a press starts speech is proven
+# by the voice_read_win unit tests, not by this run.
+# Every mode is an idle launch: the report has a `voice-net-opens: N` line and N
+# is 0, and a `voice-speech-contexts: N` line (the number of speech contexts
+# held, Windows voice plus AI speech) and N is 0, except "sapi": its control holds
+# an SpVoice through a context while the report is written, so N is 1 when the
+# report says `sapi-control: held` and 0 when it says `sapi-control: unavailable`
+# (the failed hold has already quit and freed its slot).
 mode=$1
 report=$2
 [ -s "$report" ] || { echo "FAIL ($mode): no report at $report"; exit 1; }
@@ -49,11 +58,17 @@ if ! grep -qx 'voice-resources: [0-9][0-9]*' "$report"; then
 elif [ "$mode" != sapi ] && ! grep -qx 'voice-resources: 0' "$report"; then
     echo "FAIL ($mode): an idle launch holds a voice resource: $(grep '^voice-resources: ' "$report")"; rc=1
 fi
-# the speech contexts held (Windows voice plus AI speech): every mode but the
-# sapi control (which holds an SpVoice itself, not a context) holds none
+# the speech contexts held (Windows voice plus AI speech): every mode holds none,
+# except the sapi control, whose hold is a context while the report is written:
+# 1 when held, 0 when unavailable (the failed hold has quit and freed its slot)
 if ! grep -qx 'voice-speech-contexts: [0-9][0-9]*' "$report"; then
     echo "FAIL ($mode): no 'voice-speech-contexts: N' line"; rc=1
-elif [ "$mode" != sapi ] && ! grep -qx 'voice-speech-contexts: 0' "$report"; then
+elif [ "$mode" = sapi ]; then
+    if grep -qx 'sapi-control: held' "$report"; then want_ctx=1; else want_ctx=0; fi
+    if ! grep -qx "voice-speech-contexts: $want_ctx" "$report"; then
+        echo "FAIL (sapi): expected voice-speech-contexts: $want_ctx: $(grep '^voice-speech-contexts: ' "$report")"; rc=1
+    fi
+elif ! grep -qx 'voice-speech-contexts: 0' "$report"; then
     echo "FAIL ($mode): a speech context exists before any speech was asked for: $(grep '^voice-speech-contexts: ' "$report")"; rc=1
 fi
 case $mode in

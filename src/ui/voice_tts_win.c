@@ -483,6 +483,13 @@ int voice_tts_running(void)
     return 0;
 }
 
+int voice_tts_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < TTS_MAX_CTX; i++) if (g_ctx[i] != NULL) n++;
+    return n;
+}
+
 int voice_tts_sample(HWND notify, const char *voice_id)
 {
     if (!voice_tts_start(notify, VOICE_TTS_SAMPLE_TOKEN, voice_id)) return 0;

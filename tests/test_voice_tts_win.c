@@ -139,6 +139,7 @@ int test_voice_tts_gate_off(void)
     ASSERT_EQ(voice_tts_sample(NULL, NULL), 0);
     ASSERT_EQ(voice_tts_selftest_hold(), 0);
     ASSERT_EQ(voice_tts_running(), 0);
+    ASSERT_EQ(voice_tts_count(), 0);
     ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
     ASSERT_EQ(dll_record_was_requested("sapi.dll"), 0);
     voice_tts_speak(5u, 1, "x", 0);   /* no thread: harmless */
@@ -191,6 +192,7 @@ int test_voice_tts_start_quit_wine(void)
     ASSERT_EQ(voice_tts_start(w, 9u, NULL), 1);           /* idempotent: still one */
     ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 1);
     ASSERT_EQ(voice_tts_running(), 1);
+    ASSERT_EQ(voice_tts_count(), 1);                       /* a count, not a yes/no */
 
     VoiceTtsMsg *m = wait_msg(9u, (1u << VTT_READY) | (1u << VTT_ERROR), 5000);
     ASSERT_TRUE(m != NULL);                                /* a defined outcome, no hang */
@@ -204,6 +206,7 @@ int test_voice_tts_start_quit_wine(void)
     ASSERT_TRUE(GetTickCount() - t0 < 3500);
     ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
     ASSERT_EQ(voice_tts_running(), 0);
+    ASSERT_EQ(voice_tts_count(), 0);
     ASSERT_EQ(dll_record_was_requested("sapi.dll"), 1);
     voice_tts_quit(9u, 100);                               /* idempotent */
     ASSERT_EQ(voice_ledger_underflow(), 0);
@@ -424,9 +427,11 @@ int test_voice_tts_reap_by_generation(void)
         ASSERT_TRUE(gen1 != gen2);
         voice_tts_reap(31u, gen1);                         /* the stale one: a no-op */
         ASSERT_EQ(voice_tts_running(), 1);
+        ASSERT_EQ(voice_tts_count(), 1);
         ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 1);
         voice_tts_reap(31u, gen2);                         /* the current one: freed */
         ASSERT_EQ(voice_tts_running(), 0);
+        ASSERT_EQ(voice_tts_count(), 0);
         ASSERT_EQ(voice_ledger_count(VRES_SPVOICE), 0);
         voice_tts_reap(31u, gen2);                         /* idempotent */
         ASSERT_EQ(voice_ledger_underflow(), 0);
