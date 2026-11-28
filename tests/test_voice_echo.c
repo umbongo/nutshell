@@ -312,8 +312,7 @@ int test_vtrail_recent_text(void)
     /* a cap smaller than the text: cut short, NUL-terminated */
     char small[8];
     voice_trail_recent(&t, spoken, 4500, 3000, small, sizeof small);
-    ASSERT_EQ((int)strlen(small), 7);
-    ASSERT_EQ(strncmp(small, "two thr", 7), 0);
+    ASSERT_STR_EQ(small, "eight");               /* the tail, from a word's start */
     TEST_END();
 }
 
@@ -410,5 +409,24 @@ int test_vtrail_recent_window_is_1500ms(void)
     ASSERT_STR_EQ(out, "bravo charlie delta echo");
     voice_trail_recent(&t, spoken, 2900, VOICE_ECHO_RECENT_MS, out, sizeof out);
     ASSERT_STR_EQ(out, "bravo charlie delta");
+    TEST_END();
+}
+
+int test_vtrail_recent_keeps_the_tail_when_too_long(void)
+{
+    TEST_BEGIN();
+    const char *spoken = "one two three four five six seven eight";
+    static const size_t off[8] = { 0, 4, 8, 14, 19, 24, 28, 34 };
+    VoiceWordTrail t;
+    char out[16];
+    voice_trail_reset(&t);
+    for (int i = 0; i < 8; i++) voice_trail_note(&t, 1000ul + 100ul * (unsigned long)i, off[i]);
+    /* 15 bytes fit: "six seven eight" is 15 chars, so the tail starts at a word boundary */
+    ASSERT_EQ((int)voice_trail_recent(&t, spoken, 1700, 3000, out, 16), 15);
+    ASSERT_STR_EQ(out, "six seven eight");
+    ASSERT_EQ((int)voice_trail_recent(&t, spoken, 1700, 3000, out, 15), 11);   /* "six" does not fit whole */
+    ASSERT_STR_EQ(out, "seven eight");
+    ASSERT_EQ((int)voice_trail_recent(&t, spoken, 1700, 3000, out, 5), 0);     /* not even "eight" */
+    ASSERT_STR_EQ(out, "");
     TEST_END();
 }

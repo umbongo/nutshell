@@ -43,7 +43,8 @@ void voice_trail_reset(VoiceWordTrail *t);
 void voice_trail_note(VoiceWordTrail *t, unsigned long at, size_t offset);
 /* Copies into out (NUL-terminated, at most cap - 1 bytes) the part of `spoken` from the first
  * word reported within `ms` before cut_at to the end of the last word reported at or before
- * cut_at. Returns the length; 0 and "" when no word was reported in that span. */
+ * cut_at. Returns the length; 0 and "" when no word was reported in that span. When the text does
+ * not fit, the tail is kept (the words nearest the cut), starting at a word. */
 size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
                           unsigned long ms, char *out, size_t cap);
 

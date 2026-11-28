@@ -208,7 +208,13 @@ size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned 
     while (to < slen && word_byte((unsigned char)spoken[to])) to++;   /* the end of the last word */
     if (to < from) return 0;
     len = to - from;
-    if (len > cap - 1) len = cap - 1;
+    if (len > cap - 1) {   /* keep the tail, the words nearest the cut, from a word's start */
+        from = to - (cap - 1);
+        if (from > 0 && word_byte((unsigned char)spoken[from]) && word_byte((unsigned char)spoken[from - 1]))
+            while (from < to && word_byte((unsigned char)spoken[from])) from++;
+        while (from < to && !word_byte((unsigned char)spoken[from])) from++;
+        len = to - from;
+    }
     memcpy(out, spoken + from, len);
     out[len] = '\0';
     return len;

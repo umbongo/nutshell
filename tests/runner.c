@@ -3791,6 +3791,7 @@ int test_vclass_cutin_fragments(void);
 int test_vclass_cutin_fragment_helper(void);
 int test_vtrail_recent_text(void);
 int test_vtrail_wraps_and_resets(void);
+int test_vtrail_recent_keeps_the_tail_when_too_long(void);
 int test_vecho_bargein_words_are_never_fragments(void);
 int test_vclass_phrase_is_not_a_fragment(void);
 int test_vecho_fragment_two_words_must_be_adjacent(void);
@@ -8626,6 +8627,7 @@ int main(void) {
     failed += test_vclass_cutin_fragment_helper();
     failed += test_vtrail_recent_text();
     failed += test_vtrail_wraps_and_resets();
+    failed += test_vtrail_recent_keeps_the_tail_when_too_long();
     failed += test_vecho_bargein_words_are_never_fragments();
     failed += test_vclass_phrase_is_not_a_fragment();
     failed += test_vecho_fragment_two_words_must_be_adjacent();
