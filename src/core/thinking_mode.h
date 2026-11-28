@@ -67,6 +67,13 @@ int think_mode_wheel_scrolls(ThinkMode m);
 int think_box_settle_scroll(ThinkMode m, int stick, int scroll_y, int full_h,
                             int vis_h);
 
+/* A row's follow state (1 = follows the tail) after the saved pref changed to
+ * `pref`, given the mode the row showed before (prev).  A mode change keeps
+ * the reader's place, so autoscroll is left alone, except that a row that
+ * goes to, or comes from, collapsed forgets its place and follows the tail
+ * when it next opens. */
+int think_autoscroll_on_pref(int autoscroll, ThinkMode prev, ThinkPref pref);
+
 /* Milliseconds the wheel stays with the chat thread after the thread itself
  * was wheel-scrolled. */
 #define THINK_WHEEL_LATCH_MS 300u

@@ -952,8 +952,8 @@ static void update_scrollbar(ChatListView *lv);
 
 /* Store the pref and make every row measure again (recalc_layout() only
  * remeasures dirty items).  The mode of each row follows from the pref, so
- * the scroll state of the rows is settled here too: a row entering open mode
- * follows the stream again, a row going collapsed forgets its offset. */
+ * the scroll state of the rows is settled here too: a mode change keeps the
+ * reader's place, a row going to or from collapsed forgets it. */
 static void clv_apply_thinking_pref(ChatListView *lv, int pref,
                                     const ChatMsgItem *anchor)
 {
@@ -962,12 +962,12 @@ static void clv_apply_thinking_pref(ChatListView *lv, int pref,
     for (ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL; it;
          it = it->next) {
         if (it->type != CHAT_ITEM_AI_TEXT) continue;
-        if (pref == THINK_PREF_OPEN) it->u.ai.thinking_autoscroll = 1;
         if (pref == THINK_PREF_COLLAPSED) it->u.ai.thinking_scroll_y = 0;
-        /* A collapsed row forgets its place: reopened, it follows the tail. */
-        if (pref == THINK_PREF_COLLAPSED ||
-            it->u.ai.thinking_mode == THINK_MODE_COLLAPSED)
-            it->u.ai.thinking_autoscroll = 1;
+        /* A mode change keeps the reader's place; a row going to or coming
+         * from collapsed forgets it and follows the tail. */
+        it->u.ai.thinking_autoscroll = think_autoscroll_on_pref(
+            it->u.ai.thinking_autoscroll, (ThinkMode)it->u.ai.thinking_mode,
+            (ThinkPref)pref);
         it->dirty = 1;
     }
     /* A click re-lays out every Thinking row. Not pinned to the bottom, the

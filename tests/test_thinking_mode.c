@@ -296,6 +296,29 @@ int test_thinking_box_scroll_mode_change_holds_place(void)
     /* the box grows past the reader's offset: clamped to the new maximum */
     box_append(&b, THINK_MODE_EXTENDED, 600, 400);
     ASSERT_EQ(b.y, 200);
+    /* extended to open keeps the reader's place too (no reset to the tail):
+     * the follow state think_autoscroll_on_pref() leaves is what the list
+     * view then settles with */
+    BoxScroll o = { 1, 0 };
+    box_append(&o, THINK_MODE_EXTENDED, 1000, 400);
+    box_wheel_to(&o, 250, 1000, 400);
+    ASSERT_EQ(o.stick, 0);
+    o.stick = think_autoscroll_on_pref(o.stick, THINK_MODE_EXTENDED,
+                                       THINK_PREF_OPEN);
+    ASSERT_EQ(o.stick, 0);
+    box_append(&o, THINK_MODE_OPEN, 1000, 500);
+    ASSERT_EQ(o.y, 250);
+    /* a pref change only re-arms following for a row that was or becomes
+     * collapsed: it forgets its place */
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_COLLAPSED, THINK_PREF_OPEN), 1);
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_COLLAPSED, THINK_PREF_COMPACT), 1);
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_OPEN, THINK_PREF_COLLAPSED), 1);
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_EXTENDED, THINK_PREF_COLLAPSED), 1);
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_COMPACT, THINK_PREF_EXTENDED), 0);
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_OPEN, THINK_PREF_COMPACT), 0);
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_EXTENDED, THINK_PREF_OPEN), 0);
+    ASSERT_EQ(think_autoscroll_on_pref(1, THINK_MODE_EXTENDED, THINK_PREF_OPEN), 1);
+    ASSERT_EQ(think_autoscroll_on_pref(0, THINK_MODE_COMPACT, THINK_PREF_AUTO), 0);
     /* a following box stays on the tail across the mode change */
     BoxScroll f = { 1, 0 };
     box_append(&f, THINK_MODE_COMPACT, 1000, 80);

@@ -86,6 +86,12 @@ int think_box_settle_scroll(ThinkMode m, int stick, int scroll_y, int full_h,
                                   think_compact_offset(full_h, vis_h));
 }
 
+int think_autoscroll_on_pref(int autoscroll, ThinkMode prev, ThinkPref pref)
+{
+    if (pref == THINK_PREF_COLLAPSED || prev == THINK_MODE_COLLAPSED) return 1;
+    return autoscroll;
+}
+
 int think_wheel_takes(ThinkMode m, int streaming, int overflows,
                       unsigned now_ms, int thread_scrolled, unsigned last_ms)
 {
