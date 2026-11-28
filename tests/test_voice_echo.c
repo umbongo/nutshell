@@ -430,3 +430,21 @@ int test_vtrail_recent_keeps_the_tail_when_too_long(void)
     ASSERT_STR_EQ(out, "");
     TEST_END();
 }
+
+int test_vtrail_recent_across_the_tick_wrap(void)
+{
+    TEST_BEGIN();
+    const char *spoken = "one two three four five six seven eight";
+    static const size_t off[8] = { 0, 4, 8, 14, 19, 24, 28, 34 };
+    VoiceWordTrail t;
+    char out[64];
+    const unsigned long base = (unsigned long)-1000;   /* the counter wraps after two words */
+    voice_trail_reset(&t);
+    for (int i = 0; i < 8; i++) voice_trail_note(&t, base + 500ul * (unsigned long)i, off[i]);
+    /* cut at 500 on the wrapped clock: the words from 1000 ms before, across the wrap */
+    voice_trail_recent(&t, spoken, base + 1500ul, 1000, out, sizeof out);
+    ASSERT_STR_EQ(out, "two three four");
+    voice_trail_recent(&t, spoken, base + 500ul, 1000, out, sizeof out);
+    ASSERT_STR_EQ(out, "one two");
+    TEST_END();
+}

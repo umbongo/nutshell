@@ -196,10 +196,11 @@ size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned 
     if (!t || !spoken) return 0;
     slen = strlen(spoken);
     {
-        const unsigned long lo = cut_at >= ms ? cut_at - ms : 0ul;
+        /* wrap-safe: the tick counter is 32 bits on Windows and wraps every 49 days */
+        const unsigned long lo = cut_at - ms;
         for (int i = 0; i < t->n; i++) {
             const int k = (t->head + i) % VOICE_TRAIL_MAX;
-            if (t->off[k] >= slen || t->at[k] > cut_at || t->at[k] < lo) continue;
+            if (t->off[k] >= slen || (long)(t->at[k] - cut_at) > 0 || (long)(t->at[k] - lo) < 0) continue;
             if (!have) { from = t->off[k]; have = 1; }
             to = t->off[k];
         }
