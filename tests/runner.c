@@ -1546,6 +1546,17 @@ int test_vt_scroll_down_region_beyond_64_moves_marker(void);
 int test_vt_il_beyond_64_moves_marker(void);
 int test_vt_dl_beyond_64_moves_marker(void);
 
+/* test_paste_write.c */
+int test_paste_write_empty(void);
+int test_paste_write_one_byte(void);
+int test_paste_write_chunk_boundary(void);
+int test_paste_write_line_ends(void);
+int test_paste_write_utf8_not_split(void);
+int test_paste_write_malformed_utf8_passthrough(void);
+int test_paste_write_large(void);
+int test_paste_write_failure_stops(void);
+int test_paste_write_short_write_continues(void);
+
 /* test_pty_size.c */
 int test_pty_size_first_send(void);
 int test_pty_size_unchanged_sends_nothing(void);
@@ -7063,6 +7074,17 @@ int main(void) {
     failed += test_color_mixed_semicolon_colon_256();
     failed += test_color_colon_rgb_trailing_extra_params();
     failed += test_color_bold_colon_rgb_underline_one_feed();
+
+    printf("\n--- Paste write ---\n");
+    failed += test_paste_write_empty();
+    failed += test_paste_write_one_byte();
+    failed += test_paste_write_chunk_boundary();
+    failed += test_paste_write_line_ends();
+    failed += test_paste_write_utf8_not_split();
+    failed += test_paste_write_malformed_utf8_passthrough();
+    failed += test_paste_write_large();
+    failed += test_paste_write_failure_stops();
+    failed += test_paste_write_short_write_continues();
 
     printf("\n--- Pty size ---\n");
     failed += test_pty_size_first_send();

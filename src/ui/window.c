@@ -39,6 +39,7 @@
 #include "paste_dlg.h"
 #include "clipboard.h"
 #include "paste_filter.h"
+#include "paste_write.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
 #include "voice_audio_win.h"
@@ -795,17 +796,10 @@ static void paste_chunk_write(void *ctx,
                               const char *p, size_t chunk, bool local,
                               WriteAgg *agg)
 {
-    for (size_t i = 0; i < chunk; i++) {
-        if (p[i] == '\r') continue;
-        int rc;
-        if (p[i] == '\n' && local) {
-            static const char CR = '\r';
-            rc = write_fn(ctx, &CR, 1);
-        } else {
-            rc = write_fn(ctx, &p[i], 1);
-        }
-        write_agg_add(agg, rc, 1u);
-    }
+    /* One write per chunk of the line instead of one per byte; the line-end
+     * mapping above is done by paste_write_chunked(). */
+    (void)paste_write_chunked(p, chunk, local ? 1 : 0, write_fn, ctx,
+                              PASTE_WRITE_CHUNK, agg);
 }
 
 static PasteState g_paste = {0};
@@ -3260,17 +3254,12 @@ static void do_paste(HWND hwnd)
         if (bpm)
             (void)session_write_noted(target, BRACKET_OPEN,
                                       sizeof(BRACKET_OPEN) - 1, "paste");
-        const char *p = local;
         WriteAgg wagg;
         write_agg_init(&wagg);
-        while (*p) {
-            const char *nl = strchr(p, '\n');
-            size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
-            paste_chunk_write(target->io.ctx,
-                              target->io.write,
-                              p, chunk, local_line_ends, &wagg);
-            p += chunk;
-        }
+        /* The whole block in chunks of up to PASTE_WRITE_CHUNK bytes. */
+        (void)paste_write_chunked(local, filtered_len, local_line_ends ? 1 : 0,
+                                  target->io.write, target->io.ctx,
+                                  PASTE_WRITE_CHUNK, &wagg);
         session_note_write_agg(target, &wagg, "paste");  /* one WARN per paste */
         if (bpm)
             (void)session_write_noted(target, BRACKET_CLOSE,

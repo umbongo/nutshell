@@ -1,0 +1,39 @@
+#ifndef NUTSHELL_PASTE_WRITE_H
+#define NUTSHELL_PASTE_WRITE_H
+
+#include <stddef.h>
+#include "write_stats.h"
+
+/*
+ * Writes pasted text to a transport in chunks instead of one byte per call.
+ * A paste over SSH used to be one channel write per byte; each write flips
+ * the session to blocking mode and back (src/term/ssh_channel.c), so a large
+ * paste cost thousands of those round trips.
+ *
+ * Line ends are mapped the way paste_chunk_write() always did: '\r' is
+ * dropped, and '\n' becomes '\r' when `local` is set (a console child reads
+ * Enter, not LF). Bracketed-paste markers and the control filter are the
+ * caller's business and unchanged. Pure: no platform types.
+ */
+
+/* Largest single write the paste path makes. */
+#define PASTE_WRITE_CHUNK 4096u
+
+typedef int (*PasteWriteFn)(void *ctx, const char *data, size_t len);
+
+/*
+ * Translates in[0..in_len) and writes the result through write_fn in chunks
+ * of at most max_chunk bytes (values under 4 are raised to 4, so a whole
+ * UTF-8 sequence always fits). A chunk never ends inside a UTF-8 sequence
+ * that is complete in the input. Each write call is noted in agg
+ * (rc, bytes wanted); a short write continues with the rest, a write that
+ * returns 0 or less stops the paste (the rest would fail the same way).
+ *
+ * Returns the number of bytes handed to write_fn and accepted.
+ * NULL write_fn or NULL in with in_len > 0 writes nothing and returns 0.
+ */
+size_t paste_write_chunked(const char *in, size_t in_len, int local,
+                           PasteWriteFn write_fn, void *ctx,
+                           size_t max_chunk, WriteAgg *agg);
+
+#endif
