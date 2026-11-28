@@ -493,6 +493,7 @@ static void conv_press(void)
     voice_live_reap(0);
     g_digest = voice_settings_digest(s);
     ai_chat_voice_binding(ui_ai_panel(), &g_conv_bind);
+    voice_conv_set_mute_speaking(s->voice_conv_mute_speaking);
     voice_conv_start(voice_live_resolve(s, &t));
 }
 

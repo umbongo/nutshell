@@ -71,6 +71,7 @@ void voice_conv_set_ops(const VoiceConvOps *ops);
 
 int  voice_conv_running(void);
 VoiceConvState voice_conv_state(void);
+void voice_conv_set_mute_speaking(int on);          /* the setting, read by the next voice_conv_start */
 void voice_conv_start(int live);                    /* from voice_win.c after the busy checks */
 void voice_conv_event(VoiceConvEvent ev, int a, int b);  /* feed + carry out, with now = GetTickCount */
 void voice_conv_on_audio(UINT kind, LPARAM lp);     /* VAM_CONV_* and VAM_LEVEL/VAM_ERROR for it */

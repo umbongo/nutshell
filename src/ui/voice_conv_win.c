@@ -846,6 +846,15 @@ void voice_conv_test_pump(void)
     pump();
 }
 
+/* Settings > Voice > Mute the microphone while a reply is spoken, for the conversation about to
+ * start (a change of voice settings ends a running conversation, so it is read once). */
+static int g_mute_speaking;
+
+void voice_conv_set_mute_speaking(int on)
+{
+    g_mute_speaking = on ? 1 : 0;
+}
+
 void voice_conv_start(int live)
 {
     if (!ops_ready() || voice_conv_running()) return;
@@ -855,7 +864,7 @@ void voice_conv_start(int live)
     g_ai_off = 0;           /* R37: a new conversation tries AI speech again */
     g_engine_cfg = g_ops->speech_engine ? g_ops->speech_engine() : VOICE_SPEECH_WINDOWS;
     g_since = g_ops->msg_count();
-    voice_conv_event(VCE_START, live ? 1 : 0, 0);
+    voice_conv_event(VCE_START, live ? 1 : 0, g_mute_speaking);
 }
 
 void voice_conv_on_audio(UINT kind, LPARAM lp)
