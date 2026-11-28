@@ -846,6 +846,31 @@ int test_json_fuzz_obj_str_on_null_node(void);
 int test_json_fuzz_obj_num_on_null_node(void);
 int test_json_fuzz_obj_bool_on_null_node(void);
 
+/* test_term_escapes.c */
+int test_term_wrap_scrolls_region_only(void);
+int test_term_wrap_full_screen_unchanged(void);
+int test_term_wrap_below_region_stays(void);
+int test_term_wrap_inside_region_moves_down(void);
+int test_term_alt_screen_keeps_region(void);
+int test_term_alt_screen_region_resize(void);
+int test_term_alt_screen_grow_then_scrolls(void);
+int test_term_hts_in_pending_wrap(void);
+int test_term_tbc_in_pending_wrap(void);
+int test_term_wrap_flag_below_region(void);
+int test_term_wrap_flag_region_scroll(void);
+int test_term_tab_past_2048_columns(void);
+int test_term_alt_screen_region_repeat(void);
+/* test_term_underline.c */
+int test_term_underline_typical_cell(void);
+int test_term_underline_stays_inside_cell(void);
+int test_term_underline_degenerate_cells(void);
+
+int test_term_tab_defaults(void);
+int test_term_tab_hts_and_tbc(void);
+int test_term_tab_clear_all(void);
+int test_term_tab_cht_count_beyond_stops(void);
+int test_term_tab_reset_resize_alt(void);
+
 /* test_term_fuzz.c */
 int test_term_fuzz_incomplete_esc(void);
 int test_term_fuzz_incomplete_csi(void);
@@ -8018,6 +8043,27 @@ int main(void) {
     failed += test_json_fuzz_obj_bool_on_null_node();
 
     printf("\n--- Terminal Fuzz ---\n");
+    failed += test_term_wrap_scrolls_region_only();
+    failed += test_term_wrap_full_screen_unchanged();
+    failed += test_term_wrap_below_region_stays();
+    failed += test_term_wrap_inside_region_moves_down();
+    failed += test_term_alt_screen_keeps_region();
+    failed += test_term_alt_screen_region_resize();
+    failed += test_term_alt_screen_grow_then_scrolls();
+    failed += test_term_hts_in_pending_wrap();
+    failed += test_term_tbc_in_pending_wrap();
+    failed += test_term_wrap_flag_below_region();
+    failed += test_term_wrap_flag_region_scroll();
+    failed += test_term_tab_past_2048_columns();
+    failed += test_term_alt_screen_region_repeat();
+    failed += test_term_underline_typical_cell();
+    failed += test_term_underline_stays_inside_cell();
+    failed += test_term_underline_degenerate_cells();
+    failed += test_term_tab_defaults();
+    failed += test_term_tab_hts_and_tbc();
+    failed += test_term_tab_clear_all();
+    failed += test_term_tab_cht_count_beyond_stops();
+    failed += test_term_tab_reset_resize_alt();
     failed += test_term_fuzz_incomplete_esc();
     failed += test_term_fuzz_incomplete_csi();
     failed += test_term_fuzz_csi_no_params();

@@ -13,6 +13,7 @@
                                       * theme with a contrast floor (term_colors.h). */
 
 #define TERM_MAX_CSI_PARAMS 16
+#define TERM_TAB_COLS 2048
 
 typedef enum {
     TERM_STATE_NORMAL,
@@ -121,6 +122,16 @@ typedef struct {
     int        primary_lines_count;
     int        primary_lines_start;
     TermCursor primary_cursor;
+    /* The primary screen's scroll region, saved while the alternate screen is
+     * up; term_alt_screen_exit() restores it if it still fits the screen. */
+    int        primary_scroll_top;
+    int        primary_scroll_bot;
+
+    /* Tab stops: bit c of tab_stops is set when column c has a stop (HTS,
+     * TBC, and the every-8 default). One set for both screens, as in xterm.
+     * Columns from TERM_TAB_COLS on are not stored: they keep a stop every 8
+     * and HTS/TBC do not reach them. term_tabs_reset() restores the default. */
+    uint8_t    tab_stops[TERM_TAB_COLS / 8];
     /* Set when the buffer swaps (e.g. alt-screen exit) so the renderer knows
      * the display buffer shadow is stale and must be fully invalidated. */
     bool full_redraw_needed;
@@ -198,6 +209,8 @@ void term_free(Terminal *term);
 bool term_resize(Terminal *term, int rows, int cols);
 void term_process(Terminal *term, const char *data, size_t len);
 void term_scroll(Terminal *term);
+/* Tab stops back to the default, every 8 columns (term_init, RIS). */
+void term_tabs_reset(Terminal *term);
 void term_scroll_up(Terminal *term, int top, int bot, int n);
 void term_scroll_down(Terminal *term, int top, int bot, int n);
 /* Switch to the alternate screen. Fallible: when its rows cannot be allocated

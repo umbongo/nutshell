@@ -1,0 +1,127 @@
+{
+ "merges": 5,
+ "peak_context": {
+  "critique": 153942,
+  "fix": 207627,
+  "implement": 113086,
+  "main": 312310,
+  "other": 75557,
+  "review": 407133,
+  "survey": 147057
+ },
+ "since": "2026-11-26T00:45:00+00:00",
+ "subagent_start_median": 53914,
+ "subagent_start_n": 21,
+ "totals": {
+  "all:all": {
+   "agents": 26,
+   "cache_read": 104246537,
+   "compactions": 1,
+   "cost_index": 18627757.450000025,
+   "fresh_input": 3371690,
+   "idle_rewrite_cost": 646184.0,
+   "idle_rewrite_tokens": 323092,
+   "idle_rewrites": 3,
+   "output": 643147,
+   "requests": 821
+  },
+  "model:fable-5-2": {
+   "cache_read": 43030577,
+   "cost_index": 8162933.450000005,
+   "fresh_input": 1408633,
+   "idle_rewrite_cost": 646184.0,
+   "idle_rewrite_tokens": 323092,
+   "idle_rewrites": 3,
+   "output": 292787,
+   "requests": 222
+  },
+  "model:haiku-5-5": {
+   "cache_read": 59560,
+   "cost_index": 195420.0,
+   "fresh_input": 94705,
+   "output": 12,
+   "requests": 3
+  },
+  "model:opus-5-5": {
+   "cache_read": 35965211,
+   "cost_index": 5878522.3500000015,
+   "fresh_input": 986977,
+   "output": 196314,
+   "requests": 344
+  },
+  "model:sonnet-5-5": {
+   "cache_read": 25191189,
+   "cost_index": 4390881.649999999,
+   "fresh_input": 881375,
+   "output": 154034,
+   "requests": 252
+  },
+  "role:critique": {
+   "agents": 2,
+   "cache_read": 5418676,
+   "compactions": 0,
+   "cost_index": 1170863.1,
+   "fresh_input": 278970,
+   "output": 56062,
+   "requests": 54
+  },
+  "role:fix": {
+   "agents": 5,
+   "cache_read": 23121040,
+   "compactions": 0,
+   "cost_index": 3725694.4999999995,
+   "fresh_input": 592464,
+   "output": 134622,
+   "requests": 199
+  },
+  "role:implement": {
+   "agents": 2,
+   "cache_read": 3848567,
+   "compactions": 0,
+   "cost_index": 781513.7000000001,
+   "fresh_input": 182902,
+   "output": 33611,
+   "requests": 51
+  },
+  "role:main": {
+   "agents": 5,
+   "cache_read": 33127152,
+   "compactions": 1,
+   "cost_index": 6364734.200000001,
+   "fresh_input": 1031395,
+   "idle_rewrite_cost": 646184.0,
+   "idle_rewrite_tokens": 323092,
+   "idle_rewrites": 3,
+   "output": 197941,
+   "requests": 193
+  },
+  "role:other": {
+   "agents": 5,
+   "cache_read": 2182802,
+   "compactions": 0,
+   "cost_index": 619098.2000000001,
+   "fresh_input": 260826,
+   "output": 14961,
+   "requests": 39
+  },
+  "role:review": {
+   "agents": 4,
+   "cache_read": 19345190,
+   "compactions": 0,
+   "cost_index": 3422916.5,
+   "fresh_input": 641914,
+   "output": 137212,
+   "requests": 110
+  },
+  "role:survey": {
+   "agents": 3,
+   "cache_read": 17203110,
+   "compactions": 0,
+   "cost_index": 2542937.249999999,
+   "fresh_input": 383219,
+   "output": 68738,
+   "requests": 175
+  }
+ },
+ "until": "2026-11-28T07:25:11+00:00"
+}

@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-26 (one final review, by the model that did not review the tasks; before that, the main session runs the plan). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-28 (merge when ready, and the Windows test log; the same day, a count corrected at the retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules live in CLAUDE.md ("Software Development Rules", "Branches, pull
 requests and the merge gate"); this skill walks through them in order, and
 CLAUDE.md wins where they disagree. History and rationale: the retrospectives.
@@ -37,8 +37,8 @@ main session already holds everything the task needs and a brief would
 be longer than the change. Say so in one line.
 
 **Quality checks are sub-agents too.** A second opinion on a decision is
-the `critique` skill. A diff review is an Opus agent given the diff, never a
-summary. Never poll a running agent; its completion notification is the
+the `critique` skill. A diff review is an Opus or Fable agent, never the
+model that wrote the code, given the diff, never a summary. Never poll a running agent; its completion notification is the
 signal. **Every Opus or Fable review's findings reach the maintainer
 before any fix** (CLAUDE.md). `subagent-driven-development` does not stop
 there, so the main session, as its controller, shows the findings and its
@@ -50,8 +50,7 @@ by whichever of the two did not review its tasks** (maintainer,
 2026-11-26): Opus per task means a Fable final, Fable per task an Opus
 final. Never a second final review when every task was reviewed. A
 re-review of a fix wave's diff is scoped to that diff and is not a second
-final. Finish means push and open or update the draft PR (step 5), never
-merge.
+final. Finish means the pull request merged (step 9), once it is ready.
 
 ## Running a plan
 
@@ -67,8 +66,8 @@ re-review. No sub-agent spans two of these jobs.
   long-lived Opus orchestrators were about 30% of the cost index. Their
   contexts grew to 300k-600k and every request re-read them; and a
   sub-agent's prompt cache lives 5 minutes, so it expired while they
-  waited on an implementer and the next request rewrote it in full (64
-  times). The main session has the 1-hour cache on the subscription. It
+  waited on an implementer and the next request rewrote it in full (68
+  of the 106 idle rewrites). The main session has the 1-hour cache on the subscription. It
   takes on part of the controller's reading, so the expected saving is
   smaller: the critique estimated 14-17% of the index.
 - **The ledger** is the plan-execution skill's own,
@@ -150,7 +149,7 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
      require it and the committed exe would then disagree.
    - **Non-empty**: step 6 applies in full.
 
-   Before the maintainer merges, the main session checks the diff
+   Before the merge, the main session checks the diff
    (maintainer, 2026-11-26). A branch that had its final review
    has been read in full by it, so the main session reads
    `git diff --stat origin/main...HEAD`, compares it with the files the
@@ -189,36 +188,41 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
    state. Never wait on a PID (`wait` works only for a child of the same
    shell, `kill -0` loops risk PID reuse) or with `pgrep` (`-x` matches the
    process name, not its arguments; `-f` matches its own command line).
-8. **Integration tier and Windows checks.** Before marking ready, the
-   maintainer runs the integration tier the change touches by hand on
-   Windows (`Run-Integration.ps1 -Tier gate`); it is not a gate. Wine is
-   not Windows (PR #90). Any Windows check the PR leaves unrun goes into
-   the notes document's Open list in the same PR when it is opened, or in a
-   docs-only PR straight after the merge; never as a late push to a PR
-   whose checks are green (that reruns all seven and moves the head).
-9. **Merge.** **The maintainer's explicit go-ahead is a condition in every
-   permission mode, before any command below.** A go-ahead is any explicit
-   instruction to merge from the maintainer in this session ("Merge it",
-   "proceed and merge"); it needs the PR number only when more than one PR
-   could be meant (CLAUDE.md, rule of 2026-11-12). "Go ahead with the
-   fixes", an earlier plan or an unattended-run memory is not one. If the head moves after the maintainer's last test or
-   go-ahead (a merge of `main`, a review fix, a rebuilt exe), say what they
-   have not seen and HOLD until they say yes again. In auto mode the
-   classifier may refuse `gh pr ready` (MEMORY.md); report the green checks
-   and leave `ready` and `merge` to the maintainer, and do not use the MCP
-   calls below instead. **In a cloud (Linux) session never merge:** warn
-   that the pipeline requires a successful `make test` and compiled code,
-   which a cloud instance cannot do (CLAUDE.md), and do not mark ready or
-   enable auto-merge. With the go-ahead, on `automaton` or the Windows box:
-   `gh pr ready N`, then `gh pr checks N --watch` until every check is
-   green, then `gh pr merge N --merge --auto`, in that order (auto-merge
-   merges at once when mergeable, and CodeQL is not required). It prints
-   nothing on success; read the PR state afterwards. Without `gh`:
-   `mcp__github__update_pull_request` to leave draft, then
-   `mcp__github__enable_pr_auto_merge` (method `merge`). Never merge a red
-   check; never push to `main`; never rewrite someone else's branch. Once
-   the merge is confirmed and the branch gone, ask about a retrospective
-   and read the new alerts (both in Standing rules).
+8. **Windows checks and the test log.** Wine is not Windows (PR #90), and
+   nothing built on `automaton` has run there. Every pull request that
+   changes `src/` adds `docs/test-log/vX.Y.Z-<topic>.md` in the build
+   commit: each check it leaves unrun, as Do / Expect / If it fails /
+   Result (`docs/test-log/README.md` has the format). The notes' Open list
+   keeps the item and points at the file; it does not repeat the steps.
+   Never add it as a late push to a PR whose checks are green (that reruns
+   all seven and moves the head). The integration tier
+   (`Run-Integration.ps1 -Tier gate`) is the maintainer's to run on
+   Windows and is not a gate. When the maintainer says they are ready to
+   test, guide them from the open files, one group at a time, newest build
+   first; record each result in the file and move a file whose checks all
+   passed to `docs/test-log/done/` (a docs-only PR).
+9. **Merge when ready** (maintainer, 2026-11-28: "Always merge when
+   ready"; it replaces the per-merge go-ahead of 2026-11-12). Ready means
+   all seven checks green on the latest commit, the branch up to date with
+   `main`, the review done and its findings fixed after the maintainer has
+   seen them, and the main session's check of the diff (step 5) done. Then,
+   on `automaton` or the Windows box: `gh pr ready N`, read the checks once
+   more (`gh pr view N --json statusCheckRollup,mergeStateStatus`), then
+   `gh pr merge N --merge --auto` (it merges at once when mergeable, and
+   CodeQL is not required, so never run it on a head whose checks are not
+   all green). It prints nothing on success; read the PR state afterwards
+   and tell the maintainer what was merged. In auto mode the classifier
+   has refused `gh pr ready` without a go-ahead in the session (MEMORY.md);
+   if it does, report the green checks and leave `ready` and `merge` to the
+   maintainer, and do not use the MCP calls instead. **In a cloud (Linux)
+   session never merge:** warn that the pipeline requires a successful
+   `make test` and compiled code, which a cloud instance cannot do
+   (CLAUDE.md), and do not mark ready or enable auto-merge. Never merge a
+   red check; never push to `main`; never rewrite someone else's branch.
+   The rule covers merging only: a feature's design still needs the
+   maintainer's approval before it is built, and a release tag their word.
+   Once the merge is confirmed and the branch gone, ask about a
+   retrospective and read the new alerts (both in Standing rules).
 10. **Release**, separately: tag `vX.Y.Z` matching `APP_VERSION` and push
     the tag; the release workflow re-verifies and publishes the committed
     exe. Nothing is built at release time.
