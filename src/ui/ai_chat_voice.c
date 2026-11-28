@@ -11,6 +11,7 @@
 #ifdef _WIN32
 #include "voice_config.h"
 #include "voice_win.h"
+#include "main_chord_win.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -629,6 +630,14 @@ LRESULT CALLBACK ai_chat_mic_subclass(HWND hwnd, UINT msg, WPARAM wParam,
     switch (msg) {
     case WM_ERASEBKGND:
         return 1;
+    case WM_KEYDOWN:
+        /* The main-window chords (and Ctrl+0) go to the panel, as from the
+         * input box, the list and the other buttons. */
+        if (main_chord_now(wParam) != MCHORD_NONE) {
+            if (panel) SendMessage(panel, msg, wParam, lParam);
+            return 0;
+        }
+        break;
     case WM_MOUSEMOVE:
         if (d) {
             if (!d->mic_hover_tracking) {

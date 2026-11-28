@@ -10,6 +10,7 @@
 #include "voice_config.h"
 #include "voice_gate.h"
 #include "voice_win.h"
+#include "main_chord_win.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -23,6 +24,13 @@ LRESULT CALLBACK ai_chat_btn_noerase_subclass(
 {
     (void)dwRefData;
     if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_KEYDOWN && main_chord_now(wParam) != MCHORD_NONE) {
+        /* A focused button hands the main-window chords (and Ctrl+0) to the
+         * panel, as the input box and the list do. */
+        HWND panel = GetParent(hwnd);
+        if (panel) SendMessage(panel, msg, wParam, lParam);
+        return 0;
+    }
     if (msg == WM_NCDESTROY)
         RemoveWindowSubclass(hwnd, ai_chat_btn_noerase_subclass, uIdSubclass);
     if (msg == WM_SETTEXT) {
