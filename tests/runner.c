@@ -7130,6 +7130,8 @@ int main(void) {
     failed += test_zoom_zero_char_h();
     failed += test_zoom_zero_client_w();
     failed += test_zoom_zero_term_h();
+
+    printf("\n--- Main chords ---\n");
     failed += test_main_chords_tab_next_and_prev();
     failed += test_main_chords_zoom_reset();
     failed += test_main_chords_numpad_zero_resets_the_zoom();
