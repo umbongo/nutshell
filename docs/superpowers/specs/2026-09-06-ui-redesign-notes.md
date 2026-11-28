@@ -521,6 +521,16 @@ Done, in order (details in the commit messages and the specs named):
   a stream posting during the AI panel's destruction no longer leaks its payload (f2cb01d:
   a failed post frees its payload, and `WM_DESTROY` drains the queued stream messages);
   the integration suite's case count corrected from 84 to 94 (counted from the cases).
+- v1.3.5 (PR pending; combined close-out of five reviewed branches, hand checks in
+  `docs/test-log/v1.3.5-*.md`): the AI panel shows an I-beam over text, a stopped reply keeps
+  its partial text and no longer leaves two user turns in a row, NX-OS and ASA `do CMD` have
+  their own tables, a sensitive row is in `--ui-demo`, class reasons are full phrases, and
+  the panel rescales on a monitor move; Thinking modes each have their own colour, the
+  reasoning box smart-scrolls while streaming (the "minimise the earlier stream" item was
+  closed on 2026-11-28 as already met under Automatic); new shortcuts Ctrl+Tab,
+  Ctrl+Shift+Tab and Ctrl+0, and the main-window chords forwarded from the AI panel; Settings
+  has a Tab order, F1 help, `WM_DPICHANGED`, `WM_GETMINMAXINFO`, no Debugging overflow and
+  help tips in the profile editor. Approve/deny keys were decided against on 2026-11-28.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -952,19 +962,6 @@ Open, in priority order:
       candidates are a growable message list, or compacting or dropping the oldest turns
       when the slots run low. `thinking_history` (`ai_chat_internal.h`) is sized by the
       same constant.
-- [ ] Thinking view: each mode (collapsed, compact, extended, open) needs its own colour as
-      it cycles; two of them are both green today (maintainer, 2026-11-25).
-- [ ] Thinking view: when a reasoning stream has ended and a new one begins, minimise the
-      earlier one so it stops taking screen space; streaming the reasoning live stays as it
-      is. The user can reopen an earlier stream to read it, and a thinking box opened by
-      hand stays open until it is closed by hand (maintainer, 2026-11-25).
-- [ ] Thinking view: while the reasoning is streaming, scrolling with the mouse wheel, and
-      the equivalent keystrokes, should trigger smart-scroll (maintainer, 2026-11-25,
-      *reported*, not investigated). Read here as: a scroll up stops the view following the
-      tail and holds the reader's place, and returning to the bottom resumes following, the
-      rule `src/core/stick_scroll.c` already gives the chat list and the terminal; confirm
-      that reading with the maintainer, and which of the box and the chat list it covers,
-      before building.
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
@@ -984,8 +981,7 @@ Open, in priority order:
       reasoning on plain replies is not kept; history carries no tool turns (spec non-goal);
       the four v1.2.74 review leftovers (a font left selected in one header paint path, the
       status dot's size written twice, the rounds note's spare row, two "web_fetch is off"
-      rows in one round). From PR #88: NX-OS and ASA `do CMD` should use their own tables; a
-      sensitive row in `--ui-demo`; blank class reasons (`sh -c: `).
+      rows in one round).
 - [ ] Terminal escapes (PR #94's nano work): replay vim, htop, mc and less against tmux as
       nano was. Since v1.3.3 the tab stops (HT, CHT `CSI I`, CBT `CSI Z`, HTS, TBC), auto-wrap
       inside a scroll region and the alternate screen keeping the primary's scroll region are
@@ -998,12 +994,12 @@ Open, in priority order:
       though the in-app guide lists it; the OSC 0/2 window title is parsed into
       `term->title` and nothing reads it, so it is never shown (a tab title or the window
       caption could).
-- [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
-      order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
-      the minimum width the widest Debugging row overflows; hover help for the profile
-      editor; a generated README settings block (*reported*); the automatic log opened at
-      connect (`open_session_log`) still fails silently (Start Logging tells the user since
-      v1.3.4).
+- [ ] Settings follow-ups (PR #93 and its spec's non-goals): a generated README settings
+      block (*reported*); the automatic log opened at connect (`open_session_log`) still
+      fails silently (Start Logging tells the user since v1.3.4); Enter and Escape do not
+      act as OK and Cancel in Settings; the main window's `ns_font_flush` on its own
+      `WM_DPICHANGED` can delete fonts an open dialog still holds (found in the v1.3.5
+      review, not fixed).
 - [ ] Other, from the PR #94 session (*reported*): resize cost with a full history (PR #93
       measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200 columns); a user-supplied
       issue log can hold a typed secret, so `term.rx`/`term.key` payloads are never printed
@@ -1077,7 +1073,7 @@ Open, in priority order:
       two smaller follow-ups: the classifier's reason string as a "why this level" line in
       the popup, and a Unicode input box.
 - [ ] AI panel selection follow-ups (spec `2026-10-18-ai-panel-text-selection-design.md`
-      section 8 and the plan's notes): an I-beam cursor over text; Shift+arrow keyboard
+      section 8 and the plan's notes): Shift+arrow keyboard
       selection; grapheme-safe boundaries (a combining mark or an emoji sequence can
       split); dragging past the Thinking box's edge does not scroll the box; the message
       box is still an ANSI EDIT, so text outside the code page cannot be typed (the
@@ -1126,8 +1122,7 @@ Open, in priority order:
       provenance, secret scanning -- the settings changes need the maintainer's
       say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
       destination filter shipped in PR #85.
-- [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
-      two user turns in a row in the conversation.
+- [ ] Older review findings: Session Manager phantom row.
 - [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
       device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
       than device rulesets -- keep detecting on strict-locked sessions and add a
@@ -1170,10 +1165,6 @@ Open, in priority order:
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row
       shadow poisoning now makes harmless.
-- [ ] The AI panel never refreshes `d->dpi` after `WM_CREATE`: paint, hit and tooltip
-      rects stay consistent with each other, but the panel does not rescale on a monitor
-      move (found 2026-10-18 during the Auto-approve review). Still true on 2026-11-12:
-      only the chat list view remeasures on `WM_DPICHANGED` (07953d2).
 - [ ] Scrolled-back repaint storm (2026-10-18 `issue3.log` lines 11761-12797, out of scope of
       `2026-10-18-conpty-resize-anchor-design.md`): with `scrollback_offset` 12..6, 186 paints
       in 4.4 s had `dirty_rows` equal to the offset, driven by `poll.invalidate poll_rc=0`
@@ -1191,12 +1182,14 @@ Open, in priority order:
       width. The `wrapped` half was settled by PR #74: a whole-row erase (EL 2, EL 0 from
       column 0, EL 1 to the last column, ED over a whole row) clears it, and a line feed
       never does, by design (readline moves onto a continuation row with a bare LF).
-- [ ] Chords asked about that do not exist: Ctrl+Tab (switch tabs), Ctrl+0 (zoom reset),
-      approve/deny keys in the AI panel. The cheat-sheet spec (2026-10-20, "Not changed")
-      left them out; decide whether any is wanted, then add it to `src/core/shortcuts.c`.
-- [ ] Main-window chords (Ctrl+Shift+T/W/M, F11, Ctrl+Shift+Space) fire only while the main
-      window has focus; from the AI panel's input they are dead. The cheat sheet states the
-      condition per row ("from the terminal"); forwarding them is a separate change.
+- [ ] v1.3.5 follow-ups (combined close-out build of 2026-11-28; hand checks in
+      `docs/test-log/v1.3.5-*.md`): an empty key path makes the SSH login ask for a
+      passphrase and report "Wrong passphrase for ." (found in the Settings review, in the
+      connect code, not fixed); a tool round sent as text followed by a typed message still
+      gives two user turns in a row (older than v1.3.5); the I-beam's drag case probably
+      never runs while the mouse is captured; tests that write fixed file names under the
+      shared temp directory collide when several worktrees test at once (give each run its
+      own directory).
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the

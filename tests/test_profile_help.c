@@ -155,7 +155,7 @@ int test_profile_help_every_editable_field_is_mapped(void) {
                 char id[64] = {0};
                 const char *p = strstr(line, "IDC_");
                 size_t k = 0;
-                while (p && (isalnum((unsigned char)p[k]) || p[k] == '_') && k < sizeof(id) - 1) {
+                while (p && k < sizeof(id) - 1 && (isalnum((unsigned char)p[k]) || p[k] == '_')) {
                     id[k] = p[k];
                     k++;
                 }

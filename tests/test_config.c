@@ -3466,6 +3466,7 @@ int test_config_report_missing_and_unreadable_status(void)
 #include <sys/resource.h>
 #include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 static int cfg_file_has(const char *path, const char *text)
 {
@@ -3500,10 +3501,14 @@ int test_config_save_fails_when_dir_unwritable(void)
     FILE *f = test_fopen_private(path);
     ASSERT_NOT_NULL(f);
     if (f) { fputs("ORIGINAL", f); fclose(f); }
-    ASSERT_EQ(chmod(dir, 0500), 0);
+    /* The directory is opened once and its mode changed through that handle, so
+     * the object checked above is the object changed here. */
+    int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+    ASSERT_TRUE(dfd >= 0);
+    ASSERT_EQ(dfd >= 0 ? fchmod(dfd, 0500) : -1, 0);
     Config *cfg = config_new_default();
     int rc = config_save(cfg, path);
-    (void)chmod(dir, 0700);
+    if (dfd >= 0) { (void)fchmod(dfd, 0700); close(dfd); }
     ASSERT_EQ(rc, -1);
     ASSERT_TRUE(cfg_file_has(path, "ORIGINAL"));
     ASSERT_TRUE(!cfg_exists(tmp));
