@@ -272,6 +272,72 @@ int test_md_inline_italic_offsets(void) {
     TEST_END();
 }
 
+/* Number of spans that are not plain text */
+static int md_test_styled(const char *line, MdSpan *spans, int *first_type)
+{
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    int styled = 0;
+    *first_type = -1;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type != MD_SPAN_TEXT) {
+            if (*first_type < 0) *first_type = (int)spans[i].type;
+            styled++;
+        }
+    }
+    return styled;
+}
+
+/* An underscore between two alphanumerics is not emphasis (CommonMark) */
+int test_md_inline_intraword_underscore_literal(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    int ft;
+    ASSERT_EQ(md_test_styled("snake_case_name", spans, &ft), 0);
+    ASSERT_EQ(md_test_styled("a_b_c", spans, &ft), 0);
+    ASSERT_EQ(md_test_styled("foo__bar__baz", spans, &ft), 0);
+    ASSERT_EQ(md_test_styled("x_1 and y_2", spans, &ft), 0);
+    TEST_END();
+}
+
+/* Underscore emphasis at a word boundary still works */
+int test_md_inline_underscore_at_boundary(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    int ft;
+    ASSERT_EQ(md_test_styled("_emph_", spans, &ft), 1);
+    ASSERT_EQ(ft, MD_SPAN_ITALIC);
+    ASSERT_EQ(md_test_styled("__bold__", spans, &ft), 1);
+    ASSERT_EQ(ft, MD_SPAN_BOLD);
+    ASSERT_EQ(md_test_styled("(_emph_)", spans, &ft), 1);
+    ASSERT_EQ(ft, MD_SPAN_ITALIC);
+    ASSERT_EQ(md_test_styled("_emph_.", spans, &ft), 1);
+    ASSERT_EQ(ft, MD_SPAN_ITALIC);
+    ASSERT_EQ(md_test_styled("say _hi_ now", spans, &ft), 1);
+    /* An intraword underscore inside an emphasis span does not close it */
+    int n = md_parse_inline("_foo_bar_", 9, spans);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(spans[0].type, MD_SPAN_ITALIC);
+    ASSERT_EQ(spans[0].start, 1);
+    ASSERT_EQ(spans[0].end, 8);
+    TEST_END();
+}
+
+/* '*' is unchanged: it may emphasise inside a word */
+int test_md_inline_intraword_star_unchanged(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    int ft;
+    int n = md_parse_inline("*in*word*", 9, spans);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(spans[0].type, MD_SPAN_ITALIC);
+    ASSERT_EQ(spans[0].start, 1);
+    ASSERT_EQ(spans[0].end, 3);
+    ASSERT_EQ(spans[1].type, MD_SPAN_TEXT);
+    ASSERT_EQ(md_test_styled("snake*case*name", spans, &ft), 1);
+    ASSERT_EQ(ft, MD_SPAN_ITALIC);
+    TEST_END();
+}
+
 /* ---- md_is_table_separator: edge cases ---- */
 
 /* Minimal separator */
