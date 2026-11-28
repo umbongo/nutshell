@@ -49,6 +49,7 @@ static int g_ai_off;                        /* AI speech cannot work this conver
 static int g_aec = -1;                      /* the last VAM_CONV_OPENED value */
 static VoiceListenMode g_want_mode = VLM_HOLD;
 static int g_have_mode;
+static size_t g_speak_from;                 /* the offset this speak began at */
 static int g_audio_started;                 /* this speak's first word event has been reported to the listener */
 
 static VoiceTranscript g_vt;
@@ -538,6 +539,7 @@ static void speak_with_context(const char *text, size_t from, int is_reply)
     /* the speak's own first word: an engine's first event can be its second (AI speech starts
      * its offset tracking at `from`), so the trail would never hold the first one */
     voice_trail_note(&g_trail, now_ms(), from);
+    g_speak_from = from;
     if (is_reply) {
         g_cut = from;
         g_read_to_end = 0;
@@ -1134,9 +1136,15 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
         if (m->reply_id == g_cur_id && g_playing) {
             const unsigned long t = now_ms();
             if (g_cur_is_reply) g_cut = m->offset;
-            voice_trail_note(&g_trail, t, m->offset);
             /* The first word event of a speak (both engines send it when the audio plays): the
-             * listener's echo learning starts here, not at the first loud microphone window. */
+             * listener's echo learning starts here, not at the first loud microphone window, and
+             * the speak's first word is noted again, timed from when it was actually heard (the
+             * note made at the request is 0.3 to 2 s earlier for AI speech). */
+            if (!g_audio_started) {
+                voice_trail_reset(&g_trail);
+                voice_trail_note(&g_trail, t, g_speak_from);
+            }
+            voice_trail_note(&g_trail, t, m->offset);
             if (!g_audio_started) {
                 g_audio_started = 1;
                 if (g_cap_open && g_ops->cap_audio_started &&
