@@ -1839,13 +1839,55 @@ int test_ai_stream_chunk_error_not_an_error(void)
     ASSERT_EQ(ai_stream_chunk_error("moonshot", "[DONE]", msg, sizeof(msg)), 0);
     ASSERT_EQ(ai_stream_chunk_error("moonshot", "", msg, sizeof(msg)), 0);
     ASSERT_EQ(ai_stream_chunk_error("moonshot", NULL, msg, sizeof(msg)), 0);
-    /* Anthropic's own error events are not this path's business. */
+    /* Anthropic: only a type:"error" event is an error. */
     ASSERT_EQ(ai_stream_chunk_error("anthropic",
-        "{\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}",
+        "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":"
+        "{\"type\":\"text_delta\",\"text\":\"error\"}}",
         msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("anthropic",
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}",
+        msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("anthropic", "{\"type\":\"ping\"}",
+                                    msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("anthropic", "{\"type\":\"error\"}",
+                                    msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("anthropic", "not json", msg, sizeof(msg)), 0);
+    ASSERT_STR_EQ(msg, "keep");
     /* NULL out buffer is allowed. */
     ASSERT_EQ(ai_stream_chunk_error("moonshot", "{\"error\":{\"message\":\"x\"}}",
                                     NULL, 0), 1);
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_anthropic(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1] = "";
+    int rc = ai_stream_chunk_error("anthropic",
+        "{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\","
+        "\"message\":\"Overloaded\"}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "Overloaded");
+    /* No message: falls back to the error type */
+    rc = ai_stream_chunk_error("anthropic",
+        "{\"type\":\"error\",\"error\":{\"type\":\"api_error\"}}",
+        msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "api_error");
+    /* NULL out buffer is allowed */
+    ASSERT_EQ(ai_stream_chunk_error("anthropic",
+        "{\"type\":\"error\",\"error\":{\"message\":\"x\"}}", NULL, 0), 1);
+    /* Truncation to the cap */
+    char json[1200];
+    char longmsg[900];
+    memset(longmsg, 'a', sizeof(longmsg) - 1);
+    longmsg[sizeof(longmsg) - 1] = '\0';
+    snprintf(json, sizeof(json),
+             "{\"type\":\"error\",\"error\":{\"message\":\"%s\"}}", longmsg);
+    rc = ai_stream_chunk_error("anthropic", json, msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_TRUE(strlen(msg) <= AI_STREAM_ERROR_MSG_MAX);
+    ASSERT_TRUE(strlen(msg) > 0);
     TEST_END();
 }
 

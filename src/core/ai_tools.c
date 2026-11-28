@@ -949,10 +949,16 @@ int ai_stream_chunk_error(const char *provider, const char *json,
                           char *msg_out, size_t msg_size)
 {
     if (!json || !json[0]) return 0;
-    if (provider && strcmp(provider, "anthropic") == 0) return 0;
     JsonNode *root = json_parse(json);
     if (!root) return 0;
     if (root->type != JSON_OBJECT) { json_free(root); return 0; }
+
+    /* Anthropic reports a failure as {"type":"error","error":{...}}; any
+     * other event type is ordinary stream data, whatever its text says. */
+    if (provider && strcmp(provider, "anthropic") == 0) {
+        const char *etype = json_obj_str(root, "type");
+        if (!etype || strcmp(etype, "error") != 0) { json_free(root); return 0; }
+    }
 
     JsonNode *err = json_obj_get(root, "error");
     int is_error = 0;
