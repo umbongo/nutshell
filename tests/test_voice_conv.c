@@ -1872,7 +1872,7 @@ int test_vconv_second_false_cut_turns_voice_cutin_off(void)
     ASSERT_FALSE(o.actions & VCA_MODE_SPEAK);               /* the microphone no longer listens for a cut-in */
     ASSERT_EQ(o.header, VCH_IGNORING_OWN_VOICE);
     ASSERT_STR_EQ(voice_conv_header_text(VCH_IGNORING_OWN_VOICE),
-                  "Ignoring the assistant's own voice for the rest of this reply.");
+                  "Not listening for interruptions: the assistant's voice kept triggering it. Press the key to interrupt, or say \"carry on\" after a reply to turn it back on.");
     ASSERT_EQ(c.no_cutin, 1);
     /* a third self-trigger cannot happen: the listener's events mean nothing now */
     ASSERT_EQ(run(&c, VCE_DUCK, 0, 0, t += 10).actions, 0u);

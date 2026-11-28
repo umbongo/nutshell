@@ -100,7 +100,8 @@ typedef struct {
     int cut_turn;                 /* the turn being heard began with a voice cut-in on the speech */
     int cut_reply;                /* ...and the speech it cut was a reply */
     int false_cuts;               /* cut-ins in this conversation that were its own echo or nothing */
-    int no_cutin;                 /* voice cut-in is off until a genuine cut-in or the conversation's end */
+    int no_cutin;                 /* voice cut-in is off until the user says or presses "carry on" or
+                                   * "repeat", or the conversation ends */
     int card;                     /* a card raised while paused: VoiceCardKind + 1, 0 none */
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
     unsigned long state_at;       /* when the state last changed (the watchdogs' clock) */

@@ -128,8 +128,9 @@ static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase
     c->local_speech = 0;
     c->idle_seen = 0;
     if (!c->stopcap) { c->stopcap = 1; a |= VCA_STOP_CAPTION; }
-    /* Voice cut-in is off for the rest of the conversation (or until a genuine cut-in): the
-     * listener is held whatever is spoken, and the header says so. */
+    /* Voice cut-in is off for the rest of the conversation, or until the user says or presses
+     * "carry on" or "repeat" (no voice cut-in can happen while it is held): the listener is held
+     * whatever is spoken, and the header says so. */
     if (c->no_cutin) a = (a & ~(unsigned)VCA_MODE_SPEAK) | VCA_MODE_HOLD;
     o = out(a, c->no_cutin ? VCH_IGNORING_OWN_VOICE : VCH_SPEAKING);
     o.phrase = ph;
@@ -180,8 +181,8 @@ static void genuine_cutin(VoiceConv *c)
 
 /* The cut-in's turn was the assistant's own echo or nothing: the reply carries on from the cut
  * point by the same path as "carry on". The second false cut in a conversation (counted across
- * replies; a genuine cut-in clears it) turns voice cut-in off: the listener is held while
- * the reply is read and the header says so.
+ * replies; a genuine cut-in clears it, while voice cut-in is still on) turns voice cut-in off:
+ * the listener is held while the reply is read and the header says so.
  * Nothing here touches the silence clock: it is not a turn the user took. x: the releases of the
  * turn being dropped. */
 static VoiceConvOut false_cut(VoiceConv *c, unsigned x, VoiceConvHeader h)
@@ -658,7 +659,7 @@ const char *voice_conv_header_text(VoiceConvHeader h)
     case VCH_LIVE_UNAVAILABLE: return "Live text is unavailable: the words will appear when you stop";
     case VCH_LIVE_STOPPED:     return "Live text stopped: the rest will appear when you stop";
     case VCH_AI_FAILED:        return "AI speech failed: using Windows speech";
-    case VCH_IGNORING_OWN_VOICE: return "Ignoring the assistant's own voice for the rest of this reply.";
+    case VCH_IGNORING_OWN_VOICE: return "Not listening for interruptions: the assistant's voice kept triggering it. Press the key to interrupt, or say \"carry on\" after a reply to turn it back on.";
     case VCH_NONE:
     default:                   return "";
     }
