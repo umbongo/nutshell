@@ -3356,6 +3356,7 @@ static void update_scrollbar(HWND hwnd)
 #include "snap.h"
 #include "zoom.h"
 #include "main_chords.h"
+#include "main_chord_win.h"
 #include "connect_anim.h"
 
 /* Return total non-client pixel size (border + title bar) for hwnd. */
@@ -4208,6 +4209,45 @@ static void open_debug_log_folder(HWND hwnd)
     (void)open_dir_in_explorer(hwnd, dir, "Debug Log Folder", g_theme);
 }
 
+/* Perform main-window chord `mc`. The one place a chord's action lives: the
+ * keyboard (key_on_keydown) and the AI panel's forwarded chords
+ * (WM_APP_MAIN_CHORD) both call it, so a forwarded chord never touches the
+ * key encoder, the Send Next Key one-shot or the terminal-input mark. The
+ * toggles and the new/close actions fire once per press (`is_repeat` is the
+ * key's auto-repeat bit); switching tabs and zoom reset repeat while held. */
+static void main_chord_run(HWND hwnd, MainChord mc, bool is_repeat)
+{
+    switch (mc) {
+    case MCHORD_FULLSCREEN:
+        if (!is_repeat) SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
+        break;
+    case MCHORD_NEW_TAB:
+        if (!is_repeat) on_tab_new();
+        break;
+    case MCHORD_CLOSE_TAB:
+        if (!is_repeat) close_active_tab();
+        break;
+    case MCHORD_AI_PANEL:
+        if (!is_repeat) on_ai_clicked();
+        break;
+    case MCHORD_MARK_ISSUE:
+        if (!is_repeat) mark_issue(hwnd, "key");
+        break;
+    case MCHORD_TAB_NEXT:
+    case MCHORD_TAB_PREV: {
+        int to = tab_chord_target(tabs_count(g_hwndTabs), tabs_get_active(g_hwndTabs),
+                                  mc == MCHORD_TAB_NEXT ? 1 : -1);
+        if (to >= 0) tabs_set_active(g_hwndTabs, to);
+        break;
+    }
+    case MCHORD_ZOOM_RESET:
+        apply_zoom_size(hwnd, zoom_reset_size(0));
+        break;
+    case MCHORD_NONE:
+        break;
+    }
+}
+
 /* WM_KEYDOWN. Returns true when the key was handled (WndProc returns 0). */
 static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
 {
@@ -4245,60 +4285,16 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
         return true;
     }
 
-    /* F11 -- toggle fullscreen; with any modifier it goes to the shell.
-     * Auto-repeat is consumed but ignored, so holding F11 toggles once. */
-    if (vk == VK_F11 && !shift && !ctrl && !alt) {
-        if (!is_repeat) SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
-        return true;
-    }
-    /* Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Shift+Space AI
-     * panel. Plain Ctrl+T (transpose), Ctrl+W (kill word) and Ctrl+Space
-     * (NUL) belong to the shell. Each still drops the queued character on
-     * auto-repeat (so it never leaks to the shell) but skips the action
-     * itself, so holding the chord fires it once. */
-    if (ctrl_only && shift) {
-        if (vk == (WPARAM)'T') {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) on_tab_new();
-            return true;
-        }
-        if (vk == (WPARAM)'W') {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) close_active_tab();
-            return true;
-        }
-        /* While the AI assistant is off the chord is unbound: it falls
-         * through to the terminal like any other key. */
-        if (vk == VK_SPACE && ai_gate_on()) {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) on_ai_clicked();
-            return true;
-        }
-        /* Ctrl+Shift+M: Mark Issue. The terminal only ever sent a plain CR
-         * for it (indistinguishable from Ctrl+M and Enter), so no shell or
-         * full-screen program loses anything. */
-        if (vk == (WPARAM)'M') {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) mark_issue(hwnd, "key");
-            return true;
-        }
-    }
-    /* Ctrl+Tab / Ctrl+Shift+Tab: next / previous tab, wrapping; Ctrl+0:
-     * reset the terminal zoom. Taken before the key encoder, so none of them
-     * reaches the shell (with one tab Ctrl+Tab does nothing and sends
-     * nothing). Switching repeats while the keys are held, as in a browser. */
+    /* The main window's own chords (F11, Ctrl+Shift+T/W/M/Space, Ctrl+Tab,
+     * Ctrl+Shift+Tab, Ctrl+0): one table in main_chords.c decides which key
+     * is one, main_chord_run() performs it, taken before the key encoder so
+     * none reaches the shell. Each drops the queued character, also on
+     * auto-repeat, so it never leaks to the shell. */
     {
         const MainChord mc = main_chord_classify((unsigned)vk, shift, ctrl, alt, ai_gate_on());
-        if (mc == MCHORD_TAB_NEXT || mc == MCHORD_TAB_PREV) {
-            drop_queued_char(hwnd, lParam);
-            int to = tab_chord_target(tabs_count(g_hwndTabs), tabs_get_active(g_hwndTabs),
-                                      mc == MCHORD_TAB_NEXT ? 1 : -1);
-            if (to >= 0) tabs_set_active(g_hwndTabs, to);
-            return true;
-        }
-        if (mc == MCHORD_ZOOM_RESET) {
-            drop_queued_char(hwnd, lParam);
-            apply_zoom_size(hwnd, zoom_reset_size(0));
+        if (mc != MCHORD_NONE) {
+            if (mc != MCHORD_FULLSCREEN) drop_queued_char(hwnd, lParam);
+            main_chord_run(hwnd, mc, is_repeat);
             return true;
         }
     }
@@ -5443,6 +5439,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_SHOW_SESSION_MANAGER:
             on_tab_new();
+            return 0;
+
+        case WM_APP_MAIN_CHORD:
+            /* A chord the AI panel forwarded: its action only, never the
+             * key path (no one-shot, no terminal-input mark, no encoder).
+             * Ignored while a modal has this window disabled. */
+            if (IsWindowEnabled(hwnd))
+                main_chord_run(hwnd, (MainChord)wParam, lParam != 0);
             return 0;
 
         case WM_OPEN_DEMO_SETTINGS:
