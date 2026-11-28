@@ -5,8 +5,8 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-28 (the retrospective of PRs #102-#122; before that, 2026-11-26's
-token-use baseline and loop change).
+Last updated: 2026-11-28 (merge when ready and the Windows test log; the same day, the
+retrospective of PRs #102-#122).
 
 ## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
@@ -274,8 +274,11 @@ token-use baseline and loop change).
   2026-11-12 it accepted it after the maintainer's explicit go-ahead in the
   session (*reported*). Later on 2026-11-12 it refused `gh pr ready` after
   "proceed and merge", given before PR #96 existed, and accepted it after
-  "Merge it" with PR #96 in play. Without a go-ahead (CLAUDE.md, "Branches,
-  pull requests and the merge gate"), the maintainer runs `ready` and `merge`.
+  "Merge it" with PR #96 in play. Since 2026-11-28 the maintainer's rule
+  is "Always merge when ready" (CLAUDE.md, "Branches, pull requests and
+  the merge gate"), given in the session that merged #123 and #124 that
+  way; a later session that the classifier refuses reports the green
+  checks and leaves `ready` and `merge` to the maintainer.
 - A CodeQL finding on a pull request: read the SARIF before changing code
   (`gh api -H "Accept: application/sarif+json"
   repos/umbongo/nutshell/code-scanning/analyses/<id>`; ids from
@@ -307,10 +310,14 @@ token-use baseline and loop change).
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-28 (`main` at v1.3.2, `4897425`; open pull requests:
+As of 2026-11-28 (`main` at v1.3.3 after PR #123; open pull requests:
 `gh pr list`; no open CodeQL alert):
 
-- **Nothing merged since v1.2.93 is recorded as run on Windows.** The hand
+- **Nothing merged since v1.2.94 is recorded as run on Windows** (the
+  maintainer tried v1.2.94 on 2026-11-24, *reported*, not itemised).
+  `docs/test-log/` lists every check still to run, one file per build,
+  written to be walked through with the maintainer when they say they are
+  ready to test. The hand
   checks for the AI assistant switch (#106), the notice dialog (#107),
   voice input (#108 to #110), live dictation (#112), conversation mode
   (#117) and AI speech (#120) are in the Open list, with the older backlog
