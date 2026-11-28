@@ -3394,6 +3394,11 @@ int test_ws_url_empty_query(void);
 int test_ws_url_custom_separator(void);
 int test_ws_url_custom_fragment_refused(void);
 int test_ws_url_too_long_is_refused_not_truncated(void);
+int test_ws_url_failure_leaves_out_empty(void);
+int test_ws_url_custom_refuses_control_and_space_bytes(void);
+int test_ws_url_error_text_is_plain(void);
+int test_ws_url_max_fits_the_win_buffers(void);
+int test_ws_search_query_with_nul_is_refused(void);
 
 /* test_tool_web_fetch.c */
 int test_web_fetch_html_to_text_basic(void);
@@ -8263,6 +8268,11 @@ int main(void) {
     failed += test_ws_url_custom_separator();
     failed += test_ws_url_custom_fragment_refused();
     failed += test_ws_url_too_long_is_refused_not_truncated();
+    failed += test_ws_url_failure_leaves_out_empty();
+    failed += test_ws_url_custom_refuses_control_and_space_bytes();
+    failed += test_ws_url_error_text_is_plain();
+    failed += test_ws_url_max_fits_the_win_buffers();
+    failed += test_ws_search_query_with_nul_is_refused();
 
     printf("\n--- Web Fetch ---\n");
     failed += test_web_fetch_html_to_text_basic();

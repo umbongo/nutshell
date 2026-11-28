@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "ai_tool_web_search.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* ---- ddg_parse_api_json tests -------------------------------------------- */
 
@@ -269,6 +270,95 @@ int test_ws_url_custom_fragment_refused(void)
     ASSERT_EQ(ws_build_search_url("custom", "https://search.example.com/s#top", 0,
                                   "x", url, sizeof(url)), -2);
     ASSERT_EQ((int)url[0], 0);
+    TEST_END();
+}
+
+int test_ws_url_failure_leaves_out_empty(void)
+{
+    TEST_BEGIN();
+    char url[40];
+    /* The custom URL fits, the separator or "q=" does not: every early
+     * failure return must leave out empty, never the half-built URL. */
+    const char *base = "https://search.example.com/s";   /* 28 bytes */
+    for (size_t cap = 2; cap <= 33; cap++) {
+        memset(url, 'X', sizeof(url));
+        int rc = ws_build_search_url("custom", base, 0, "zz", url, cap);
+        if (rc != 0) ASSERT_EQ((int)url[0], 0);
+    }
+    memset(url, 'X', sizeof(url));
+    ASSERT_EQ(ws_build_search_url("custom", base, 0, "zz", url, 29), -1);
+    ASSERT_EQ((int)url[0], 0);
+    memset(url, 'X', sizeof(url));
+    ASSERT_EQ(ws_build_search_url("custom", base, 0, "zz", url, 30), -1);
+    ASSERT_EQ((int)url[0], 0);
+    memset(url, 'X', sizeof(url));
+    ASSERT_EQ(ws_build_search_url("custom", base, 0, "zz", url, 31), -1);
+    ASSERT_EQ((int)url[0], 0);
+    memset(url, 'X', sizeof(url));
+    ASSERT_EQ(ws_build_search_url("duckduckgo-html", NULL, 0, "zz", url, 5), -1);
+    ASSERT_EQ((int)url[0], 0);
+    TEST_END();
+}
+
+int test_ws_url_custom_refuses_control_and_space_bytes(void)
+{
+    TEST_BEGIN();
+    char url[1024];
+    const char *bad[] = {
+        "https://s.example.com/a b", "https://s.example.com/a\r\nHost: x",
+        "https://s.example.com/a\tb", "https://s.example.com/a\x7f",
+        "https://s.example.com/\x01", " https://s.example.com/", "https://s.example.com/ ",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        memset(url, 'X', sizeof(url));
+        ASSERT_EQ(ws_build_search_url("custom", bad[i], 0, "x", url, sizeof(url)), -3);
+        ASSERT_EQ((int)url[0], 0);
+    }
+    /* http:// and a '~' (0x7E) or '!' (0x21) stay allowed. */
+    ASSERT_TRUE(ws_url_is("custom", "http://192.168.1.5:8080/~s!", 0, "x",
+                          "http://192.168.1.5:8080/~s!?q=x"));
+    /* The check is on the custom URL only, not on the query. */
+    ASSERT_TRUE(ws_url_is("custom", "http://h.example/s", 0, "a b",
+                          "http://h.example/s?q=a%20b"));
+    /* And not when the custom URL is not used. */
+    ASSERT_TRUE(ws_url_is("custom", "https://s.example.com/a b", 1, "x",
+                          "https://html.duckduckgo.com/html/?q=x"));
+    TEST_END();
+}
+
+int test_ws_url_error_text_is_plain(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(strstr(ws_url_error_text(-1), "too long") != NULL);
+    ASSERT_TRUE(strstr(ws_url_error_text(-2), "# fragment") != NULL);
+    ASSERT_TRUE(strstr(ws_url_error_text(-3), "space or control") != NULL);
+    ASSERT_TRUE(strstr(ws_url_error_text(-9), "too long") != NULL);
+    TEST_END();
+}
+
+int test_ws_url_max_fits_the_win_buffers(void)
+{
+    TEST_BEGIN();
+    /* An encoded URL of 740 to 985 characters used to fail in ws_get's path
+     * buffer; the one shared limit now sizes the URL and every wide buffer. */
+    char url[WS_URL_MAX];
+    char q[400];
+    memset(q, ' ', 300); q[300] = '\0';      /* 900 encoded bytes */
+    ASSERT_EQ(ws_build_search_url("duckduckgo-html", NULL, 0, q, url, sizeof(url)), 0);
+    ASSERT_TRUE(strlen(url) > 740 && strlen(url) < WS_URL_MAX);
+    TEST_END();
+}
+
+int test_ws_search_query_with_nul_is_refused(void)
+{
+    TEST_BEGIN();
+    char *buf = NULL; size_t len = 0; int trunc = 0;
+    int rc = tool_web_search_execute("{\"query\":\"a\\u0000b\"}", NULL, NULL,
+                                     &buf, &len, &trunc);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "cannot be sent") != NULL);
+    free(buf);
     TEST_END();
 }
 
