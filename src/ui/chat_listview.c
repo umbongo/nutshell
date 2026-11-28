@@ -4847,8 +4847,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             if (parent) SendMessage(parent, msg, wParam, lParam);
             return 0;
         }
-        /* Ctrl+0: the panel resets the chat zoom */
-        if (main_chord_now(wParam) == MCHORD_ZOOM_RESET) {
+        /* A main-window chord (Ctrl+0 resets the chat zoom; the rest reach the
+         * main window): the panel decides. */
+        if (main_chord_now(wParam) != MCHORD_NONE) {
             HWND parent = GetParent(hwnd);
             if (parent) SendMessage(parent, msg, wParam, lParam);
             return 0;

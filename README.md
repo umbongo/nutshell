@@ -426,8 +426,8 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **Ctrl+Shift+T** | New session (opens the Session Manager) | from the terminal, not the AI panel |
-| **Ctrl+Shift+W** | Close the active tab | from the terminal |
+| **Ctrl+Shift+T** | New session (opens the Session Manager) | |
+| **Ctrl+Shift+W** | Close the active tab | |
 | **Ctrl+Tab, Ctrl+Shift+Tab** | Next tab, previous tab | |
 | **Alt+F4** | Exit | |
 | **Alt** | Open the menu bar | |
@@ -471,7 +471,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **Ctrl+Shift+Space** | Show or hide the panel | from the terminal, not from inside the panel |
+| **Ctrl+Shift+Space** | Show or hide the panel | |
 | **Enter** | Send | while a reply streams or commands run: stop them |
 | **Shift+Enter** | New line | |
 | **Ctrl+V** | Paste text, or attach an image from the clipboard | |
@@ -487,8 +487,8 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **F11** | Fullscreen | from the terminal |
-| **Ctrl+Shift+M** | Mark an issue in the debug log | from the terminal |
+| **F11** | Fullscreen | |
+| **Ctrl+Shift+M** | Mark an issue in the debug log | |
 | **Esc, Enter** | Close a dialog | most dialogs |
 | **Help > Keyboard Shortcuts** | This sheet | |
 

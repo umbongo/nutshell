@@ -15,9 +15,9 @@
 static const Shortcut TABLE[] = {
     /* 1. Sessions and tabs */
     { S1, "Ctrl+Shift+T", "New session (opens the Session Manager)",
-      "from the terminal, not the AI panel", SC_MENU_ACCEL, IDM_FILE_NEW_SESSION },
+      "", SC_MENU_ACCEL, IDM_FILE_NEW_SESSION },
     { S1, "Ctrl+Shift+W", "Close the active tab",
-      "from the terminal", SC_MENU_ACCEL, IDM_FILE_CLOSE_TAB },
+      "", SC_MENU_ACCEL, IDM_FILE_CLOSE_TAB },
     { S1, "Ctrl+Tab, Ctrl+Shift+Tab", "Next tab, previous tab", "", 0u, 0 },
     { S1, "Alt+F4",       "Exit", "", 0u, 0 },
     { S1, "Alt",          "Open the menu bar", "", 0u, 0 },
@@ -58,7 +58,7 @@ static const Shortcut TABLE[] = {
 
     /* 5. AI Assist panel */
     { S5, "Ctrl+Shift+Space", "Show or hide the panel",
-      "from the terminal, not from inside the panel", SC_AI | SC_MENU_ACCEL, IDM_VIEW_AI_CHAT },
+      "", SC_AI | SC_MENU_ACCEL, IDM_VIEW_AI_CHAT },
     { S5, "Enter",       "Send",
       "while a reply streams or commands run: stop them", SC_AI, 0 },
     { S5, "Shift+Enter", "New line", "", SC_AI, 0 },
@@ -77,9 +77,9 @@ static const Shortcut TABLE[] = {
       "list focused", SC_AI, 0 },
 
     /* 6. Window and help */
-    { S6, "F11",          "Fullscreen", "from the terminal",
+    { S6, "F11",          "Fullscreen", "",
       SC_MENU_ACCEL, IDM_VIEW_FULLSCREEN },
-    { S6, "Ctrl+Shift+M", "Mark an issue in the debug log", "from the terminal",
+    { S6, "Ctrl+Shift+M", "Mark an issue in the debug log", "",
       SC_MENU_ACCEL, IDM_HELP_MARK_ISSUE },
     { S6, "Esc, Enter",   "Close a dialog", "most dialogs", 0u, 0 },
     { S6, "Help > Keyboard Shortcuts", "This sheet", "", SC_MENU_PATH, 0 },

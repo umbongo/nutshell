@@ -160,3 +160,28 @@ int test_main_chords_are_in_the_shortcut_table(void)
     }
     TEST_END();
 }
+
+/* The editing keys of the AI input box and the list (Ctrl+A/C/V/X/Z, Ctrl and
+ * Ctrl+Shift with any letter or digit but the chord ones, the zoom keys) are
+ * never forwarded to the main window. */
+int test_main_chords_panel_editing_keys_stay_in_the_panel(void)
+{
+    TEST_BEGIN();
+    for (unsigned vk = 'A'; vk <= 'Z'; vk++) {
+        for (int shift = 0; shift <= 1; shift++) {
+            int chord_letter = shift && (vk == 'T' || vk == 'W' || vk == 'M');
+            MainChord c = main_chord_classify(vk, shift, 1, 0, 1);
+            ASSERT_EQ(main_chord_forwarded_from_panel(c), chord_letter ? 1 : 0);
+        }
+    }
+    for (unsigned vk = '1'; vk <= '9'; vk++)
+        ASSERT_EQ(main_chord_classify(vk, 0, 1, 0, 1), MCHORD_NONE);
+    ASSERT_EQ(main_chord_classify(0xBB /* VK_OEM_PLUS */, 0, 1, 0, 1), MCHORD_NONE);
+    ASSERT_EQ(main_chord_classify(0xBD /* VK_OEM_MINUS */, 0, 1, 0, 1), MCHORD_NONE);
+    /* Enter, Backspace, arrows: never chords, with Ctrl or without. */
+    static const unsigned keys[] = { 0x0D, 0x08, 0x25, 0x26, 0x27, 0x28, 0x2E, 0x1B };
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+        for (int ctrl = 0; ctrl <= 1; ctrl++)
+            ASSERT_EQ(main_chord_classify(keys[i], 0, ctrl, 0, 1), MCHORD_NONE);
+    TEST_END();
+}

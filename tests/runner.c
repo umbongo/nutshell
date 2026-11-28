@@ -1616,6 +1616,7 @@ int test_main_chords_tab_target_none_to_move_to(void);
 int test_main_chords_tab_target_bad_current(void);
 int test_main_chords_zoom_reset_sizes(void);
 int test_main_chords_are_in_the_shortcut_table(void);
+int test_main_chords_panel_editing_keys_stay_in_the_panel(void);
 
 /* test_snap.c */
 int test_snap_calc_exact_fit(void);
@@ -7138,6 +7139,7 @@ int main(void) {
     failed += test_main_chords_tab_target_bad_current();
     failed += test_main_chords_zoom_reset_sizes();
     failed += test_main_chords_are_in_the_shortcut_table();
+    failed += test_main_chords_panel_editing_keys_stay_in_the_panel();
 
     printf("\n--- Snap ---\n");
     failed += test_snap_calc_exact_fit();
