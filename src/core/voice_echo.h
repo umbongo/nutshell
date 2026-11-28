@@ -12,6 +12,7 @@
 #include <stddef.h>
 
 #define VOICE_ECHO_AFTER_MS     2000
+#define VOICE_ECHO_TURN_GRACE_MS 300   /* a turn that began this long after the speech ended is not its echo */
 #define VOICE_PHRASE_MAX_AGE_MS 300000
 
 /* 1 when `transcript` is an echo of `spoken`: it has at least 3 words and the
@@ -82,6 +83,8 @@ typedef struct {
                                   * cut (voice_trail_recent), or NULL */
     const char   *tail;          /* without cut_in, after the speech ended: the part of `spoken` said
                                   * in its final 1.5 s (voice_trail_heard at the end), or NULL */
+    unsigned long turn_at;       /* when the turn's audio began (the tail rule applies to a turn that
+                                  * began before spoken_end_at + VOICE_ECHO_TURN_GRACE_MS) */
 } VoiceReplyCtx;
 
 VoiceTurnClass voice_turn_classify(const char *transcript, const VoiceReplyCtx *r,

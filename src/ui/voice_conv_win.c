@@ -57,6 +57,8 @@ static VoiceCapture *g_turn_audio;          /* the finished turn's audio (fallba
 static int g_batch_want;                    /* SUBMIT_BATCH is waiting for the turn's audio */
 static int g_audio_lost;                    /* the turn's audio can no longer arrive (abandoned, no memory) */
 static int g_turn_open_listener;            /* the listener's turn is open (TURN_START seen, no end yet) */
+static unsigned long g_turn_began_at;       /* when the last listener turn's audio began (0: unknown) */
+#define TURN_START_LAG_MS 150ul             /* the listener reports a turn about this long after its voice began */
 static int g_err_note_done;                 /* a provider error or failure text was shown this turn */
 
 static unsigned g_since;                    /* the message count at the last send's baseline */
@@ -414,6 +416,7 @@ static VoiceTurnClass classify_text(const char *text)
         (void)voice_trail_heard(&g_trail, g_spoken, g_spoken_end_at, tail, sizeof tail);
         ctx.tail = tail;
     }
+    ctx.turn_at = g_turn_began_at ? g_turn_began_at : now_ms();
     cls = voice_turn_classify(text, &ctx, now_ms());
     secure_zero(recent, sizeof recent);
     secure_zero(tail, sizeof tail);
@@ -940,6 +943,8 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
             switch ((VoiceListenEvent)val) {
             case VLN_TURN_START:
                 g_turn_open_listener = 1;
+                g_turn_began_at = now_ms() - TURN_START_LAG_MS;
+                if (g_turn_began_at == 0) g_turn_began_at = 1;
                 voice_conv_event(VCE_TURN_START, 0, 0);
                 break;
             case VLN_TURN_END:

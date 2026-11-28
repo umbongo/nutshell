@@ -3793,6 +3793,7 @@ int test_vtrail_recent_text(void);
 int test_vtrail_wraps_and_resets(void);
 int test_vclass_tail_fragment_after_the_speech_ends(void);
 int test_vclass_tail_fragment_spares_commands(void);
+int test_vclass_tail_fragment_is_aimed_by_the_turn_start(void);
 int test_vtrail_heard_includes_the_start_and_a_second_of_lookahead(void);
 int test_vtrail_recent_across_the_tick_wrap(void);
 int test_vtrail_recent_keeps_the_tail_when_too_long(void);
@@ -8636,6 +8637,7 @@ int main(void) {
     failed += test_vtrail_wraps_and_resets();
     failed += test_vclass_tail_fragment_after_the_speech_ends();
     failed += test_vclass_tail_fragment_spares_commands();
+    failed += test_vclass_tail_fragment_is_aimed_by_the_turn_start();
     failed += test_vtrail_heard_includes_the_start_and_a_second_of_lookahead();
     failed += test_vtrail_recent_across_the_tick_wrap();
     failed += test_vtrail_recent_keeps_the_tail_when_too_long();

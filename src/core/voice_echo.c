@@ -359,8 +359,13 @@ VoiceTurnClass voice_turn_classify(const char *transcript, const VoiceReplyCtx *
         /* the conversation's own commands are never a fragment of the reply */
         if (voice_phrase_match(transcript) == VPH_NONE) {
             if (r->cut_in && voice_echo_fragment(r->recent, transcript)) return VTC_ECHO;
-            /* a piece of the reply's end heard right after it, though no cut-in began the turn */
-            if (!r->cut_in && !r->playing && (long)(now - r->spoken_end_at) <= VOICE_ECHO_AFTER_MS
+            /* a piece of the reply's end picked up as a turn as the speech finished, though no
+             * cut-in began it: the turn's audio began before the speech ended (plus a grace),
+             * however late its transcript arrives. A reply that asked something is answered, not
+             * echoed. */
+            if (!r->cut_in && !r->playing
+                && (long)(r->turn_at - r->spoken_end_at) < VOICE_ECHO_TURN_GRACE_MS
+                && !voice_speak_ends_with_question(r->spoken)
                 && voice_echo_tail(r->tail, transcript)) return VTC_ECHO;
         }
     }

@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+/* a statement that ends with the words "30 GB free" */
+static const char *STATEMENT = "I checked the machine. The C drive has 120 GB free and the D drive has 30 GB free.";
 static const char *REPLY =
     "I checked the machine. The C drive has 120 GB free and the D drive has 30 GB free. "
     "Everything else looks healthy. Shall I clean up the temp folder?";
@@ -488,7 +490,7 @@ int test_vclass_tail_fragment_after_the_speech_ends(void)
     TEST_BEGIN();
     VoiceReplyCtx r;
     memset(&r, 0, sizeof r);
-    r.spoken = REPLY;
+    r.spoken = STATEMENT;
     r.spoken_end_at = 10000;
     r.tail = "the D drive has 30 GB free";
     /* the last one or two words, within 2 s of the end: echo */
@@ -500,8 +502,10 @@ int test_vclass_tail_fragment_after_the_speech_ends(void)
     ASSERT_EQ(voice_turn_classify("free GB", &r, 11000), VTC_TEXT);
     ASSERT_EQ(voice_turn_classify("drive", &r, 11000), VTC_TEXT);
     ASSERT_EQ(voice_turn_classify("open the logs", &r, 11000), VTC_TEXT);
-    /* too late, or no tail known */
-    ASSERT_EQ(voice_turn_classify("GB free", &r, 12001), VTC_TEXT);
+    /* the transcript can arrive at any time: it is when the turn's audio began that counts */
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 12001), VTC_ECHO);
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 13000), VTC_ECHO);
+    /* no tail known */
     r.tail = NULL;
     ASSERT_EQ(voice_turn_classify("GB free", &r, 11000), VTC_TEXT);
     /* still playing and not a cut-in: not this rule's business */
@@ -526,5 +530,42 @@ int test_vclass_tail_fragment_spares_commands(void)
     ASSERT_EQ(voice_turn_classify("stop", &r, 11000), VTC_TEXT);           /* a barge-in word */
     r.tail = "this will hold on";
     ASSERT_EQ(voice_turn_classify("hold on", &r, 11000), VTC_TEXT);
+    TEST_END();
+}
+
+/* The rule is for a piece of the reply's end picked up as a turn just as the speech finishes: the
+ * turn's audio began before the speech ended (plus 300 ms), whenever the transcript arrives. */
+int test_vclass_tail_fragment_is_aimed_by_the_turn_start(void)
+{
+    TEST_BEGIN();
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.spoken = STATEMENT;
+    r.spoken_end_at = 10000;
+    r.tail = "the D drive has 30 GB free";
+    r.turn_at = 9800;                           /* began 200 ms before the end; transcript 3 s later */
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 13000), VTC_ECHO);
+    r.turn_at = 10200;                          /* 200 ms after the end, inside the 300 ms grace */
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 11500), VTC_ECHO);
+    r.turn_at = 10500;                          /* began 500 ms after the end: the user's own */
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 13000), VTC_TEXT);
+    ASSERT_EQ(voice_turn_classify("free", &r, 11500), VTC_TEXT);
+    /* a reply that asked a question: the answer is never the reply's own words */
+    r.turn_at = 9800;
+    r.spoken = "Do you want tabs or spaces?";
+    r.tail = "tabs or spaces";
+    ASSERT_EQ(voice_turn_classify("spaces", &r, 11000), VTC_TEXT);
+    r.spoken = "Do you want tabs or spaces? ";
+    ASSERT_EQ(voice_turn_classify("or spaces", &r, 11000), VTC_TEXT);
+    r.spoken = "You can pick tabs or spaces";
+    ASSERT_EQ(voice_turn_classify("spaces", &r, 11000), VTC_ECHO);
+    /* the commands and barge-in words are kept as before */
+    r.tail = "do you want to cancel or stop";
+    r.turn_at = 9800;
+    ASSERT_EQ(voice_turn_classify("stop", &r, 11000), VTC_TEXT);
+    r.reply = "Shall I clean up and carry on";
+    r.reply_at = 10000;
+    r.tail = "shall we stop or carry on";
+    ASSERT_EQ(voice_turn_classify("carry on", &r, 11000), VTC_CONTINUE);
     TEST_END();
 }
