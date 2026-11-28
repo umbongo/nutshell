@@ -125,7 +125,7 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 
 #### Text Selection and Clipboard
 
-- **Click and drag** on the terminal to select text. Dragging above or below the terminal scrolls the history and the selection follows, so a selection can be longer than the window; the wheel still scrolls while you drag. The selection is held in the history, not the window: scrolling with the wheel, the scrollbar or Page Up/Down keeps it
+- **Click and drag** on the terminal to select text. Dragging above or below the terminal scrolls the history and the selection follows, so a selection can be longer than the window; the wheel still scrolls while you drag. The selection is held in the history, not the window: scrolling with the wheel, the scrollbar or Page Up/Down keeps it. Hold Alt while dragging to select a rectangle; each row's slice is copied as its own line.
 - **Double-click** selects a word (a path or a simple URL is one word, even when it wraps onto the next row); **triple-click** selects the whole line. Dragging after either extends by whole words or lines
 - **Shift+click** or **middle-click** extends the selection to the pointer, moving the nearer end and keeping its word or line mode; a fourth rapid click starts over with a single cell (the click count cycles 1, 2, 3, 1, ...)
 - The highlight stays until the next plain left-click in the terminal, until the program writes over the selected text, or until a resize or a full-screen program (vim, less) replaces the screen. Each tab keeps its own selection

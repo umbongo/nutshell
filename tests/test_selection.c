@@ -1110,6 +1110,411 @@ int test_sel_extend_from_after_start_recycled(void)
     TEST_END();
 }
 
+/* ---- block (Alt+drag) selection ----------------------------------------- */
+
+/* An Alt drag from screen cell (r0,c0) to (r1,c1), released. */
+static bool bdrag(Selection *s, const Terminal *t, int r0, int c0, int r1, int c1)
+{
+    selection_begin_block(s, t, r0, c0, 0, 0);
+    selection_extend(s, t, r1, c1, 100, 100, 4, 4);
+    return selection_finish(s, t);
+}
+
+/* Four rows "ABCDEFGH" style: row i holds the letters from 'a'+i*... */
+static Terminal *block_term(void)
+{
+    Terminal *t = term_init(4, 10, 0);
+    feed(t, "0123456789\r\nabcdefghij\r\nKLMNOPQRST\r\nuvwxyzABCD");
+    return t;
+}
+
+static bool block_copy_is(const Selection *s, const Terminal *t, const char *want)
+{
+    char *txt = copy_str(s, t);
+    bool ok = strcmp(txt, want) == 0;
+    if (!ok) printf("  block copy: got \"%s\" want \"%s\"\n", txt, want);
+    free(txt);
+    return ok;
+}
+
+int test_sel_block_down_right(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 2, 2, 4));
+    ASSERT_TRUE(s.block);
+    ASSERT_TRUE(block_copy_is(&s, t, "234\r\ncde\r\nMNO"));
+    ASSERT_TRUE(selection_contains(&s, t, 1, 3));
+    ASSERT_TRUE(!selection_contains(&s, t, 1, 5));     /* a stream selection would hold it */
+    ASSERT_TRUE(!selection_contains(&s, t, 1, 1));
+    ASSERT_TRUE(!selection_contains(&s, t, 3, 3));
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_block_all_four_directions(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 2, 4, 0, 2));             /* up and left */
+    ASSERT_TRUE(block_copy_is(&s, t, "234\r\ncde\r\nMNO"));
+    ASSERT_TRUE(bdrag(&s, t, 0, 4, 2, 2));             /* down and left */
+    ASSERT_TRUE(block_copy_is(&s, t, "234\r\ncde\r\nMNO"));
+    ASSERT_TRUE(bdrag(&s, t, 2, 2, 0, 4));             /* up and right */
+    ASSERT_TRUE(block_copy_is(&s, t, "234\r\ncde\r\nMNO"));
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_block_one_row_and_one_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 1, 2, 1, 5));             /* one row */
+    ASSERT_TRUE(block_copy_is(&s, t, "cdef"));
+    ASSERT_TRUE(bdrag(&s, t, 0, 3, 3, 3));             /* one column, several rows */
+    ASSERT_TRUE(block_copy_is(&s, t, "3\r\nd\r\nN\r\nx"));
+    term_free(t);
+    TEST_END();
+}
+
+/* A press and release without movement is no selection, block or not. */
+int test_sel_block_click_selects_nothing(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    selection_begin_block(&s, t, 1, 3, 0, 0);
+    selection_extend(&s, t, 1, 3, 1, 1, 4, 4);         /* under the drag threshold */
+    ASSERT_TRUE(!selection_finish(&s, t));
+    ASSERT_TRUE(block_copy_is(&s, t, ""));
+    term_free(t);
+    TEST_END();
+}
+
+/* Rows shorter than the left edge give an empty line; trailing blanks go. */
+int test_sel_block_short_rows(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 0);
+    feed(t, "0123456789\r\nab\r\n\r\nabcdef  ");
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 4, 3, 7));
+    ASSERT_TRUE(block_copy_is(&s, t, "4567\r\n\r\n\r\nef"));
+    ASSERT_TRUE(bdrag(&s, t, 0, 1, 3, 8));             /* "ab" row reaches into col 1 only */
+    ASSERT_TRUE(block_copy_is(&s, t, "12345678\r\nb\r\n\r\nbcdef"));
+    term_free(t);
+    TEST_END();
+}
+
+/* Empty lines at the bottom are dropped, as in the stream copy. */
+int test_sel_block_trailing_empty_lines_dropped(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 0);
+    feed(t, "0123456789\r\nab");
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 5, 3, 8));
+    ASSERT_TRUE(block_copy_is(&s, t, "5678"));
+    ASSERT_TRUE(bdrag(&s, t, 1, 5, 3, 8));             /* only blanks */
+    ASSERT_TRUE(block_copy_is(&s, t, ""));
+    term_free(t);
+    TEST_END();
+}
+
+/* Cells hold one codepoint each: a wide character is one cell and is copied
+ * whole or not at all. A combining mark at the left edge (its base outside)
+ * is left out; one right after the right edge goes with its base. */
+int test_sel_block_wide_and_combining_edges(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 10, 0);
+    feed(t, "a\xe6\x97\xa5" "b\xe6\x9c\xac" "c\r\ne\xcc\x81" "xyz");
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 1, 0, 3));             /* wide, b, wide */
+    ASSERT_TRUE(block_copy_is(&s, t, "\xe6\x97\xa5" "b\xe6\x9c\xac"));
+    /* Row 1 is e, U+0301 (own cell), x, y, z. */
+    ASSERT_TRUE(bdrag(&s, t, 1, 0, 1, 0));             /* base alone: its mark follows */
+    ASSERT_TRUE(block_copy_is(&s, t, "e\xcc\x81"));
+    ASSERT_TRUE(bdrag(&s, t, 1, 1, 1, 3));             /* mark at the left edge: left out */
+    ASSERT_TRUE(block_copy_is(&s, t, "xy"));
+    term_free(t);
+    TEST_END();
+}
+
+/* Insert-character moves cells right without raising the row's len: the
+ * block copy must see what the highlight shows, as the stream copy does. */
+int test_sel_block_copy_past_row_len(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(2, 10, 0);
+    feed(t, "abc\r\x1b[5@");                           /* five blanks, then abc; len stays 3 */
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 4, 0, 9));
+    ASSERT_TRUE(block_copy_is(&s, t, " abc"));
+    /* After delete-character the row can be longer than len says, too. */
+    feed(t, "\x1b[2;1Hwxyz123456\x1b[2;1H\x1b[2P");     /* "yz123456" shifted left */
+    ASSERT_TRUE(bdrag(&s, t, 1, 0, 1, 7));
+    ASSERT_TRUE(block_copy_is(&s, t, "yz123456"));
+    term_free(t);
+    TEST_END();
+}
+
+/* Alt starts a block; Ctrl with it (Ctrl+Alt, or AltGr, which Windows reports
+ * as Ctrl+Alt) does not. */
+int test_sel_block_modifiers(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(selection_block_modifiers(true, false));
+    ASSERT_TRUE(!selection_block_modifiers(false, false));
+    ASSERT_TRUE(!selection_block_modifiers(true, true));      /* AltGr, Ctrl+Alt */
+    ASSERT_TRUE(!selection_block_modifiers(false, true));
+    TEST_END();
+}
+
+/* Alt+double-click is no longer a word selection: an Alt press always starts
+ * a block, whatever the click counter says, and a plain press keeps its count. */
+int test_sel_block_alt_double_click_is_not_a_word(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(selection_press_clicks(true, 1), 1);
+    ASSERT_EQ(selection_press_clicks(true, 2), 1);
+    ASSERT_EQ(selection_press_clicks(true, 3), 1);
+    ASSERT_EQ(selection_press_clicks(false, 2), 2);
+    ASSERT_EQ(selection_press_clicks(false, 3), 3);
+    /* Two quick Alt drags at one spot: the second begins a block again. */
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 2, 1, 4));
+    selection_begin_block(&s, t, 0, 2, 0, 0);
+    selection_extend(&s, t, 1, 4, 100, 100, 4, 4);
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_TRUE(s.block);
+    ASSERT_TRUE(block_copy_is(&s, t, "234\r\ncde"));
+    term_free(t);
+    TEST_END();
+}
+
+/* Across the scrollback and the screen. */
+int test_sel_block_across_scrollback(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 20);
+    feed_lines(t, 0, 12);                               /* L00..L11, view L08..L11 */
+    t->scrollback_offset = 6;                           /* view L02..L05 */
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 1, 1, 3, 2));              /* L03..L05, cols 1-2 */
+    t->scrollback_offset = 0;
+    (void)selection_sync(&s, t);
+    ASSERT_TRUE(s.valid);
+    ASSERT_TRUE(block_copy_is(&s, t, "03\r\n04\r\n05"));
+    ASSERT_TRUE(!selection_in_view(&s, t));
+    t->scrollback_offset = 6;
+    ASSERT_TRUE(selection_in_view(&s, t));
+    ASSERT_TRUE(selection_contains(&s, t, 1, 2));
+    ASSERT_TRUE(!selection_contains(&s, t, 1, 0));
+    term_free(t);
+    TEST_END();
+}
+
+/* Shift+click on a block keeps it a block: the nearest corner moves. */
+int test_sel_block_extend_keeps_block(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 2, 1, 4));              /* corners (0,2) and (1,4) */
+    selection_extend_from(&s, t, 3, 6, 0, 0);           /* past the end: bottom-right moves */
+    ASSERT_TRUE(s.block);
+    ASSERT_TRUE(block_copy_is(&s, t, "23456\r\ncdefg\r\nMNOPQ\r\nwxyzA"));
+    selection_extend(&s, t, 3, 7, 100, 100, 4, 4);      /* the drag is live: the anchor is (0,2) */
+    ASSERT_TRUE(block_copy_is(&s, t, "234567\r\ncdefgh\r\nMNOPQR\r\nwxyzAB"));
+    ASSERT_TRUE(selection_finish(&s, t));
+    selection_extend_from(&s, t, 0, 0, 0, 0);           /* before the start: top-left moves */
+    ASSERT_TRUE(s.block);
+    ASSERT_TRUE(block_copy_is(&s, t, "01234567\r\nabcdefgh\r\nKLMNOPQR\r\nuvwxyzAB"));
+    term_free(t);
+    TEST_END();
+}
+
+/* A plain click starts a stream selection again. */
+int test_sel_block_cleared_by_plain_click(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 2, 2, 4));
+    ASSERT_TRUE(s.block);
+    selection_begin(&s, t, 1, 3, 1, 0, 0);
+    ASSERT_TRUE(!s.block);
+    ASSERT_TRUE(!s.valid);
+    selection_extend(&s, t, 2, 4, 100, 100, 4, 4);
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_TRUE(block_copy_is(&s, t, "defghij\r\nKLMNO"));
+    term_free(t);
+    TEST_END();
+}
+
+/* Output that overwrites the rectangle clears it, as for a stream. */
+int test_sel_block_output_into_rectangle_clears(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 2, 1, 4));
+    feed(t, "\x1b[2;1Hzz");
+    ASSERT_TRUE(selection_sync(&s, t));
+    ASSERT_TRUE(!s.valid);
+    term_free(t);
+    TEST_END();
+}
+
+/* A recycled start trims the rows but not the columns. */
+int test_sel_block_recycle_keeps_columns(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);                  /* capacity 6 */
+    feed_lines(t, 0, 6);
+    t->scrollback_offset = 2;
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 1, 2, 2));              /* L00..L02, cols 1-2 */
+    feed(t, "\r\nL06");                                 /* recycles L00 */
+    t->scrollback_offset = 0;
+    ASSERT_TRUE(selection_sync(&s, t));
+    ASSERT_TRUE(s.valid);
+    ASSERT_EQ(s.start.col, 1);
+    ASSERT_EQ(s.end.col, 2);
+    ASSERT_TRUE(block_copy_is(&s, t, "01\r\n02"));
+    term_free(t);
+    TEST_END();
+}
+
+/* Shift+click near each corner of a block moves that corner; the opposite one
+ * becomes the anchor, and the result is still a block. */
+int test_sel_block_extend_nearest_corner(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    /* Rows 1-2, columns 3-6: corners (1,3) (1,6) (2,3) (2,6). */
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 0, 2, 0, 0);          /* near top-left */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 0); ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ((int)s.end.line, 2);   ASSERT_EQ(s.end.col, 6);
+    ASSERT_TRUE(selection_finish(&s, t));
+
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 0, 8, 0, 0);          /* near top-right */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 0); ASSERT_EQ(s.start.col, 3);
+    ASSERT_EQ((int)s.end.line, 2);   ASSERT_EQ(s.end.col, 8);
+    ASSERT_TRUE(selection_finish(&s, t));
+
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 3, 1, 0, 0);          /* near bottom-left */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 1); ASSERT_EQ(s.start.col, 1);
+    ASSERT_EQ((int)s.end.line, 3);   ASSERT_EQ(s.end.col, 6);
+    ASSERT_TRUE(selection_finish(&s, t));
+
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 3, 8, 0, 0);          /* near bottom-right */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 1); ASSERT_EQ(s.start.col, 3);
+    ASSERT_EQ((int)s.end.line, 3);   ASSERT_EQ(s.end.col, 8);
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_TRUE(block_copy_is(&s, t, "defghi\r\nNOPQRS\r\nxyzABC"));
+    term_free(t);
+    TEST_END();
+}
+
+/* A copy made while the drag is live, after the first rows were recycled and
+ * before any sync, skips the recycled rows and keeps the columns. */
+int test_sel_block_copy_skips_recycled_first_rows(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);                  /* capacity 6 */
+    feed_lines(t, 0, 6);
+    t->scrollback_offset = 2;
+    Selection s;
+    selection_begin_block(&s, t, 0, 1, 0, 0);           /* L00 .. L02, columns 1-2 */
+    selection_extend(&s, t, 2, 2, 100, 100, 4, 4);
+    feed(t, "\r\nL06");                                 /* recycles L00 */
+    ASSERT_TRUE(s.active);
+    ASSERT_TRUE(block_copy_is(&s, t, "01\r\n02"));
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_block_select_all_is_not_a_block(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 2, 1, 4));
+    selection_select_all(&s, t);
+    ASSERT_TRUE(!s.block);
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- the lone-Alt-tap decision ------------------------------------------ */
+
+int test_alt_tap_alone_opens_menu(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_key_down(&a, false);
+    ASSERT_TRUE(!alt_tap_key_up(&a));                   /* not swallowed: the menu opens */
+    TEST_END();
+}
+
+int test_alt_tap_mouse_press_swallows_release(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_key_down(&a, false);
+    alt_tap_key_down(&a, true);                         /* auto-repeat */
+    alt_tap_mouse_press(&a);
+    alt_tap_key_down(&a, true);                         /* repeat after the press */
+    ASSERT_TRUE(alt_tap_key_up(&a));
+    /* The next tap is a fresh one. */
+    alt_tap_key_down(&a, false);
+    ASSERT_TRUE(!alt_tap_key_up(&a));
+    TEST_END();
+}
+
+int test_alt_tap_focus_loss_forgets(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_key_down(&a, false);
+    alt_tap_mouse_press(&a);
+    alt_tap_reset(&a);                                  /* the key-up went elsewhere */
+    alt_tap_key_down(&a, false);
+    ASSERT_TRUE(!alt_tap_key_up(&a));
+    TEST_END();
+}
+
+/* A mouse press with Alt held before the window saw the key-down. */
+int test_alt_tap_press_without_seen_key_down(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_mouse_press(&a);
+    ASSERT_TRUE(alt_tap_key_up(&a));
+    ASSERT_TRUE(!alt_tap_key_up(&a));                   /* consumed once */
+    TEST_END();
+}
+
 /* ---- click cycling ------------------------------------------------------ */
 
 int test_sel_click_count_cycles_one_two_three(void)
@@ -1229,5 +1634,49 @@ int test_sel_word_blank_run_takes_no_mark_either_side(void)
     ASSERT_EQ(s.start.col, 2);
     ASSERT_EQ(s.end.col, 2);
     term_free(t);
+    TEST_END();
+}
+
+/* Ctrl+Alt (or AltGr): the Alt key-down and key-up are not system messages,
+ * so only a non-system key-up reset tells the state. After it a lone tap
+ * opens the menu again. */
+int test_alt_tap_reset_after_non_system_key_up(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_key_down(&a, false);
+    alt_tap_mouse_press(&a);                            /* Ctrl+Alt+click */
+    alt_tap_reset(&a);                                  /* WM_KEYUP of VK_MENU */
+    alt_tap_key_down(&a, false);
+    ASSERT_TRUE(!alt_tap_key_up(&a));
+    TEST_END();
+}
+
+/* A press whose Alt key-up never came: the next fresh Alt key-down (repeat
+ * bit clear) starts a new tap, whatever the state recorded. */
+int test_alt_tap_stale_press_does_not_swallow_next_tap(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_mouse_press(&a);                            /* no key-down was recorded */
+    alt_tap_key_down(&a, false);
+    ASSERT_TRUE(!alt_tap_key_up(&a));
+    TEST_END();
+}
+
+/* Alt already recorded down: a press swallows its release; a repeat does not
+ * clear that. */
+int test_alt_tap_press_with_alt_already_down(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_key_down(&a, false);
+    alt_tap_key_down(&a, true);
+    alt_tap_mouse_press(&a);
+    alt_tap_key_down(&a, true);
+    ASSERT_TRUE(alt_tap_key_up(&a));
     TEST_END();
 }
