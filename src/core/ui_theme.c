@@ -68,9 +68,10 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                         * 0x6BAAFF (L* 68.8) managed only 2.38:1 and was the
                         * brightest blue in the window. */
             0xEA6262, /* stop_btn — soft coral red */
-            0xA8D8B0, /* thinking_compact — pastel green, 11.70:1 on bg_primary */
-            0xD2B48C, /* thinking_collapsed — pastel brown, 9.50:1 */
-            0xB8BCC4, /* thinking_open — pastel grey, 9.84:1 */
+            0x7091C3, /* thinking_compact — link toward white, 5.82:1 on bg_primary */
+            0x818181, /* thinking_collapsed — text_dim eased toward bg, 4.81:1 (quietest) */
+            0xC4AE5E, /* thinking_open — warning toward white, 8.53:1 (strongest) */
+            0x68AE79, /* thinking_extended — success toward white, 7.06:1 */
         },
     },
     {
@@ -105,9 +106,10 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                                            * bg_primary (9.19, 6.73, 4.73) */
             0x6C90BD, /* send_btn — a muted steel blue (L* 59), near the accent's hue */
             0xBF7D7D, /* stop_btn — rose pink */
-            0x2A7A3F, /* thinking_compact — deep green, 4.88:1 on bg_primary */
-            0x8A5A24, /* thinking_collapsed — deep brown, 5.40:1 */
-            0x5E6470, /* thinking_open — slate grey, 5.46:1 */
+            0x2D62B2, /* thinking_compact — link toward text_main, 5.51:1 on bg_primary */
+            0x6D6D72, /* thinking_collapsed — text_dim eased toward bg, 4.73:1 (quietest) */
+            0x684D0E, /* thinking_open — warning toward text_main, 7.26:1 (strongest) */
+            0x1C6832, /* thinking_extended — success toward text_main, 6.27:1 */
         },
     },
     {
@@ -138,9 +140,10 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
             0x8FBC6A, 0xD4AA4A, 0xD08375,
             0x7E91A2, /* send_btn — dusty steel blue */
             0xC4756B, /* stop_btn — earthy terracotta */
-            0xA8D8B0, /* thinking_compact — pastel green, 8.72:1 on bg_primary */
-            0xD2B48C, /* thinking_collapsed — pastel brown, 7.08:1 */
-            0xB8BCC4, /* thinking_open — pastel grey, 7.33:1 */
+            0xB4A1C1, /* thinking_compact — info toward white, 5.86:1 on bg_primary */
+            0x979790, /* thinking_collapsed — text_dim eased toward bg, 4.75:1 (quietest) */
+            0xDBC99F, /* thinking_open — warning toward white, 8.56:1 (strongest) */
+            0xADBDA0, /* thinking_extended — success toward white, 7.03:1 */
         },
     },
     {
@@ -179,9 +182,10 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                                            * bg_primary */
             0x78929E, /* send_btn — misty blue */
             0xBC7F7A, /* stop_btn — dusty rose */
-            0x2A7A3F, /* thinking_compact — deep green, 4.76:1 on bg_primary */
-            0x8A5A24, /* thinking_collapsed — deep brown, 5.27:1 */
-            0x5E6470, /* thinking_open — slate grey, 5.33:1 */
+            0x72568F, /* thinking_compact — info toward black, 5.47:1 on bg_primary */
+            0x5A6E70, /* thinking_collapsed — text_dim eased toward bg, 4.83:1 (quietest) */
+            0x684B06, /* thinking_open — warning toward black, 7.24:1 (strongest) */
+            0x21653F, /* thinking_extended — success toward black, 6.28:1 */
         },
     },
 };

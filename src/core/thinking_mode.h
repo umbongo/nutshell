@@ -62,7 +62,7 @@ int think_compact_offset(int full_h, int vis_h);
  * NULL gives 0. */
 size_t think_trimmed_len(const char *s, size_t len);
 
-/* The label colour for the mode (compact and extended green, collapsed brown, open grey).
+/* The label colour for the mode (each of the four modes has its own token; collapsed is the quietest, open the strongest).
  * An out of range mode picks the collapsed one. */
 unsigned int think_mode_label_colour(const ThemeChatColors *chat, ThinkMode m);
 

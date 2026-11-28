@@ -79,8 +79,8 @@ int think_compact_offset(int full_h, int vis_h)
 unsigned int think_mode_label_colour(const ThemeChatColors *chat, ThinkMode m)
 {
     switch (m) {
-    case THINK_MODE_COMPACT:
-    case THINK_MODE_EXTENDED: return chat->thinking_compact;
+    case THINK_MODE_COMPACT: return chat->thinking_compact;
+    case THINK_MODE_EXTENDED: return chat->thinking_extended;
     case THINK_MODE_OPEN:    return chat->thinking_open;
     default:                 return chat->thinking_collapsed;
     }

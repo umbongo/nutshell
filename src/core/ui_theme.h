@@ -26,9 +26,10 @@ typedef struct {
     unsigned int indicator_red;      /* Stalled activity dot */
     unsigned int send_btn;           /* Send button background (pastel blue) */
     unsigned int stop_btn;           /* Stop button background (pastel red) */
-    unsigned int thinking_compact;   /* Thinking label, compact mode (pastel green); text on bg_primary */
-    unsigned int thinking_collapsed; /* Thinking label, collapsed mode (pastel brown) */
-    unsigned int thinking_open;      /* Thinking label, open mode (pastel grey) */
+    unsigned int thinking_compact;   /* Thinking label, compact mode (pastel blue or lilac); text on bg_primary */
+    unsigned int thinking_collapsed; /* Thinking label, collapsed mode (the quietest: a dim grey) */
+    unsigned int thinking_open;      /* Thinking label, open mode (pastel amber, the strongest) */
+    unsigned int thinking_extended;  /* Thinking label, extended mode (pastel green) */
 } ThemeChatColors;
 
 /* Explicit per-theme overrides for a handful of derived tokens.  0 means

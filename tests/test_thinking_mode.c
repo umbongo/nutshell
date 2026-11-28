@@ -2,6 +2,8 @@
 #include "test_framework.h"
 #include "thinking_mode.h"
 #include "ui_theme.h"
+#include "theme.h"
+#include <math.h>
 #include <string.h>
 
 int test_thinking_mode_next_cycle(void)
@@ -115,11 +117,12 @@ int test_thinking_label_colour(void)
     c.thinking_compact   = 0x111111;
     c.thinking_collapsed = 0x222222;
     c.thinking_open      = 0x333333;
+    c.thinking_extended  = 0x444444;
     ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_COMPACT), 0x111111u);
     ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_COLLAPSED), 0x222222u);
     ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_OPEN), 0x333333u);
-    /* Extended shares the compact colour (no token of its own) */
-    ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_EXTENDED), 0x111111u);
+    /* Extended has a token of its own */
+    ASSERT_EQ(think_mode_label_colour(&c, THINK_MODE_EXTENDED), 0x444444u);
     ASSERT_EQ(think_mode_label_colour(&c, (ThinkMode)-3), 0x222222u);
     ASSERT_EQ(think_mode_label_colour(&c, (ThinkMode)50), 0x222222u);
     TEST_END();
@@ -137,18 +140,47 @@ int test_thinking_follows_tail(void)
     TEST_END();
 }
 
-/* Every theme sets all three label colours, and they differ. */
+/* Smallest RGB distance (Euclidean, 0..255 per channel) between any two of the
+ * four mode colours on one theme. */
+#define THINK_MIN_MODE_DIST 40.0
+
+static double think_rgb_dist(unsigned int a, unsigned int b)
+{
+    double s = 0.0;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        double d = (double)((a >> sh) & 0xFFu) - (double)((b >> sh) & 0xFFu);
+        s += d * d;
+    }
+    return sqrt(s);
+}
+
+/* Every theme gives each of the four modes its own colour: pairwise at least
+ * THINK_MIN_MODE_DIST apart, each readable (WCAG 4.5:1) on the chat surface
+ * the label is drawn on (bg_primary), and the strength rises with the mode:
+ * collapsed is the quietest, open the strongest (contrast on that surface). */
 int test_thinking_theme_tokens_distinct(void)
 {
     TEST_BEGIN();
+    static const ThinkMode order[4] = {
+        THINK_MODE_COLLAPSED, THINK_MODE_COMPACT,
+        THINK_MODE_EXTENDED, THINK_MODE_OPEN
+    };
     for (int i = 0; i < NUM_UI_THEMES; i++) {
-        const ThemeChatColors *c = &ui_theme_get(i)->chat;
-        ASSERT_TRUE(c->thinking_compact != 0);
-        ASSERT_TRUE(c->thinking_collapsed != 0);
-        ASSERT_TRUE(c->thinking_open != 0);
-        ASSERT_TRUE(c->thinking_compact != c->thinking_collapsed);
-        ASSERT_TRUE(c->thinking_compact != c->thinking_open);
-        ASSERT_TRUE(c->thinking_collapsed != c->thinking_open);
+        const ThemeColors *t = ui_theme_get(i);
+        unsigned int col[4];
+        double prev = 0.0;
+        for (int k = 0; k < 4; k++) {
+            col[k] = think_mode_label_colour(&t->chat, order[k]);
+            ASSERT_TRUE(col[k] != 0);
+            const double r = theme_contrast(col[k], t->bg_primary);
+            ASSERT_TRUE(r >= 4.5);
+            ASSERT_TRUE(r > prev);   /* strictly stronger with each mode */
+            prev = r;
+        }
+        for (int a = 0; a < 4; a++)
+            for (int b = a + 1; b < 4; b++)
+                ASSERT_TRUE(think_rgb_dist(col[a], col[b]) >=
+                            THINK_MIN_MODE_DIST);
     }
     TEST_END();
 }
