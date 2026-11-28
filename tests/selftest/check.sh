@@ -1,5 +1,5 @@
 #!/bin/sh
-# check.sh <off|voiceoff|on|conv|sapi|ai> <report-file>
+# check.sh <off|voiceoff|on|conv|sapi|ai|dictai> <report-file>
 # Asserts on the report nutshell.exe --self-report wrote. AI off: nothing of
 # the assistant was requested from Windows (winhttp.dll, riched20.dll and
 # msftedit.dll) and no `module: winhttp.dll` is loaded. AI on (the control):
@@ -17,6 +17,9 @@
 # "ai" (Conversation, AI speech configured, nothing spoken yet) requests
 # winhttp, riched20, msftedit and mmdevapi (mapped), never sapi/wtsapi32, and
 # opens no render client and no speech request: `voice-resources: 0`.
+# "dictai" (Dictation, Voice on, AI speech configured, nothing pressed: the Read
+# aloud button has created no speech context, `voice-speech-contexts: 0`, and
+# requested neither sapi nor wtsapi32).
 # Every mode: the report has a `voice-net-opens: N` line and N is 0 (all three are
 # idle launches).
 mode=$1
@@ -45,6 +48,13 @@ if ! grep -qx 'voice-resources: [0-9][0-9]*' "$report"; then
     echo "FAIL ($mode): no 'voice-resources: N' line"; rc=1
 elif [ "$mode" != sapi ] && ! grep -qx 'voice-resources: 0' "$report"; then
     echo "FAIL ($mode): an idle launch holds a voice resource: $(grep '^voice-resources: ' "$report")"; rc=1
+fi
+# the speech contexts held (Windows voice plus AI speech): every mode but the
+# sapi control (which holds an SpVoice itself, not a context) holds none
+if ! grep -qx 'voice-speech-contexts: [0-9][0-9]*' "$report"; then
+    echo "FAIL ($mode): no 'voice-speech-contexts: N' line"; rc=1
+elif [ "$mode" != sapi ] && ! grep -qx 'voice-speech-contexts: 0' "$report"; then
+    echo "FAIL ($mode): a speech context exists before any speech was asked for: $(grep '^voice-speech-contexts: ' "$report")"; rc=1
 fi
 case $mode in
 off)
@@ -91,6 +101,13 @@ ai)
     mod mmdevapi.dll || { echo "FAIL (ai): mmdevapi.dll is not a loaded module"; rc=1; }
     no_speech ai
     ;;
+dictai)
+    for d in winhttp.dll riched20.dll msftedit.dll mmdevapi.dll; do
+        req "$d" || { echo "FAIL (dictai): $d was not requested"; rc=1; }
+    done
+    mod mmdevapi.dll || { echo "FAIL (dictai): mmdevapi.dll is not a loaded module"; rc=1; }
+    no_speech dictai
+    ;;
 sapi)
     unavailable=0
     grep -qx 'sapi-control: unavailable' "$report" && unavailable=1
@@ -108,7 +125,7 @@ sapi)
         echo "note (sapi): sapi-control: unavailable (this Wine has a partial SAPI: SpVoice is created but SetInterest/SetNotifyWin32Event fail); the DLL lines were asserted"
     fi
     ;;
-*) echo "usage: check.sh off|voiceoff|on|conv|sapi|ai report"; exit 2 ;;
+*) echo "usage: check.sh off|voiceoff|on|conv|sapi|ai|dictai report"; exit 2 ;;
 esac
 [ $rc -eq 0 ] && echo "PASS ($mode): $(grep -ci '^requested: ' "$report") requested, $(grep -ci '^module: ' "$report") modules"
 exit $rc

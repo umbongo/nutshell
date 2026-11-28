@@ -18,6 +18,8 @@
 #include "dll_record.h"
 #include "voice_net_win.h"
 #include "voice_ledger.h"
+#include "voice_tts_win.h"
+#include "voice_aispeech_win.h"
 
 static FARPROC WINAPI ns_dli_hook(unsigned notify, PDelayLoadInfo info)
 {
@@ -67,6 +69,11 @@ int ns_self_report_write(const char *path, int sapi_state)
     long voice_res = 0;
     for (int r = 0; r < (int)VRES_COUNT; r++) voice_res += voice_ledger_count((VoiceRes)r);
     extra = snprintf(text + len, sizeof(text) - len, "voice-resources: %ld\n", voice_res);
+    if (extra > 0 && (size_t)extra < sizeof(text) - len) len += (size_t)extra;
+    /* Speech contexts held (Windows voice plus AI speech): nothing is created
+     * before a Read aloud press or a spoken reply, so an idle launch shows 0. */
+    extra = snprintf(text + len, sizeof(text) - len, "voice-speech-contexts: %d\n",
+                     voice_tts_running() + voice_ais_running());
     if (extra > 0 && (size_t)extra < sizeof(text) - len) len += (size_t)extra;
     /* --self-report-sapi's control: -1 not asked (no line), 0 or 1 */
     if (sapi_state >= 0) {

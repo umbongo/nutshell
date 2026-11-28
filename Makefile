@@ -491,7 +491,8 @@ endif
 # msftedit.dll and winhttp.dll (one session opened and closed) must have
 # been. Three runs: off (AI off, voice ticked in the file: the dependency keeps
 # it off, so no mmdevapi.dll), voiceoff (AI on, voice off) and on (both on:
-# mmdevapi.dll must have been requested). Uses $(TARGET) as it stands: a UPX-packed exe
+# mmdevapi.dll must have been requested), plus conv, sapi, ai and dictai (Dictation,
+# AI speech configured, nothing pressed: no speech context, no sapi.dll). Uses $(TARGET) as it stands: a UPX-packed exe
 # (make release) works as well as an unpacked one. A private Wine prefix
 # keeps the shared ~/.wine untouched; the first run takes a minute.
 SELFTEST_DIR    = build/selftest
@@ -502,7 +503,7 @@ selftest-wine: $(TARGET)
 		echo "[skip] selftest-wine needs wine and xvfb-run"; \
 	else \
 		set -e; \
-		for m in off voiceoff on conv sapi ai; do \
+		for m in off voiceoff on conv sapi ai dictai; do \
 			rm -rf $(SELFTEST_DIR)/$$m; mkdir -p $(SELFTEST_DIR)/$$m; \
 			cp $(TARGET) $(SELFTEST_DIR)/$$m/nutshell.exe; \
 			case $$m in \
@@ -513,6 +514,9 @@ selftest-wine: $(TARGET)
 			on) cp tests/selftest/nutshell-voice-on.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			conv|sapi) cp tests/selftest/nutshell-voice-conv.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
 			ai) cp tests/selftest/nutshell-voice-ai.config $(SELFTEST_DIR)/$$m/nutshell.config ;; \
+			dictai) sed 's/"voice_mode": "conversation"/"voice_mode": "dictation"/' tests/selftest/nutshell-voice-ai.config > $(SELFTEST_DIR)/$$m/nutshell.config; \
+				grep -q '"voice_mode": "dictation"' $(SELFTEST_DIR)/$$m/nutshell.config \
+					|| { echo "FAIL: the dictai config is not Dictation (the sed matched nothing)"; exit 1; } ;; \
 			esac; \
 			extra=; [ $$m = sapi ] && extra=--self-report-sapi; \
 			( cd $(SELFTEST_DIR)/$$m && WINEPREFIX=$(SELFTEST_PREFIX) WINEDEBUG=-all \
