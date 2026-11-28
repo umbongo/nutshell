@@ -1106,9 +1106,6 @@ Open, in priority order:
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
 - [ ] CI review follow-ups (2026-09-10 review; the libssh2 part was done 2026-09-24):
-      `tests/integration/Install-IntegrationRunner.ps1` still exists for the runner
-      decommissioned on 2026-09-15 and names the removed `integration.yml`; deleting it is
-      the maintainer's call;
       `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
       `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
