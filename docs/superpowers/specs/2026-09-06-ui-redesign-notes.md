@@ -983,14 +983,18 @@ Open, in priority order:
       status dot's size written twice, the rounds note's spare row, two "web_fetch is off"
       rows in one round). From PR #88: NX-OS and ASA `do CMD` should use their own tables; a
       sensitive row in `--ui-demo`; blank class reasons (`sh -c: `).
-- [ ] Terminal escapes (PR #94's nano work): CSI I, HTS and TBC unhandled; `term_put_char`
-      auto-wrap inside a scroll region; entering the alternate screen resets the primary's
-      scroll region (*reported*); replay vim, htop, mc and less against tmux as nano was.
-- [ ] Terminal attributes (found 2026-11-12 while checking this list): the parser keeps SGR
-      underline and blink (`TERM_ATTR_UNDERLINE`, `TERM_ATTR_BLINK`) but `renderer.c` draws
-      neither, though the in-app guide lists both styles; the OSC 0/2 window title is parsed
-      into `term->title` and nothing reads it, so it is never shown (a tab title or the
-      window caption could).
+- [ ] Terminal escapes (PR #94's nano work): replay vim, htop, mc and less against tmux as
+      nano was. Since v1.3.3 the tab stops (HT, CHT `CSI I`, CBT `CSI Z`, HTS, TBC), auto-wrap
+      inside a scroll region and the alternate screen keeping the primary's scroll region are
+      done. Left: `ESC c` (RIS) resets only the tab stops; a full reset also clears the
+      screen, the attributes, the modes, the scroll region and the cursor.
+- [ ] Terminal attributes (found 2026-11-12 while checking this list): underline is drawn
+      since v1.3.3 (Windows hand check not run: `printf '\033[4munderlined\033[0m plain\n'`
+      at 100 % and 150 % scaling, on a line with a missing glyph too, and a line under
+      bold and under reverse video). Blink (`TERM_ATTR_BLINK`) is parsed and not drawn,
+      though the in-app guide lists it; the OSC 0/2 window title is parsed into
+      `term->title` and nothing reads it, so it is never shown (a tab title or the window
+      caption could).
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
