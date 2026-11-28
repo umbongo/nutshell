@@ -147,3 +147,49 @@ int test_app_font_zoom_full_range_down(void) {
     sz = app_font_zoom(sz, -1);  ASSERT_EQ(sz, 6); /* clamped */
     TEST_END();
 }
+
+/* ---- app_font_px_height: a point size at a DPI (CreateFont's negative
+ * character height), the arithmetic the AI panel redoes on a monitor move ---- */
+
+int test_app_font_px_height_known_values(void) {
+    TEST_BEGIN();
+    /* MulDiv(pt, dpi, 72), negated: rounded to the nearest pixel. */
+    ASSERT_EQ(app_font_px_height(10, 96), -13);    /* 13.33 */
+    ASSERT_EQ(app_font_px_height(8, 96), -11);     /* 10.67 */
+    ASSERT_EQ(app_font_px_height(10, 120), -17);   /* 16.67 */
+    ASSERT_EQ(app_font_px_height(14, 144), -28);   /* exact */
+    ASSERT_EQ(app_font_px_height(20, 192), -53);   /* 53.33 */
+    ASSERT_EQ(app_font_px_height(6, 96), -8);      /* exact */
+    ASSERT_EQ(app_font_px_height(9, 100), -13);    /* 12.5 rounds up */
+    TEST_END();
+}
+
+int test_app_font_px_height_bad_input(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(app_font_px_height(0, 96), 0);
+    ASSERT_EQ(app_font_px_height(-4, 96), 0);
+    ASSERT_EQ(app_font_px_height(10, 0), app_font_px_height(10, 96));   /* dpi <= 0 is 96 */
+    ASSERT_EQ(app_font_px_height(10, -5), app_font_px_height(10, 96));
+    TEST_END();
+}
+
+int test_app_font_px_height_grows_with_dpi_and_zoom(void) {
+    TEST_BEGIN();
+    static const int dpis[] = { 96, 120, 144, 192 };
+    for (int s = 0; s < APP_FONT_NUM_SIZES; s++) {
+        int prev = 0;
+        for (int i = 0; i < 4; i++) {
+            int h = app_font_px_height(k_app_font_sizes[s], dpis[i]);
+            ASSERT_TRUE(h < 0);                 /* character height: negative */
+            ASSERT_TRUE(h <= prev);             /* never smaller at a higher DPI */
+            prev = h;
+        }
+    }
+    /* The user's zoom survives a DPI change: the same point size on both
+     * monitors, so the zoom step keeps ordering the heights. */
+    for (int i = 0; i < 4; i++)
+        for (int s = 1; s < APP_FONT_NUM_SIZES; s++)
+            ASSERT_TRUE(app_font_px_height(k_app_font_sizes[s], dpis[i]) <
+                        app_font_px_height(k_app_font_sizes[s - 1], dpis[i]));
+    TEST_END();
+}

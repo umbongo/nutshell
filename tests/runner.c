@@ -2231,6 +2231,9 @@ int test_app_font_zoom_ui_size_is_in_table(void);
 int test_app_font_zoom_full_range_up(void);
 int test_app_font_zoom_preserves_size_after_roundtrip(void);
 int test_app_font_zoom_full_range_down(void);
+int test_app_font_px_height_known_values(void);
+int test_app_font_px_height_bad_input(void);
+int test_app_font_px_height_grows_with_dpi_and_zoom(void);
 
 /* test_selection.c */
 int test_sel_pixel_to_cell_basic(void);
@@ -7278,6 +7281,9 @@ int main(void) {
     failed += test_app_font_zoom_full_range_up();
     failed += test_app_font_zoom_preserves_size_after_roundtrip();
     failed += test_app_font_zoom_full_range_down();
+    failed += test_app_font_px_height_known_values();
+    failed += test_app_font_px_height_bad_input();
+    failed += test_app_font_px_height_grows_with_dpi_and_zoom();
 
     printf("\n--- Selection ---\n");
     failed += test_sel_pixel_to_cell_basic();

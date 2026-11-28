@@ -50,6 +50,14 @@ int app_font_snap_size(int raw_size)
     return best;
 }
 
+int app_font_px_height(int pt, int dpi)
+{
+    if (pt <= 0) return 0;
+    if (dpi <= 0) dpi = 96;
+    long long px = ((long long)pt * dpi + 36) / 72;   /* MulDiv's rounding */
+    return -(int)px;
+}
+
 int app_font_zoom(int current_size, int delta)
 {
     /* Find the index of the largest allowed size <= current_size. */

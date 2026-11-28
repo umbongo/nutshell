@@ -626,4 +626,77 @@ void ai_chat_apply_zoom(AiChatData *d, int delta)
     }
 }
 
+/* The panel moved to a monitor with another scale (WM_DPICHANGED, or the main
+ * window telling it so): take the new DPI, re-fetch the cached UI fonts, and
+ * rebuild the fonts the panel owns -- the small bold font and the three
+ * zoomable chat fonts -- from the same point sizes, so the user's zoom level
+ * is kept. The old handles are deleted once nothing uses them. Then lay out
+ * again: paint, hit-testing and the tooltip rects all read d->dpi. */
+void ai_chat_apply_dpi(AiChatData *d, int dpi)
+{
+    if (!d) return;
+    if (dpi <= 0) dpi = 96;
+    d->dpi = dpi;
+
+    d->hFont = ns_font(FONT_BODY, dpi);
+    if (d->hSessionLabel)
+        SendMessage(d->hSessionLabel, WM_SETFONT,
+                    (WPARAM)ns_font(FONT_TITLE, dpi), TRUE);
+
+    HFONT old_small = d->hSmallFont;
+    d->hSmallFont = CreateFont(app_font_px_height(8, dpi), 0, 0, 0, FW_BOLD,
+                               FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                               OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                               CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                               "Segoe UI");
+
+    HFONT old_chat = d->hChatFont, old_bold = d->hBoldFont, old_mono = d->hMonoFont;
+    if (d->hChatList) {
+        int h = app_font_px_height(d->ui_font_size, dpi);
+        d->hChatFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                  CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+        d->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                  CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+        d->hMonoFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                  CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  FIXED_PITCH | FF_MODERN,
+                                  d->ai_font_name[0] ? d->ai_font_name : "Consolas");
+        chat_listview_set_fonts(d->hChatList,
+                                d->hChatFont ? d->hChatFont : d->hFont,
+                                d->hMonoFont, d->hBoldFont, d->hSmallFont);
+        chat_listview_relayout(d->hChatList);
+    }
+
+    /* The input box follows the chat font (as at creation and in zoom). */
+    HFONT in_font = d->hChatFont ? d->hChatFont : d->hFont;
+    if (d->hInput && in_font) {
+        SendMessage(d->hInput, WM_SETFONT, (WPARAM)in_font, TRUE);
+        HDC hdc_m = GetDC(d->hInput);
+        if (hdc_m) {
+            HGDIOBJ old_m = SelectObject(hdc_m, (HGDIOBJ)in_font);
+            TEXTMETRIC tm_m;
+            GetTextMetrics(hdc_m, &tm_m);
+            d->display_line_h = tm_m.tmHeight + tm_m.tmExternalLeading;
+            d->input_line_h = d->display_line_h;
+            SelectObject(hdc_m, old_m);
+            ReleaseDC(d->hInput, hdc_m);
+        }
+    }
+
+    /* Nothing refers to the old handles any more. */
+    if (old_small && old_small != d->hSmallFont) DeleteObject(old_small);
+    if (old_chat && old_chat != d->hChatFont) DeleteObject(old_chat);
+    if (old_bold && old_bold != d->hBoldFont) DeleteObject(old_bold);
+    if (old_mono && old_mono != d->hMonoFont) DeleteObject(old_mono);
+
+    ai_chat_relayout(d);
+    ai_chat_input_sync_scroll(d);
+    if (d->hwnd) InvalidateRect(d->hwnd, NULL, TRUE);
+}
+
 #endif /* _WIN32 */
