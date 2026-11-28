@@ -2566,10 +2566,12 @@ static void create_demo_session(HWND hwnd)
     ai_feature_on(hwnd);
 
     const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
-    /* The three voice states show voice as on, again without touching
-     * Settings: the gate's override only. Nothing starts the audio thread,
-     * COM or the push-to-talk filter (voice_feature_apply is not called). */
-    if (strncmp(state, "voice-", 6) == 0 || strcmp(state, "settings-voice") == 0)
+    /* "voice-recording", "voice-transcribing" and "settings-voice" show voice
+     * as on, again without touching Settings: the gate's override only.
+     * Nothing starts the audio thread, COM or the push-to-talk filter
+     * (voice_feature_apply is not called). "voice-read-aloud" sets its view
+     * directly and needs no override. */
+    if (ui_demo_is_voice_input_state(state) || strcmp(state, "settings-voice") == 0)
         voice_gate_set_demo_override(1);
     int demo_local = (strcmp(state, "local") == 0);
 

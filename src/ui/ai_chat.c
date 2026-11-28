@@ -3078,9 +3078,10 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         if (strcmp(state, "empty") == 0) forced = AI_STATE_EMPTY;
         else if (strcmp(state, "nokey") == 0) forced = AI_STATE_NO_KEY;
         else if (strcmp(state, "nosession") == 0) forced = AI_STATE_NO_SESSION;
-        /* The voice states show the "Ask about this session" empty state, so
-         * the voice hint under it is on screen next to the mic button. */
-        else if (strncmp(state, "voice-", 6) == 0) forced = AI_STATE_EMPTY;
+        /* "voice-recording" and "voice-transcribing" show the "Ask about this
+         * session" empty state, so the voice hint under it is on screen next
+         * to the mic button. */
+        else if (ui_demo_is_voice_input_state(state)) forced = AI_STATE_EMPTY;
     }
     ai_chat_force_state(hwnd, forced);
 

@@ -110,6 +110,12 @@ void ui_demo_run_log(const char *state, CmdRunLog *log, const AiConversation *co
  * NULL). */
 int ui_demo_state_valid(const char *state);
 
+/* 1 for "voice-recording" and "voice-transcribing", the demo states that put
+ * the mic button in a look over the empty-state panel (window.c opens the
+ * voice gate's demo override for them, ai_chat.c forces the empty state); 0
+ * for every other state, "voice-read-aloud" and NULL included. */
+int ui_demo_is_voice_input_state(const char *state);
+
 /* 1 if `state`'s canned reply is long enough that the AI chat panel's
  * initial scroll-to-bottom would push the Thinking disclosure off the top
  * of the thread, so ai_chat_apply_demo_extras() (src/ui/ai_chat.c) should

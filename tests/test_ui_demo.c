@@ -37,7 +37,8 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
  * "cmddetail", "settings-debug", "policy-auto", "policy-compact" and "ansi"
  * reuse or swap content too, and "shortcuts" (2026-10-20) opens the modal
  * keyboard shortcuts sheet. None of those is part of "all"; nor are
- * "voice-recording", "voice-transcribing" and "settings-voice". */
+ * "voice-recording", "voice-transcribing", "voice-read-aloud" and
+ * "settings-voice". */
 int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
@@ -681,17 +682,52 @@ int test_ui_demo_voice_read_aloud(void)
     TEST_BEGIN();
     AiConversation conv;
     ApprovalQueue a1, a2;
+    memset(&conv, 0, sizeof(conv));
     ASSERT_EQ(ui_demo_state_valid("voice-read-aloud"), 1);
     ASSERT_EQ(ui_demo_scrolls_to_top("voice-read-aloud"), 0);
-    ASSERT_EQ(ui_demo_build("voice-read-aloud", &conv, &a1, &a2, NULL, 0), 0);
-    ASSERT_EQ(conv.msg_count, 7);          /* system; chat's user + reply; tool's four */
-    ASSERT_EQ(a1.count, 0);
-    ChatMsgList l;
-    chat_msg_list_init(&l);
-    chat_rebuild_replay(&l, &conv, NULL, NULL, NULL);
-    ASSERT_EQ(chat_turn_refresh(&l, 1, 0), 2);   /* one button per turn */
-    chat_msg_list_clear(&l);
-    ai_conv_reset(&conv);
+    int rc = ui_demo_build("voice-read-aloud", &conv, &a1, &a2, NULL, 0);
+    ASSERT_EQ(rc, 0);
+    if (rc == 0) {
+        ASSERT_EQ(conv.msg_count, 7);      /* system; chat's user + reply; tool's four */
+        ASSERT_EQ(a1.count, 0);
+        ChatMsgList l;
+        chat_msg_list_init(&l);
+        chat_rebuild_replay(&l, &conv, NULL, NULL, NULL);
+        ASSERT_EQ(chat_turn_refresh(&l, 1, 0), 2);   /* one button per turn */
+        const ChatMsgItem *first_btn = NULL, *last_btn = NULL, *first_ai = NULL;
+        int buttons = 0;
+        for (const ChatMsgItem *it = l.head; it; it = it->next) {
+            if (it->type == CHAT_ITEM_AI_TEXT && !first_ai) first_ai = it;
+            if (it->type != CHAT_ITEM_AI_TEXT || !it->u.ai.turn_btn) continue;
+            if (!first_btn) first_btn = it;
+            last_btn = it;
+            buttons++;
+        }
+        ASSERT_EQ(buttons, 2);
+        ASSERT_TRUE(first_btn != NULL && first_btn == first_ai);  /* the chat reply */
+        ASSERT_TRUE(last_btn != NULL && last_btn == l.tail);      /* the tool turn's summary */
+        chat_msg_list_clear(&l);
+
+        /* Not part of "all": a different conversation. */
+        AiConversation all;
+        ApprovalQueue b1, b2;
+        memset(&all, 0, sizeof(all));
+        int rc_all = ui_demo_build("all", &all, &b1, &b2, NULL, 0);
+        ASSERT_EQ(rc_all, 0);
+        if (rc_all == 0) {
+            ASSERT_TRUE(all.msg_count != conv.msg_count);
+            ai_conv_reset(&all);
+        }
+        ai_conv_reset(&conv);
+    }
+
+    /* The voice gate's demo override: the older voice states only. */
+    ASSERT_TRUE(ui_demo_is_voice_input_state("voice-recording"));
+    ASSERT_TRUE(ui_demo_is_voice_input_state("voice-transcribing"));
+    ASSERT_TRUE(!ui_demo_is_voice_input_state("voice-read-aloud"));
+    ASSERT_TRUE(!ui_demo_is_voice_input_state("all"));
+    ASSERT_TRUE(!ui_demo_is_voice_input_state("chat"));
+    ASSERT_TRUE(!ui_demo_is_voice_input_state(NULL));
     TEST_END();
 }
 

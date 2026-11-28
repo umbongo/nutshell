@@ -769,6 +769,12 @@ int ui_demo_build(const char *state, AiConversation *conv,
     return 0;
 }
 
+int ui_demo_is_voice_input_state(const char *state)
+{
+    return state && (strcmp(state, "voice-recording") == 0 ||
+                     strcmp(state, "voice-transcribing") == 0);
+}
+
 const char *ui_demo_header_status(const char *state)
 {
     if (state && (strcmp(state, "header-status") == 0 ||
