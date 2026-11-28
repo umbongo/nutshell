@@ -4897,6 +4897,7 @@ int test_md_blocks_respects_len_not_nul(void);
 
 /* test_ui_demo.c */
 int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
+int test_ui_demo_approval_has_a_sensitive_row(void);
 int test_ui_demo_cmddetail_matches_approval(void);
 int test_ui_demo_chat_selection_spans_every_kind(void);
 int test_ui_demo_chat_drag_across_items_golden(void);
@@ -9738,6 +9739,7 @@ int main(void) {
     failed += test_md_blocks_respects_len_not_nul();
 
     failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
+    failed += test_ui_demo_approval_has_a_sensitive_row();
     failed += test_ui_demo_cmddetail_matches_approval();
     failed += test_ui_demo_chat_selection_spans_every_kind();
     failed += test_ui_demo_chat_drag_across_items_golden();
