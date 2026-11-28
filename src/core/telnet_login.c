@@ -1,6 +1,7 @@
 #include "telnet_login.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 /* Length of line without trailing spaces and tabs. */
@@ -82,14 +83,21 @@ int tn_login_armed(const TnLogin *l)
     return l->phase != TN_LOGIN_OFF;
 }
 
+/* The tick is a 32-bit millisecond counter that wraps after 49.7 days, so
+ * times are compared by their modular difference, never by magnitude. */
+static int tick_reached(unsigned long now_ms, unsigned long target_ms)
+{
+    return (uint32_t)(now_ms - target_ms) < 0x80000000u;
+}
+
 TnLoginAction tn_login_step(TnLogin *l, const char *cursor_line, unsigned long now_ms)
 {
     if (l->phase == TN_LOGIN_OFF || l->phase == TN_LOGIN_ASKING) return TN_LOGIN_NONE;
-    if (now_ms >= l->deadline_ms) {
+    if (tick_reached(now_ms, l->deadline_ms)) {
         l->phase = TN_LOGIN_OFF;
         return TN_LOGIN_NONE;
     }
-    if (!l->fresh || now_ms - l->last_rx_ms < TN_LOGIN_SETTLE_MS) return TN_LOGIN_NONE;
+    if (!l->fresh || (uint32_t)(now_ms - l->last_rx_ms) < TN_LOGIN_SETTLE_MS) return TN_LOGIN_NONE;
     l->fresh = 0;
     if (!cursor_line) return TN_LOGIN_NONE;
     if (tn_line_is_device_prompt(cursor_line)) {

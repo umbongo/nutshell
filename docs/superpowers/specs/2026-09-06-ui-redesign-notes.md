@@ -935,15 +935,13 @@ Open, in priority order:
       rows never folds (commands plus a web fetch, or prose between commands); the list view
       has no automated paint test (a `wintest` fixture for the list view and header paint);
       opening a card while a reply streams stops the list following the stream (by intent).
-- [ ] Tool-gate follow-ups (PR #91): a later chunk with `"id":""` overwrites a stored call
-      id; the indexed path has no upper bound on the index; a pending call in a reply cut off
-      at the output limit is not run; Anthropic `type:"error"` stream events are not shown;
-      DeepSeek's reasoner may need the reasoning pass-back on tool loops; Kimi's reasoning on
-      plain replies is not kept; history carries no tool turns (spec non-goal); a tool row in
-      `--ui-demo`; the four v1.2.74 review leftovers (a font left selected in one header
-      paint path, the status dot's size written twice, the rounds note's spare row, two
-      "web_fetch is off" rows in one round). From PR #88: NX-OS and ASA `do CMD` should use
-      their own tables; a sensitive row in `--ui-demo`; blank class reasons (`sh -c: `).
+- [ ] Tool-gate follow-ups (PR #91): a pending call in a reply cut off at the output limit
+      is not run; DeepSeek's reasoner may need the reasoning pass-back on tool loops; Kimi's
+      reasoning on plain replies is not kept; history carries no tool turns (spec non-goal);
+      the four v1.2.74 review leftovers (a font left selected in one header paint path, the
+      status dot's size written twice, the rounds note's spare row, two "web_fetch is off"
+      rows in one round). From PR #88: NX-OS and ASA `do CMD` should use their own tables; a
+      sensitive row in `--ui-demo`; blank class reasons (`sh -c: `).
 - [ ] Terminal escapes (PR #94's nano work): CSI I, HTS and TBC unhandled; `term_put_char`
       auto-wrap inside a scroll region; entering the alternate screen resets the primary's
       scroll region (*reported*); replay vim, htop, mc and less against tmux as nano was.
@@ -955,12 +953,11 @@ Open, in priority order:
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
-      editor; Start Logging fails silently; Refresh models turns a Base URL of `https://host`
-      into `https://models`; a generated README settings block (*reported*).
-- [ ] Other, from the PR #94 session (*reported*): markdown `_` inside a word; resize cost
-      with a full history (PR #93 measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200
-      columns); a user-supplied issue log can hold a typed secret, so `term.rx`/`term.key`
-      payloads are never printed and tests use synthetic text.
+      editor; Start Logging fails silently; a generated README settings block (*reported*).
+- [ ] Other, from the PR #94 session (*reported*): resize cost with a full history (PR #93
+      measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200 columns); a user-supplied
+      issue log can hold a typed secret, so `term.rx`/`term.key` payloads are never printed
+      and tests use synthetic text.
 - [ ] web_search does not URL-encode the query (`src/core/ai_tool_web_search.c`, all four
       URL builders): a query with spaces, `&`, `#` or `+` reaches DuckDuckGo or the custom
       URL mangled; found 2026-11-13.
@@ -979,12 +976,11 @@ Open, in priority order:
       "Mark Issue Ctrl+Shift+M" tooltip drawn over terminal row 2 in the maintainer's
       screenshot, not investigated.
 - [ ] Telnet follow-ups (PR #81): `tests/integration/cases/85-telnet.ps1` (five cases) has
-      never been parsed or run -- no `pwsh` on `automaton`, so the Windows box is the
-      first place it can run (`-Only telnet_autologin_never_logs_password,...`); a stray
-      `IAC SB` with no `IAC SE` swallows later output (PuTTY does the same); the 20 s
-      auto-login timer misjudges once per 49.7 days of uptime (fails safe); the minor test
-      gaps in #81's final review. From PR #80: no Wine test separates "mask after every
-      edit message" from a message whitelist.
+      never been parsed or run -- no `pwsh` on `automaton`, so the Windows box is the first
+      place it can run (`-Only telnet_autologin_never_logs_password,...`); a stray `IAC SB`
+      with no `IAC SE` swallows later output (PuTTY does the same); the minor test gaps in
+      #81's final review. From PR #80: no Wine test separates "mask after every edit
+      message" from a message whitelist.
 - [ ] SSH agent / Pageant authentication: not supported (keyboard-interactive spec,
       non-goal). Low priority; a profile that needs the agent has to use a key file or a
       password today.

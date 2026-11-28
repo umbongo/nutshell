@@ -187,3 +187,75 @@ int test_tn_login_null_cursor_line_is_ignored(void)
     ASSERT_EQ((int)l.phase, (int)TN_LOGIN_ARMED);
     TEST_END();
 }
+
+/* The tick is a 32-bit millisecond counter that wraps every 49.7 days; the
+ * callers pass values already truncated to 32 bits. */
+#define TICK32(x) ((unsigned long)((x) & 0xFFFFFFFFul))
+
+int test_tn_login_deadline_across_tick_wrap(void)
+{
+    TEST_BEGIN();
+    const unsigned long t0 = 0xFFFFFF00ul;       /* 256 ms before the wrap */
+    TnLogin l;
+
+    /* Just before the deadline, after the wrap: still armed, not early. */
+    tn_login_init(&l, 1, 1, t0);
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 19999u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 1);
+    /* Exactly at the deadline: it fires, once. */
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 20000u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 0);
+    ASSERT_EQ((int)tn_login_step(&l, "login:", TICK32(t0 + 20001u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 0);
+
+    /* Past the deadline after the wrap. */
+    tn_login_init(&l, 1, 1, t0);
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 30000u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 0);
+
+    /* Before the wrap, well inside the window: armed. */
+    tn_login_init(&l, 1, 1, t0);
+    ASSERT_EQ((int)tn_login_step(&l, "x", t0 + 100u), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 1);
+    TEST_END();
+}
+
+/* On a 64-bit host tn_login_init stores an unwrapped deadline, so this sets
+ * the wrapped 32-bit value a Windows build holds: t0 + 20000 wrapped to a
+ * small number. A plain >= would fire at once; the login must stay armed
+ * until the deadline is really reached. */
+int test_tn_login_wrapped_deadline_not_early(void)
+{
+    TEST_BEGIN();
+    const unsigned long t0 = 0xFFFFFF00ul;
+    TnLogin l;
+    tn_login_init(&l, 1, 1, t0);
+    l.deadline_ms = TICK32(t0 + 20000u);
+    ASSERT_TRUE(l.deadline_ms < t0);              /* really wrapped */
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 100u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 1);
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 19999u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 1);
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 20000u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 0);
+    TEST_END();
+}
+
+int test_tn_login_settle_across_tick_wrap(void)
+{
+    TEST_BEGIN();
+    const unsigned long t0 = 0xFFFFFFF0ul;
+    TnLogin l;
+    tn_login_init(&l, 1, 1, t0);
+    tn_login_on_rx(&l, t0);
+    /* 100 ms later (after the wrap): still settling. */
+    ASSERT_EQ((int)tn_login_step(&l, "login:", TICK32(t0 + 100u)), (int)TN_LOGIN_NONE);
+    /* 300 ms later: settled, the user name goes out. */
+    ASSERT_EQ((int)tn_login_step(&l, "login:", TICK32(t0 + 300u)), (int)TN_LOGIN_SEND_USER);
+    /* The restarted deadline is also wrap-safe. */
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 300u + 19999u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 1);
+    ASSERT_EQ((int)tn_login_step(&l, "x", TICK32(t0 + 300u + 20000u)), (int)TN_LOGIN_NONE);
+    ASSERT_EQ(tn_login_armed(&l), 0);
+    TEST_END();
+}

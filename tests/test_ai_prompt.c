@@ -264,6 +264,60 @@ int test_ai_provider_models_unknown(void) {
     TEST_END();
 }
 
+static const char *models_url_of(const char *base)
+{
+    static char buf[512];
+    return ai_models_url_from_base(base, buf, sizeof(buf)) == 0 ? buf : NULL;
+}
+
+int test_ai_models_url_from_base(void) {
+    TEST_BEGIN();
+    /* Shapes that were already right keep their result. */
+    ASSERT_STR_EQ(models_url_of("https://host/v1/chat/completions"), "https://host/v1/models");
+    ASSERT_STR_EQ(models_url_of("https://host/v1/"), "https://host/v1/models");
+    ASSERT_STR_EQ(models_url_of("https://host/api/v1/chat/completions"),
+                  "https://host/api/v1/models");
+    ASSERT_STR_EQ(models_url_of("https://host/api/chat"), "https://host/api/models");
+    ASSERT_STR_EQ(models_url_of("https://host/chat/completions"), "https://host/chat/models");
+    ASSERT_STR_EQ(models_url_of("https://host/v1"), "https://host/models");
+    ASSERT_STR_EQ(models_url_of("https://host/"), "https://host/models");
+    ASSERT_STR_EQ(models_url_of("http://localhost:11434/v1/chat/completions?x=1"),
+                  "http://localhost:11434/v1/models");
+    ASSERT_STR_EQ(models_url_of("https://host/chat?q=a"), "https://host/models");
+    ASSERT_STR_EQ(models_url_of("host/v1/chat"), "host/v1/models");
+    /* A base with no path: append /models to the host. */
+    ASSERT_STR_EQ(models_url_of("https://host"), "https://host/models");
+    ASSERT_STR_EQ(models_url_of("http://host:8080"), "http://host:8080/models");
+    /* Failures */
+    ASSERT_NULL(models_url_of(""));
+    ASSERT_NULL(models_url_of(NULL));
+    ASSERT_NULL(models_url_of("host"));
+    ASSERT_NULL(models_url_of("https://"));
+    TEST_END();
+}
+
+int test_ai_models_url_from_base_buffer_limits(void) {
+    TEST_BEGIN();
+    char out[16];
+    /* "https://host/models" is 19 chars: does not fit in 16 */
+    memset(out, 'x', sizeof(out));
+    ASSERT_EQ(ai_models_url_from_base("https://host", out, sizeof(out)), -1);
+    ASSERT_STR_EQ(out, "");
+    ASSERT_EQ(ai_models_url_from_base("https://host/v1/chat", out, sizeof(out)), -1);
+    ASSERT_STR_EQ(out, "");
+    /* Exact fit: "http://h/models" is 15 chars + NUL = 16 */
+    ASSERT_EQ(ai_models_url_from_base("http://h", out, sizeof(out)), 0);
+    ASSERT_STR_EQ(out, "http://h/models");
+    /* One byte short */
+    char small[15];
+    ASSERT_EQ(ai_models_url_from_base("http://h", small, sizeof(small)), -1);
+    ASSERT_STR_EQ(small, "");
+    /* Degenerate buffers */
+    ASSERT_EQ(ai_models_url_from_base("https://host", NULL, 16), -1);
+    ASSERT_EQ(ai_models_url_from_base("https://host", out, 0), -1);
+    TEST_END();
+}
+
 int test_ai_provider_models_url_known(void) {
     TEST_BEGIN();
     const char *url;

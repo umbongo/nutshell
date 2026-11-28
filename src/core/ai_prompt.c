@@ -2636,6 +2636,35 @@ const char *ai_provider_models_url(const char *provider)
     return NULL;
 }
 
+int ai_models_url_from_base(const char *base, char *out, size_t out_size)
+{
+    if (!out || out_size == 0) return -1;
+    out[0] = '\0';
+    if (!base || !base[0]) return -1;
+
+    const char *scheme = strstr(base, "://");
+    const char *slash = strrchr(base, '/');
+    if (!slash || slash == base) return -1;
+
+    int n;
+    if (scheme && slash == scheme + 2) {
+        /* Only the "//" of the scheme: no path. */
+        if (!scheme[3]) return -1;
+        n = snprintf(out, out_size, "%s/models", base);
+    } else {
+        const char *v1 = strstr(base, "/v1/");
+        if (v1)
+            n = snprintf(out, out_size, "%.*s/v1/models", (int)(v1 - base), base);
+        else
+            n = snprintf(out, out_size, "%.*s/models", (int)(slash - base), base);
+    }
+    if (n < 0 || (size_t)n >= out_size) {
+        out[0] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
 size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
                               char *buf, size_t buf_size)
 {

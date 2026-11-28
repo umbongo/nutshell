@@ -3599,18 +3599,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     char base[256];
                     GetDlgItemText(d->hPage, IDC_AI_CUSTOM_URL, base, (int)sizeof(base));
                     if (base[0]) {
-                        /* Strip /chat/completions or similar, append /models */
-                        char *slash = strrchr(base, '/');
-                        if (slash && slash != base) {
-                            /* Try to find /v1/ or similar prefix */
-                            char *v1 = strstr(base, "/v1/");
-                            if (v1)
-                                snprintf(custom_models_url, sizeof(custom_models_url),
-                                         "%.*s/v1/models", (int)(v1 - base), base);
-                            else
-                                snprintf(custom_models_url, sizeof(custom_models_url),
-                                         "%.*s/models", (int)(slash - base), base);
-                        }
+                        /* Strip /chat/completions or similar, append /models;
+                         * a failure leaves custom_models_url empty. */
+                        (void)ai_models_url_from_base(base, custom_models_url,
+                                                      sizeof(custom_models_url));
                         models_url = custom_models_url;
                     }
                 }
