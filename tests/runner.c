@@ -1601,6 +1601,7 @@ int test_pty_size_retry_completes(void);
 int test_pty_size_retry_again_again(void);
 int test_pty_size_retry_nothing_pending(void);
 int test_pty_size_retry_then_grid_changed(void);
+int test_pty_size_wanted_survives_second_again(void);
 int test_pty_size_pending_rule(void);
 
 /* test_connect_anim.c */
@@ -7170,6 +7171,7 @@ int main(void) {
     failed += test_pty_size_retry_again_again();
     failed += test_pty_size_retry_nothing_pending();
     failed += test_pty_size_retry_then_grid_changed();
+    failed += test_pty_size_wanted_survives_second_again();
     failed += test_pty_size_pending_rule();
 
     printf("\n--- Connect Animation ---\n");

@@ -269,6 +269,32 @@ int test_pty_size_retry_then_grid_changed(void)
     TEST_END();
 }
 
+/* A size wanted while an older request is still in flight is not lost: the
+ * call that asks for it gets "try again" from the pending one, and asking
+ * again (the poll does, every tick, with the terminal's size) finishes the
+ * old request and then sends the wanted size. */
+int test_pty_size_wanted_survives_second_again(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { PS_AGAIN, PS_AGAIN, 0, 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(pty_size_apply(&st, 120, 40, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(p.n, 2);
+    ASSERT_EQ(st.cols, 80);
+    ASSERT_EQ(pty_size_pending(&st), 1);
+    ASSERT_EQ(st.pending_cols, 100);
+    ASSERT_EQ(pty_size_apply(&st, 120, 40, ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(p.n, 4);
+    ASSERT_EQ(p.cols[2], 100);
+    ASSERT_EQ(p.cols[3], 120);
+    ASSERT_EQ(st.cols, 120);
+    ASSERT_EQ(st.rows, 40);
+    ASSERT_EQ(pty_size_pending(&st), 0);
+    TEST_END();
+}
+
 /* The pending rule itself: both dimensions positive; NULL is none. */
 int test_pty_size_pending_rule(void)
 {
