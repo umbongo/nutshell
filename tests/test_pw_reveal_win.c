@@ -270,6 +270,83 @@ int test_pw_reveal_win_emptied_by_delete_key(void)
     TEST_END();
 }
 
+/* The "check after every message" rule against a message whitelist.
+ *
+ * pw_reveal's edit subclass looks at the field's length after EVERY message
+ * it sees, not only after WM_SETTEXT/WM_CLEAR/WM_CHAR and the like. To tell
+ * the two apart, a private subclass is installed BEFORE pw_reveal_attach, so
+ * it sits below pw_reveal's: on a message no whitelist could contain
+ * (WM_APP + 0x51) it rewrites the text straight through the edit's own
+ * procedure, so pw_reveal's proc never sees a WM_SETTEXT, only the private
+ * message on its way out. A whitelist keeps the field revealed and shows the
+ * text; a check after every message masks it. A second private message
+ * leaves the text non-empty and must NOT mask: the check is "emptied", not
+ * "any message". */
+#define TEST_MSG_EMPTY   (WM_APP + 0x51)
+#define TEST_MSG_REPLACE (WM_APP + 0x52)
+
+static LRESULT CALLBACK hidden_edit_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp,
+                                         UINT_PTR id, DWORD_PTR ref)
+{
+    (void)id; (void)ref;
+    if (m == TEST_MSG_EMPTY) {
+        DefSubclassProc(hwnd, WM_SETTEXT, 0, (LPARAM)L"");
+        return 1;
+    }
+    if (m == TEST_MSG_REPLACE) {
+        DefSubclassProc(hwnd, WM_SETTEXT, 0, (LPARAM)L"other");
+        return 1;
+    }
+    return DefSubclassProc(hwnd, m, wp, lp);
+}
+
+int test_pw_reveal_win_unlisted_message_that_empties_field_masks(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    memset(&f, 0, sizeof f);
+    f.top = CreateWindowExA(0, "STATIC", "pwtest", WS_OVERLAPPEDWINDOW,
+                            0, 0, 400, 200, NULL, NULL,
+                            GetModuleHandle(NULL), NULL);
+    ASSERT_NOT_NULL(f.top);
+    if (f.top) {
+        f.edit = CreateWindowExA(0, "EDIT", "",
+                                 WS_CHILD | WS_VISIBLE | ES_PASSWORD |
+                                 ES_AUTOHSCROLL | WS_BORDER,
+                                 10, 10, 200, 24, f.top, NULL,
+                                 GetModuleHandle(NULL), NULL);
+        ASSERT_NOT_NULL(f.edit);
+    }
+    if (f.edit) {
+        SetWindowTextA(f.edit, "s3cret");
+        SendMessageW(f.edit, EM_SETPASSWORDCHAR, 0x25CF, 0);
+        f.orig = (WCHAR)SendMessageW(f.edit, EM_GETPASSWORDCHAR, 0, 0);
+        /* Below pw_reveal's subclass: attached first. */
+        ASSERT_TRUE(SetWindowSubclass(f.edit, hidden_edit_proc, 0x7E57, 0));
+        pw_reveal_attach(f.edit);
+        f.eye = FindWindowExA(f.edit, NULL, "NutshellPwEye", NULL);
+        ASSERT_NOT_NULL(f.eye);
+    }
+    if (f.eye) {
+        /* Non-empty replacement through the unlisted message: stays revealed. */
+        press(f.eye);
+        ASSERT_EQ(pwchar(f.edit), 0);
+        SendMessageW(f.edit, TEST_MSG_REPLACE, 0, 0);
+        ASSERT_EQ(GetWindowTextLengthW(f.edit), 5);
+        ASSERT_EQ(pw_reveal_is_revealed(f.edit), 1);
+        ASSERT_EQ(pwchar(f.edit), 0);
+
+        /* Emptied through the unlisted message: masked again. */
+        SendMessageW(f.edit, TEST_MSG_EMPTY, 0, 0);
+        ASSERT_EQ(GetWindowTextLengthW(f.edit), 0);
+        ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
+        ASSERT_EQ(pwchar(f.edit), f.orig);
+    }
+    if (f.edit) RemoveWindowSubclass(f.edit, hidden_edit_proc, 0x7E57);
+    fix_free(&f);
+    TEST_END();
+}
+
 int test_pw_reveal_win_replaced_text_masks(void)
 {
     TEST_BEGIN();
