@@ -877,6 +877,7 @@ int test_term_erase_with_background_len(void);
 int test_term_el_extract_and_reflow(void);
 int test_term_erase_keeps_continuation_on_resize(void);
 int test_term_extract_wrapped_pair_after_erase(void);
+int test_term_ech_dch_match_el_on_resize(void);
 
 /* test_term_fuzz.c */
 int test_term_fuzz_incomplete_esc(void);
@@ -7960,6 +7961,7 @@ int main(void) {
     failed += test_term_el_extract_and_reflow();
     failed += test_term_erase_keeps_continuation_on_resize();
     failed += test_term_extract_wrapped_pair_after_erase();
+    failed += test_term_ech_dch_match_el_on_resize();
     failed += test_term_fuzz_incomplete_esc();
     failed += test_term_fuzz_incomplete_csi();
     failed += test_term_fuzz_csi_no_params();

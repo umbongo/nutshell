@@ -560,3 +560,45 @@ int test_term_extract_wrapped_pair_after_erase(void) {
     term_free(t);
     TEST_END();
 }
+
+/* Visible text of a 6x20 terminal fed `input`, resized to 14 columns. */
+static void narrowed_text(const char *input, char *out, size_t cap) {
+    Terminal *t = term_init(6, 20, 50);
+    feed(t, input);
+    term_resize(t, 6, 14);
+    term_extract_visible(t, out, cap);
+    term_free(t);
+}
+
+int test_term_ech_dch_match_el_on_resize(void) {
+    TEST_BEGIN();
+    char want[256], got[256];
+    narrowed_text("abcdefghijklmnopqrs\x1B[1G\x1B[2K\r\nnext", want, sizeof want);
+    ASSERT_STR_EQ(want, "\nnext");
+    narrowed_text("abcdefghijklmnopqrs\x1B[1G\x1B[19X\r\nnext", got, sizeof got);
+    ASSERT_STR_EQ(got, want);
+    narrowed_text("abcdefghijklmnopqrs\x1B[1G\x1B[99X\r\nnext", got, sizeof got);
+    ASSERT_STR_EQ(got, want);
+    narrowed_text("abcdefghijklmnopqrs\x1B[1G\x1B[19P\r\nnext", got, sizeof got);
+    ASSERT_STR_EQ(got, want);
+    narrowed_text("abcdefghijklmnopqrs\x1B[1G\x1B[99P\r\nnext", got, sizeof got);
+    ASSERT_STR_EQ(got, want);
+
+    Terminal *t = term_init(3, 10, 20);
+    /* ECH reaching len cuts it, past erased cells; a middle erase does not */
+    feed(t, "abcdef\x1B[3G\x1B[99X");
+    ASSERT_EQ(row_len(t, 0), 2);
+    feed(t, "\x1B[2;1Habcdef\x1B[2G\x1B[2X");
+    ASSERT_EQ(row_len(t, 1), 6);
+    feed(t, "\x1B[3;1Habcdef\x1B[5G\x1B[2X");     /* reaches len exactly */
+    ASSERT_EQ(row_len(t, 2), 4);
+    /* DCH: len drops by the count, never below the cursor column's content */
+    feed(t, "\x1B[2J\x1B[1;1Habcdef\x1B[2G\x1B[2P");
+    ASSERT_EQ(row_len(t, 0), 4);
+    feed(t, "\x1B[2;1Habcdef\x1B[3G\x1B[99P");
+    ASSERT_EQ(row_len(t, 1), 2);
+    feed(t, "\x1B[3;1Habcdef\x1B[9G\x1B[2P");      /* cursor past the content */
+    ASSERT_EQ(row_len(t, 2), 6);
+    term_free(t);
+    TEST_END();
+}

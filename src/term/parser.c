@@ -723,6 +723,12 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     dch_row->cells[dc].codepoint = 0;
                     dch_row->cells[dc].attr = term->current_attr;
                 }
+                /* Content right of the deleted cells moves left by n; the
+                 * cells before the cursor stay. */
+                if (term->cursor.col < dch_row->len) {
+                    int nl = dch_row->len - dch_n;
+                    row_erase_tail_len(dch_row, nl > term->cursor.col ? nl : term->cursor.col);
+                }
                 dch_row->dirty = true;
             }
             break;
@@ -737,6 +743,9 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     ech_row->cells[ec].codepoint = 0;
                     ech_row->cells[ec].attr = term->current_attr;
                 }
+                /* An erase that reaches the row's content ends it there. */
+                if (term->cursor.col + ech_n >= ech_row->len)
+                    row_erase_tail_len(ech_row, term->cursor.col);
                 ech_row->dirty = true;
             }
             break;
