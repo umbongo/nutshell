@@ -14,6 +14,7 @@
 #include <string.h>
 #include "test_framework.h"
 #include "thread_join.h"
+#include "ai_gate.h"
 #include "ai_netcancel.h"
 #include "ai_tool_web_fetch.h"
 #include "net_guard.h"
@@ -235,6 +236,10 @@ static DWORD WINAPI trickle_thread(LPVOID p)
 int test_web_fetch_trickling_head_ends_at_hop_deadline(void)
 {
     TEST_BEGIN();
+    /* ns_winhttp_open refuses while the AI gate is off (an earlier test leaves
+     * it off), which would fail the hop at once without reaching the watchdog:
+     * the lower bound below catches that. */
+    ai_gate_set_enabled(1);
     HttpLoop *h = hl_start(HLS_TRICKLE_HEAD, NULL);
     ASSERT_NOT_NULL(h);
     if (h) {
@@ -248,6 +253,7 @@ int test_web_fetch_trickling_head_ends_at_hop_deadline(void)
         ASSERT_EQ((int)w, (int)WAIT_OBJECT_0);        /* far inside the 60 s trickle */
         ASSERT_EQ(a.rc, -1);
         ASSERT_EQ(a.status, 0);
+        ASSERT_TRUE(a.ms >= 600);                     /* it waited for the hop's 700 ms */
         ASSERT_TRUE(a.ms < 4000);
         hl_stop(h);
         if (t) {
@@ -255,12 +261,14 @@ int test_web_fetch_trickling_head_ends_at_hop_deadline(void)
             CloseHandle(t);
         }
     }
+    ai_gate_set_enabled(0);
     TEST_END();
 }
 
 int test_web_fetch_trickling_head_ends_on_cancel_flag(void)
 {
     TEST_BEGIN();
+    ai_gate_set_enabled(1);                            /* see the test above */
     HttpLoop *h = hl_start(HLS_TRICKLE_HEAD, NULL);
     ASSERT_NOT_NULL(h);
     if (h) {
@@ -278,12 +286,15 @@ int test_web_fetch_trickling_head_ends_on_cancel_flag(void)
         DWORD w = t ? WaitForSingleObject(t, 5000) : WAIT_FAILED;
         ASSERT_EQ((int)w, (int)WAIT_OBJECT_0);
         ASSERT_EQ(a.rc, -1);
+        ASSERT_TRUE(a.ms >= 400);                     /* it ran until the cancel at 500 ms */
+        ASSERT_TRUE(a.ms < 4000);
         hl_stop(h);
         if (t) {
             if (w != WAIT_OBJECT_0) TerminateThread(t, 1);
             CloseHandle(t);
         }
     }
+    ai_gate_set_enabled(0);
     TEST_END();
 }
 
