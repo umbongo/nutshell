@@ -100,6 +100,9 @@ typedef struct {
     int think_mode_changed;     /* a layout re-derived a Thinking row's mode
                                  * (reply completed, say); recalc_layout()
                                  * holds the reader's place on it */
+    unsigned think_thread_wheel_tick; /* GetTickCount when the wheel last scrolled
+                                 * the thread (think_wheel_takes latch) */
+    int think_thread_wheel_seen; /* think_thread_wheel_tick is valid */
 
     /* Hover tracking for painted elements (approval card rows/actions,
      * the [Retry] link) -- see ns_hover.h and Design-System Foundation

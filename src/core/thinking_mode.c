@@ -86,6 +86,17 @@ int think_box_settle_scroll(ThinkMode m, int stick, int scroll_y, int full_h,
                                   think_compact_offset(full_h, vis_h));
 }
 
+int think_wheel_takes(ThinkMode m, int streaming, int overflows,
+                      unsigned now_ms, int thread_scrolled, unsigned last_ms)
+{
+    if (m == THINK_MODE_OPEN) return 1;
+    if (m != THINK_MODE_COMPACT && m != THINK_MODE_EXTENDED) return 0;
+    if (!streaming || !overflows) return 0;
+    if (thread_scrolled && (unsigned)(now_ms - last_ms) < THINK_WHEEL_LATCH_MS)
+        return 0;
+    return 1;
+}
+
 int think_compact_offset(int full_h, int vis_h)
 {
     return full_h > vis_h ? full_h - vis_h : 0;

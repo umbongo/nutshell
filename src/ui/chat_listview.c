@@ -4715,6 +4715,18 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                      * its own max almost continuously, so wheel-down chains
                      * to the outer list immediately and it can still reach
                      * bottom to re-engage its own stick-to-bottom. */
+                    /* think_wheel_takes() (src/core/thinking_mode.c): a
+                     * compact or extended box takes the wheel only while
+                     * it streams, overflows and the thread has not just
+                     * been wheel-scrolled; else the thread keeps it. */
+                    if (!think_wheel_takes(
+                            (ThinkMode)wi->u.ai.thinking_mode,
+                            !wi->u.ai.thinking_complete,
+                            full_h > tl.body.h,
+                            (unsigned)GetTickCount(),
+                            lv->think_thread_wheel_seen,
+                            lv->think_thread_wheel_tick))
+                        break;
                     if (thinking_wheel_over_box(tl.body, lv->viewport_height,
                                                  full_h, pt.x, pt.y)) {
                         int max_scroll = full_h - tl.body.h;
@@ -4802,6 +4814,8 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             }
         }
 
+        lv->think_thread_wheel_tick = (unsigned)GetTickCount();
+        lv->think_thread_wheel_seen = 1;
         int old_pos = lv->scroll_y;
         lv->scroll_y -= (delta * scroll_amount) / WHEEL_DELTA;
         clamp_scroll(lv);

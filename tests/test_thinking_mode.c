@@ -215,6 +215,43 @@ int test_thinking_box_wheel_modes(void)
     TEST_END();
 }
 
+/* Who gets a wheel notch over a Thinking box: a compact or extended box takes
+ * it only while its reasoning streams AND its text overflows AND the thread
+ * has not been wheel-scrolled in the last THINK_WHEEL_LATCH_MS; the open box
+ * always (the caller still checks overflow and the box limits). */
+int test_thinking_wheel_takes(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)THINK_WHEEL_LATCH_MS, 300);
+    /* finished compact / extended box: the thread */
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_COMPACT, 0, 1, 5000u, 0, 0u));
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_EXTENDED, 0, 1, 5000u, 0, 0u));
+    /* streaming, overflowing, thread never scrolled: the box */
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_COMPACT, 1, 1, 5000u, 0, 0u));
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_EXTENDED, 1, 1, 5000u, 0, 0u));
+    /* content fits: the thread */
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_COMPACT, 1, 0, 5000u, 0, 0u));
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_EXTENDED, 1, 0, 5000u, 0, 0u));
+    /* the latch: within 300 ms of a thread scroll the thread keeps the wheel */
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_COMPACT, 1, 1, 5000u, 1, 4999u));
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_COMPACT, 1, 1, 5000u, 1, 5000u));
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_EXTENDED, 1, 1, 5299u, 1, 5000u));
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_EXTENDED, 1, 1, 5300u, 1, 5000u));
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_COMPACT, 1, 1, 9000u, 1, 5000u));
+    /* the latch across the tick counter's wrap */
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_COMPACT, 1, 1, 0x20u, 1, 0xFFFFFF00u));
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_COMPACT, 1, 1, 0x200u, 1, 0xFFFFFF00u));
+    /* the open box keeps its old rule: it takes the wheel whatever the rest */
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_OPEN, 0, 1, 5000u, 0, 0u));
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_OPEN, 1, 1, 5000u, 1, 4999u));
+    ASSERT_TRUE(think_wheel_takes(THINK_MODE_OPEN, 0, 0, 5000u, 0, 0u));
+    /* collapsed and out-of-range modes have no body */
+    ASSERT_TRUE(!think_wheel_takes(THINK_MODE_COLLAPSED, 1, 1, 5000u, 0, 0u));
+    ASSERT_TRUE(!think_wheel_takes((ThinkMode)9, 1, 1, 5000u, 0, 0u));
+    ASSERT_TRUE(!think_wheel_takes((ThinkMode)-1, 1, 1, 5000u, 0, 0u));
+    TEST_END();
+}
+
 int test_thinking_box_scroll_follow_hold_resume(void)
 {
     TEST_BEGIN();

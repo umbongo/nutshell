@@ -67,6 +67,23 @@ int think_mode_wheel_scrolls(ThinkMode m);
 int think_box_settle_scroll(ThinkMode m, int stick, int scroll_y, int full_h,
                             int vis_h);
 
+/* Milliseconds the wheel stays with the chat thread after the thread itself
+ * was wheel-scrolled. */
+#define THINK_WHEEL_LATCH_MS 300u
+
+/* Whether a wheel notch with the pointer over a Thinking box goes to the box
+ * (1) or to the chat thread (0).  A compact or extended box takes it only
+ * while its reasoning is still streaming AND its text overflows the box AND
+ * the thread has not been wheel-scrolled in the last THINK_WHEEL_LATCH_MS (so
+ * scrolling through history never catches on a box).  The open box always
+ * takes it (the caller still checks overflow and the box's own limits);
+ * collapsed and out-of-range modes have no body: 0.  now_ms and last_ms are
+ * GetTickCount-style unsigned millisecond counts; thread_scrolled says
+ * last_ms is valid (the thread was wheel-scrolled at least once).  The
+ * difference is unsigned, so a tick-count wrap is harmless. */
+int think_wheel_takes(ThinkMode m, int streaming, int overflows,
+                      unsigned now_ms, int thread_scrolled, unsigned last_ms);
+
 /* Scroll offset that puts the last lines in view: max(0, full_h - vis_h). */
 int think_compact_offset(int full_h, int vis_h);
 
