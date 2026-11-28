@@ -1238,6 +1238,37 @@ int test_voice_ais_endless_audio_capped(void)
     TEST_END();
 }
 
+/* The wall-clock cap: a server that keeps sending past the request's time budget is closed and
+ * the chunk fails as a stream, whatever the frame count (the frame cap stays at its default, far
+ * out of reach). The seam lowers the 6 minutes to 1.5 s. */
+int test_voice_ais_request_time_capped(void)
+{
+    TEST_BEGIN();
+    HWND w = vr_begin();
+    ASSERT_NOT_NULL(w);
+    HttpLoop *h = hl_start(HLS_WAV_ENDLESS, NULL);
+    ASSERT_NOT_NULL(h);
+    if (w && h) {
+        voice_ais_test_max_request_ms(1500);
+        VoiceAisTarget t = vr_target(hl_port(h), VAIS_SHAPE_OPENAI);
+        ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
+        const ULONGLONG t0 = GetTickCount64();
+        voice_ais_speak(VA_TOKEN, 1, "One. Two.", 0, &t, VR_KEY);
+        ASSERT_EQ(va_wait_end(1, 30000), 1);
+        ASSERT_TRUE(GetTickCount64() - t0 < 30000);
+        va_pump(100);
+        ASSERT_EQ(va_count(VTT_DONE, 1), 0);
+        ASSERT_EQ(va_count(VTT_ERROR, 1), 1);
+        ASSERT_EQ((int)vr_error_hr(), (int)VOICE_AIS_HR_STREAM);
+        voice_ais_quit(VA_TOKEN, 3000);
+        ASSERT_EQ(voice_ledger_all_zero(), 1);
+        voice_ais_test_max_request_ms(0);
+    }
+    if (h) hl_stop(h);
+    va_end(w);
+    TEST_END();
+}
+
 /* F1: an error status with a body that never ends: the body read stops at 64 KB, the request is
  * closed and the status still decides (500). */
 int test_voice_ais_endless_error_body_capped(void)

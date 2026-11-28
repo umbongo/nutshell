@@ -111,7 +111,10 @@ int  voice_ais_audio_over_cap(uint64_t total, uint64_t add);
  * audio the frame cap allows, so a server that streams slightly slower than real time still
  * finishes, while a stream that never ends and carries no audio (Mistral keep-alive lines, a
  * server that stalls after the header) cannot hold the request, the render queue and the
- * speech-request ledger slot until the 10-minute Speaking watchdog fires. */
+ * speech-request ledger slot until the 10-minute Speaking watchdog fires. The cap is checked
+ * as each piece of the audio stream arrives, so it covers the stream only: an error body
+ * (status 300 or more) is read by ai_http_win.c without a callback and is bounded by its 64 KB
+ * limit and the receive timeout instead. */
 #define VOICE_AIS_MAX_REQUEST_MS 360000u
 /* 1 when more than cap_ms milliseconds passed between two reads of one 64-bit tick source
  * (GetTickCount64): the unsigned difference, so a counter that wrapped between the reads

@@ -85,6 +85,7 @@ static unsigned g_gen = AIS_GEN_BASE;
 static VoiceAisFetch g_fetch;
 static size_t g_max_chunks = AIS_MAX_CHUNKS;
 static volatile LONG64 g_max_frames = VOICE_AIS_MAX_FRAMES;
+static volatile LONG64 g_max_request_ms = VOICE_AIS_MAX_REQUEST_MS;
 
 static void lock(void)   { EnterCriticalSection(&g_lock); }
 static void unlock(void) { LeaveCriticalSection(&g_lock); }
@@ -92,6 +93,7 @@ static void unlock(void) { LeaveCriticalSection(&g_lock); }
 void voice_ais_set_fetch(VoiceAisFetch f) { g_fetch = f; }
 void voice_ais_test_max_chunks(size_t n) { g_max_chunks = n ? n : AIS_MAX_CHUNKS; }
 void voice_ais_test_max_frames(uint64_t n) { g_max_frames = n ? (LONG64)n : (LONG64)VOICE_AIS_MAX_FRAMES; }
+void voice_ais_test_max_request_ms(uint64_t ms) { g_max_request_ms = ms ? (LONG64)ms : (LONG64)VOICE_AIS_MAX_REQUEST_MS; }
 
 /* ---- small helpers ---- */
 
@@ -405,7 +407,7 @@ static int fetch_stream_cb(const char *data, size_t len, void *ctx)
     /* A stream that runs past the wall-clock cap, audio or not (keep-alive lines carry none), is
      * closed and fails as a stream, the same way as the frame cap. */
     if (voice_ais_request_too_long((uint64_t)f->started, (uint64_t)GetTickCount64(),
-                                   VOICE_AIS_MAX_REQUEST_MS)) {
+                                   (uint64_t)g_max_request_ms)) {
         f->failed = 1;
         return 1;
     }
