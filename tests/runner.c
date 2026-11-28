@@ -4744,6 +4744,14 @@ int test_local_shell_spec_name_natively_detected_powershell(void);
 int test_local_shell_spec_name_other_custom_stays_custom(void);
 int test_local_shell_spec_name_non_custom_and_null(void);
 
+/* test_term_replay.c */
+int test_term_replay_less_80x24(void);
+int test_term_replay_less_120x40(void);
+int test_term_replay_vim_80x24(void);
+int test_term_replay_vim_120x40(void);
+int test_term_replay_htop_80x24(void);
+int test_term_replay_htop_120x40(void);
+
 /* test_term_conpty.c */
 int test_term_conpty_ls_screen_contents(void);
 int test_term_conpty_ls_byte_at_a_time_matches(void);
@@ -9576,6 +9584,12 @@ int main(void) {
     failed += test_local_shell_spec_name_natively_detected_powershell();
     failed += test_local_shell_spec_name_other_custom_stays_custom();
     failed += test_local_shell_spec_name_non_custom_and_null();
+    failed += test_term_replay_less_80x24();
+    failed += test_term_replay_less_120x40();
+    failed += test_term_replay_vim_80x24();
+    failed += test_term_replay_vim_120x40();
+    failed += test_term_replay_htop_80x24();
+    failed += test_term_replay_htop_120x40();
     failed += test_term_conpty_ls_screen_contents();
     failed += test_term_conpty_ls_byte_at_a_time_matches();
     failed += test_term_conpty_opening_sequence_is_consumed();
