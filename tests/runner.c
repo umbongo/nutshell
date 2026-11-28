@@ -1592,6 +1592,11 @@ int test_pty_size_changed_during_connect(void);
 int test_pty_size_one_dimension_differs(void);
 int test_pty_size_not_recorded_until_sent(void);
 int test_pty_size_invalid_and_null(void);
+int test_pty_size_apply_again_then_same_size(void);
+int test_pty_size_apply_again_then_different_size(void);
+int test_pty_size_apply_again_twice(void);
+int test_pty_size_apply_hard_error(void);
+int test_pty_size_apply_no_request_when_unchanged(void);
 
 /* test_connect_anim.c */
 int test_anim_dots_zero_elapsed(void);
@@ -7151,6 +7156,11 @@ int main(void) {
     failed += test_pty_size_one_dimension_differs();
     failed += test_pty_size_not_recorded_until_sent();
     failed += test_pty_size_invalid_and_null();
+    failed += test_pty_size_apply_again_then_same_size();
+    failed += test_pty_size_apply_again_then_different_size();
+    failed += test_pty_size_apply_again_twice();
+    failed += test_pty_size_apply_hard_error();
+    failed += test_pty_size_apply_no_request_when_unchanged();
 
     printf("\n--- Connect Animation ---\n");
     failed += test_anim_dots_zero_elapsed();

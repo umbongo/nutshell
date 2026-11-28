@@ -23,6 +23,8 @@ SSHChannel *ssh_channel_open(SshSession *s) {
     ch->ssh = s;
     ch->last_cols = 0;
     ch->last_rows = 0;
+    ch->pending_cols = 0;
+    ch->pending_rows = 0;
     return ch;
 }
 

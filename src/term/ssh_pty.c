@@ -13,6 +13,8 @@ int ssh_pty_request(SSHChannel *ch, const char *term_type, int cols, int rows) {
         pty_size_sent(&st, cols, rows);
         ch->last_cols = st.cols;
         ch->last_rows = st.rows;
+        ch->pending_cols = 0;
+        ch->pending_rows = 0;
     }
     return rc;
 }
@@ -22,14 +24,19 @@ int ssh_pty_shell(SSHChannel *ch) {
     return libssh2_channel_shell(ch->channel);
 }
 
+static int pty_size_send(void *ctx, int cols, int rows) {
+    return libssh2_channel_request_pty_size_ex((LIBSSH2_CHANNEL *)ctx, cols, rows, 0, 0);
+}
+
 int ssh_pty_resize(SSHChannel *ch, int cols, int rows) {
     if (!ch || !ch->channel) return -1;
-    PtySizeState last = { ch->last_cols, ch->last_rows };
-    if (!pty_size_needs_send(&last, cols, rows)) return 0;
-    int rc = libssh2_channel_request_pty_size_ex(ch->channel, cols, rows, 0, 0);
-    if (rc == 0) {
-        ch->last_cols = cols;
-        ch->last_rows = rows;
-    }
+    PtySizeState st = { ch->last_cols, ch->last_rows,
+                        ch->pending_cols, ch->pending_rows };
+    int rc = pty_size_apply(&st, cols, rows, pty_size_send, ch->channel,
+                            LIBSSH2_ERROR_EAGAIN);
+    ch->last_cols = st.cols;
+    ch->last_rows = st.rows;
+    ch->pending_cols = st.pending_cols;
+    ch->pending_rows = st.pending_rows;
     return rc;
 }

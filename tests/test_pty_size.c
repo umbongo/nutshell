@@ -84,3 +84,115 @@ int test_pty_size_invalid_and_null(void)
     pty_size_sent(NULL, 80, 24);
     TEST_END();
 }
+
+/* A scripted transport for pty_size_apply: returns the next code in `script`
+ * and records the size each request asked for. */
+#define PS_AGAIN (-37)
+typedef struct { int script[8]; int n; int cols[8]; int rows[8]; } PsScript;
+
+static int ps_send(void *ctx, int cols, int rows)
+{
+    PsScript *p = (PsScript *)ctx;
+    int i = p->n++;
+    p->cols[i] = cols;
+    p->rows[i] = rows;
+    return p->script[i];
+}
+
+/* EAGAIN records nothing; the same size wanted again repeats that request and
+ * records it once it returns 0. */
+int test_pty_size_apply_again_then_same_size(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { PS_AGAIN, 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(st.cols, 80);               /* not recorded */
+    ASSERT_EQ(st.pending_cols, 100);
+    ASSERT_EQ(st.pending_rows, 30);
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(p.n, 2);                    /* one repeat, no extra request */
+    ASSERT_EQ(p.cols[1], 100);
+    ASSERT_EQ(st.cols, 100);
+    ASSERT_EQ(st.rows, 30);
+    ASSERT_EQ(st.pending_cols, 0);
+    TEST_END();
+}
+
+/* EAGAIN, then a different size wanted: the pending one is repeated first,
+ * then the wanted one is sent; the recorded size is the wanted one. */
+int test_pty_size_apply_again_then_different_size(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { PS_AGAIN, 0, 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(pty_size_apply(&st, 120, 40, ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(p.n, 3);
+    ASSERT_EQ(p.cols[1], 100);            /* the pending request first */
+    ASSERT_EQ(p.cols[2], 120);            /* then the size now wanted */
+    ASSERT_EQ(p.rows[2], 40);
+    ASSERT_EQ(st.cols, 120);
+    ASSERT_EQ(st.rows, 40);
+    ASSERT_EQ(st.pending_cols, 0);
+    TEST_END();
+}
+
+/* EAGAIN twice: still pending, nothing recorded, and the wanted size is not
+ * sent yet. */
+int test_pty_size_apply_again_twice(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { PS_AGAIN, PS_AGAIN, 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(pty_size_apply(&st, 120, 40, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(p.n, 2);
+    ASSERT_EQ(p.cols[1], 100);            /* the repeat, not the new size */
+    ASSERT_EQ(st.cols, 80);
+    ASSERT_EQ(st.pending_cols, 100);
+    ASSERT_EQ(pty_size_apply(&st, 120, 40, ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(st.cols, 120);
+    TEST_END();
+}
+
+/* A hard error records nothing and leaves the last good size; a hard error on
+ * a pending repeat drops the pending size. */
+int test_pty_size_apply_hard_error(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { -5 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), -5);
+    ASSERT_EQ(st.cols, 80);
+    ASSERT_EQ(st.pending_cols, 0);        /* not an EAGAIN: nothing pending */
+
+    PsScript q = { { PS_AGAIN, -5, 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &q, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &q, PS_AGAIN), -5);
+    ASSERT_EQ(st.cols, 80);
+    ASSERT_EQ(st.pending_cols, 0);
+    ASSERT_EQ(q.n, 2);                    /* the error ended this call */
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &q, PS_AGAIN), 0);
+    ASSERT_EQ(st.cols, 100);              /* the next call sends it afresh */
+    TEST_END();
+}
+
+/* Nothing pending and an unchanged or invalid size: no request at all. */
+int test_pty_size_apply_no_request_when_unchanged(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 80, 24, ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(pty_size_apply(&st, 0, 0, ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(p.n, 0);
+    ASSERT_EQ(pty_size_apply(NULL, 80, 24, ps_send, &p, PS_AGAIN), -1);
+    ASSERT_EQ(pty_size_apply(&st, 90, 24, NULL, &p, PS_AGAIN), -1);
+    TEST_END();
+}
