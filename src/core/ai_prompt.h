@@ -548,6 +548,16 @@ const char * const *ai_provider_models(const char *provider);
  * Returns NULL for unknown/custom providers. */
 const char *ai_provider_models_url(const char *provider);
 
+/* Derive the models-list URL from a custom provider's configured API URL.
+ * Everything before "/v1/" gets "/v1/models"; otherwise the last path segment
+ * is replaced by "models" (so ".../v1/chat/completions" ends in
+ * ".../v1/models" and "https://host/api/chat" in "https://host/api/models").
+ * A base with no path ("https://host") gets "/models" appended.
+ * Returns 0 and fills out; -1 (out set to "" when out_size > 0) for an empty
+ * or NULL base, a base with no path separator, a bare scheme, or a result
+ * that does not fit. */
+int ai_models_url_from_base(const char *base, char *out, size_t out_size);
+
 /* Build a NULL-terminated array of auth headers for a provider's chat API.
  * provider:  e.g. "anthropic", "openai", "deepseek"
  * api_key:   the raw API key string

@@ -250,8 +250,10 @@ int ai_tool_round_should_run(const char *provider, int tool_stop,
  * error type, or "unknown error"; control and bidirectional-format
  * characters are stripped, newlines and tabs become spaces, and it is cut
  * to AI_STREAM_ERROR_MSG_MAX bytes (and to msg_size - 1) on a UTF-8
- * boundary. Always 0 for provider "anthropic" (its error events are not
- * handled here), for "error": null and for every other chunk. */
+ * boundary. For provider "anthropic" only a payload whose top-level "type"
+ * is "error" is considered (its "error" object or string is read as above);
+ * every other Anthropic payload returns 0, whatever its text says. Also 0
+ * for "error": null and for every other chunk. */
 int ai_stream_chunk_error(const char *provider, const char *json,
                           char *msg_out, size_t msg_size);
 
