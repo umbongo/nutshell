@@ -1546,6 +1546,17 @@ int test_vt_scroll_down_region_beyond_64_moves_marker(void);
 int test_vt_il_beyond_64_moves_marker(void);
 int test_vt_dl_beyond_64_moves_marker(void);
 
+/* test_paint_poll.c */
+int test_paint_poll_active_with_output(void);
+int test_paint_poll_active_disconnected_dirty(void);
+int test_paint_poll_active_idle(void);
+int test_paint_poll_background_connected_dirty(void);
+int test_paint_poll_background_disconnected_dirty(void);
+int test_paint_poll_background_critical_ignored(void);
+int test_paint_poll_cooldown_edges(void);
+int test_paint_poll_critical_bypasses_cooldown(void);
+int test_paint_poll_independent_cooldowns(void);
+
 /* test_log_open_error.c */
 int test_log_open_error_names_path_and_reason(void);
 int test_log_open_error_no_errno_and_no_path(void);
@@ -7081,6 +7092,17 @@ int main(void) {
     failed += test_color_mixed_semicolon_colon_256();
     failed += test_color_colon_rgb_trailing_extra_params();
     failed += test_color_bold_colon_rgb_underline_one_feed();
+
+    printf("\n--- Paint poll ---\n");
+    failed += test_paint_poll_active_with_output();
+    failed += test_paint_poll_active_disconnected_dirty();
+    failed += test_paint_poll_active_idle();
+    failed += test_paint_poll_background_connected_dirty();
+    failed += test_paint_poll_background_disconnected_dirty();
+    failed += test_paint_poll_background_critical_ignored();
+    failed += test_paint_poll_cooldown_edges();
+    failed += test_paint_poll_critical_bypasses_cooldown();
+    failed += test_paint_poll_independent_cooldowns();
 
     printf("\n--- Log open error ---\n");
     failed += test_log_open_error_names_path_and_reason();

@@ -42,6 +42,7 @@
 #include "paste_filter.h"
 #include "paste_write.h"
 #include "log_open_error.h"
+#include "paint_poll.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
 #include "voice_audio_win.h"
@@ -158,6 +159,7 @@ typedef struct Session {
     SessionIo   io;            /* transport vtable; io.ctx != NULL is the "connected" predicate */
     FILE       *session_log;   /* NULL when logging disabled */
     unsigned    log_id;        /* debug-log session id: prints as s<N> (0 = none) */
+    DWORD       last_poll_paint_tick; /* this session's last poll-driven invalidate (the cooldown is per session) */
     RenderStuck poll_stuck;    /* render.stuck_dirty from the poll tick: a background tab's dirty row */
     /* Connection thread state */
     ConnState       conn_state;
@@ -764,7 +766,6 @@ static void sync_session_grid(HWND hwnd, Session *s)
 
 /* Paint cooldown: cap repaints at ~60fps to prevent thrashing on heavy output */
 #define PAINT_COOLDOWN_MS 16
-static DWORD g_last_paint_tick;
 
 /* Set by WM_SIZE(SIZE_MINIMIZED), cleared by the next WM_SIZE. The window
  * surface does not survive the iconic state, but the renderer's
@@ -1045,6 +1046,7 @@ static Session *create_session(int rows, int cols) {
     s->log_id = ++g_next_log_id;
     s->term->log_id = s->log_id;
     render_stuck_init(&s->poll_stuck);
+    s->last_poll_paint_tick = 0;
     DLOG(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.new", "rows=%d cols=%d", rows, cols);
     s->ssh = NULL;
     s->channel = NULL;
@@ -5327,27 +5329,40 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 DLOG(DLOG_RENDER, DLOG_INFO, s->log_id, "render.stuck_dirty",
                                      "src=poll rows=%d ticks=%d active=0", bg_dirty, stuck_ticks);
                         }
-                        if (poll_rc > 0 || term_has_dirty_rows(s->term)) {
-                            DWORD now = GetTickCount();
-                            bool critical = (s == g_active_session &&
-                                             s->term->full_redraw_needed);
-                            if (critical || now - g_last_paint_tick >= PAINT_COOLDOWN_MS) {
+                        /* Only the active session's terminal is painted, so
+                         * only it may ask for a paint (paint_poll_decide()):
+                         * a background tab's rows stay dirty until it is
+                         * activated, and on_tab_select() redraws it in full
+                         * then. The cooldown runs on this session's own tick,
+                         * so another session's paints cannot delay it. */
+                        {
+                            const DWORD now = GetTickCount();
+                            const bool is_active = (s == g_active_session);
+                            const bool critical = is_active &&
+                                                  s->term->full_redraw_needed;
+                            const unsigned long since =
+                                (unsigned long)(DWORD)(now - s->last_poll_paint_tick);
+                            const PaintPollAction act = paint_poll_decide(
+                                is_active ? 1 : 0, poll_rc > 0 ? 1 : 0,
+                                term_has_dirty_rows(s->term) ? 1 : 0,
+                                critical ? 1 : 0, since, PAINT_COOLDOWN_MS);
+                            if (act == PAINT_POLL_INVALIDATE) {
                                 if (poll_rc > 0 || critical)
                                     dispbuf_invalidate(&g_renderer.dispbuf);
                                 DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "poll.invalidate",
                                      "poll_rc=%d dirty_rows=%d critical=%d since_paint_ms=%lu",
                                      poll_rc, term_dirty_row_flags(s->term, NULL, 0),
-                                     critical ? 1 : 0, (unsigned long)(now - g_last_paint_tick));
+                                     critical ? 1 : 0, since);
                                 invalidate_terminal_why(hwnd, "poll");
-                                g_last_paint_tick = now;
-                            } else {
+                                s->last_poll_paint_tick = now;
+                            } else if (act == PAINT_POLL_COOLDOWN_SKIP) {
                                 /* The v1.2.34 diagnosis had to infer this one: a poll
                                  * tick that wanted a paint but fell inside the cooldown. */
                                 g_cooldown_skips++;
                                 DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "poll.cooldown_skip",
                                      "poll_rc=%d dirty_rows=%d critical=0 since_paint_ms=%lu",
                                      poll_rc, term_dirty_row_flags(s->term, NULL, 0),
-                                     (unsigned long)(now - g_last_paint_tick));
+                                     since);
                             }
                         }
                     }
