@@ -546,18 +546,17 @@ bool selection_is_combining(uint32_t cp)
 
 /* ---- the lone-Alt-tap decision ------------------------------------------ */
 
-void alt_tap_key_down(AltTap *a)
+void alt_tap_key_down(AltTap *a, bool repeat)
 {
     if (!a) return;
-    if (!a->alt_down) a->used = false;             /* a fresh press, not auto-repeat */
+    if (!repeat) a->used = false;                  /* a fresh press, not auto-repeat */
     a->alt_down = true;
 }
 
 void alt_tap_mouse_press(AltTap *a)
 {
     if (!a) return;
-    a->alt_down = true;
-    a->used = true;
+    a->used = true;                                /* alt_down is the key-down's to set */
 }
 
 bool alt_tap_key_up(AltTap *a)

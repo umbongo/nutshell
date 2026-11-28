@@ -119,11 +119,15 @@ bool selection_is_combining(uint32_t cp);
  * Alt a modifier of that press, so its release must be swallowed, as for any
  * chord. Pure state, one per window. */
 typedef struct { bool alt_down; bool used; } AltTap;
-void alt_tap_key_down(AltTap *a);      /* Alt pressed (auto-repeat is a no-op) */
+/* Alt pressed. `repeat` is the auto-repeat bit of the message (lParam bit 30):
+ * a repeat does not start a new tap, a fresh press does. */
+void alt_tap_key_down(AltTap *a, bool repeat);
 void alt_tap_mouse_press(AltTap *a);   /* a mouse button pressed while Alt is down */
 /* Alt released: true when the key-up must not reach DefWindowProc (it would
  * open the menu bar). Resets the state. */
 bool alt_tap_key_up(AltTap *a);
-void alt_tap_reset(AltTap *a);         /* focus lost: forget a key-up we will not see */
+/* Focus lost, or an Alt key-up that arrived as a non-system message (Ctrl+Alt,
+ * AltGr): forget the state. */
+void alt_tap_reset(AltTap *a);
 
 #endif /* NUTSHELL_SELECTION_H */

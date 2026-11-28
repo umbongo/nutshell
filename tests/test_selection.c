@@ -1376,7 +1376,7 @@ int test_alt_tap_alone_opens_menu(void)
     TEST_BEGIN();
     AltTap a;
     alt_tap_reset(&a);
-    alt_tap_key_down(&a);
+    alt_tap_key_down(&a, false);
     ASSERT_TRUE(!alt_tap_key_up(&a));                   /* not swallowed: the menu opens */
     TEST_END();
 }
@@ -1386,13 +1386,13 @@ int test_alt_tap_mouse_press_swallows_release(void)
     TEST_BEGIN();
     AltTap a;
     alt_tap_reset(&a);
-    alt_tap_key_down(&a);
-    alt_tap_key_down(&a);                               /* auto-repeat */
+    alt_tap_key_down(&a, false);
+    alt_tap_key_down(&a, true);                         /* auto-repeat */
     alt_tap_mouse_press(&a);
-    alt_tap_key_down(&a);                               /* repeat after the press */
+    alt_tap_key_down(&a, true);                         /* repeat after the press */
     ASSERT_TRUE(alt_tap_key_up(&a));
     /* The next tap is a fresh one. */
-    alt_tap_key_down(&a);
+    alt_tap_key_down(&a, false);
     ASSERT_TRUE(!alt_tap_key_up(&a));
     TEST_END();
 }
@@ -1402,10 +1402,10 @@ int test_alt_tap_focus_loss_forgets(void)
     TEST_BEGIN();
     AltTap a;
     alt_tap_reset(&a);
-    alt_tap_key_down(&a);
+    alt_tap_key_down(&a, false);
     alt_tap_mouse_press(&a);
     alt_tap_reset(&a);                                  /* the key-up went elsewhere */
-    alt_tap_key_down(&a);
+    alt_tap_key_down(&a, false);
     ASSERT_TRUE(!alt_tap_key_up(&a));
     TEST_END();
 }
@@ -1541,5 +1541,49 @@ int test_sel_word_blank_run_takes_no_mark_either_side(void)
     ASSERT_EQ(s.start.col, 2);
     ASSERT_EQ(s.end.col, 2);
     term_free(t);
+    TEST_END();
+}
+
+/* Ctrl+Alt (or AltGr): the Alt key-down and key-up are not system messages,
+ * so only a non-system key-up reset tells the state. After it a lone tap
+ * opens the menu again. */
+int test_alt_tap_reset_after_non_system_key_up(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_key_down(&a, false);
+    alt_tap_mouse_press(&a);                            /* Ctrl+Alt+click */
+    alt_tap_reset(&a);                                  /* WM_KEYUP of VK_MENU */
+    alt_tap_key_down(&a, false);
+    ASSERT_TRUE(!alt_tap_key_up(&a));
+    TEST_END();
+}
+
+/* A press whose Alt key-up never came: the next fresh Alt key-down (repeat
+ * bit clear) starts a new tap, whatever the state recorded. */
+int test_alt_tap_stale_press_does_not_swallow_next_tap(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_mouse_press(&a);                            /* no key-down was recorded */
+    alt_tap_key_down(&a, false);
+    ASSERT_TRUE(!alt_tap_key_up(&a));
+    TEST_END();
+}
+
+/* Alt already recorded down: a press swallows its release; a repeat does not
+ * clear that. */
+int test_alt_tap_press_with_alt_already_down(void)
+{
+    TEST_BEGIN();
+    AltTap a;
+    alt_tap_reset(&a);
+    alt_tap_key_down(&a, false);
+    alt_tap_key_down(&a, true);
+    alt_tap_mouse_press(&a);
+    alt_tap_key_down(&a, true);
+    ASSERT_TRUE(alt_tap_key_up(&a));
     TEST_END();
 }

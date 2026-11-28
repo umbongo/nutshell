@@ -6305,9 +6305,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (key_on_keydown(hwnd, wParam, lParam)) return 0;
             break;  /* a character key: TranslateMessage has queued its WM_CHAR */
 
+        case WM_KEYUP:
+            /* With Ctrl also held (Ctrl+Alt, AltGr) Alt's key-up is not a
+             * system message: forget the tap state it would have ended. */
+            if (wParam == VK_MENU) alt_tap_reset(&g_alt_tap);
+            break;
+
         case WM_SYSKEYDOWN: {
             session_mark_terminal_input();
-            if (wParam == VK_MENU) alt_tap_key_down(&g_alt_tap);
+            if (wParam == VK_MENU) alt_tap_key_down(&g_alt_tap, (lParam & (1 << 30)) != 0);
             SysKeyDownResult r = key_on_syskeydown(hwnd, wParam, lParam);
             if (r == SYSKEYDOWN_HANDLED) return 0;
             if (r == SYSKEYDOWN_SENT_AND_PASS)
