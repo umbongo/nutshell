@@ -287,6 +287,28 @@ static int md_test_styled(const char *line, MdSpan *spans, int *first_type)
     return styled;
 }
 
+/* The text a line renders to: every span's content, concatenated. */
+static void md_test_rendered(const char *line, MdSpan *spans, char *out, size_t cap)
+{
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    size_t o = 0;
+    for (int i = 0; i < n; i++)
+        for (int k = spans[i].start; k < spans[i].end && o + 1 < cap; k++)
+            out[o++] = line[k];
+    out[o] = '\0';
+}
+
+/* A line that must come out as its own text with no styled span */
+static int md_test_literal(const char *line)
+{
+    MdSpan spans[MD_MAX_SPANS];
+    char text[256];
+    int ft;
+    if (md_test_styled(line, spans, &ft) != 0) return 0;
+    md_test_rendered(line, spans, text, sizeof(text));
+    return strcmp(text, line) == 0;
+}
+
 /* An underscore between two alphanumerics is not emphasis (CommonMark) */
 int test_md_inline_intraword_underscore_literal(void) {
     TEST_BEGIN();
@@ -296,6 +318,21 @@ int test_md_inline_intraword_underscore_literal(void) {
     ASSERT_EQ(md_test_styled("a_b_c", spans, &ft), 0);
     ASSERT_EQ(md_test_styled("foo__bar__baz", spans, &ft), 0);
     ASSERT_EQ(md_test_styled("x_1 and y_2", spans, &ft), 0);
+    ASSERT_EQ(md_test_styled("foo__bar__", spans, &ft), 0);
+    ASSERT_TRUE(md_test_literal("foo__bar__"));
+    TEST_END();
+}
+
+/* An unclosed opener stays literal: a "__" run inside a word never closes
+ * it, and no marker character is lost. */
+int test_md_inline_intraword_run_does_not_close(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(md_test_literal("_foo snake__case"));
+    ASSERT_TRUE(md_test_literal("__a__b"));
+    ASSERT_TRUE(md_test_literal("foo__bar__"));
+    ASSERT_TRUE(md_test_literal("x__y"));
+    ASSERT_TRUE(md_test_literal("trailing**"));
+    ASSERT_TRUE(md_test_literal("a**"));
     TEST_END();
 }
 

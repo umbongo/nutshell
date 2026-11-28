@@ -282,7 +282,18 @@ static inline int md_parse_inline(const char *line, int len, MdSpan *out)
                 int start = i + 1;
                 int close = start;
                 while (close < len) {
-                    if (line[close] == marker &&
+                    if (marker == '_' && line[close] == marker) {
+                        /* An intraword run never closes, whatever its length. */
+                        int cstars = 0;
+                        while (close + cstars < len && line[close + cstars] == marker)
+                            cstars++;
+                        if (md_run_is_intraword(line, len, close, cstars)) {
+                            close += cstars;
+                            continue;
+                        }
+                    }
+                    /* close > start: an empty span would swallow the markers. */
+                    if (line[close] == marker && close > start &&
                         (close + 1 >= len || line[close + 1] != marker) &&
                         !(marker == '_' && close > 0 &&
                           md_is_alnum_ascii(line[close - 1]) && close + 1 < len &&

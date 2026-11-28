@@ -3639,6 +3639,7 @@ int test_md_inline_strikethrough_offsets(void);
 int test_md_inline_text_bold_text(void);
 int test_md_inline_italic_offsets(void);
 int test_md_inline_intraword_underscore_literal(void);
+int test_md_inline_intraword_run_does_not_close(void);
 int test_md_inline_underscore_at_boundary(void);
 int test_md_inline_intraword_star_unchanged(void);
 int test_md_table_sep_minimal(void);
@@ -8411,6 +8412,7 @@ int main(void) {
     failed += test_md_inline_text_bold_text();
     failed += test_md_inline_italic_offsets();
     failed += test_md_inline_intraword_underscore_literal();
+    failed += test_md_inline_intraword_run_does_not_close();
     failed += test_md_inline_underscore_at_boundary();
     failed += test_md_inline_intraword_star_unchanged();
     failed += test_md_table_sep_minimal();
