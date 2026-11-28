@@ -69,6 +69,8 @@ static int g_cur_is_reply;
 static size_t g_cut;
 static int g_playing, g_read_to_end;
 static unsigned long g_spoken_end_at, g_reply_at;
+static VoiceWordTrail g_trail;              /* the words of the speech being played, with their times */
+static unsigned long g_cut_at;              /* when the last cut-in cut the speech */
 
 static int g_notice_pending;                /* the first reply waits for the notice */
 static int g_notice_checked;                /* asked this conversation */
@@ -387,13 +389,23 @@ static void cancel_batch(void)
 static VoiceTurnClass classify_text(const char *text)
 {
     VoiceReplyCtx ctx;
+    VoiceTurnClass cls;
+    char recent[512];
     ctx.spoken = g_spoken;
     ctx.playing = g_playing;
     ctx.spoken_end_at = g_spoken_end_at;
     ctx.reply = g_reply;
     ctx.reply_at = g_reply_at;
     ctx.read_to_end = g_read_to_end;
-    return voice_turn_classify(text, &ctx, now_ms());
+    ctx.cut_in = g_c.cut_turn;
+    ctx.recent = NULL;
+    if (g_c.cut_turn && g_spoken) {
+        (void)voice_trail_recent(&g_trail, g_spoken, g_cut_at, VOICE_ECHO_RECENT_MS, recent, sizeof recent);
+        ctx.recent = recent;
+    }
+    cls = voice_turn_classify(text, &ctx, now_ms());
+    secure_zero(recent, sizeof recent);
+    return cls;
 }
 
 static void transcript_final(const char *text)
@@ -506,6 +518,7 @@ static void speak_with_context(const char *text, size_t from, int is_reply)
     g_progress_at = 0;
     g_cur_id = ++g_reply_seq;
     g_cur_is_reply = is_reply;
+    voice_trail_reset(&g_trail);
     if (is_reply) {
         g_cut = from;
         g_read_to_end = 0;
@@ -930,6 +943,7 @@ void voice_conv_on_audio(UINT kind, LPARAM lp)
                 voice_conv_event(VCE_UNDUCK, 0, 0);
                 break;
             case VLN_CUT:
+                g_cut_at = now_ms();
                 g_want_mode = VLM_LISTEN;   /* the listener moved itself; no command is sent */
                 voice_conv_event(VCE_CUT, 0, 0);
                 break;
@@ -1099,6 +1113,7 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
         if (m->reply_id == g_cur_id && g_playing) {
             const unsigned long t = now_ms();
             if (g_cur_is_reply) g_cut = m->offset;
+            voice_trail_note(&g_trail, t, m->offset);
             /* The speech is advancing: the Speaking watchdog restarts (at most once a second). */
             if (g_progress_at == 0 || t - g_progress_at >= 1000ul) {
                 g_progress_at = t ? t : 1ul;

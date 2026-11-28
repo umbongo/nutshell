@@ -96,6 +96,7 @@ typedef struct {
     int held, held_continue;      /* a held reply (held_phrase: the WENT_WRONG phrase) */
     int held_phrase;
     int held_local;               /* the held speech was a local repeat or continue */
+    int cut_turn;                 /* the turn being heard began with a voice cut-in on the speech */
     int card;                     /* a card raised while paused: VoiceCardKind + 1, 0 none */
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
     unsigned long state_at;       /* when the state last changed (the watchdogs' clock) */

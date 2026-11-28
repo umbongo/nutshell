@@ -1729,3 +1729,38 @@ int test_vconv_ai_failed_header_text(void)
     ASSERT_STR_EQ(voice_conv_header_text(VCH_AI_FAILED), "AI speech failed: using Windows speech");
     TEST_END();
 }
+
+/* The turn after a cut-in is marked, so its transcript is checked as echo whenever it arrives. */
+int test_vconv_cut_turn_flag(void)
+{
+    TEST_BEGIN();
+    VoiceConv c;
+    unsigned long t;
+    t = goto_state(&c, VCS_SPEAKING, 1);
+    ASSERT_EQ(c.cut_turn, 0);
+    run(&c, VCE_DUCK, 0, 0, t += 10);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    ASSERT_EQ(c.cut_turn, 0);                       /* a cut-in candidate is not a cut yet */
+    run(&c, VCE_CUT, 0, 0, t += 200);
+    ASSERT_EQ(c.cut_turn, 1);
+    run(&c, VCE_TURN_END, 0, 0, t += 1000);
+    ASSERT_EQ(c.state, VCS_ENDING);
+    ASSERT_EQ(c.cut_turn, 1);                       /* still, while the transcript is awaited */
+    run(&c, VCE_LINK_FINAL, 0, 0, t += 100);
+    run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, t += 10);
+    run(&c, VCE_SENT, VSS_SENT, 0, t += 10);
+    ASSERT_EQ(c.state, VCS_WORKING);
+    ASSERT_EQ(c.cut_turn, 0);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    /* a cough that only ducked never sets it */
+    t = goto_state(&c, VCS_SPEAKING, 1);
+    run(&c, VCE_DUCK, 0, 0, t += 10);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_TURN_ABANDON, 0, 0, t += 300);
+    ASSERT_EQ(c.cut_turn, 0);
+    run(&c, VCE_PRESS, 0, 0, t += 10);   /* stops the speech */
+    run(&c, VCE_PRESS, 0, 0, t += 10);   /* ends the conversation */
+    ASSERT_TRUE(clean());
+    TEST_END();
+}

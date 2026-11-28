@@ -126,6 +126,76 @@ int voice_echo_match(const char *spoken, const char *transcript)
     return result;
 }
 
+int voice_echo_fragment(const char *recent, const char *transcript)
+{
+    int result = 0;
+    Words t, s;
+    if (!recent || !transcript) return 0;
+    if (!words_split(transcript, &t)) return 0;
+    if (t.n < 1 || t.n > 2) { words_free(&t); return 0; }
+    if (!words_split(recent, &s)) { words_free(&t); return 0; }
+    size_t j = 0;
+    while (j < s.n && !word_eq(&t, 0, &s, j)) j++;
+    if (j < s.n) {
+        if (t.n == 1) {
+            result = 1;
+        } else {
+            for (j++; j < s.n; j++)
+                if (word_eq(&t, 1, &s, j)) { result = 1; break; }
+        }
+    }
+    words_free(&t); words_free(&s);
+    return result;
+}
+
+void voice_trail_reset(VoiceWordTrail *t)
+{
+    if (t) memset(t, 0, sizeof *t);
+}
+
+void voice_trail_note(VoiceWordTrail *t, unsigned long at, size_t offset)
+{
+    int idx;
+    if (!t) return;
+    if (t->n < VOICE_TRAIL_MAX) {
+        idx = (t->head + t->n) % VOICE_TRAIL_MAX;
+        t->n++;
+    } else {
+        idx = t->head;
+        t->head = (t->head + 1) % VOICE_TRAIL_MAX;
+    }
+    t->at[idx] = at;
+    t->off[idx] = offset;
+}
+
+size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
+                          unsigned long ms, char *out, size_t cap)
+{
+    size_t len = 0, from = 0, to = 0, slen;
+    int have = 0;
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!t || !spoken) return 0;
+    slen = strlen(spoken);
+    {
+        const unsigned long lo = cut_at >= ms ? cut_at - ms : 0ul;
+        for (int i = 0; i < t->n; i++) {
+            const int k = (t->head + i) % VOICE_TRAIL_MAX;
+            if (t->off[k] >= slen || t->at[k] > cut_at || t->at[k] < lo) continue;
+            if (!have) { from = t->off[k]; have = 1; }
+            to = t->off[k];
+        }
+    }
+    if (!have) return 0;
+    while (to < slen && word_byte((unsigned char)spoken[to])) to++;   /* the end of the last word */
+    if (to < from) return 0;
+    len = to - from;
+    if (len > cap - 1) len = cap - 1;
+    memcpy(out, spoken + from, len);
+    out[len] = '\0';
+    return len;
+}
+
 /* ---- phrases ---- */
 
 static const char *const REPEAT_PHRASES[] = {
@@ -201,8 +271,11 @@ VoiceTurnClass voice_turn_classify(const char *transcript, const VoiceReplyCtx *
     if (!r) return VTC_TEXT;
 
     if (r->spoken) {
-        int window = r->playing || (long)(now - r->spoken_end_at) <= VOICE_ECHO_AFTER_MS;
+        /* A cut-in turn is checked however late its transcript arrives (a batch transcription
+         * can take longer than the window). */
+        int window = r->cut_in || r->playing || (long)(now - r->spoken_end_at) <= VOICE_ECHO_AFTER_MS;
         if (window && voice_echo_match(r->spoken, transcript)) return VTC_ECHO;
+        if (r->cut_in && voice_echo_fragment(r->recent, transcript)) return VTC_ECHO;
     }
     if (r->reply && (long)(now - r->reply_at) <= VOICE_PHRASE_MAX_AGE_MS
         && !voice_speak_ends_with_question(r->reply)) {

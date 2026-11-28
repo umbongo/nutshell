@@ -552,6 +552,7 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
     case VCE_CUT:
         if (st != VCS_SPEAKING) return none;
         c->state = VCS_HEARING;   /* the turn opens now (AEC) or at TURN_START (half-duplex) */
+        c->cut_turn = 1;
         /* no mode command: the listener has moved itself to LISTEN with the turn carrying on,
          * and a mode command would wipe that turn */
         return out(VCA_STOP_SPEECH | VCA_UNDUCK | release_caption(c), VCH_HEARING);
@@ -566,6 +567,8 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
     const VoiceConvState before = c->state;
     VoiceConvOut o = step_inner(c, ev, a, b, now);
     if (c->state != before) c->state_at = now;
+    /* the cut-in's turn is over once the conversation is neither hearing it nor awaiting its text */
+    if (c->state != VCS_HEARING && c->state != VCS_ENDING) c->cut_turn = 0;
     return o;
 }
 
