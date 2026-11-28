@@ -127,9 +127,11 @@ static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase
     c->speaking_reply = reply;
     c->local_speech = 0;
     c->idle_seen = 0;
-    if (!(speak & VCA_SPEAK_CONTINUE)) c->false_cuts = c->no_cutin = 0;   /* a new reply or phrase */
     if (!c->stopcap) { c->stopcap = 1; a |= VCA_STOP_CAPTION; }
-    o = out(a, VCH_SPEAKING);
+    /* Voice cut-in is off for the rest of the conversation (or until a genuine cut-in): the
+     * listener is held whatever is spoken, and the header says so. */
+    if (c->no_cutin) a = (a & ~(unsigned)VCA_MODE_SPEAK) | VCA_MODE_HOLD;
+    o = out(a, c->no_cutin ? VCH_IGNORING_OWN_VOICE : VCH_SPEAKING);
     o.phrase = ph;
     return o;
 }
@@ -169,26 +171,28 @@ static VoiceConvOut ending_to_listening(VoiceConv *c, unsigned extra, VoiceConvH
     return enter_listening(c, a, h);
 }
 
+/* A cut-in the user meant (its turn sent, or a command phrase), or a continue or repeat they
+ * asked for: the count of false cuts starts again and voice cut-in is back on. */
+static void genuine_cutin(VoiceConv *c)
+{
+    c->false_cuts = c->no_cutin = 0;
+}
+
 /* The cut-in's turn was the assistant's own echo or nothing: the reply carries on from the cut
- * point by the same path as "carry on". The second false cut within a reply turns voice cut-in
- * off for the rest of it: the listener is held while the reply is read and the header says so.
+ * point by the same path as "carry on". The second false cut in a conversation (counted across
+ * replies; a genuine cut-in clears it) turns voice cut-in off: the listener is held while
+ * the reply is read and the header says so.
  * Nothing here touches the silence clock: it is not a turn the user took. x: the releases of the
  * turn being dropped. */
 static VoiceConvOut false_cut(VoiceConv *c, unsigned x, VoiceConvHeader h)
 {
     const int local = c->local_speech;
     VoiceConvOut o;
-    c->false_cuts++;
-    o = enter_speaking(c, VCA_SPEAK_CONTINUE, VCPH_NONE, 1);
+    if (++c->false_cuts >= VOICE_CONV_FALSE_CUT_MAX) c->no_cutin = 1;
+    o = enter_speaking(c, VCA_SPEAK_CONTINUE, VCPH_NONE, 1);   /* held and headed when cut-in is off */
     o.actions |= x | VCA_DROP_TURN;
     c->local_speech = local;   /* enter_speaking cleared it: a local speech stays local */
-    if (c->false_cuts >= VOICE_CONV_FALSE_CUT_MAX) {
-        c->no_cutin = 1;
-        o.actions = (o.actions & ~(unsigned)VCA_MODE_SPEAK) | VCA_MODE_HOLD;
-        o.header = VCH_IGNORING_OWN_VOICE;
-    } else if (h != VCH_NONE) {
-        o.header = h;
-    }
+    if (!c->no_cutin && h != VCH_NONE) o.header = h;
     return o;
 }
 
@@ -205,6 +209,7 @@ static VoiceConvOut on_transcript(VoiceConv *c, int cls)
     if (cls == VTC_REPEAT || cls == VTC_CONTINUE) {
         unsigned x = VCA_DROP_TURN | release_typing(c) | release_link(c) | release_batch(c);
         VoiceConvOut o;
+        genuine_cutin(c);   /* the user's own phrase: voice cut-in works again */
         o = enter_speaking(c, cls == VTC_REPEAT ? VCA_SPEAK_REPEAT : VCA_SPEAK_CONTINUE,
                            VCPH_NONE, 1);
         o.actions |= x;
@@ -214,6 +219,7 @@ static VoiceConvOut on_transcript(VoiceConv *c, int cls)
         c->sending = 0;
         return o;
     }
+    if (c->cut_turn) genuine_cutin(c);   /* a cut-in the user meant */
     c->sending = 1;
     return out(VCA_SEND_TURN, VCH_NONE);
 }

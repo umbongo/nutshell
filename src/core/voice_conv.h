@@ -99,8 +99,8 @@ typedef struct {
     int held_local;               /* the held speech was a local repeat or continue */
     int cut_turn;                 /* the turn being heard began with a voice cut-in on the speech */
     int cut_reply;                /* ...and the speech it cut was a reply */
-    int false_cuts;               /* cut-ins on this reply that were its own echo or nothing */
-    int no_cutin;                 /* voice cut-in is off for the rest of this reply */
+    int false_cuts;               /* cut-ins in this conversation that were its own echo or nothing */
+    int no_cutin;                 /* voice cut-in is off until a genuine cut-in or the conversation's end */
     int card;                     /* a card raised while paused: VoiceCardKind + 1, 0 none */
     unsigned long sent_at, idle_at, idle_since, final_deadline, held_at;
     unsigned long state_at;       /* when the state last changed (the watchdogs' clock) */
@@ -111,7 +111,7 @@ typedef struct {
 #define VOICE_CONV_IDLE_SAFETY_MS  3000
 #define VOICE_CONV_SILENCE_END_MS  180000
 #define VOICE_CONV_HELD_MAX_MS     30000
-#define VOICE_CONV_FALSE_CUT_MAX   2      /* false cuts in one reply before voice cut-in is off for it */
+#define VOICE_CONV_FALSE_CUT_MAX   2      /* false cuts in a conversation before voice cut-in is off */
 /* Watchdogs for a state that waits on an event that may never come (a lost end, a lost
  * transcript, a lost speech-done). Hearing: the listener's own turn cap is 120 s, plus 10 s.
  * Ending: longer than the upload's own timeouts (88 s send plus 72 s receive for a 120 s
