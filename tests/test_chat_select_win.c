@@ -21,6 +21,8 @@
 #include "ui_theme.h"
 #include "ns_reduced_motion.h"
 #include "ai_prompt.h"
+#include "ai_panel_layout.h"
+#include "thinking_mode.h"
 #include "resource.h"
 
 /* window.c owns these in the app; this harness links without it. */
@@ -735,6 +737,207 @@ int test_chat_select_win_thinking_mode_change_holds_reader_place(void)
         view_close(&tv);
         chat_msg_list_clear(&list);
     }
+    TEST_END();
+}
+
+/* ---- Thinking row: the wheel ------------------------------------------ */
+
+/* A list of `rows` Thinking replies (each `n` reasoning lines, `complete`)
+ * above six long plain replies, in a 420 x 700 view under `pref`, laid out
+ * and painted, then released from the bottom and scrolled to 30 px so the
+ * thread has room to move both ways.  Items are returned in its[]. */
+static int wheel_view(TestView *tv, ChatMsgList *list, ChatMsgItem **its,
+                      int rows, int n, int complete, int pref)
+{
+    chat_msg_list_init(list);
+    for (int i = 0; i < rows; i++) {
+        its[i] = chat_msg_append(list, CHAT_ITEM_AI_TEXT, "answer");
+        set_think_lines(its[i], n, 0);
+        its[i]->u.ai.thinking_complete = complete;
+    }
+    for (int i = 0; i < 6; i++)
+        chat_msg_append(list, CHAT_ITEM_AI_TEXT,
+            "filler\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\n"
+            "line 9\nline 10\nline 11\nline 12");
+    if (!view_open_h(tv, list, 420, 700, 96, 1)) return 0;
+    chat_listview_set_thinking_pref(tv->lv, pref);
+    view_paint(tv, 420);
+    ChatListView *lv = lv_of(tv->lv);
+    if (!lv) return 0;
+    lv->stick_to_bottom = 0;
+    lv->scroll_y = 30;
+    return 1;
+}
+
+/* A client point inside the middle of a Thinking row's body box, from the
+ * same geometry build_thinking_layout() uses at 96 DPI (the item must have
+ * been painted so its wrap is cached).  Returns 0 when there is no body. */
+static int think_body_point(ChatListView *lv, ChatMsgItem *it, int width,
+                            int *x, int *y)
+{
+    const int side = 8;                       /* BASE_SIDE_PAD */
+    const int top = item_top_of(lv, it) - lv->scroll_y;
+    const int lh = it->u.ai.think_cache_line_h;
+    if (top < -100000 || lh <= 0) return 0;
+    NsRect avail = { side + lv->ai_indent, top + 20 + 4,
+                     (width - 2 * side) - (side + lv->ai_indent), 0 };
+    const int cap = think_mode_body_cap((ThinkMode)it->u.ai.thinking_mode, lh,
+                                        ai_thinking_max_body_h(lh));
+    ThinkingLayout tl;
+    thinking_layout(avail, 1, it->u.ai.think_cache_full_h, cap, 96, &tl);
+    if (tl.body.h <= 0) return 0;
+    *x = tl.body.x + tl.body.w / 2;
+    *y = tl.body.y + tl.body.h / 2;
+    return 1;
+}
+
+/* One wheel message: positive delta = wheel up.  The list view's client
+ * origin is the screen origin here (hidden popup host at 0,0). */
+static void send_wheel(HWND lvh, int x, int y, int delta)
+{
+    SendMessageA(lvh, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)(short)delta),
+                 MAKELPARAM(x, y));
+}
+
+/* Content that fits the box: the thread takes the wheel, the box stays. */
+int test_chat_select_win_thinking_wheel_fits_goes_to_thread(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    TestView tv;
+    ChatMsgItem *its[2];
+    ASSERT_TRUE(wheel_view(&tv, &list, its, 1, 2, 0, THINK_PREF_COMPACT));
+    ChatListView *lv = lv_of(tv.lv);
+    ASSERT_NOT_NULL(lv);
+    if (!lv) return 1;
+    its[0]->u.ai.thinking_complete = 0;   /* streaming, but nothing to scroll */
+    int x = 0, y = 0;
+    ASSERT_TRUE(think_body_point(lv, its[0], 420, &x, &y));
+    const int box_before = its[0]->u.ai.thinking_scroll_y;
+    const int before = lv->scroll_y;
+    send_wheel(tv.lv, x, y, -120);
+    ASSERT_EQ(lv->scroll_y, before + 40);
+    ASSERT_EQ(its[0]->u.ai.thinking_scroll_y, box_before);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* A streaming compact box that overflows takes the wheel (the thread stays
+ * put) until the thread has just been scrolled; a finished one never does. */
+int test_chat_select_win_thinking_wheel_streaming_box_takes_it(void)
+{
+    TEST_BEGIN();
+    for (int complete = 0; complete < 2; complete++) {
+        ChatMsgList list;
+        TestView tv;
+        ChatMsgItem *its[2];
+        ASSERT_TRUE(wheel_view(&tv, &list, its, 1, 40, complete,
+                               THINK_PREF_COMPACT));
+        ChatListView *lv = lv_of(tv.lv);
+        ASSERT_NOT_NULL(lv);
+        if (!lv) return 1;
+        int x = 0, y = 0;
+        ASSERT_TRUE(think_body_point(lv, its[0], 420, &x, &y));
+        const int box_before = its[0]->u.ai.thinking_scroll_y;
+        const int before = lv->scroll_y;
+        ASSERT_TRUE(box_before > 0);   /* following the tail of 40 lines */
+        send_wheel(tv.lv, x, y, 120);   /* up */
+        if (!complete) {
+            ASSERT_TRUE(its[0]->u.ai.thinking_scroll_y < box_before);
+            ASSERT_EQ(its[0]->u.ai.thinking_autoscroll, 0);
+            ASSERT_EQ(lv->scroll_y, before);
+            /* the thread scrolled by the wheel (over a filler row, below
+             * the box) latches: the box gives the wheel back at once... */
+            const int box_now = its[0]->u.ai.thinking_scroll_y;
+            send_wheel(tv.lv, 200, 650, -120);
+            ASSERT_EQ(lv->scroll_y, before + 40);
+            ASSERT_TRUE(think_body_point(lv, its[0], 420, &x, &y));
+            send_wheel(tv.lv, x, y, 120);
+            ASSERT_EQ(its[0]->u.ai.thinking_scroll_y, box_now);
+            ASSERT_EQ(lv->scroll_y, before);
+            /* ...and takes it again after 300 ms without thread wheel input */
+            Sleep(400);
+            ASSERT_TRUE(think_body_point(lv, its[0], 420, &x, &y));
+            send_wheel(tv.lv, x, y, 120);
+            ASSERT_TRUE(its[0]->u.ai.thinking_scroll_y < box_now);
+            ASSERT_EQ(lv->scroll_y, before);
+        } else {
+            ASSERT_EQ(its[0]->u.ai.thinking_scroll_y, box_before);
+            ASSERT_EQ(lv->scroll_y, before > 40 ? before - 40 : 0);
+        }
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
+    TEST_END();
+}
+
+/* Extended to open keeps the reader's offset; collapsed then reopened
+ * follows the tail again. */
+int test_chat_select_win_thinking_wheel_mode_change_place(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    TestView tv;
+    ChatMsgItem *its[2];
+    ASSERT_TRUE(wheel_view(&tv, &list, its, 1, 100, 0, THINK_PREF_EXTENDED));
+    ChatListView *lv = lv_of(tv.lv);
+    ASSERT_NOT_NULL(lv);
+    if (!lv) return 1;
+    ChatMsgItem *it = its[0];
+    int x = 0, y = 0;
+    ASSERT_TRUE(think_body_point(lv, it, 420, &x, &y));
+    const int lh = it->u.ai.think_cache_line_h;
+    const int max_ext = it->u.ai.think_cache_full_h - 25 * lh;
+    ASSERT_TRUE(max_ext > 15 * lh);
+    /* scroll up to about 10 lines from the top: wheel up by (max - 10 lines) */
+    const int want = 10 * lh;
+    send_wheel(tv.lv, x, y, ((max_ext - want) * 120) / 40);
+    const int y0 = it->u.ai.thinking_scroll_y;
+    ASSERT_TRUE(y0 > 0 && y0 < max_ext);
+    ASSERT_EQ(it->u.ai.thinking_autoscroll, 0);
+    chat_listview_set_thinking_pref(tv.lv, THINK_PREF_OPEN);
+    view_paint(&tv, 420);
+    ASSERT_EQ(it->u.ai.thinking_mode, THINK_MODE_OPEN);
+    ASSERT_EQ(it->u.ai.thinking_scroll_y, y0);       /* place kept */
+    ASSERT_EQ(it->u.ai.thinking_autoscroll, 0);
+    /* collapse forgets the place; reopened, the box follows the tail */
+    chat_listview_set_thinking_pref(tv.lv, THINK_PREF_COLLAPSED);
+    view_paint(&tv, 420);
+    ASSERT_EQ(it->u.ai.thinking_scroll_y, 0);
+    chat_listview_set_thinking_pref(tv.lv, THINK_PREF_COMPACT);
+    view_paint(&tv, 420);
+    ASSERT_EQ(it->u.ai.thinking_autoscroll, 1);
+    ASSERT_EQ(it->u.ai.thinking_scroll_y,
+              it->u.ai.think_cache_full_h - 4 * it->u.ai.think_cache_line_h);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* Two Thinking rows keep separate follow state: the wheel over one releases
+ * only that one. */
+int test_chat_select_win_thinking_wheel_rows_keep_own_state(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    TestView tv;
+    ChatMsgItem *its[2];
+    ASSERT_TRUE(wheel_view(&tv, &list, its, 2, 40, 0, THINK_PREF_COMPACT));
+    ChatListView *lv = lv_of(tv.lv);
+    ASSERT_NOT_NULL(lv);
+    if (!lv) return 1;
+    int x = 0, y = 0;
+    ASSERT_TRUE(think_body_point(lv, its[1], 420, &x, &y));
+    const int a_before = its[0]->u.ai.thinking_scroll_y;
+    const int b_before = its[1]->u.ai.thinking_scroll_y;
+    send_wheel(tv.lv, x, y, 120);   /* up over the second row's box */
+    ASSERT_EQ(its[1]->u.ai.thinking_autoscroll, 0);
+    ASSERT_TRUE(its[1]->u.ai.thinking_scroll_y < b_before);
+    ASSERT_EQ(its[0]->u.ai.thinking_autoscroll, 1);
+    ASSERT_EQ(its[0]->u.ai.thinking_scroll_y, a_before);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
     TEST_END();
 }
 
