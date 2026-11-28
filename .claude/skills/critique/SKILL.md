@@ -1,12 +1,12 @@
 ---
 name: critique
-description: Get an adversarial Opus critique of a decision before it is committed — a spec, a design choice, a change to what the merge gate or CI enforces, a process rule, a skill. Use when a decision is worth a second opinion; it is a judgement call, not a gate. Encodes how to brief the critic so it argues instead of agreeing, and how every finding is answered.
+description: Get an adversarial critique, by Opus or Fable, of a decision before it is committed — a spec, a design choice, a change to what the merge gate or CI enforces, a process rule, a skill. Use when a decision is worth a second opinion; it is a judgement call, not a gate. Encodes how to brief the critic so it argues instead of agreeing, and how every finding is answered.
 ---
 
-# Critique — Opus argues, the main session decides
+# Critique — a second model argues, the main session decides
 
-Last updated: 2026-09-21 (after its own first critique). Changes are
-recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-28 (the critic is Opus or Fable, never the author's
+model). Changes are recorded in `.claude/CHANGELOG.md`.
 
 CLAUDE.md's rule is to hand off wherever possible without the quality
 suffering; a second opinion on a decision is one such handoff. This skill
@@ -28,14 +28,17 @@ decision.
 - A change to the process sections of CLAUDE.md, or a new or materially
   changed skill under `.claude/skills/`.
 
-Not for: implementation diffs (a diff review is a separate Opus agent
+Not for: implementation diffs (a diff review is a separate Opus or Fable agent
 given the diff), docs that record what already happened, or a fix with
 no decision in it.
 
 ## How to brief the critic
 
-Spawn one agent, `model: opus`, and wait for its report before doing
-anything that depends on it. The brief contains, in this order:
+Spawn one agent and wait for its report before doing anything that
+depends on it. Its model is Opus or Fable, never the model that wrote the
+artefact, with the effort set explicitly. One standing exception, the
+maintainer's instruction (2026-11): critiques of the voice feature's
+architecture and design go to Fable at high effort. The brief contains, in this order:
 
 1. **The artefact itself**, verbatim or by path: the spec, the diff of the
    decision, the skill text. Never a summary of it.

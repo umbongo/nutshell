@@ -5,7 +5,7 @@ description: Survey the state of umbongo/nutshell — branches, tags, open pull 
 
 # Repo status — branches, PRs and checks
 
-Last updated: 2026-11-21 (known state). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-28 (the dated known state became stable facts only). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## Why the naive commands mislead here
 
@@ -54,15 +54,18 @@ A short table: branch, tip subject, relation to `main` (ahead/behind or
 which have an open PR, which are stale. Say explicitly when a number could
 not be measured (shallow history) rather than reporting a wrong one.
 
-## Known state on 2026-11-21
+## Stable facts, checked 2026-11-28
 
-`main` at v1.2.86 (PR #101, `986a7b7`; Dependabot's CodeQL action bump,
-PR #97, merged after it at `be6599f`). Open pull requests: `gh pr list`
-(none on 2026-11-21). `v1.2.41` (at `7960bd2`)
-and `v1.2.60` (at `0f5bf9a`, the comctl32 fix) are snapshot branches with
-no tag. `v1.0.76`
-and `v1.1.21` are still both a branch and a tag, and `git ls-remote --tags
-origin` lists eight `archive/*` tags (a local `git tag` may show fewer); `v1.2.13` is a branch
-only, the backup kept before the v1.2.14 security fixes. Merged feature
-branches are deleted on merge. The only release is v1.1.21 (2026-09-14); no
-v1.2.x tag has been cut. No never-pushed branch on `automaton`.
+Snapshot branches with no tag: `v1.2.13` (the backup kept before the
+v1.2.14 security fixes), `v1.2.41` (at `7960bd2`), `v1.2.60` (at
+`0f5bf9a`, the comctl32 fix) and `v1.2.89` (at `4c1a4e7`, the backup
+before the AI switch and voice work). `v1.0.76` and `v1.1.21` are both a
+branch and a tag, and `git ls-remote --tags origin` lists eight
+`archive/*` tags (a local `git tag` may show fewer). Merged feature
+branches are deleted on merge; a local copy and its worktree under
+`~/nutshell-wt/` can outlive the merge. The only release is v1.1.21
+(2026-09-14). `docs/voice-realtime-speech-spec` is local-only on
+`automaton` (one commit, `f79e110`: the Realtime API alternative to AI
+speech, set aside, *reported*). The version on `main`, the open pull
+requests and the branches in flight are measured each time, never read
+from here.

@@ -4,6 +4,61 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-28 — retrospective of PRs #102 to #122 (20 merges)
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-fable-5-2 (main session, the retrospective and the edits); claude-sonnet-5-5 (token-use measurement, notes compaction); claude-opus-5-5 (process review, critique).
+
+The maintainer said yes to a retrospective at 20 merges since `be6599f`. It is
+`docs/retrospectives/2026-11-28-twenty-merges-retrospective.md`; token use is in
+`docs/token-usage/2026-11-28-first-window-after-loop-change.json`.
+
+- **Recorded late: the maintainer's rule of 2026-11-25**, that every review is run by a model
+  other than the one that wrote the code, Opus or Fable only. It reached `feature-workflow`
+  that day with no entry here, and CLAUDE.md still said "an Opus agent". **CLAUDE.md**,
+  quality checks, and **`skills/feature-workflow/SKILL.md`**, Allocation, now both say an Opus
+  or Fable agent, never the model that wrote the code.
+- **`memory/MEMORY.md`**: the last-retrospective marker moves to `4897425` (PR #122); token
+  use (the first window after the loop change, too short to judge); the settings trim was not
+  in effect on 2026-11-28; `automaton` has 4 cores and 7 GB (an unbounded `make -j release`
+  was killed, *reported* from PR #120's ledger) and a 249 GB root; what Wine cannot do; a new
+  config field goes into the selftest and harness configs; the test baselines (4,673 hosted,
+  4,632 stub, `wintest` 257); exe facts; "Open items worth knowing" rewritten for v1.3.2.
+- **`skills/critique/SKILL.md`**: the critic is Opus or Fable, never the author's model, with
+  the effort set; the maintainer's instruction that voice design critiques go to Fable at high
+  effort is stated as the one exception. Description and heading no longer say Opus only.
+- **`skills/checkpoint/SKILL.md`**: step 2 leaves alone any Open item an unmerged branch edits
+  (this compaction ran beside three branches editing the notes); step 4's figure for
+  `feature-workflow` is about 260.
+- **`skills/feature-workflow/SKILL.md`**: 68 of the 106 idle rewrites were the orchestrators'
+  (it said 64).
+- **`skills/repo-status/SKILL.md`**: the dated "known state" became stable facts only (the
+  snapshot branches with `v1.2.89` added, the tag collisions, the local-only spec branch); the
+  version, open pull requests and branches in flight are measured each time.
+
+Critique (Opus, on the diff of these edits), ten findings:
+
+1. No changelog entry though the retrospective cited one: accepted, this entry.
+2. A small-branch review rule written into CLAUDE.md in the maintainer's voice, which the
+   maintainer never gave: accepted, removed. It is the retrospective's recommendation R7 and
+   is in the pull request body for a yes or no.
+3. "One such review" had no referent for a branch with no tasks: accepted, gone with 2; R7's
+   wording says "by a model that did not write it".
+4. `feature-workflow` and `critique` still said "Opus agent" in three places: accepted, fixed.
+5. The voice-critique instruction was reduced to history: accepted, restated as the exception.
+   (Its remark that this critique broke the rule assumed an Opus main session; it was Fable.)
+6. MEMORY.md said the trim works and that it does not: accepted, one bullet now.
+7. "Every retrospective compares token use (maintainer)" overstated the attribution: accepted,
+   reworded; the maintainer asked for one comparison, the skill measures each time.
+8. `checkpoint` is over its own 100-line guide (125 lines): partly accepted, the new rule cut
+   to two lines; the skill is not shortened here.
+9. The compaction rule missed local-only branches and overstated the conflict: accepted.
+10. The `repo-status` known state was stale as written: accepted, stable facts only.
+
+Not verified by the critic and left as stated: the hosted and stub test counts (from the PR
+#122 check log and the build agents' reports); that the Realtime spec was set aside
+(*reported*).
+
 ## 2026-11-26 — one final review, by the model that did not review the tasks
 
 Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.

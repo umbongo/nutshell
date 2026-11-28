@@ -5,7 +5,7 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-11-26 (token use measured at every retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-28 (the compaction leaves in-flight branches' Open items alone; before that, token use measured at every retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
@@ -76,12 +76,14 @@ worktrees and leaves the tree ready for a new session.
    Read each merged PR body's "not run", "Not verified", "Follow-ups",
    "Deferred" and "Known limits" sections and carry into Open what the
    notes lack (why: the 2026-11-12 retrospective, "Rules added").
+   Leave untouched any Open item an unmerged branch edits (open pull
+   requests, worktrees and local-only branches): it would conflict there.
 3. **Update `MEMORY.md`.** Add only facts that will still be true next
    session (host limits, gate rules, API quirks, ref layout). Remove
    anything the docs now state better. Bump its "Last updated" line.
 4. **Update or add skills** when a procedure was learned the hard way.
    One skill per job; keep each under about 100 lines (`feature-workflow`,
-   at about 200, is the known exception: it restates the whole merge path).
+   at about 260, is the known exception: it restates the whole merge path).
 5. **Review the workflows.** Read every file under `.github/workflows/`
    and `.github/scripts/`, and the "Branches, pull requests and the merge
    gate" and "Software Development Rules" sections of CLAUDE.md. For each,
