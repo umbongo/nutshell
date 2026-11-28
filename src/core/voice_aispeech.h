@@ -44,7 +44,7 @@ typedef struct {
 /* 1 and *t filled, or 0 with a user-facing reason in err (err may be NULL). The
  * reasons: "The speech provider is not known", "Enter the speech Base URL", "The
  * speech Base URL is not valid", "The speech Base URL is too long" (the key binding "custom "
- * + the base would not fit), "Enter the speech model your server uses", "Enter
+ * + the base would not fit, and the speech key is its own and one is typed), "Enter the speech model your server uses", "Enter
  * the voice your server uses" and, when the provider needs a key and
  * voice_ais_key() gives "", "Enter a speech API key". An empty model or voice takes
  * Mistral's default; Custom has none. */
@@ -96,6 +96,10 @@ int  voice_ais_failure_fatal(long hr);
 long voice_ais_decoder_failure(int format_err, int notwav_err, uint64_t frames_decoded);
 /* The reason for the chat note, no full stop: for RESOLVE it is resolve_err. */
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap);
+/* The same for a known provider id ("mistral" or "custom"; NULL is as the one above): a 3xx
+ * for Mistral does not say "check the Base URL", which it has no row for. */
+void voice_ais_failure_reason_for(const char *provider, long hr, const char *resolve_err,
+                                  char *out, size_t cap);
 
 /* The most audio one request may deliver: 5 minutes of 24 kHz frames. A server that sends
  * more (an endless body) fails that chunk as VOICE_AIS_HR_STREAM and the request is closed. */
@@ -103,12 +107,27 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
 /* 1 when `total` frames already taken plus `add` more pass VOICE_AIS_MAX_FRAMES (exactly the
  * cap is allowed); the addition cannot wrap. */
 int  voice_ais_audio_over_cap(uint64_t total, uint64_t add);
-/* The same against any cap (the wintest seam lowers it): 1 when total + add > cap. */
+/* The most wall-clock time one request may stay open: 6 minutes, 20% over the 5 minutes of
+ * audio the frame cap allows, so a server that streams slightly slower than real time still
+ * finishes, while a stream that never ends and carries no audio (Mistral keep-alive lines, a
+ * server that stalls after the header) cannot hold the request, the render queue and the
+ * speech-request ledger slot until the 10-minute Speaking watchdog fires. The cap is checked
+ * as each piece of the audio stream arrives, so it covers the stream only: an error body
+ * (status 300 or more) is read by ai_http_win.c without a callback and is bounded by its 64 KB
+ * limit and the receive timeout instead. */
+#define VOICE_AIS_MAX_REQUEST_MS 360000u
+/* 1 when more than cap_ms milliseconds passed between two reads of one 64-bit tick source
+ * (GetTickCount64): the unsigned difference, so a counter that wrapped between the reads
+ * still gives the true elapsed time; exactly the cap is allowed. */
+int  voice_ais_request_too_long(uint64_t start_ms, uint64_t now_ms, uint64_t cap_ms);
+/* voice_ais_audio_over_cap() against any cap (the wintest seam lowers it): 1 when
+ * total + add > cap. */
 int  voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap);
 
 /* The Voice page's note for a Play sample that failed after it started:
  * "Could not play the sample: <voice_ais_failure_reason(hr)>". Cut and terminated to cap. */
 void voice_ais_sample_failure_note(long hr, char *out, size_t cap);
+void voice_ais_sample_failure_note_for(const char *provider, long hr, char *out, size_t cap);
 
 /* Mistral's stream, one SSE line at a time (lines from sse_line_feed). */
 typedef enum { VAIS_EV_NONE = 0, VAIS_EV_AUDIO, VAIS_EV_DONE, VAIS_EV_ERROR } VoiceAisEvKind;

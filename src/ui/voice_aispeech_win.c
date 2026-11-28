@@ -85,6 +85,7 @@ static unsigned g_gen = AIS_GEN_BASE;
 static VoiceAisFetch g_fetch;
 static size_t g_max_chunks = AIS_MAX_CHUNKS;
 static volatile LONG64 g_max_frames = VOICE_AIS_MAX_FRAMES;
+static volatile LONG64 g_max_request_ms = VOICE_AIS_MAX_REQUEST_MS;
 
 static void lock(void)   { EnterCriticalSection(&g_lock); }
 static void unlock(void) { LeaveCriticalSection(&g_lock); }
@@ -92,6 +93,7 @@ static void unlock(void) { LeaveCriticalSection(&g_lock); }
 void voice_ais_set_fetch(VoiceAisFetch f) { g_fetch = f; }
 void voice_ais_test_max_chunks(size_t n) { g_max_chunks = n ? n : AIS_MAX_CHUNKS; }
 void voice_ais_test_max_frames(uint64_t n) { g_max_frames = n ? (LONG64)n : (LONG64)VOICE_AIS_MAX_FRAMES; }
+void voice_ais_test_max_request_ms(uint64_t ms) { g_max_request_ms = ms ? (LONG64)ms : (LONG64)VOICE_AIS_MAX_REQUEST_MS; }
 
 /* ---- small helpers ---- */
 
@@ -342,6 +344,7 @@ typedef struct {
     int fmt_err;                        /* the decoder error was "unsupported audio format" */
     int notwav_err;                     /* the decoder error was "not a WAV stream" */
     uint64_t frames;                    /* decoded frames of this request, against VOICE_AIS_MAX_FRAMES */
+    ULONGLONG started;                  /* GetTickCount64() at the request, against VOICE_AIS_MAX_REQUEST_MS */
     VoiceWavStream wav;
     SseLine sse;
     VoiceAisSse st;
@@ -361,6 +364,9 @@ static int fetch_feed(AisFetch *f, const unsigned char *p, size_t n)
             f->notwav_err = voice_wavs_error_is_notwav(&f->wav);
             return 1;
         }
+        /* More than a trailer's worth of bytes after the declared end is audio the header did not
+         * declare: fail as a stream rather than hold the request open until the time cap. */
+        if (voice_wavs_after_end(&f->wav, 0) == VWS_AFTER_FAIL) { f->failed = 1; return 1; }
         if (got > 0) {
             /* An endless body must not become endless queued audio: past the cap the request is
              * closed (the stream callback's 1 ends the read) and the chunk fails as a stream. */
@@ -398,6 +404,13 @@ static int fetch_sse_line(const char *line, size_t len, void *ctx)
 static int fetch_stream_cb(const char *data, size_t len, void *ctx)
 {
     AisFetch *f = (AisFetch *)ctx;
+    /* A stream that runs past the wall-clock cap, audio or not (keep-alive lines carry none), is
+     * closed and fails as a stream, the same way as the frame cap. */
+    if (voice_ais_request_too_long((uint64_t)f->started, (uint64_t)GetTickCount64(),
+                                   (uint64_t)g_max_request_ms)) {
+        f->failed = 1;
+        return 1;
+    }
     if (f->mistral) return sse_line_feed(&f->sse, data, len, fetch_sse_line, f);
     return fetch_feed(f, (const unsigned char *)data, len);
 }
@@ -431,6 +444,7 @@ static long ais_fetch(void *job, const VoiceAisTarget *t, const char *key, const
         f->job = job;
         f->push = push;
         f->mistral = t->shape == VAIS_SHAPE_MISTRAL;
+        f->started = GetTickCount64();
         voice_wavs_init(&f->wav, f->mistral ? AIS_MISTRAL_RAW : VWS_RAW_NONE);
         sse_line_init(&f->sse);
         voice_ais_sse_init(&f->st);                      /* once per request: audio_seen is per stream */
@@ -447,6 +461,9 @@ static long ais_fetch(void *job, const VoiceAisTarget *t, const char *key, const
         }
         secure_zero(err, sizeof(err));                    /* it may hold the server's reply body */
         DLOG(DLOG_AI, DLOG_INFO, 0, "voice.speech_request", "kind=%s status=%d", t->provider, status);
+        if (voice_wavs_trailer(&f->wav) > 0)              /* a count only, never the bytes */
+            DLOG(DLOG_AI, DLOG_INFO, 0, "voice.speech_trailer", "bytes=%llu",
+                 (unsigned long long)voice_wavs_trailer(&f->wav));
 
         if (rc != 0) {
             r = status >= 300 ? (long)status : VOICE_AIS_HR_NET;

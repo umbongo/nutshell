@@ -58,26 +58,51 @@ static int blank(const char *s)
     return 1;
 }
 
-/* host[:port] of an http(s) URL whose authority has no userinfo (authority_unreadable). */
+/* host[:port] of an http(s) URL whose authority passed base_unreadable(). */
 static void url_host(const char *url, char *out, size_t cap)
 {
     const char *p = strstr(url, "://");
     p = p ? p + 3 : url;
     size_t n = strcspn(p, "/?#");
     if (n + 1 > cap) n = cap ? cap - 1 : 0;
-    if (cap) { memcpy(out, p, n); out[n] = '\0'; }
+    if (cap) {
+        memcpy(out, p, n);
+        if (n > 0 && out[n - 1] == ':') n--;       /* an empty port names the host alone */
+        out[n] = '\0';
+    }
 }
 
-/* 1 when the authority (between "://" and the next "/", "?" or "#") has an "@" or a "[": a
- * userinfo or an IPv6 literal, which the privacy line's reader and WinHTTP's URL parser read
- * differently, so the line could name a host the request does not go to. */
-static int authority_unreadable(const char *url)
+/* 1 when the normalised base cannot be sent as it reads. The privacy line's reader and the
+ * request's URL parser (parse_url in ai_http_win.c, which ends the host only at ":" or "/" and
+ * reads the port with atoi) must see the same host, so refused are: a "?" or "#" anywhere (a
+ * query or fragment would also swallow the "/audio/speech" appended after it), a space, a
+ * control character, a byte of 0x80 or more or a backslash anywhere, and in the authority (up
+ * to the first "/") an "@" (userinfo), a "[" (IPv6 literal), an empty host and a port that is
+ * not 1 to 65535 (an empty port, "h:", is the default port and passes). A trailing dot on the host is a valid name and is kept as typed. */
+static int base_unreadable(const char *url)
 {
     const char *p = strstr(url, "://");
     p = p ? p + 3 : url;
-    size_t n = strcspn(p, "/?#");
-    for (size_t i = 0; i < n; i++)
+    for (const char *c = url; *c; c++) {
+        unsigned char u = (unsigned char)*c;
+        if (u <= 0x20 || u >= 0x7F || u == '?' || u == '#' || u == '\\') return 1;
+    }
+    size_t n = strcspn(p, "/");
+    size_t host = n;
+    for (size_t i = 0; i < n; i++) {
         if (p[i] == '@' || p[i] == '[') return 1;
+        if (p[i] == ':' && host == n) host = i;
+    }
+    if (host == 0) return 1;
+    if (host < n) {
+        unsigned long port = 0;
+        if (n - host - 1 > 5) return 1;      /* an empty port is the default, as parse_url reads it */
+        for (size_t i = host + 1; i < n; i++) {
+            if (p[i] < '0' || p[i] > '9') return 1;
+            port = port * 10 + (unsigned long)(p[i] - '0');
+        }
+        if (n - host - 1 > 0 && (port == 0 || port > 65535)) return 1;
+    }
     return 0;
 }
 
@@ -147,7 +172,7 @@ int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t ca
         char base[512];
         if (blank(s->voice_tts_url)) { put_err(err, cap, "Enter the speech Base URL"); return 0; }
         if (!voice_base_url_normalise(s->voice_tts_url, base, sizeof base) ||
-            authority_unreadable(base) ||
+            base_unreadable(base) ||
             snprintf(t->url, sizeof t->url, "%s" SPEECH_SUFFIX, base) >= (int)sizeof t->url) {
             put_err(err, cap, "The speech Base URL is not valid");
             return 0;
@@ -155,7 +180,10 @@ int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t ca
         url_host(base, t->host, sizeof t->host);
         char bind[CFG_STR_MAX];
         voice_ais_binding(s, bind, sizeof bind);
-        if (bind[0] == '\0') {          /* "custom " + base does not fit: no key could ever match */
+        /* "custom " + base does not fit: no own key could ever match. That matters only when an
+         * own key is the one in use and one is typed; a keyless server, or one that shares the
+         * speech-to-text or chat key, never reads the binding. */
+        if (bind[0] == '\0' && voice_ais_key_shared(s) == VAIS_KEY_OWN && s->tts_api_key[0]) {
             put_err(err, cap, "The speech Base URL is too long");
             return 0;
         }
@@ -288,6 +316,12 @@ long voice_ais_decoder_failure(int format_err, int notwav_err, uint64_t frames_d
 
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap)
 {
+    voice_ais_failure_reason_for(NULL, hr, resolve_err, out, cap);
+}
+
+void voice_ais_failure_reason_for(const char *provider, long hr, const char *resolve_err,
+                                  char *out, size_t cap)
+{
     if (!out || cap == 0) return;
     switch (hr) {
     case 401:
@@ -318,8 +352,12 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
         snprintf(out, cap, "the speech stream was broken");
         break;
     default:
-        if (hr >= 300 && hr <= 399)
-            snprintf(out, cap, "the server redirected the request (HTTP %ld): check the Base URL", hr);
+        if (hr >= 300 && hr <= 399) {
+            /* Mistral has no Base URL row to check */
+            int mistral = provider && strcmp(provider, "mistral") == 0;
+            snprintf(out, cap, "the server redirected the request (HTTP %ld)%s", hr,
+                     mistral ? "" : ": check the Base URL");
+        }
         else if (hr > 0) snprintf(out, cap, "the speech provider returned HTTP %ld", hr);
         else snprintf(out, cap, "the speech request failed");
         break;
@@ -328,9 +366,14 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
 
 void voice_ais_sample_failure_note(long hr, char *out, size_t cap)
 {
+    voice_ais_sample_failure_note_for(NULL, hr, out, cap);
+}
+
+void voice_ais_sample_failure_note_for(const char *provider, long hr, char *out, size_t cap)
+{
     if (!out || cap == 0) return;
     char reason[160];
-    voice_ais_failure_reason(hr, NULL, reason, sizeof reason);
+    voice_ais_failure_reason_for(provider, hr, NULL, reason, sizeof reason);
     snprintf(out, cap, "Could not play the sample: %s", reason);
 }
 
@@ -338,6 +381,11 @@ int voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap)
 {
     if (total > cap) return 1;
     return add > cap - total;
+}
+
+int voice_ais_request_too_long(uint64_t start_ms, uint64_t now_ms, uint64_t cap_ms)
+{
+    return (uint64_t)(now_ms - start_ms) > cap_ms;
 }
 
 int voice_ais_audio_over_cap(uint64_t total, uint64_t add)
