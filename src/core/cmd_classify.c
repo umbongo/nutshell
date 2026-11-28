@@ -2491,7 +2491,9 @@ static int classify_line_wrapper(const char *base, size_t bl, const char *p,
         else if (positional && !inner_reason[0])
             snprintf(reason, cap, "%.*s -c: positional arguments follow the command line",
                      (int)bl, base);
-        else snprintf(reason, cap, "%.*s -c: %s", (int)bl, base, inner_reason);
+        else if (inner_reason[0])
+            snprintf(reason, cap, "%.*s -c: %s", (int)bl, base, inner_reason);
+        /* else: the body gave no reason; the caller names what raised it. */
         return 1;
     }
 
@@ -2504,8 +2506,9 @@ static int classify_line_wrapper(const char *base, size_t bl, const char *p,
         }
         *lvl = classify_inner_line(line, inner_reason, sizeof inner_reason);
         if (trunc && *lvl < CMD_UNKNOWN) *lvl = CMD_UNKNOWN;
-        snprintf(reason, cap, "eval: %s",
-                 trunc ? "command line too long to classify" : inner_reason);
+        if (trunc || inner_reason[0])
+            snprintf(reason, cap, "eval: %s",
+                     trunc ? "command line too long to classify" : inner_reason);
         return 1;
     }
 
@@ -2532,8 +2535,9 @@ static int classify_line_wrapper(const char *base, size_t bl, const char *p,
         *lvl = words ? classify_inner_line(line, inner_reason, sizeof inner_reason)
                      : CMD_UNKNOWN;
         if (!words) snprintf(reason, cap, "watch without a command");
-        else snprintf(reason, cap, "watch: %s",
-                      trunc ? "command line too long to classify" : inner_reason);
+        else if (trunc || inner_reason[0])
+            snprintf(reason, cap, "watch: %s",
+                     trunc ? "command line too long to classify" : inner_reason);
         if ((unknown_flag || trunc) && *lvl < CMD_UNKNOWN) *lvl = CMD_UNKNOWN;
         if (unknown_flag && *lvl == CMD_UNKNOWN && (!words || !inner_reason[0]))
             snprintf(reason, cap, "watch: option outside the known-safe set");
@@ -3329,8 +3333,17 @@ static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len
         if (classify_line_wrapper(base1, base1_len, p, seg_end, &wl, wr, sizeof wr)) {
             if (redir > wl) wl = redir;
             if (has_sudo && wl < CMD_WRITE) wl = CMD_WRITE;
-            if (wl > CMD_READ && wr[0] && reason_buf && reason_buf_size > 0)
-                snprintf(reason_buf, reason_buf_size, "%s", wr);
+            if (wl > CMD_READ && reason_buf && reason_buf_size > 0) {
+                if (wr[0])
+                    snprintf(reason_buf, reason_buf_size, "%s", wr);
+                else if (has_sudo)
+                    snprintf(reason_buf, reason_buf_size, "sudo escalation of %.*s",
+                             (int)base1_len, base1);
+                else if (redir >= wl)
+                    snprintf(reason_buf, reason_buf_size,
+                             "%.*s: output redirection writes to a file",
+                             (int)base1_len, base1);
+            }
             return wl;
         }
     }
@@ -4534,9 +4547,14 @@ static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len
 
     {
         CmdSafetyLevel level = CMD_UNKNOWN;
-        if (reason_buf && reason_buf_size > 0)
-            snprintf(reason_buf, reason_buf_size, "unrecognised command: %.*s",
-                     (int)base1_len, base1);
+        if (reason_buf && reason_buf_size > 0) {
+            if (base1_len == 0)
+                snprintf(reason_buf, reason_buf_size,
+                         "unrecognised command: the first word is empty after unquoting");
+            else
+                snprintf(reason_buf, reason_buf_size, "unrecognised command: %.*s",
+                         (int)base1_len, base1);
+        }
         return level > redir ? level : redir;
     }
 }
@@ -8285,9 +8303,9 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
  * metacharacters, or a quote or escape is left open, the command is
  * ambiguous -- see "Quoting model" above -- and the result is the worse of
  * both readings, never better than CMD_UNKNOWN. */
-static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
-                                    char *reason_buf, size_t reason_buf_size,
-                                    unsigned *mask_out)
+static CmdSafetyLevel classify_core_body(const char *command, CmdPlatform platform,
+                                         char *reason_buf, size_t reason_buf_size,
+                                         unsigned *mask_out)
 {
     if (!command || !command[0]) {
         if (reason_buf && reason_buf_size > 0)
@@ -8338,6 +8356,49 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
     }
     if (mask_out) *mask_out = mask_a | mask_b | CMD_MASK_OF(CMD_UNKNOWN);
     return worst;
+}
+
+/* The class reason of a command above READ is never blank and never ends in a
+ * bare prefix ("sh -c: "). The rules name their own reasons; this is the net
+ * for a path that wrote none, or a prefix with nothing after it. It changes
+ * no level. */
+static void reason_finalize(const char *command, CmdSafetyLevel level,
+                            char *reason_buf, size_t reason_buf_size)
+{
+    size_t n;
+    if (!reason_buf || reason_buf_size == 0) return;
+    n = strlen(reason_buf);
+    while (n > 0 && (reason_buf[n - 1] == ' ' || reason_buf[n - 1] == ':')) n--;
+    if (n < strlen(reason_buf)) {
+        /* "<prefix>: " with nothing after it */
+        char tmp[256];
+        snprintf(tmp, sizeof tmp, "%.*s", (int)(n < sizeof tmp ? n : sizeof tmp - 1), reason_buf);
+        snprintf(reason_buf, reason_buf_size,
+                 "%s: the rules found nothing more specific to say", tmp);
+        if (n == 0) reason_buf[0] = '\0';
+    }
+    if (level > CMD_READ && reason_buf[0] == '\0') {
+        if (scan_redirects(command, strlen(command)) >= level)
+            snprintf(reason_buf, reason_buf_size, "output redirection writes to a file");
+        else if (level == CMD_UNKNOWN)
+            snprintf(reason_buf, reason_buf_size, "no rule recognises this command line");
+        else if (level == CMD_WRITE)
+            snprintf(reason_buf, reason_buf_size, "a rule rates this command as changing state");
+        else
+            snprintf(reason_buf, reason_buf_size,
+                     "a rule rates this command as able to cause an outage or data loss");
+    }
+}
+
+static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
+                                    char *reason_buf, size_t reason_buf_size,
+                                    unsigned *mask_out)
+{
+    CmdSafetyLevel level;
+    if (reason_buf && reason_buf_size > 0) reason_buf[0] = '\0';
+    level = classify_core_body(command, platform, reason_buf, reason_buf_size, mask_out);
+    if (command) reason_finalize(command, level, reason_buf, reason_buf_size);
+    return level;
 }
 
 CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,

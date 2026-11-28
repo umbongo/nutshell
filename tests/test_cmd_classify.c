@@ -4973,6 +4973,74 @@ int test_nxos_asa_do_own_tables(void) {
     TEST_END();
 }
 
+/* The "why this level" text is never blank and never a bare prefix such as
+ * "sh -c: ". `level` pins today's classification (no level changed). */
+static int reason_is_clean(const char *why, CmdSafetyLevel lv)
+{
+    size_t n = strlen(why);
+    if (lv > CMD_READ && n == 0) return 0;
+    while (n > 0 && why[n - 1] == ' ') n--;
+    if (n > 0 && why[n - 1] == ':') return 0;
+    return 1;
+}
+
+int test_class_reasons_never_blank(void) {
+    TEST_BEGIN();
+    static const struct { const char *cmd; int level; } rows[] = {
+        { "sh -c 'ls'", 0 }, { "bash -c 'ls -l'", 0 }, { "sh -c ''", 1 },
+        { "sh -c '   '", 0 }, { "sh -c", 1 }, { "sh -c 'echo hi' arg0", 1 },
+        { "sh -c 'ls' > /tmp/x", 2 }, { "sudo ls", 2 }, { "sudo", 2 },
+        { "env", 0 }, { "env ls", 0 }, { "xargs", 2 }, { "xargs ls", 2 },
+        { "parallel ls", 2 }, { "watch ls", 0 }, { "watch", 1 },
+        { "watch ls > /tmp/x", 2 }, { "eval ls", 0 }, { "eval", 1 },
+        { "eval ''", 1 }, { "eval ls > /tmp/x", 2 },
+        { "ls | grep x", 0 }, { "ls; pwd", 0 }, { "echo $(ls)", 1 },
+        { "sudo sh -c 'ls'", 2 }, { "sudo bash -c 'ls -l'", 2 },
+        { "sudo sh -c ''", 2 }, { "sudo eval ls", 2 }, { "sudo watch ls", 2 },
+        { "sudo xargs ls", 2 }, { "sudo env ls", 2 },
+        { "sudo sh -c 'sudo sh -c ls'", 2 }, { "sh -c 'sh -c ls > /etc/out'", 2 },
+        { "sh -c '\\' > /tmp/x", 2 }, { "sudo sh -c '\\'", 2 },
+        { "eval '\\''", 1 }, { "sudo eval '\\''", 2 },
+        { "ls > /tmp/x", 2 }, { "sudo ls > /tmp/x", 2 },
+        { "sh -c 'rm -rf /'", 3 }, { "sh -c 'frobnicate'", 1 },
+        { "sh -c 'echo $(ls)'", 1 }, { "frobnicate", 1 },
+        { "sh -c 'ls", 1 }, { "", 0 }, { "   ", 0 }, { "\t", 0 },
+    };
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        char why[256] = "";
+        CmdSafetyLevel lv = cmd_classify_ex(rows[i].cmd, CMD_PLATFORM_LINUX, why, sizeof why);
+        if (!reason_is_clean(why, lv) || (int)lv != rows[i].level)
+            printf("  [%s] level %d (want %d) reason [%s]\n", rows[i].cmd, (int)lv,
+                   rows[i].level, why);
+        ASSERT_EQ((int)lv, rows[i].level);
+        ASSERT_TRUE(reason_is_clean(why, lv));
+        /* the same shapes under the other rulesets: reason clean, level free */
+        static const CmdPlatform others[] = {
+            CMD_PLATFORM_UNKNOWN, CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_JUNOS };
+        for (size_t k = 0; k < sizeof others / sizeof others[0]; k++) {
+            char w2[256] = "";
+            CmdSafetyLevel l2 = cmd_classify_ex(rows[i].cmd, others[k], w2, sizeof w2);
+            if (!reason_is_clean(w2, l2))
+                printf("  [%s] platform %d level %d reason [%s]\n", rows[i].cmd,
+                       (int)others[k], (int)l2, w2);
+            ASSERT_TRUE(reason_is_clean(w2, l2));
+        }
+    }
+    /* A wrapper whose level comes from sudo or a redirect says so. */
+    {
+        char why[256] = "";
+        (void)cmd_classify_ex("sudo sh -c 'ls'", CMD_PLATFORM_LINUX, why, sizeof why);
+        ASSERT_NOT_NULL(strstr(why, "sudo"));
+        why[0] = '\0';
+        (void)cmd_classify_ex("sh -c 'ls' > /tmp/x", CMD_PLATFORM_LINUX, why, sizeof why);
+        ASSERT_NOT_NULL(strstr(why, "redirect"));
+        why[0] = '\0';
+        (void)cmd_classify_ex("eval ls > /tmp/x", CMD_PLATFORM_LINUX, why, sizeof why);
+        ASSERT_NOT_NULL(strstr(why, "redirect"));
+    }
+    TEST_END();
+}
+
 int test_nxos_asa_debug_aligned(void) {
     TEST_BEGIN();
     ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));
