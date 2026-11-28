@@ -291,6 +291,12 @@ long voice_ais_decoder_failure(int format_err, int notwav_err, uint64_t frames_d
 
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap)
 {
+    voice_ais_failure_reason_for(NULL, hr, resolve_err, out, cap);
+}
+
+void voice_ais_failure_reason_for(const char *provider, long hr, const char *resolve_err,
+                                  char *out, size_t cap)
+{
     if (!out || cap == 0) return;
     switch (hr) {
     case 401:
@@ -321,8 +327,12 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
         snprintf(out, cap, "the speech stream was broken");
         break;
     default:
-        if (hr >= 300 && hr <= 399)
-            snprintf(out, cap, "the server redirected the request (HTTP %ld): check the Base URL", hr);
+        if (hr >= 300 && hr <= 399) {
+            /* Mistral has no Base URL row to check */
+            int mistral = provider && strcmp(provider, "mistral") == 0;
+            snprintf(out, cap, "the server redirected the request (HTTP %ld)%s", hr,
+                     mistral ? "" : ": check the Base URL");
+        }
         else if (hr > 0) snprintf(out, cap, "the speech provider returned HTTP %ld", hr);
         else snprintf(out, cap, "the speech request failed");
         break;
@@ -331,9 +341,14 @@ void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_
 
 void voice_ais_sample_failure_note(long hr, char *out, size_t cap)
 {
+    voice_ais_sample_failure_note_for(NULL, hr, out, cap);
+}
+
+void voice_ais_sample_failure_note_for(const char *provider, long hr, char *out, size_t cap)
+{
     if (!out || cap == 0) return;
     char reason[160];
-    voice_ais_failure_reason(hr, NULL, reason, sizeof reason);
+    voice_ais_failure_reason_for(provider, hr, NULL, reason, sizeof reason);
     snprintf(out, cap, "Could not play the sample: %s", reason);
 }
 

@@ -766,6 +766,26 @@ int test_vais_decoder_failure_hr(void)
 }
 
 /* F2: the Voice page's note when a Play sample fails after it resolved and started. */
+/* Mistral has no Base URL row, so its redirect reason does not send the user to one. */
+int test_vais_redirect_reason_per_provider(void)
+{
+    TEST_BEGIN();
+    char o[200];
+    voice_ais_failure_reason_for("mistral", 301, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 301)");
+    voice_ais_failure_reason_for("custom", 301, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 301): check the Base URL");
+    voice_ais_failure_reason_for(NULL, 308, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the server redirected the request (HTTP 308): check the Base URL");
+    voice_ais_failure_reason_for("mistral", 401, NULL, o, sizeof o);
+    ASSERT_STR_EQ(o, "the speech provider refused the key (HTTP 401)");
+    voice_ais_sample_failure_note_for("mistral", 302, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the server redirected the request (HTTP 302)");
+    voice_ais_sample_failure_note_for("custom", 302, o, sizeof o);
+    ASSERT_STR_EQ(o, "Could not play the sample: the server redirected the request (HTTP 302): check the Base URL");
+    TEST_END();
+}
+
 int test_vais_sample_failure_note(void)
 {
     TEST_BEGIN();

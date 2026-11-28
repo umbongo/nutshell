@@ -96,6 +96,10 @@ int  voice_ais_failure_fatal(long hr);
 long voice_ais_decoder_failure(int format_err, int notwav_err, uint64_t frames_decoded);
 /* The reason for the chat note, no full stop: for RESOLVE it is resolve_err. */
 void voice_ais_failure_reason(long hr, const char *resolve_err, char *out, size_t cap);
+/* The same for a known provider id ("mistral" or "custom"; NULL is as the one above): a 3xx
+ * for Mistral does not say "check the Base URL", which it has no row for. */
+void voice_ais_failure_reason_for(const char *provider, long hr, const char *resolve_err,
+                                  char *out, size_t cap);
 
 /* The most audio one request may deliver: 5 minutes of 24 kHz frames. A server that sends
  * more (an endless body) fails that chunk as VOICE_AIS_HR_STREAM and the request is closed. */
@@ -109,6 +113,7 @@ int  voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap);
 /* The Voice page's note for a Play sample that failed after it started:
  * "Could not play the sample: <voice_ais_failure_reason(hr)>". Cut and terminated to cap. */
 void voice_ais_sample_failure_note(long hr, char *out, size_t cap);
+void voice_ais_sample_failure_note_for(const char *provider, long hr, char *out, size_t cap);
 
 /* Mistral's stream, one SSE line at a time (lines from sse_line_feed). */
 typedef enum { VAIS_EV_NONE = 0, VAIS_EV_AUDIO, VAIS_EV_DONE, VAIS_EV_ERROR } VoiceAisEvKind;
