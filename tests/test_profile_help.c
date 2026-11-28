@@ -68,7 +68,7 @@ int test_profile_help_fields_say_what_empty_means(void) {
     TEST_BEGIN();
     /* The fields that may be left empty (or that cannot) say so. */
     static const ProfileHelpId k_must_say[] = {
-        PH_NAME, PH_HOST, PH_PORT, PH_USER, PH_PASSWORD, PH_KEY, PH_SHELL, PH_AI_NOTES
+        PH_NAME, PH_HOST, PH_PORT, PH_USER, PH_PASSWORD, PH_KEY, PH_AI_NOTES
     };
     for (size_t i = 0; i < sizeof(k_must_say) / sizeof(k_must_say[0]); i++) {
         const ProfileHelp *e = profile_help_get((int)k_must_say[i]);
@@ -78,6 +78,44 @@ int test_profile_help_fields_say_what_empty_means(void) {
         if (!says) printf("  %s does not say what an empty field does\n", e->name);
         ASSERT_TRUE(says);
     }
+    TEST_END();
+}
+
+/* The wording the review asked for, word for word where it was given. */
+int test_profile_help_review_wording(void) {
+    TEST_BEGIN();
+    const ProfileHelp *e;
+    e = profile_help_get((int)PH_NAME);
+    ASSERT_STR_EQ(e->text,
+        "The name shown in the list of saved sessions. If you leave it empty, "
+        "the list shows the host name instead; a local shell session has no "
+        "host, so give it a name.");
+    e = profile_help_get((int)PH_USER);
+    ASSERT_STR_EQ(e->text,
+        "The account to log in as. SSH needs one: Nutshell does not ask for "
+        "it, so with this empty the server refuses the login. For Telnet, "
+        "Nutshell types it at the login prompt; leave it empty to type it "
+        "yourself.");
+    e = profile_help_get((int)PH_KEY);
+    ASSERT_STR_EQ(e->text,
+        "The path of your private key file, used when Auth is SSH Key. If you "
+        "leave it empty, the key login cannot work, so give a path or choose "
+        "Password.");
+    e = profile_help_get((int)PH_PLATFORM);
+    ASSERT_TRUE(strstr(e->text, "Auto-detect") != NULL);
+    ASSERT_TRUE(strstr(e->text, "Automatic") == NULL);
+    e = profile_help_get((int)PH_PASSWORD);
+    ASSERT_TRUE(strstr(e->text,
+        " With Telnet and no user either, you type both at the server's "
+        "prompts.") != NULL);
+    e = profile_help_get((int)PH_AUTH);
+    ASSERT_TRUE(strstr(e->text, "Telnet") == NULL);
+    e = profile_help_get((int)PH_SHELL);
+    ASSERT_TRUE(strncmp(e->text, "Automatic (the first choice) picks one "
+                        "installed on this PC:", 60) == 0);
+    ASSERT_TRUE(strstr(e->text, "empty") == NULL);
+    ASSERT_TRUE(strstr(e->text, "PowerShell 7, Windows PowerShell, Git Bash, "
+                       "MSYS2 bash or cmd, in that order") != NULL);
     TEST_END();
 }
 

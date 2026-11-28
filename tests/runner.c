@@ -4231,6 +4231,7 @@ int test_settings_help_voice_entries(void);
 int test_profile_help_table_matches_enum(void);
 int test_profile_help_texts_shape(void);
 int test_profile_help_fields_say_what_empty_means(void);
+int test_profile_help_review_wording(void);
 int test_profile_help_every_editable_field_is_mapped(void);
 
 /* test_settings_layout.c */
@@ -9153,6 +9154,7 @@ int main(void) {
     failed += test_profile_help_table_matches_enum();
     failed += test_profile_help_texts_shape();
     failed += test_profile_help_fields_say_what_empty_means();
+    failed += test_profile_help_review_wording();
     failed += test_profile_help_every_editable_field_is_mapped();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();
