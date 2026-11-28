@@ -27,6 +27,90 @@ static size_t append_result(char *out_buf, size_t out_max, size_t out_pos,
     return out_pos + (size_t)n;
 }
 
+/* ---- ws_build_search_url ------------------------------------------------- */
+
+/* Append the RFC 3986 percent-encoding of `q` (every byte except
+ * A-Z a-z 0-9 - . _ ~ becomes %XX, upper-case hex) to out at *pos.
+ * Returns 0, or -1 when it does not fit; nothing partial is kept. */
+static int ws_append_encoded(char *out, size_t out_max, size_t *pos,
+                             const char *q)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t p = *pos;
+    for (const unsigned char *c = (const unsigned char *)q; *c; c++) {
+        int plain = (*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') ||
+                    (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' ||
+                    *c == '_' || *c == '~';
+        size_t need = plain ? 1 : 3;
+        if (p + need >= out_max) return -1;
+        if (plain) {
+            out[p++] = (char)*c;
+        } else {
+            out[p++] = '%';
+            out[p++] = hex[*c >> 4];
+            out[p++] = hex[*c & 0x0F];
+        }
+    }
+    out[p] = '\0';
+    *pos = p;
+    return 0;
+}
+
+int ws_build_search_url(const char *provider, const char *custom_url,
+                        int force_html, const char *query,
+                        char *out, size_t out_max)
+{
+    if (!out || out_max == 0) return -1;
+    out[0] = '\0';
+    if (!query) query = "";
+    if (!provider) provider = "";
+
+    const char *prefix;
+    const char *suffix = "";
+    char sep_buf[2] = "";
+    if (!force_html && custom_url && custom_url[0] != '\0' &&
+        strcmp(provider, "custom") == 0) {
+        /* A fragment would swallow the query, so the URL is refused. */
+        if (strchr(custom_url, '#')) return -2;
+        size_t cl = strlen(custom_url);
+        if (cl >= out_max) return -1;
+        memcpy(out, custom_url, cl + 1);
+        size_t pos = cl;
+        char last = custom_url[cl - 1];
+        if (last != '?' && last != '&') {
+            sep_buf[0] = strchr(custom_url, '?') ? '&' : '?';
+            if (pos + 1 >= out_max) return -1;
+            out[pos++] = sep_buf[0];
+        }
+        if (pos + 2 >= out_max) return -1;
+        out[pos++] = 'q';
+        out[pos++] = '=';
+        out[pos] = '\0';
+        if (ws_append_encoded(out, out_max, &pos, query) != 0) {
+            out[0] = '\0';
+            return -1;
+        }
+        return 0;
+    }
+    if (force_html || strcmp(provider, "duckduckgo-html") == 0) {
+        prefix = "https://html.duckduckgo.com/html/?q=";
+    } else {
+        prefix = "https://api.duckduckgo.com/?q=";
+        suffix = "&format=json&no_html=1&no_redirect=1";
+    }
+    size_t pl = strlen(prefix), sl = strlen(suffix);
+    if (pl >= out_max) return -1;
+    memcpy(out, prefix, pl + 1);
+    size_t pos = pl;
+    if (ws_append_encoded(out, out_max, &pos, query) != 0 ||
+        pos + sl >= out_max) {
+        out[0] = '\0';
+        return -1;
+    }
+    memcpy(out + pos, suffix, sl + 1);
+    return 0;
+}
+
 /* ---- ddg_parse_api_json -------------------------------------------------- */
 
 int ddg_parse_api_json(const char *json_response, size_t json_len,
@@ -513,7 +597,16 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
 
     char query_copy[1024];
     size_t qlen = strlen(query);
-    if (qlen >= sizeof(query_copy)) qlen = sizeof(query_copy) - 1;
+    if (qlen >= sizeof(query_copy)) {
+        /* Never cut a query short: a different query would be searched. */
+        json_free(input);
+        const char *err = "Search query is too long for a search URL";
+        *result_buf = malloc(strlen(err) + 1);
+        if (!*result_buf) return -1;
+        strcpy(*result_buf, err);
+        *result_len = strlen(err);
+        return -1;
+    }
     memcpy(query_copy, query, qlen);
     query_copy[qlen] = '\0';
 
@@ -526,19 +619,13 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
 
     /* Build DDG API URL */
     char url[1024];
-    int url_n;
-    if (ctx && strcmp(provider, "custom") == 0 && ctx->search_url[0] != '\0') {
-        url_n = snprintf(url, sizeof(url), "%s?q=%s", ctx->search_url, query_copy);
-    } else if (strcmp(provider, "duckduckgo-html") == 0) {
-        url_n = snprintf(url, sizeof(url),
-                         "https://html.duckduckgo.com/html/?q=%s", query_copy);
-    } else {
-        url_n = snprintf(url, sizeof(url),
-                         "https://api.duckduckgo.com/?q=%s&format=json&no_html=1&no_redirect=1",
-                         query_copy);
-    }
-    if (url_n < 0 || (size_t)url_n >= sizeof(url)) {
-        const char *err = "Search query is too long for a search URL";
+    int url_n = ws_build_search_url(provider,
+                                    ctx ? ctx->search_url : NULL, 0,
+                                    query_copy, url, sizeof(url));
+    if (url_n != 0) {
+        const char *err = (url_n == -2)
+            ? "The custom search URL must not contain a # fragment"
+            : "Search query is too long for a search URL";
         *result_buf = malloc(strlen(err) + 1);
         if (!*result_buf) return -1;
         strcpy(*result_buf, err);
@@ -574,9 +661,9 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
             free(resp_buf);
 
             char html_url[1024];
-            int html_n = snprintf(html_url, sizeof(html_url),
-                     "https://html.duckduckgo.com/html/?q=%s", query_copy);
-            if (html_n < 0 || (size_t)html_n >= sizeof(html_url)) {
+            int html_n = ws_build_search_url(provider, NULL, 1, query_copy,
+                                             html_url, sizeof(html_url));
+            if (html_n != 0) {
                 const char *err = "Search query is too long for a search URL";
                 *result_buf = malloc(strlen(err) + 1);
                 if (!*result_buf) return -1;

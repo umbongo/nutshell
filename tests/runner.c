@@ -3387,6 +3387,13 @@ int test_ddg_html_organic(void);
 int test_ddg_html_ad_filtered(void);
 int test_ddg_html_captcha(void);
 int test_ddg_html_no_results(void);
+int test_ws_url_plain_and_space(void);
+int test_ws_url_reserved_bytes_cannot_inject(void);
+int test_ws_url_utf8_bytes(void);
+int test_ws_url_empty_query(void);
+int test_ws_url_custom_separator(void);
+int test_ws_url_custom_fragment_refused(void);
+int test_ws_url_too_long_is_refused_not_truncated(void);
 
 /* test_tool_web_fetch.c */
 int test_web_fetch_html_to_text_basic(void);
@@ -8234,6 +8241,13 @@ int main(void) {
     failed += test_ddg_html_ad_filtered();
     failed += test_ddg_html_captcha();
     failed += test_ddg_html_no_results();
+    failed += test_ws_url_plain_and_space();
+    failed += test_ws_url_reserved_bytes_cannot_inject();
+    failed += test_ws_url_utf8_bytes();
+    failed += test_ws_url_empty_query();
+    failed += test_ws_url_custom_separator();
+    failed += test_ws_url_custom_fragment_refused();
+    failed += test_ws_url_too_long_is_refused_not_truncated();
 
     printf("\n--- Web Fetch ---\n");
     failed += test_web_fetch_html_to_text_basic();
