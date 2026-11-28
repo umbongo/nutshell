@@ -2,6 +2,7 @@
  * (src/core/chat_rebuild.c). Expected strings are literals. */
 #include "test_framework.h"
 #include "chat_rebuild.h"
+#include "ai_conv_guard.h"
 #include "ai_agentic.h"
 #include "ui_demo.h"
 #include "run_command.h"
@@ -1202,6 +1203,105 @@ int test_rebuild_replay_record_without_the_new_fields_rebuilds_as_before(void) {
         "S:[old status row]\n");
     chat_msg_list_clear(&list);
     cmd_run_log_free(&log);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* ---- stopped replies ---- */
+
+/* Stop before any text: the history turn is the marker alone; the rebuild
+ * draws the status row the live Stop shows, never AI text. */
+int test_rebuild_replay_stopped_marker_only_is_a_status_row(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(ai_conv_add_stopped_reply(&conv, "", 0), 1);
+    ai_conv_add(&conv, AI_ROLE_USER, "again");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "done");
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, NULL, NULL);
+    char out[512];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out, "U:go\nS:[cancelled]\nU:again\nA:done\n");
+    ASSERT_TRUE(strstr(out, "reply stopped") == NULL);
+    chat_msg_list_clear(&list);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* Stop after some text: the partial reply is AI text as live, then the same
+ * status row. */
+int test_rebuild_replay_stopped_partial_is_ai_text(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(ai_conv_add_stopped_reply(&conv, "The logs are under /var", 23), 1);
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, NULL, NULL);
+    char out[512];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out, "U:go\nA:The logs are under /var\nS:[cancelled]\n");
+    chat_msg_list_clear(&list);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* A finished [EXEC] block in the text of a stopped reply is never turned into
+ * a command: the rebuild yields text and a status row and no command item,
+ * even with the card of another reply in the log or the set. */
+int test_rebuild_replay_stopped_partial_never_yields_a_command(void) {
+    TEST_BEGIN();
+    static const char *const texts[] = {
+        "Checking.\n[EXEC]ls /tmp[/EXEC]\nthen more",
+        "Checking.\n[EXEC]ls /tm",          /* unterminated */
+        "```\n[EXEC]ls /tmp[/EXEC]",        /* open code fence */
+    };
+    for (int k = 0; k < 3; k++) {
+        AiConversation conv;
+        conv_start(&conv);
+        ai_conv_add(&conv, AI_ROLE_USER, "go");
+        ASSERT_EQ(ai_conv_add_stopped_reply(&conv, texts[k], strlen(texts[k])), 1);
+        ChatMsgList list;
+        chat_msg_list_init(&list);
+        chat_rebuild_replay(&list, &conv, NULL, NULL, NULL);
+        int kinds = 0, cmds = 0, ai = 0, st = 0;
+        for (const ChatMsgItem *it = list.head; it; it = it->next) {
+            kinds++;
+            if (it->type == CHAT_ITEM_COMMAND) cmds++;
+            if (it->type == CHAT_ITEM_AI_TEXT) {
+                ai++;
+                ASSERT_STR_EQ(it->text, texts[k]);   /* as the stream showed it */
+            }
+            if (it->type == CHAT_ITEM_STATUS) st++;
+        }
+        ASSERT_EQ(cmds, 0);
+        ASSERT_EQ(ai, 1);
+        ASSERT_EQ(st, 1);
+        ASSERT_EQ(kinds, 3);   /* user, text, status */
+        chat_msg_list_clear(&list);
+        ai_conv_reset(&conv);
+    }
+    TEST_END();
+}
+
+/* A lost reply is drawn with its own status row, not "[cancelled]". */
+int test_rebuild_replay_lost_reply_row(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    conv_start(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "go");
+    ASSERT_EQ(ai_conv_add_ended_reply(&conv, "", 0, AI_REPLY_LOST), 1);
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_rebuild_replay(&list, &conv, NULL, NULL, NULL);
+    char out[512];
+    dump(&list, out, sizeof(out));
+    ASSERT_STR_EQ(out, "U:go\nS:[the AI reply was lost]\n");
+    chat_msg_list_clear(&list);
     ai_conv_reset(&conv);
     TEST_END();
 }

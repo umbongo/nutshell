@@ -306,6 +306,14 @@ static void build_approval(AiConversation *conv, ApprovalQueue *approval)
                                     CMD_PLATFORM_LINUX);
     chat_approval_set_note(approval, blocked,
         "Deletes the old rotated logs under /var/log/old.");
+
+    /* Pending (sensitive read): a command that reads a credential. It is a
+     * read, so the ceiling does not hold it, but a sensitive command always
+     * asks and its row prints the reason after the command text. */
+    int sensitive = chat_approval_add(approval, "cat ~/.ssh/id_rsa",
+                                      CMD_PLATFORM_LINUX);
+    chat_approval_set_note(approval, sensitive,
+        "Prints your private SSH key so I can check which key the deploy uses.");
 }
 
 /* ---------------------------------------------------------------------

@@ -421,6 +421,11 @@ int test_config_roundtrip_settings(void);
 int test_config_roundtrip_profile(void);
 int test_config_roundtrip_multiple_profiles(void);
 int test_config_save_null(void);
+#ifndef _WIN32
+int test_config_save_fails_when_dir_unwritable(void);
+int test_config_save_rename_failure_removes_tmp(void);
+int test_config_save_write_failure_keeps_original(void);
+#endif
 int test_config_default_colour_scheme(void);
 int test_config_roundtrip_colour_scheme(void);
 int test_config_default_ai_provider(void);
@@ -726,6 +731,9 @@ int test_classify_open_quote_first_word_overrun(void);
 int test_ios_configure_terminal_prefixes(void);
 int test_ios_debug(void);
 int test_ios_do(void);
+int test_nxos_asa_do_own_tables(void);
+int test_class_reasons_never_blank(void);
+int test_class_reason_keeps_a_colon_the_command_has(void);
 int test_crontab(void);
 int test_cmd_classify_probes(void);
 int test_nxos_asa_debug_aligned(void);
@@ -1661,6 +1669,24 @@ int test_zoom_zero_char_h(void);
 int test_zoom_zero_client_w(void);
 int test_zoom_zero_term_h(void);
 
+/* test_main_chords.c */
+int test_main_chords_tab_next_and_prev(void);
+int test_main_chords_zoom_reset(void);
+int test_main_chords_numpad_zero_resets_the_zoom(void);
+int test_main_chords_existing_chords(void);
+int test_main_chords_ai_panel_needs_the_assistant_on(void);
+int test_main_chords_forwarded_from_panel(void);
+int test_main_chords_should_forward_needs_the_main_window_enabled(void);
+int test_main_chords_typing_is_never_a_chord(void);
+int test_main_chords_tab_target_wraps_forward(void);
+int test_main_chords_tab_target_wraps_backward(void);
+int test_main_chords_tab_target_none_to_move_to(void);
+int test_main_chords_tab_target_bad_current(void);
+int test_main_chords_zoom_reset_sizes(void);
+int test_main_chords_are_in_the_shortcut_table(void);
+int test_main_chords_sheet_names_the_reset_size(void);
+int test_main_chords_panel_editing_keys_stay_in_the_panel(void);
+
 /* test_snap.c */
 int test_snap_calc_exact_fit(void);
 int test_snap_calc_right_gutter(void);
@@ -2289,6 +2315,9 @@ int test_app_font_zoom_ui_size_is_in_table(void);
 int test_app_font_zoom_full_range_up(void);
 int test_app_font_zoom_preserves_size_after_roundtrip(void);
 int test_app_font_zoom_full_range_down(void);
+int test_app_font_px_height_known_values(void);
+int test_app_font_px_height_bad_input(void);
+int test_app_font_px_height_grows_with_dpi_and_zoom(void);
 
 /* test_selection.c */
 int test_sel_pixel_to_cell_basic(void);
@@ -2772,6 +2801,10 @@ int test_rebuild_replay_exec_text_in_a_tool_round_is_split(void);
 int test_rebuild_replay_exec_text_with_live_card_is_split(void);
 int test_rebuild_replay_plain_reply_text_is_kept_whole_with_a_record(void);
 int test_rebuild_replay_partless_tool_turn(void);
+int test_rebuild_replay_stopped_marker_only_is_a_status_row(void);
+int test_rebuild_replay_stopped_partial_is_ai_text(void);
+int test_rebuild_replay_stopped_partial_never_yields_a_command(void);
+int test_rebuild_replay_lost_reply_row(void);
 int test_rebuild_replay_orphan_tool_turn_and_empty_part(void);
 int test_rebuild_replay_live_cards_come_last_in_order(void);
 int test_rebuild_replay_demo_tool_state_shows_the_cut(void);
@@ -3516,6 +3549,16 @@ int test_pairs_partial_results_fails(void);
 int test_pairs_wrong_id_fails(void);
 int test_pairs_orphan_result_fails(void);
 int test_pairs_open_at_end_fails(void);
+
+/* test_ai_conv_guard.c: stopped and lost replies, the body builder */
+int test_stopped_reply_before_any_text(void);
+int test_stopped_reply_after_partial_text(void);
+int test_stopped_reply_rule_is_one_function(void);
+int test_lost_reply_has_its_own_text(void);
+int test_stopped_reply_twice_is_one_turn(void);
+int test_stopped_reply_in_a_tool_round(void);
+int test_body_does_not_invent_a_stopped_reply(void);
+
 int test_conv_note_queued_while_open(void);
 int test_conv_note_deferred_while_busy(void);
 int test_conv_note_refusals(void);
@@ -4238,6 +4281,7 @@ int test_cheatsheet_layout_scrolls_on_1366x768_at_120(void);
 int test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p(void);
 int test_cheatsheet_layout_192_is_twice_96(void);
 int test_cheatsheet_layout_every_action_fits_360(void);
+int test_cheatsheet_layout_voice_rows_are_measured_and_held(void);
 int test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p(void);
 int test_cheatsheet_layout_tiny_work_area_stays_sane(void);
 int test_cheatsheet_layout_degenerate_inputs(void);
@@ -4268,6 +4312,12 @@ int test_thinking_trimmed_len(void);
 int test_thinking_label_colour(void);
 int test_thinking_follows_tail(void);
 int test_thinking_theme_tokens_distinct(void);
+int test_thinking_theme_pill_tokens_set(void);
+int test_thinking_pill_colour(void);
+int test_thinking_box_wheel_modes(void);
+int test_thinking_wheel_takes(void);
+int test_thinking_box_scroll_follow_hold_resume(void);
+int test_thinking_box_scroll_mode_change_holds_place(void);
 
 /* test_settings_help.c */
 int test_settings_help_table_matches_enum(void);
@@ -4284,6 +4334,13 @@ int test_settings_help_labels_match_sources(void);
 int test_settings_help_every_id_in_settings_c(void);
 int test_settings_help_ai_enable_entry(void);
 int test_settings_help_voice_entries(void);
+
+/* test_profile_help.c */
+int test_profile_help_table_matches_enum(void);
+int test_profile_help_texts_shape(void);
+int test_profile_help_fields_say_what_empty_means(void);
+int test_profile_help_review_wording(void);
+int test_profile_help_every_editable_field_is_mapped(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -4330,6 +4387,12 @@ int test_sl_scroll_max_never_negative(void);
 int test_sl_scroll_clamp_within_range(void);
 int test_sl_scroll_clamp_negative_pins_zero(void);
 int test_sl_scroll_clamp_over_max_pins_max(void);
+int test_sl_scroll_to_show_in_view_unchanged(void);
+int test_sl_scroll_to_show_above_scrolls_up(void);
+int test_sl_scroll_to_show_below_scrolls_just_enough(void);
+int test_sl_scroll_to_show_taller_than_view_top_aligned(void);
+int test_sl_scroll_to_show_clamped_at_both_ends(void);
+int test_settings_ctrl_table_has_room(void);
 int test_sl_scroll_clamp_zero_max(void);
 int test_sl_initial_1080p_fits_behaviour(void);
 int test_sl_initial_scroll_expectations(void);
@@ -4339,6 +4402,29 @@ int test_sl_initial_tiny_work_area(void);
 int test_sl_initial_narrow_clamps_width(void);
 int test_sl_initial_144dpi_capped(void);
 int test_sl_initial_negative_origin(void);
+int test_sl_dpi_metrics_scale_with_dpi(void);
+int test_sl_dpi_min_size_scales(void);
+int test_sl_dpi_min_window_adds_the_frame(void);
+int test_sl_dpi_min_size_regions_dont_overlap(void);
+int test_sl_dpi_rows_stay_inside_the_page(void);
+int test_sl_scroll_rescale(void);
+int test_sl_row_layout_matches_plain_rects_when_it_fits(void);
+int test_sl_row_layout_null_safe(void);
+int test_sl_debug_rows_fit_at_min_width_96(void);
+int test_sl_debug_rows_fit_at_min_width_144(void);
+int test_sl_debug_rows_fit_at_min_width_120_and_192(void);
+int test_sl_debug_keep_at_most_edit_keeps_its_width(void);
+int test_sl_row_layout_tiny_page_never_negative(void);
+
+/* test_settings_tab.c */
+int test_stab_order_top_to_bottom_then_left_to_right(void);
+int test_stab_order_skips_disabled_and_hidden(void);
+int test_stab_order_groups_nav_page_buttons(void);
+int test_stab_order_ties_keep_creation_order(void);
+int test_stab_order_degenerate_inputs(void);
+int test_stab_step_forward_backward_wrap(void);
+int test_stab_step_unknown_current_enters_at_the_ends(void);
+int test_stab_step_empty_and_single(void);
 
 /* test_ns_scale.c */
 int test_ns_scale_identity_at_96(void);
@@ -4688,6 +4774,11 @@ int test_local_shell_resolve_bare_noop_for_non_custom(void);
 int test_local_shell_resolve_bare_noop_when_already_has_path(void);
 int test_local_shell_resolve_bare_rejects_relative_path_with_separator(void);
 int test_local_shell_resolve_bare_rejects_relative_path_quoted(void);
+int test_local_shell_custom_forward_slash_absolute_path_accepted(void);
+int test_local_shell_custom_unc_path_accepted(void);
+int test_local_shell_custom_quoted_forward_slash_with_spaces_exact(void);
+int test_local_shell_custom_unc_unquoted_spaced_resolves_existing(void);
+int test_local_shell_custom_single_leading_backslash_is_relative(void);
 int test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces(void);
 int test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix(void);
 int test_local_shell_resolve_bare_unquoted_spaced_appends_exe(void);
@@ -4964,8 +5055,13 @@ int test_md_blocks_indented_fence_not_counted(void);
 int test_md_blocks_max_smaller_than_count_returns_full_count(void);
 int test_md_blocks_respects_len_not_nul(void);
 
+/* test_chat_cursor.c */
+int test_chat_cursor_every_hit_kind(void);
+int test_chat_cursor_unknown_kind_is_arrow(void);
+
 /* test_ui_demo.c */
 int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
+int test_ui_demo_approval_has_a_sensitive_row(void);
 int test_ui_demo_cmddetail_matches_approval(void);
 int test_ui_demo_chat_selection_spans_every_kind(void);
 int test_ui_demo_chat_drag_across_items_golden(void);
@@ -5530,6 +5626,11 @@ int main(void) {
     failed += test_config_roundtrip_profile();
     failed += test_config_roundtrip_multiple_profiles();
     failed += test_config_save_null();
+#ifndef _WIN32
+    failed += test_config_save_fails_when_dir_unwritable();
+    failed += test_config_save_rename_failure_removes_tmp();
+    failed += test_config_save_write_failure_keeps_original();
+#endif
     failed += test_config_default_colour_scheme();
     failed += test_config_roundtrip_colour_scheme();
     failed += test_config_default_ai_provider();
@@ -5833,6 +5934,9 @@ int main(void) {
     failed += test_ios_configure_terminal_prefixes();
     failed += test_ios_debug();
     failed += test_ios_do();
+    failed += test_nxos_asa_do_own_tables();
+    failed += test_class_reasons_never_blank();
+    failed += test_class_reason_keeps_a_colon_the_command_has();
     failed += test_crontab();
     failed += test_cmd_classify_probes();
     failed += test_nxos_asa_debug_aligned();
@@ -7242,6 +7346,24 @@ int main(void) {
     failed += test_zoom_zero_client_w();
     failed += test_zoom_zero_term_h();
 
+    printf("\n--- Main chords ---\n");
+    failed += test_main_chords_tab_next_and_prev();
+    failed += test_main_chords_zoom_reset();
+    failed += test_main_chords_numpad_zero_resets_the_zoom();
+    failed += test_main_chords_existing_chords();
+    failed += test_main_chords_ai_panel_needs_the_assistant_on();
+    failed += test_main_chords_forwarded_from_panel();
+    failed += test_main_chords_should_forward_needs_the_main_window_enabled();
+    failed += test_main_chords_typing_is_never_a_chord();
+    failed += test_main_chords_tab_target_wraps_forward();
+    failed += test_main_chords_tab_target_wraps_backward();
+    failed += test_main_chords_tab_target_none_to_move_to();
+    failed += test_main_chords_tab_target_bad_current();
+    failed += test_main_chords_zoom_reset_sizes();
+    failed += test_main_chords_are_in_the_shortcut_table();
+    failed += test_main_chords_sheet_names_the_reset_size();
+    failed += test_main_chords_panel_editing_keys_stay_in_the_panel();
+
     printf("\n--- Snap ---\n");
     failed += test_snap_calc_exact_fit();
     failed += test_snap_calc_right_gutter();
@@ -7378,6 +7500,9 @@ int main(void) {
     failed += test_app_font_zoom_full_range_up();
     failed += test_app_font_zoom_preserves_size_after_roundtrip();
     failed += test_app_font_zoom_full_range_down();
+    failed += test_app_font_px_height_known_values();
+    failed += test_app_font_px_height_bad_input();
+    failed += test_app_font_px_height_grows_with_dpi_and_zoom();
 
     printf("\n--- Selection ---\n");
     failed += test_sel_pixel_to_cell_basic();
@@ -7772,6 +7897,10 @@ int main(void) {
     failed += test_rebuild_replay_exec_text_with_live_card_is_split();
     failed += test_rebuild_replay_plain_reply_text_is_kept_whole_with_a_record();
     failed += test_rebuild_replay_partless_tool_turn();
+    failed += test_rebuild_replay_stopped_marker_only_is_a_status_row();
+    failed += test_rebuild_replay_stopped_partial_is_ai_text();
+    failed += test_rebuild_replay_stopped_partial_never_yields_a_command();
+    failed += test_rebuild_replay_lost_reply_row();
     failed += test_rebuild_replay_orphan_tool_turn_and_empty_part();
     failed += test_rebuild_replay_live_cards_come_last_in_order();
     failed += test_rebuild_replay_demo_tool_state_shows_the_cut();
@@ -9132,6 +9261,7 @@ int main(void) {
     failed += test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p();
     failed += test_cheatsheet_layout_192_is_twice_96();
     failed += test_cheatsheet_layout_every_action_fits_360();
+    failed += test_cheatsheet_layout_voice_rows_are_measured_and_held();
     failed += test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p();
     failed += test_cheatsheet_layout_tiny_work_area_stays_sane();
     failed += test_cheatsheet_layout_degenerate_inputs();
@@ -9187,6 +9317,12 @@ int main(void) {
     failed += test_sl_scroll_clamp_within_range();
     failed += test_sl_scroll_clamp_negative_pins_zero();
     failed += test_sl_scroll_clamp_over_max_pins_max();
+    failed += test_sl_scroll_to_show_in_view_unchanged();
+    failed += test_sl_scroll_to_show_above_scrolls_up();
+    failed += test_sl_scroll_to_show_below_scrolls_just_enough();
+    failed += test_sl_scroll_to_show_taller_than_view_top_aligned();
+    failed += test_sl_scroll_to_show_clamped_at_both_ends();
+    failed += test_settings_ctrl_table_has_room();
     failed += test_sl_scroll_clamp_zero_max();
     failed += test_sl_initial_1080p_fits_behaviour();
     failed += test_sl_initial_scroll_expectations();
@@ -9196,6 +9332,27 @@ int main(void) {
     failed += test_sl_initial_narrow_clamps_width();
     failed += test_sl_initial_144dpi_capped();
     failed += test_sl_initial_negative_origin();
+    failed += test_sl_dpi_metrics_scale_with_dpi();
+    failed += test_sl_dpi_min_size_scales();
+    failed += test_sl_dpi_min_window_adds_the_frame();
+    failed += test_sl_dpi_min_size_regions_dont_overlap();
+    failed += test_sl_dpi_rows_stay_inside_the_page();
+    failed += test_sl_scroll_rescale();
+    failed += test_sl_row_layout_matches_plain_rects_when_it_fits();
+    failed += test_sl_row_layout_null_safe();
+    failed += test_sl_debug_rows_fit_at_min_width_96();
+    failed += test_sl_debug_rows_fit_at_min_width_144();
+    failed += test_sl_debug_rows_fit_at_min_width_120_and_192();
+    failed += test_sl_debug_keep_at_most_edit_keeps_its_width();
+    failed += test_sl_row_layout_tiny_page_never_negative();
+    failed += test_stab_order_top_to_bottom_then_left_to_right();
+    failed += test_stab_order_skips_disabled_and_hidden();
+    failed += test_stab_order_groups_nav_page_buttons();
+    failed += test_stab_order_ties_keep_creation_order();
+    failed += test_stab_order_degenerate_inputs();
+    failed += test_stab_step_forward_backward_wrap();
+    failed += test_stab_step_unknown_current_enters_at_the_ends();
+    failed += test_stab_step_empty_and_single();
 
     failed += test_search_providers_table();
     failed += test_search_provider_index_case_and_unknown();
@@ -9214,6 +9371,17 @@ int main(void) {
     failed += test_thinking_label_colour();
     failed += test_thinking_follows_tail();
     failed += test_thinking_theme_tokens_distinct();
+    failed += test_thinking_theme_pill_tokens_set();
+    failed += test_thinking_pill_colour();
+    failed += test_thinking_box_wheel_modes();
+    failed += test_thinking_wheel_takes();
+    failed += test_thinking_box_scroll_follow_hold_resume();
+    failed += test_thinking_box_scroll_mode_change_holds_place();
+    failed += test_profile_help_table_matches_enum();
+    failed += test_profile_help_texts_shape();
+    failed += test_profile_help_fields_say_what_empty_means();
+    failed += test_profile_help_review_wording();
+    failed += test_profile_help_every_editable_field_is_mapped();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();
     failed += test_settings_help_labels_and_pages();
@@ -9529,6 +9697,11 @@ int main(void) {
     failed += test_local_shell_resolve_bare_noop_when_already_has_path();
     failed += test_local_shell_resolve_bare_rejects_relative_path_with_separator();
     failed += test_local_shell_resolve_bare_rejects_relative_path_quoted();
+    failed += test_local_shell_custom_forward_slash_absolute_path_accepted();
+    failed += test_local_shell_custom_unc_path_accepted();
+    failed += test_local_shell_custom_quoted_forward_slash_with_spaces_exact();
+    failed += test_local_shell_custom_unc_unquoted_spaced_resolves_existing();
+    failed += test_local_shell_custom_single_leading_backslash_is_relative();
     failed += test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces();
     failed += test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix();
     failed += test_local_shell_resolve_bare_unquoted_spaced_appends_exe();
@@ -9869,7 +10042,12 @@ int main(void) {
     failed += test_md_blocks_max_smaller_than_count_returns_full_count();
     failed += test_md_blocks_respects_len_not_nul();
 
+    /* test_chat_cursor.c */
+    failed += test_chat_cursor_every_hit_kind();
+    failed += test_chat_cursor_unknown_kind_is_arrow();
+
     failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
+    failed += test_ui_demo_approval_has_a_sensitive_row();
     failed += test_ui_demo_cmddetail_matches_approval();
     failed += test_ui_demo_chat_selection_spans_every_kind();
     failed += test_ui_demo_chat_drag_across_items_golden();
@@ -10154,6 +10332,16 @@ int main(void) {
         failed += test_pairs_wrong_id_fails();
         failed += test_pairs_orphan_result_fails();
         failed += test_pairs_open_at_end_fails();
+
+        /* test_ai_conv_guard.c: stopped and lost replies, the body builder */
+        failed += test_stopped_reply_before_any_text();
+        failed += test_stopped_reply_after_partial_text();
+        failed += test_stopped_reply_rule_is_one_function();
+        failed += test_lost_reply_has_its_own_text();
+        failed += test_stopped_reply_twice_is_one_turn();
+        failed += test_stopped_reply_in_a_tool_round();
+        failed += test_body_does_not_invent_a_stopped_reply();
+
         failed += test_conv_note_queued_while_open();
         failed += test_conv_note_deferred_while_busy();
         failed += test_conv_note_refusals();

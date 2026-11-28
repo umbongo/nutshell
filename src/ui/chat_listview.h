@@ -100,6 +100,9 @@ typedef struct {
     int think_mode_changed;     /* a layout re-derived a Thinking row's mode
                                  * (reply completed, say); recalc_layout()
                                  * holds the reader's place on it */
+    unsigned think_thread_wheel_tick; /* GetTickCount when the wheel last scrolled
+                                 * the thread (think_wheel_takes latch) */
+    int think_thread_wheel_seen; /* think_thread_wheel_tick is valid */
 
     /* Hover tracking for painted elements (approval card rows/actions,
      * the [Retry] link) -- see ns_hover.h and Design-System Foundation
@@ -202,6 +205,11 @@ int chat_listview_is_near_bottom(HWND hwnd);
 
 /* Recalculate layout after resize. */
 void chat_listview_relayout(HWND hwnd);
+
+/* Follow a monitor-scale change: every spacing constant, every row's cached
+ * height and the cached Thinking layouts are redone at `dpi`. Call
+ * chat_listview_relayout afterwards. */
+void chat_listview_set_dpi(HWND hwnd, UINT dpi);
 
 /* Set activity state pointer (not owned). */
 void chat_listview_set_activity(HWND hwnd, ActivityState *activity);

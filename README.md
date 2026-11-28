@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.3.4 \
+**Version**: v1.3.5 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -363,7 +363,7 @@ as WRITE, the worst single category.
 
 #### Thought Process
 
-When a reply carries reasoning, a **Thinking** row appears above the reply text: a chevron, the word "Thinking" (coloured by its mode), and a dimmed summary (`· 240 words` once finished, `· streaming…` while still arriving). It has four modes: **collapsed** (just the row, brown label, chevron pointing right), **compact** (the row plus a box of the last four lines of the reasoning, green label; it follows the stream as the text grows and shows the final four lines once finished; it has no scrollbar and the wheel scrolls the thread), **extended** (the same as compact, but the box holds the last 25 lines, green label; shorter text takes its own height) and **open** (the whole reasoning in a box that grows up to 50 lines and then scrolls inside itself with a thin scrollbar, grey label; while the reply streams it follows the newest text as long as you're scrolled to its bottom, and stops following if you scroll up until you scroll back down). A compact or extended box shorter than its line count takes its own height. Click anywhere on the row to cycle collapsed, compact, extended, open, collapsed. The choice is global and sticky: it restyles every Thinking row and is saved in `nutshell.config`, so it survives a restart. Until you click, the default is **Automatic**: extended while a reply is streaming, collapsed once it has finished (a failed reply's row counts as finished; Stop removes a stopped reply's row). **AI Assistant > Behaviour > Thinking display** sets it too (Automatic, Always collapsed, Always compact, Always open, Always extended); choosing Automatic is the way back to the default. Copy includes the reasoning text (all of it, not only the visible lines) when the row is compact, extended or open, and Save includes it when the idle mode under your choice is not collapsed. Replies with no reasoning show no row at all. `nutshell.exe --ui-demo=thinking`, `--ui-demo=thinking-compact`, `--ui-demo=thinking-extended` and `--ui-demo=thinking-open` preview the four modes without a live session.
+When a reply carries reasoning, a **Thinking** row appears above the reply text: a chevron, the word "Thinking" (coloured by its mode), and a dimmed summary (`· 240 words` once finished, `· streaming…` while still arriving). It has four modes, and each mode has its own colour for the word "Thinking" so you can tell them apart at a glance (pastel text on the dark themes, dark text on a pastel pill on the light ones): **collapsed** (just the row, chevron pointing right), **compact** (the row plus a box of the last four lines of the reasoning), **extended** (the same, but the box holds the last 25 lines) and **open** (the whole reasoning in a box that grows up to 50 lines and then scrolls inside itself with a thin scrollbar). While a reply streams, a compact or extended box follows the newest text; if its text is longer than the box, the mouse wheel over it scrolls the box (there is no scrollbar), a scroll up holds your place and scrolling back to the bottom follows the stream again. In every other case the wheel scrolls the chat thread: over a finished reply's box, over a box whose text fits, and for 300 ms after you last scrolled the thread, so scrolling back through history never catches on a box. The open box takes the wheel whenever its text overflows, finished or not, and while the reply streams it follows the newest text as long as you're scrolled to its bottom, and stops following if you scroll up until you scroll back down. Changing mode keeps your place in the box; a row that was collapsed follows the tail when it opens. A compact or extended box shorter than its line count takes its own height. Click anywhere on the row to cycle collapsed, compact, extended, open, collapsed. The choice is global and sticky: it restyles every Thinking row and is saved in `nutshell.config`, so it survives a restart. Until you click, the default is **Automatic**: extended while a reply is streaming, collapsed once it has finished (a failed reply's row counts as finished; Stop removes a stopped reply's row). **AI Assistant > Behaviour > Thinking display** sets it too (Automatic, Always collapsed, Always compact, Always open, Always extended); choosing Automatic is the way back to the default. Copy includes the reasoning text (all of it, not only the visible lines) when the row is compact, extended or open, and Save includes it when the idle mode under your choice is not collapsed. Replies with no reasoning show no row at all. `nutshell.exe --ui-demo=thinking`, `--ui-demo=thinking-compact`, `--ui-demo=thinking-extended` and `--ui-demo=thinking-open` preview the four modes without a live session.
 
 #### Empty, No-Key, and No-Session States
 
@@ -426,8 +426,9 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **Ctrl+Shift+T** | New session (opens the Session Manager) | from the terminal, not the AI panel |
-| **Ctrl+Shift+W** | Close the active tab | from the terminal |
+| **Ctrl+Shift+T** | New session (opens the Session Manager) | |
+| **Ctrl+Shift+W** | Close the active tab | |
+| **Ctrl+Tab, Ctrl+Shift+Tab** | Next tab, previous tab | |
 | **Alt+F4** | Exit | |
 | **Alt** | Open the menu bar | |
 | **Alt+Space** | Open the system menu | |
@@ -451,8 +452,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **PgUp** | History up a page; vim and less get it | |
 | **PgDn** | History down a page; vim and less get it | |
 | **Ctrl+PgUp, Ctrl+PgDn** | Sent to the program, always | |
-| **Ctrl+=** | Zoom the terminal font in | US layout |
-| **Ctrl+-** | Zoom the terminal font out | US layout |
+| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the terminal font in, out, reset to 10 pt | US layout |
 
 #### Keys the terminal sends to the shell
 
@@ -471,12 +471,11 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **Ctrl+Shift+Space** | Show or hide the panel | from the terminal, not from inside the panel |
+| **Ctrl+Shift+Space** | Show or hide the panel | |
 | **Enter** | Send | while a reply streams or commands run: stop them |
 | **Shift+Enter** | New line | |
 | **Ctrl+V** | Paste text, or attach an image from the clipboard | |
-| **Ctrl+=** | Zoom the chat in | US layout |
-| **Ctrl+-** | Zoom the chat out | US layout |
+| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the chat in, out or reset | US layout |
 | **Ctrl+C** | Copy the selected text | conversation list focused |
 | **Ctrl+A** | Select all messages | list focused |
 | **Esc** | Clear the selection | list focused |
@@ -488,8 +487,8 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **F11** | Fullscreen | from the terminal |
-| **Ctrl+Shift+M** | Mark an issue in the debug log | from the terminal |
+| **F11** | Fullscreen | |
+| **Ctrl+Shift+M** | Mark an issue in the debug log | |
 | **Esc, Enter** | Close a dialog | most dialogs |
 | **Help > Keyboard Shortcuts** | This sheet | |
 

@@ -2,6 +2,7 @@
 #include "voice_speak.h"
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* Speak text and compare with `want`; frees the result. */
 static int speak_eq(const char *md, const char *want)
@@ -208,6 +209,45 @@ int test_vspeak_long_reply(void)
     }
     ASSERT_TRUE(covered <= tl);
     free(st); free(ln); free(t); free(md);
+
+    /* Time must grow linearly with the reply. Speak 40 KB and 640 KB of the
+     * same prose (16x) and compare CPU time: linear gives about 16x, a
+     * quadratic pass about 256x. The bound of 60x (and a 1 ms floor on the
+     * small run, so timer noise cannot fail it) tells them apart. Best of
+     * three runs each. */
+    static const size_t sizes[2] = { 40000u, 640000u };
+    double best[2] = { 0.0, 0.0 };
+    for (int k = 0; k < 2; k++) {
+        size_t mcap = sizes[k] + 512u;
+        char *big = (char *)malloc(mcap);
+        ASSERT_NOT_NULL(big);
+        size_t bo = 0;
+        while (bo < sizes[k]) {
+            bo += (size_t)snprintf(big + bo, mcap - bo,
+                "Here is **some** prose with a [link](http://a.b/c) and `code`. It goes on [[[ and on.\n"
+                "- an item without a stop\n```\nint main(void) { return 0; }\n```\n"
+                "| a | b |\n|---|---|\n| 1 | 2 |\n\n    indented code\n\n");
+        }
+        size_t ccap = bo / 4u + 64u;
+        size_t *cs = (size_t *)malloc(sizeof(size_t) * ccap);
+        size_t *cl = (size_t *)malloc(sizeof(size_t) * ccap);
+        ASSERT_NOT_NULL(cs);
+        ASSERT_NOT_NULL(cl);
+        for (int rep = 0; rep < 3; rep++) {
+            clock_t c0 = clock();
+            char *tt = voice_speak_text(big);
+            ASSERT_NOT_NULL(tt);
+            size_t cn = voice_speak_chunks(tt, 0, cs, cl, ccap);
+            ASSERT_TRUE(cn > 0);
+            double dt = (double)(clock() - c0) / (double)CLOCKS_PER_SEC;
+            free(tt);
+            if (rep == 0 || dt < best[k]) best[k] = dt;
+        }
+        free(cs); free(cl); free(big);
+    }
+    double base = best[0] < 0.001 ? 0.001 : best[0];
+    printf("  [vspeak] 40 KB %.4f s, 640 KB %.4f s\n", best[0], best[1]);
+    ASSERT_TRUE(best[1] < 60.0 * base);
     TEST_END();
 }
 

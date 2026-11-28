@@ -5,6 +5,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "main_chord_win.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -174,6 +175,21 @@ LRESULT CALLBACK ai_chat_input_subclass_proc(HWND hwnd, UINT msg,
             return 0; /* eat the Enter key */
         }
         /* AI_INPUT_NEWLINE: fall through to default (inserts newline) */
+    }
+    if (msg == WM_KEYDOWN && main_chord_now(wParam) != MCHORD_NONE) {
+        /* A main-window chord: Ctrl+0 resets the chat zoom (the panel, as for
+         * Ctrl+= and Ctrl+-); the others reach the main window through the
+         * panel. The character the key-down queued (Ctrl+Tab's tab) is
+         * dropped first, so it never lands in the box. */
+        HWND parent = GetParent(hwnd);
+        const ULONG_PTR scan = ((ULONG_PTR)lParam >> 16) & 0x1FFu;
+        MSG qm;
+        while (PeekMessage(&qm, hwnd, WM_CHAR, WM_DEADCHAR, PM_NOREMOVE) &&
+               (((ULONG_PTR)qm.lParam >> 16) & 0x1FFu) == scan) {
+            (void)PeekMessage(&qm, hwnd, WM_CHAR, WM_DEADCHAR, PM_REMOVE);
+        }
+        if (parent) SendMessage(parent, msg, wParam, lParam);
+        return 0;
     }
     if (msg == WM_KEYDOWN && (GetKeyState(VK_CONTROL) & 0x8000)) {
         if (wParam == VK_OEM_PLUS  || wParam == (WPARAM)'='

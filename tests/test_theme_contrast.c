@@ -187,6 +187,7 @@ SEL(s_c_stop,         "chat.stop_btn",       t->chat.stop_btn);
 SEL(s_c_think_compact,  "chat.thinking_compact",   t->chat.thinking_compact);
 SEL(s_c_think_collapsed, "chat.thinking_collapsed", t->chat.thinking_collapsed);
 SEL(s_c_think_open,     "chat.thinking_open",      t->chat.thinking_open);
+SEL(s_c_think_extended, "chat.thinking_extended",  t->chat.thinking_extended);
 SEL(s_c_send_down,    "chat.send_btn (pressed)", darken_pressed(t->chat.send_btn));
 SEL(s_c_stop_down,    "chat.stop_btn (pressed)", darken_pressed(t->chat.stop_btn));
 
@@ -296,6 +297,7 @@ static const Pair k_pairs[] = {
     { &s_c_think_compact,   &s_bgp_base, FLOOR_TEXT },  /* Thinking label, compact (chat_listview.c) */
     { &s_c_think_collapsed, &s_bgp_base, FLOOR_TEXT },  /* Thinking label, collapsed */
     { &s_c_think_open,      &s_bgp_base, FLOOR_TEXT },  /* Thinking label, open */
+    { &s_c_think_extended,  &s_bgp_base, FLOOR_TEXT },  /* Thinking label, extended */
 
     /* -- intents painted as text (4.5) -- */
     { &s_warn_base,    &s_bgp_base,      FLOOR_TEXT },  /* detail dialog reason, settings URL warning */

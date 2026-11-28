@@ -448,7 +448,23 @@ void ai_chat_drain_stream_messages(HWND hwnd)
  * Safe to call even when no stream is active. */
 void ai_chat_cancel_active_stream(AiChatData *d)
 {
+    ai_chat_cancel_active_stream_why(d, AI_REPLY_STOPPED);
+}
+
+/* The same, recording why the reply ended (Stop, or a lost stream). */
+void ai_chat_cancel_active_stream_why(AiChatData *d, AiReplyEnd why)
+{
     if (!d) return;
+
+    /* A reply that was in flight is recorded as stopped below, with the text
+     * streamed so far. Taken now: the reset further down clears the buffer. */
+    int was_streaming = d->active_state && d->active_state->busy;
+    char *partial = NULL;
+    if (was_streaming && d->stream_content_len > 0) {
+        size_t plen = strlen(d->stream_content);
+        partial = (char *)malloc(plen + 1);
+        if (partial) memcpy(partial, d->stream_content, plen + 1);
+    }
 
     /* Abort and orphan this session's stream only -- another tab's reply
      * keeps running -- and put the session back to idle. */
@@ -466,10 +482,18 @@ void ai_chat_cancel_active_stream(AiChatData *d)
         chat_listview_invalidate(d->hChatList);
     }
 
-    /* Remove the incomplete streaming AI item */
+    /* The partial reply stays in the chat as a finished AI item (as the
+     * stream showed it, never split or read for commands); the caller's
+     * "[cancelled]" row follows. With no text there is nothing to keep. */
     if (d->stream_ai_item) {
-        chat_msg_remove(&d->msg_list, d->stream_ai_item);
+        if (partial && partial[strspn(partial, " \t\r\n")]) {
+            d->stream_ai_item->u.ai.thinking_complete = 1;
+            d->stream_ai_item->dirty = 1;
+        } else {
+            chat_msg_remove(&d->msg_list, d->stream_ai_item);
+        }
         d->stream_ai_item = NULL;
+        d->stream_display_start = -1;
     }
 
     /* Reset streaming state */
@@ -485,6 +509,13 @@ void ai_chat_cancel_active_stream(AiChatData *d)
         ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
         ai_conv_snapshot_trim(&d->conv);   /* R40: after every pop */
     }
+
+    /* The reply was never stored: keep what streamed, so the next message does
+     * not follow a user turn directly (a no-op unless the conversation ends on
+     * a user turn, so a second Stop adds nothing). */
+    if (was_streaming)
+        (void)ai_conv_add_ended_reply(&d->conv, partial, partial ? strlen(partial) : 0, why);
+    free(partial);
 
     /* Update UI */
     ai_chat_update_context_bar(d);

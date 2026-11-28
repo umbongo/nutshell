@@ -18,6 +18,10 @@
  * Returns NULL on failure. */
 HWND ns_tip_create(HWND owner, int dpi, HFONT font, const ThemeTokens *tokens);
 
+/* Re-apply the DPI-dependent settings after a monitor move: the maximum
+ * width and margins ns_tip_create set, and the font (borrowed). */
+void ns_tip_set_dpi(HWND tip, int dpi, HFONT font);
+
 /* Add `tool` (a window) as a tool: TTF_IDISHWND | TTF_SUBCLASS, hwnd is the
  * tool's parent and uId the tool. Changes no window style. Non-zero on
  * success. */
@@ -35,6 +39,16 @@ int ns_tip_add_rect(HWND tip, HWND host, UINT_PTR id, const RECT *rc,
 
 /* Move a rect tool added with ns_tip_add_rect (NULL = {0,0,0,0}). */
 void ns_tip_move_rect(HWND tip, HWND host, UINT_PTR id, const RECT *rc);
+
+/* The keyboard path (F1): show `text` in the same tip window, below `anchor`
+ * (a control's rectangle in screen coordinates), or above it when it would
+ * leave the monitor's work area. One tracking tool, added on first use, so a
+ * second call replaces the text. `text` must outlive the tip (a literal or
+ * a table entry). Non-zero when the tip was shown. */
+int ns_tip_pop(HWND tip, HWND host, const char *text, const RECT *anchor);
+
+/* Hide the tip ns_tip_pop showed. Safe when none is showing. */
+void ns_tip_unpop(HWND tip, HWND host);
 
 #endif /* _WIN32 */
 #endif /* NUTSHELL_NS_TIP_H */

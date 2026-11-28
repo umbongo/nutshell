@@ -1,4 +1,5 @@
 #include "thinking_mode.h"
+#include "stick_scroll.h"
 
 #include <string.h>
 
@@ -71,6 +72,37 @@ int think_mode_follows_tail(ThinkMode m)
     return m == THINK_MODE_COMPACT || m == THINK_MODE_EXTENDED;
 }
 
+int think_mode_wheel_scrolls(ThinkMode m)
+{
+    return m == THINK_MODE_COMPACT || m == THINK_MODE_EXTENDED ||
+           m == THINK_MODE_OPEN;
+}
+
+int think_box_settle_scroll(ThinkMode m, int stick, int scroll_y, int full_h,
+                            int vis_h)
+{
+    if (!think_mode_wheel_scrolls(m)) return 0;
+    return stick_scroll_on_layout(stick, scroll_y,
+                                  think_compact_offset(full_h, vis_h));
+}
+
+int think_autoscroll_on_pref(int autoscroll, ThinkMode prev, ThinkPref pref)
+{
+    if (pref == THINK_PREF_COLLAPSED || prev == THINK_MODE_COLLAPSED) return 1;
+    return autoscroll;
+}
+
+int think_wheel_takes(ThinkMode m, int streaming, int overflows,
+                      unsigned now_ms, int thread_scrolled, unsigned last_ms)
+{
+    if (m == THINK_MODE_OPEN) return 1;
+    if (m != THINK_MODE_COMPACT && m != THINK_MODE_EXTENDED) return 0;
+    if (!streaming || !overflows) return 0;
+    if (thread_scrolled && (unsigned)(now_ms - last_ms) < THINK_WHEEL_LATCH_MS)
+        return 0;
+    return 1;
+}
+
 int think_compact_offset(int full_h, int vis_h)
 {
     return full_h > vis_h ? full_h - vis_h : 0;
@@ -79,10 +111,20 @@ int think_compact_offset(int full_h, int vis_h)
 unsigned int think_mode_label_colour(const ThemeChatColors *chat, ThinkMode m)
 {
     switch (m) {
-    case THINK_MODE_COMPACT:
-    case THINK_MODE_EXTENDED: return chat->thinking_compact;
+    case THINK_MODE_COMPACT: return chat->thinking_compact;
+    case THINK_MODE_EXTENDED: return chat->thinking_extended;
     case THINK_MODE_OPEN:    return chat->thinking_open;
     default:                 return chat->thinking_collapsed;
+    }
+}
+
+unsigned int think_mode_pill_colour(const ThemeChatColors *chat, ThinkMode m)
+{
+    switch (m) {
+    case THINK_MODE_COMPACT:  return chat->thinking_compact_pill;
+    case THINK_MODE_EXTENDED: return chat->thinking_extended_pill;
+    case THINK_MODE_OPEN:     return chat->thinking_open_pill;
+    default:                  return chat->thinking_collapsed_pill;
     }
 }
 

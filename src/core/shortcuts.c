@@ -1,4 +1,5 @@
 #include "shortcuts.h"
+#include "app_font.h"
 #include "resource.h"   /* IDM_* -- -Isrc/ui is on both build paths */
 #include <string.h>
 
@@ -12,12 +13,17 @@
 
 #define NO_SESSION "with no live session: the menu"
 
+/* The default font size as text, from the constant Ctrl+0 resets to. */
+#define SC_STR_(x) #x
+#define SC_STR(x)  SC_STR_(x)
+
 static const Shortcut TABLE[] = {
     /* 1. Sessions and tabs */
     { S1, "Ctrl+Shift+T", "New session (opens the Session Manager)",
-      "from the terminal, not the AI panel", SC_MENU_ACCEL, IDM_FILE_NEW_SESSION },
+      "", SC_MENU_ACCEL, IDM_FILE_NEW_SESSION },
     { S1, "Ctrl+Shift+W", "Close the active tab",
-      "from the terminal", SC_MENU_ACCEL, IDM_FILE_CLOSE_TAB },
+      "", SC_MENU_ACCEL, IDM_FILE_CLOSE_TAB },
+    { S1, "Ctrl+Tab, Ctrl+Shift+Tab", "Next tab, previous tab", "", 0u, 0 },
     { S1, "Alt+F4",       "Exit", "", 0u, 0 },
     { S1, "Alt",          "Open the menu bar", "", 0u, 0 },
     { S1, "Alt+Space",    "Open the system menu", "", 0u, 0 },
@@ -40,8 +46,8 @@ static const Shortcut TABLE[] = {
     { S3, "PgUp",       "History up a page; vim and less get it", "", 0u, 0 },
     { S3, "PgDn",       "History down a page; vim and less get it", "", 0u, 0 },
     { S3, "Ctrl+PgUp, Ctrl+PgDn", "Sent to the program, always", "", 0u, 0 },
-    { S3, "Ctrl+=",     "Zoom the terminal font in", "US layout", 0u, 0 },
-    { S3, "Ctrl+-",     "Zoom the terminal font out", "US layout", 0u, 0 },
+    { S3, "Ctrl+=, Ctrl+-, Ctrl+0",
+      "Zoom the terminal font in, out, reset to " SC_STR(APP_FONT_DEFAULT_SIZE) " pt", "US layout", 0u, 0 },
 
     /* 4. Keys the terminal sends to the shell */
     { S4, "Ctrl+Space",      "NUL (0x00)", "", 0u, 0 },
@@ -58,13 +64,12 @@ static const Shortcut TABLE[] = {
 
     /* 5. AI Assist panel */
     { S5, "Ctrl+Shift+Space", "Show or hide the panel",
-      "from the terminal, not from inside the panel", SC_AI | SC_MENU_ACCEL, IDM_VIEW_AI_CHAT },
+      "", SC_AI | SC_MENU_ACCEL, IDM_VIEW_AI_CHAT },
     { S5, "Enter",       "Send",
       "while a reply streams or commands run: stop them", SC_AI, 0 },
     { S5, "Shift+Enter", "New line", "", SC_AI, 0 },
     { S5, "Ctrl+V",      "Paste text, or attach an image from the clipboard", "", SC_AI, 0 },
-    { S5, "Ctrl+=",      "Zoom the chat in", "US layout", SC_AI, 0 },
-    { S5, "Ctrl+-",      "Zoom the chat out", "US layout", SC_AI, 0 },
+    { S5, "Ctrl+=, Ctrl+-, Ctrl+0", "Zoom the chat in, out or reset", "US layout", SC_AI, 0 },
     { S5, "Ctrl+C",      "Copy the selected text", "conversation list focused", SC_AI, 0 },
     { S5, "Ctrl+A",      "Select all messages", "list focused", SC_AI, 0 },
     { S5, "Esc",         "Clear the selection", "list focused", SC_AI, 0 },
@@ -78,9 +83,9 @@ static const Shortcut TABLE[] = {
       "list focused", SC_AI, 0 },
 
     /* 6. Window and help */
-    { S6, "F11",          "Fullscreen", "from the terminal",
+    { S6, "F11",          "Fullscreen", "",
       SC_MENU_ACCEL, IDM_VIEW_FULLSCREEN },
-    { S6, "Ctrl+Shift+M", "Mark an issue in the debug log", "from the terminal",
+    { S6, "Ctrl+Shift+M", "Mark an issue in the debug log", "",
       SC_MENU_ACCEL, IDM_HELP_MARK_ISSUE },
     { S6, "Esc, Enter",   "Close a dialog", "most dialogs", 0u, 0 },
     { S6, "Help > Keyboard Shortcuts", "This sheet", "", SC_MENU_PATH, 0 },
