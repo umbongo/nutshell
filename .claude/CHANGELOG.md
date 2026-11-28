@@ -4,6 +4,116 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-28 — the retrospective's recommendations R7, R3 and R4, accepted
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-fable-5-2 (main session, the edits); claude-sonnet-5-5 (the R4 test).
+
+The maintainer answered the three recommendations of the 2026-11-28 retrospective that
+needed a yes or no: "R7. Yes. R3. Yes. R4. Ok."
+
+- **R7, CLAUDE.md** (quality checks) and **`skills/feature-workflow/SKILL.md`** (step 5): a
+  branch with no plan (a fix, a batch of small fixes) gets one review of its whole diff by a
+  model that did not write it, Opus or Fable, and the main session reads that diff in full
+  before the merge. It is what PRs #122 and #123 did; the wording is the one proposed in
+  PR #124's body.
+- **R3, CLAUDE.md** and **`skills/feature-workflow/SKILL.md`** ("Running a plan", step 6):
+  the version is bumped and the exe built once, after the final review's fix wave. The work
+  after the last task is now ordered: final review, fix wave and re-review, then the build.
+- **R4**: a native test that every `tests/*_win.c` file is in the Makefile's
+  `WIN_ONLY_TESTS` (`tests/test_win_only_list.c`, in this pull request; **`memory/MEMORY.md`**
+  names it and drops the open item for `test_ai_netcancel_win.c`, fixed in PR #126). It changes what
+  `make test`, and so the `Native tests` check, enforces: a Windows-only test file left out
+  of the list now fails the suite on every host, where before only a Windows-host build
+  could show it.
+- **CLAUDE.md**, "Building on Linux": `vcpkg.json` at the repo root pins the three libraries
+  to the vcpkg commit the exe is built with; the Makefile still reads the classic `installed/`
+  directory. **`docs/test-log/README.md`** drops its index of files (two pull requests adding
+  a file each would otherwise edit the same lines).
+
+## 2026-11-28 — merge when ready; the Windows test log
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-fable-5-2 (main session, the edits); claude-sonnet-5-5 (the test log's first files).
+
+With PR #123 green and waiting and PR #124 open, the maintainer said: "Always Merge when
+ready, keep a log of what needs to be tested that you can guide me on when I say I'm ready to
+test". #123 and #124 were merged under it the same hour.
+
+- **CLAUDE.md**, "Branches, pull requests and the merge gate": the per-merge go-ahead
+  (2026-11-12) is replaced by merge when ready, with "ready" spelled out as the gate already
+  was (every check green on the latest commit, up to date, review findings fixed after the
+  maintainer has seen them, the main session's check of the diff). A design's approval and a
+  release tag are stated as outside the rule: that limit is the main session's reading of
+  "merge", not the maintainer's words. New paragraph: the Windows test log.
+- **`skills/feature-workflow/SKILL.md`**: step 8 is the test log (a `docs/test-log/` file per
+  code pull request; the notes' Open list points at it); step 9 is merge when ready;
+  Allocation's "Finish means" follows.
+- **`memory/MEMORY.md`**: the classifier note says what the rule is now; "Open items" names
+  the test log and is corrected to v1.3.3 and to "since v1.2.94": the notes record the
+  maintainer trying v1.2.94 on 2026-11-24, where the retrospective and the first wording
+  said v1.2.93.
+- **`docs/test-log/`** (new): a README and ten files, 200 checks, built from the notes' Open
+  list and the bodies of PRs #104 to #123.
+
+No critique was run: the rule is the maintainer's own sentence, and "ready" restates the gate
+without changing what it enforces.
+
+## 2026-11-28 — retrospective of PRs #102 to #122 (20 merges)
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-fable-5-2 (main session, the retrospective and the edits); claude-sonnet-5-5 (token-use measurement, notes compaction); claude-opus-5-5 (process review, critique).
+
+The maintainer said yes to a retrospective at 20 merges since `be6599f`. It is
+`docs/retrospectives/2026-11-28-twenty-merges-retrospective.md`; token use is in
+`docs/token-usage/2026-11-28-first-window-after-loop-change.json`.
+
+- **Recorded late: the maintainer's rule of 2026-11-25**, that every review is run by a model
+  other than the one that wrote the code, Opus or Fable only. It reached `feature-workflow`
+  that day with no entry here, and CLAUDE.md still said "an Opus agent". **CLAUDE.md**,
+  quality checks, and **`skills/feature-workflow/SKILL.md`**, Allocation, now both say an Opus
+  or Fable agent, never the model that wrote the code.
+- **`memory/MEMORY.md`**: the last-retrospective marker moves to `4897425` (PR #122); token
+  use (the first window after the loop change, too short to judge); the settings trim was not
+  in effect on 2026-11-28; `automaton` has 4 cores and 7 GB (an unbounded `make -j release`
+  was killed, *reported* from PR #120's ledger) and a 249 GB root; what Wine cannot do; a new
+  config field goes into the selftest and harness configs; the test baselines (4,673 hosted,
+  4,632 stub, `wintest` 257); exe facts; "Open items worth knowing" rewritten for v1.3.2.
+- **`skills/critique/SKILL.md`**: the critic is Opus or Fable, never the author's model, with
+  the effort set; the maintainer's instruction that voice design critiques go to Fable at high
+  effort is stated as the one exception. Description and heading no longer say Opus only.
+- **`skills/checkpoint/SKILL.md`**: step 2 leaves alone any Open item an unmerged branch edits
+  (this compaction ran beside three branches editing the notes); step 4's figure for
+  `feature-workflow` is about 260.
+- **`skills/feature-workflow/SKILL.md`**: 68 of the 106 idle rewrites were the orchestrators'
+  (it said 64).
+- **`skills/repo-status/SKILL.md`**: the dated "known state" became stable facts only (the
+  snapshot branches with `v1.2.89` added, the tag collisions, the local-only spec branch); the
+  version, open pull requests and branches in flight are measured each time.
+
+Critique (Opus, on the diff of these edits), ten findings:
+
+1. No changelog entry though the retrospective cited one: accepted, this entry.
+2. A small-branch review rule written into CLAUDE.md in the maintainer's voice, which the
+   maintainer never gave: accepted, removed. It is the retrospective's recommendation R7 and
+   is in the pull request body for a yes or no.
+3. "One such review" had no referent for a branch with no tasks: accepted, gone with 2; R7's
+   wording says "by a model that did not write it".
+4. `feature-workflow` and `critique` still said "Opus agent" in three places: accepted, fixed.
+5. The voice-critique instruction was reduced to history: accepted, restated as the exception.
+   (Its remark that this critique broke the rule assumed an Opus main session; it was Fable.)
+6. MEMORY.md said the trim works and that it does not: accepted, one bullet now.
+7. "Every retrospective compares token use (maintainer)" overstated the attribution: accepted,
+   reworded; the maintainer asked for one comparison, the skill measures each time.
+8. `checkpoint` is over its own 100-line guide (125 lines): partly accepted, the new rule cut
+   to two lines; the skill is not shortened here.
+9. The compaction rule missed local-only branches and overstated the conflict: accepted.
+10. The `repo-status` known state was stale as written: accepted, stable facts only.
+
+Not verified by the critic and left as stated: the hosted and stub test counts (from the PR
+#122 check log and the build agents' reports); that the Realtime spec was set aside
+(*reported*).
+
 ## 2026-11-26 — one final review, by the model that did not review the tasks
 
 Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.

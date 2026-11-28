@@ -4,16 +4,16 @@
 landed at v1.0.92/v1.0.96 (see "Todo" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **4,133 tests**, 0 failures (hosted `Native tests`, real
-libssh2, PR #101's head, 2026-11-21; 4,092 with the libssh2 stub on `automaton`;
-`wintest` 58). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
-(`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 84 registered cases
+batches). Native suite: **4,673 tests**, 0 failures, 3 skipped (hosted `Native tests`, real
+libssh2, PR #122's head, 2026-11-28; 4,632 with the libssh2 stub on `automaton`;
+`wintest` 257 run, 0 failed, 6 skipped under Wine). Integration suite (`tests/integration/Run-Integration.ps1`): twelve case files
+(`cases\10-terminal` … `97-voice`, `85-telnet` new in PR #81), 94 registered cases
 (the README's case tables and the telnet file), manual only since 2026-09-15, DPI-aware since
-PR #71; `ui_gallery` captures 20 `--ui-demo` states x 4 themes = 80 images. Next action is sub-project 3 (main window
+PR #71; `ui_gallery` captures 22 `--ui-demo` states x 4 themes = 88 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.86 (2026-11-21).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.3.2 (2026-11-28).
 
 ## Decisions so far
 
@@ -484,6 +484,43 @@ Done, in order (details in the commit messages and the specs named):
   OpenAI, Groq and custom get a British-spelling `prompt`, Gemini an instruction, Mistral
   neither. Migration marker `voice_defaults_rev` 3 turns an empty language into en-GB once.
   Its Windows checks are in Open (voice item, (aj) onwards).
+- Merge record of the branches above (2026-11-28): themed checkboxes v1.2.89 (PR #104,
+  4c1a4e7); AI assistant switch and notice dialog v1.2.90 (PR #106, 9467728); the 19
+  OK-only boxes moved onto the notice dialog v1.2.91 (PR #107, 74f2871); voice input
+  v1.2.92 (PR #108, 4b3ebe3); Right Shift and Toggle v1.2.93 (PR #109, 3bcc8fd); voice
+  improvements with review by default v1.2.94 (PR #110, 90fbdbe). Design docs: PR #105
+  (ef74f19). Todo notes: PRs #111, #113, #115, #116.
+- Live dictation, v1.2.95 (PR #112, 36251ea; PR 1 of live voice): words appear in the AI
+  box while speaking, OpenAI `gpt-live-transcribe` and Mistral `voxtral-mini-transcribe-realtime-3`
+  over a delay-loaded WinHTTP WebSocket, with a batch fallback; typing is paused while
+  recording. Its Windows checks are in Open.
+- Conversation mode, v1.2.99 (PR #117, 58dbd00; PR 2 of live voice): a spoken conversation
+  with Windows SAPI speech, echo cancellation, ducking, cut-in and local "carry on". Its
+  Windows checks are in Open.
+- AI speech, v1.3.1 (PR #120, 6b1991d; PR 3 of live voice): spoken replies from Mistral and
+  OpenAI-compatible servers, with the Windows speech fallback; the Mistral capture was
+  waived (2026-11-26). Closes in code the PR 2 follow-ups marked "fixed in code in PR 3".
+  Its Windows checks are in Open.
+- Core quick wins, v1.3.2 (PR #122, 4897425): an empty later tool id or name no longer
+  overwrites the stored one; Anthropic `type: "error"` stream events are shown; an
+  intraword underscore is not emphasis; the telnet auto-login deadline is wrap-safe; the
+  Custom provider models URL for a Base URL with no path (`ai_models_url_from_base`).
+- Process: the main session runs a plan, token use measured at each retrospective (PR #119,
+  1f999b3); one final review per branch, by the model that did not review the tasks
+  (PR #121, c03f4e9); Dependabot's actions group (PR #118, f881e01).
+- 2026-11-21 retrospective (PR #102, 5b33449;
+  `docs/retrospectives/2026-11-21-seven-merges-retrospective.md`).
+- 2026-11-28 retrospective (twenty merges, PRs #102 to #122, since marker `be6599f`):
+  this compaction moved no Open item whole to Done (the history proves only the parts PR #122
+  already struck), updated the counts (4,673 hosted tests, `wintest` 257, `ui_gallery`
+  22 x 4, v1.3.2, 93 CRLF files), and added Open "Live dictation follow-ups" from PR #112's
+  and #108's bodies. The voice items stay Open: nothing of live voice has run on Windows.
+- Housekeeping closed on the process branch (2026-11-28): `vcpkg.json` manifest with the
+  `builtin-baseline` of the `~/vcpkg` checkout (e2747d2; the Makefile still reads the
+  classic `installed/` directory); `Install-IntegrationRunner.ps1` deleted (9d0cdd1);
+  a stream posting during the AI panel's destruction no longer leaks its payload (f2cb01d:
+  a failed post frees its payload, and `WM_DESTROY` drains the queued stream messages);
+  the integration suite's case count corrected from 84 to 94 (counted from the cases).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -537,7 +574,7 @@ Open, in priority order:
       `test_voice_stt_cancel_blocked`'s Windows-only "Cancelled" and timing assertions. (n)
       Harness cases never run (no pwsh): `settings_voice_gallery`,
       `self_report_voice_off_clean`, `voice_off_right_shift_reaches_input`, the updated
-      `settings_help_tool_count` (now "1, 1, 107", the arithmetic unverified) and
+      `settings_help_tool_count` (now "1, 1, 110" since PR #112, the arithmetic unverified) and
       `ui_gallery` with its two new states (22 x 4 = 88 captures). (o) A microphone with a
       non-Latin friendly name in the Settings device list: the combo is ANSI, so the name may
       come out as question marks. (p) The mic button's busy look when a card finishes. (q)
@@ -667,8 +704,9 @@ Open, in priority order:
       the Windows box (newer gcc and MSYS2 headers, live spec §7.5). (o) The Live model row
       and the "Live text as you speak needs OpenAI or Mistral" note on the Voice page for each
       provider and with "Use current AI assistant". (p) The upgrade notice line "Voice: live
-      speech-to-text model". (q) The integration harness has no live-dictation case yet: the
-      WAV-injection seam is left to PR 2 (live spec §16 item 28).
+      speech-to-text model". (q) The integration harness had no live-dictation case: the
+      WAV-injection seam came in PR #117 (103e18d) and the case `voice_live_dictation_fixture`
+      is in the Conversation mode item's (n), never run.
 - [ ] **Conversation mode (PR 2 of live voice, feat/voice-conversation): nothing run on
       Windows.** Built and tested here under Wine and the native suite (4519 tests, 170
       `wintest`) with no microphone, no working SAPI and no real audio device; live spec
@@ -853,6 +891,15 @@ Open, in priority order:
       split or rename it. Only the native parser tests cover the error event.
       The 5-minute cap counts decoded frames, so a Mistral stream that never ends and carries no
       audio stays open until the user stops it or the 10-minute Speaking watchdog fires.
+- [ ] Live dictation follow-ups (PR #112, parked minors; nothing run on Windows): an error
+      followed by a ready timeout gives two chat lines; a READY and the 10 s timeout landing
+      at the same moment shows "stopped" instead of "unavailable"; teardown can stall the UI
+      for up to 1 s if slow; the box-changed check is skipped for the fallback and Escape
+      writes (typing is locked then); Shift+Insert is caught as "box changed" (a hand
+      check); messages queued when the window is destroyed are not wiped; the glue has no
+      automated test, so only the hand checks cover it. From PR #108, not built: the live
+      level bar under the input; Gemini's default model `gemini-2.5-flash` is unconfirmed
+      on Google's page.
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
@@ -883,20 +930,17 @@ Open, in priority order:
       `developers.openai.com/api/docs/deprecations.md`, 2026-11-25. Change them in their own
       pull request. Also later: Groq Orpheus once it leaves Preview; resampling for Custom
       servers.
-- [ ] **SSH: a resize during the connect never reaches the server** (maintainer's issue mark,
-      2026-11-25, v1.2.95, `nutshell-20261125-112702-p7428.issue1.log`: tmux drew 25 rows and
-      93 columns in a 49x125 window). `connection_thread` asks for the pty with the grid
-      snapshotted when the connect starts (`j->cols`/`j->rows`, `src/ui/window.c`); the grid
-      sync skips `io.resize` while `s->io.ctx` is NULL, so every resize in those seconds (25
-      of them in the log, 25x93 to 49x125) is dropped, and adopting the channel on connect
-      sends no size. The remote pty keeps the starting size until the next grid change.
-      Fix: after `s->io = io` in the SSH branch of the connect-done handler, call
-      `s->io.resize(s->io.ctx, s->term->cols, s->term->rows)`; have `ssh_pty_request` record
-      `last_cols`/`last_rows` so an unchanged size sends nothing. Telnet already reads the
-      current grid at adoption. Test first: a native test that the adopt step sends the
-      current size when it differs from the requested one, and a harness case that resizes
-      mid-connect and reads `stty size`. Until then, resizing the window by one cell fixes a
-      session.
+- [ ] SSH: a resize during the connect (maintainer's issue mark, 2026-11-25) is fixed in
+      v1.3.4: the current size is sent when the channel is adopted, and the poll keeps the
+      remote pty at the terminal's size, so a request that got EAGAIN is finished and never
+      lost. Left: the harness case that resizes mid-connect and reads `stty size` is not
+      written (no existing case gives the pattern); the hand check is in
+      `docs/test-log/v1.3.4-session-io.md`.
+- [ ] `ssh_channel_write` on a stalled peer: the 5 s `SO_SNDTIMEO` it sets limits nothing,
+      because libssh2 makes the socket non-blocking at the handshake, so a blocking write
+      waits in `poll` without a limit and the UI thread with it (reasoned from the libssh2
+      1.11.1 source in the review of PR #126's branch, not reproduced). The earlier note
+      "up to 5 s per write" is wrong.
 - [ ] The AI assistant cannot run queued commands while the session is inside tmux; they
       run only after tmux is closed (maintainer, 2026-11-25, *reported*, not investigated).
 - [ ] AI panel: find a way to stop the conversation becoming full (maintainer, 2026-11-25,
@@ -942,18 +986,24 @@ Open, in priority order:
       status dot's size written twice, the rounds note's spare row, two "web_fetch is off"
       rows in one round). From PR #88: NX-OS and ASA `do CMD` should use their own tables; a
       sensitive row in `--ui-demo`; blank class reasons (`sh -c: `).
-- [ ] Terminal escapes (PR #94's nano work): CSI I, HTS and TBC unhandled; `term_put_char`
-      auto-wrap inside a scroll region; entering the alternate screen resets the primary's
-      scroll region (*reported*); replay vim, htop, mc and less against tmux as nano was.
-- [ ] Terminal attributes (found 2026-11-12 while checking this list): the parser keeps SGR
-      underline and blink (`TERM_ATTR_UNDERLINE`, `TERM_ATTR_BLINK`) but `renderer.c` draws
-      neither, though the in-app guide lists both styles; the OSC 0/2 window title is parsed
-      into `term->title` and nothing reads it, so it is never shown (a tab title or the
-      window caption could).
+- [ ] Terminal escapes (PR #94's nano work): replay vim, htop, mc and less against tmux as
+      nano was. Since v1.3.3 the tab stops (HT, CHT `CSI I`, CBT `CSI Z`, HTS, TBC), auto-wrap
+      inside a scroll region and the alternate screen keeping the primary's scroll region are
+      done. Left: `ESC c` (RIS) resets only the tab stops; a full reset also clears the
+      screen, the attributes, the modes, the scroll region and the cursor.
+- [ ] Terminal attributes (found 2026-11-12 while checking this list): underline is drawn
+      since v1.3.3 (Windows hand check not run: `printf '\033[4munderlined\033[0m plain\n'`
+      at 100 % and 150 % scaling, on a line with a missing glyph too, and a line under
+      bold and under reverse video). Blink (`TERM_ATTR_BLINK`) is parsed and not drawn,
+      though the in-app guide lists it; the OSC 0/2 window title is parsed into
+      `term->title` and nothing reads it, so it is never shown (a tab title or the window
+      caption could).
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
-      editor; Start Logging fails silently; a generated README settings block (*reported*).
+      editor; a generated README settings block (*reported*); the automatic log opened at
+      connect (`open_session_log`) still fails silently (Start Logging tells the user since
+      v1.3.4).
 - [ ] Other, from the PR #94 session (*reported*): resize cost with a full history (PR #93
       measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200 columns); a user-supplied
       issue log can hold a typed secret, so `term.rx`/`term.key` payloads are never printed
@@ -967,8 +1017,6 @@ Open, in priority order:
       clock only between reads).
 - [ ] winhttp_open: fail closed when TLS 1.2 cannot be enforced (today the session keeps
       the OS defaults if the TLS 1.2-only retry is refused).
-- [ ] `vcpkg.json` manifest with a baseline (deferred by PR #87, whose body says it is in
-      this list; it was not until 2026-11-12).
 - [ ] `ssh_channel_write` blocks the UI thread for up to its 5 s send timeout per write
       when the remote window is full (found by PR #79, left alone). The same class of
       symptom as #79's lost input: keys stop while the UI thread waits. Move SSH writes off
@@ -994,8 +1042,8 @@ Open, in priority order:
       the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
       combining marks and the reflow drop order in PR #76; middle-click now extends, so
       middle-button paste is off the list; the scrollback-size setting and lazy allocation
-      shipped in PR #93): Alt+drag block selection; the per-byte paste writes over SSH
-      (mouse reporting to applications: see "Local shell follow-ups").
+      shipped in PR #93): Alt+drag block selection (mouse reporting to applications: see
+      "Local shell follow-ups").
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
       the 100 ms throttle with its starved-timer check, DPI reorder, logging, the
@@ -1014,9 +1062,10 @@ Open, in priority order:
       PR #101's `extended_box` and `mode_change_holds_reader_place`, and
       `test_settings_label_win_labels_fit_column`) have no recorded run on Windows, only
       under Wine.
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.86, which adds telnet, the
-      password eye, keyboard-interactive auth, the tool gate, `run_command` and the Thinking
-      row modes (four since PR #101) since then.
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.3.2, which adds telnet, the
+      password eye, keyboard-interactive auth, the tool gate, `run_command`, the Thinking
+      row modes (four since PR #101), the AI switch, the notice dialog and voice (dictation,
+      conversation mode, AI speech) since then.
       The first tag will also be the first run of `release.yml`'s `.sha256` step (PR #87).
       Tagging is the maintainer's call (`feature-workflow` step 10), best after the Windows
       checks in the first item.
@@ -1060,18 +1109,15 @@ Open, in priority order:
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
 - [ ] CI review follow-ups (2026-09-10 review; the libssh2 part was done 2026-09-24):
-      `tests/integration/Install-IntegrationRunner.ps1` still exists for the runner
-      decommissioned on 2026-09-15 and names the removed `integration.yml`; deleting it is
-      the maintainer's call;
       `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
       `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
-      94 CRLF-indexed files (2026-11-12) in a lone PR when nothing else is in flight;
+      93 CRLF-indexed files (2026-11-28) in a lone PR when nothing else is in flight;
       mark `tests/fuzz/corpus/**` binary first, since eight seeds there carry CR bytes as
       test input. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
 - [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
-      settings), D (AI extras) — 31 cases planned; the suite has since grown to 84 cases, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
+      settings), D (AI extras) — 31 cases planned; the suite has since grown to 94 cases, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config
@@ -1081,9 +1127,7 @@ Open, in priority order:
       say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
       destination filter shipped in PR #85.
 - [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
-      two user turns in a row in the conversation; a stream posting during the AI
-      panel's destruction leaks its payload (tiny; probably closed by the v1.2.14
-      stream-lifetime rework, f2cb01d -- confirm, then strike).
+      two user turns in a row in the conversation.
 - [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
       device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
       than device rulesets -- keep detecting on strict-locked sessions and add a
@@ -1115,16 +1159,13 @@ Open, in priority order:
 - [ ] Paint-path follow-ups from the 2026-10-14 stale-band investigation (v1.2.34 fixed
       the seed: `renderer_draw` cleared `row->dirty` on a paint that did not contain
       the row, and `term_alt_screen_enter()` now requests a full redraw like the exit
-      path). Two weaknesses the REDRAW_DEBUG log exposed remain: (a) a disconnected
-      background session keeps a row dirty forever, so `term_has_dirty_rows()` makes
-      the WM_TIMER poll loop invalidate the window at 60 fps indefinitely — find why
-      the row never clears (rows of a non-active session are never painted) and stop
-      polling dirty state for sessions that are not on screen; (b) the poll path calls
+      path). Fixed in v1.3.4: a background session's dirty row no longer makes the timer
+      invalidate the window at 60 fps, and the cooldown tick is per session. One weakness
+      the REDRAW_DEBUG log exposed remains: (b) the poll path calls
       `dispbuf_invalidate()` without `force_all_rows`, so a shadow-invalidating repaint
       cannot rescue a row already marked clean — consider making `dispbuf_invalidate`
-      also mark all rows dirty, or routing it through `full_redraw_needed`. The 16 ms
-      cooldown's `g_last_paint_tick` is shared by all sessions, which is what let the
-      background tab's no-op paints starve nano's. Also noted by the review: the poll
+      also mark all rows dirty, or routing it through `full_redraw_needed`. Also noted by
+      the review: the poll
       loop only repaints for connected idle sessions, so a disconnected or connecting
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row

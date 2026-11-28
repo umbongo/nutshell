@@ -5,7 +5,8 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-26 (the token-use baseline and the loop change; before that, 2026-11-21's retrospective of PRs #95-#101).
+Last updated: 2026-11-28 (merge when ready and the Windows test log; the same day, the
+retrospective of PRs #102-#122).
 
 ## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
@@ -27,19 +28,22 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   maintainer declined a retrospective on 2026-11-04 and asked for none
   until the backlog was cleared (*reported*), so the 2026-11-12 one covered
   14 merges.
-- **Last retrospective:** 2026-11-21, marker commit `be6599f` (merge of
-  PR #97, Dependabot's CodeQL action bump; it covered seven merges, #95 to
-  #101). The next one covers the merges since it
-  (`git log --merges --first-parent be6599f..origin/main`); move this
+- **Last retrospective:** 2026-11-28, marker commit `4897425` (merge of
+  PR #122, the first todo-list batch; it covered 20 merges, #102 to #122,
+  and was asked for at 20 after "No retro yet" at 17). The next one covers
+  the merges since it
+  (`git log --merges --first-parent 4897425..origin/main`); move this
   marker at every retrospective.
-- **The next retrospective compares token use before and after the
-  2026-11-26 loop change** (maintainer): the main session now runs a plan
-  itself, with no long-lived orchestrator. The baseline is
-  `docs/token-usage/2026-11-26-baseline.json` (2026-11-21T00:00 to
-  2026-11-26T00:45 UTC; the next window starts at that `until`; the
-  controller, main session plus orchestrators, 40% of the cost index and
-  1.25M per implementer agent; 106 idle cache rewrites; 56k sub-agent
-  start-up); the method is the `checkpoint` skill's step 1.
+- **Token use is measured at each retrospective** (the `checkpoint`
+  skill's step 1; the maintainer asked on 2026-11-26 for a comparison
+  before and after that day's loop change): the files are in
+  `docs/token-usage/`, and the next window starts at the newest file's
+  `until` (2026-11-28T07:25 UTC). The first window after
+  the 2026-11-26 loop change (the main session runs a plan itself) was too
+  short to judge the expected 14-17% saving: 2.3 days, 2 implementer
+  agents. Idle cache rewrites fell from 106 to 3; the controller's share
+  from 40% to 34%. The window from 2026-11-28 holds the todo batches and
+  is the one to judge by.
 
 ## Token use, facts measured on 2026-11-26
 
@@ -48,16 +52,22 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` change it, deliberately unset).
   An agent that waits longer than that rewrites its whole context at the
   next request.
-- Every sub-agent started at about 56k tokens before its brief. Since
+- Every sub-agent started at about 56k tokens before its brief. On
   2026-11-26 `~/nutshell/.claude/settings.local.json` on `automaton`
-  (gitignored, so not in a worktree or another clone) turns off what this
-  repository never uses: `syncClaudeAiSkills: false`,
+  (gitignored, so not in a worktree or another clone) was set to turn off
+  what this repository never uses: `syncClaudeAiSkills: false`,
   `disableClaudeAiConnectors: true`, and `enabledPlugins` false for
   playwright and the synced engineering, design and cowork plugins. A
-  headless start fell from 54.3k to 45.6k. Sessions must start in
-  `~/nutshell` to get it. Gmail, Calendar, Drive and Claude Docs are
-  therefore absent in nutshell sessions; desktop-commander is kept as the
-  fallback when Bash fails (the full-disk note below).
+  headless start then measured 45.6k, down from 54.3k. **It was not in
+  effect on 2026-11-28** (measured): a session started in `~/nutshell`
+  still listed the engineering, design and cowork skills and the
+  playwright tools, a sub-agent started from it did too, and the sub-agent
+  start-up median was 54k. The cause is not known
+  (`~/.claude/settings.json` enables playwright at user level); check
+  `/plugin` before relying on the trim. The claude.ai connectors (Gmail,
+  Calendar, Drive, Claude Docs) are blocked by the organisation's policy
+  in any case; desktop-commander is kept as the fallback when Bash fails
+  (the full-disk note below).
 
 ## Working from a cloud (Linux) session
 
@@ -91,8 +101,13 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   changes the shared `~/.wine` prefix for every session. No `pwsh` is
   installed, so a harness case file cannot be parsed or run here; only the
   Windows box can check one. Before a push the PRs of 2026-11 ran
-  `make -j test`, `make test SAN=1`, `make lint-gate`, `make fuzz-run` and
-  `xvfb-run -a make wintest` here.
+  `make -j test`, `make test SAN=1`, `make lint-gate`, `make fuzz-run`,
+  `xvfb-run -a make wintest` and, since PR #106, `make selftest-wine`
+  here. One Wine run at a time: the prefix is shared.
+- `automaton` has 4 cores and 7 GB of RAM (2026-11-28). An unbounded
+  `make -j release` was killed for memory during PR #120; `make release`
+  or `-j3` is safe. The root filesystem is 249 GB, 25% used (it was 76 GB
+  and full on 2026-11-21).
 - **Never wait with `pgrep -f`.** `while pgrep -f 'make fuzz-long'; do
   sleep 5; done` matches its own `bash -c` command line and never exits:
   one such loop ran from 2026-11-05 to 2026-11-12 and kept a sub-agent
@@ -116,6 +131,16 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   5.82 no longer exports `SetWindowSubclass` and its siblings. Wine's does,
   so it never reproduced (PR #90). A build only counts as started on Windows
   once it has been run there.
+- **What Wine cannot do, so only Windows runs it** (PRs #106 to #120):
+  abort a blocked WinHTTP call or wake a blocked WebSocket receive (five
+  `wintest` skips), give a capture or render audio device under `xvfb`
+  (`VAE_NO_DEVICE`), or run SAPI speech in full. The network-cancel, audio
+  and speech paths of the AI switch and of voice are therefore unproven
+  until a Windows run.
+- **A new config field goes into the selftest and harness configs too**
+  (PR #110's review): a config that lacks a field this version knows gets
+  the upgrade notice at every launch, and `make selftest-wine` then times
+  out on the modal dialog.
 - **A Windows-host `make test` is a third build** that neither `automaton`
   nor CI runs. It differs from the two here in two ways: MSYS2's gcc is
   newer (15.2 on 2026-11-13, *reported*; the cross-compile is gcc 13), so it
@@ -126,7 +151,10 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   PR #98 made it `-Werror`, four `-Wformat-truncation` warnings in a `_WIN32`
   branch of `ai_tool_web_search.c`, which gcc 13 compiles without a word,
   failed it (fixed in PR #100). A new `tests/*_win.c` file goes into
-  `WIN_ONLY_TESTS`; a change to the build flags, or one a newer gcc may warn
+  `WIN_ONLY_TESTS` (since 2026-11-28 the native test
+  `test_win_only_list_every_win_file_is_listed` fails on any host when one
+  is missing; `test_ai_netcancel_win.c`, missed in PR #106, was added in
+  PR #126); a change to the build flags, or one a newer gcc may warn
   on, asks the maintainer for a `mingw32-make test`.
 - **Never-pushed branches** can live in `~/nutshell-wt/*` worktrees, the
   main clone `~/nutshell` or the Windows box; check `automaton`'s
@@ -135,15 +163,17 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   and `mingw32-make wintest`, and can build too. Command blocks written for
   the maintainer there prefix a local file with `.\` and carry no `#`
   comment lines (maintainer, *reported* 2026-11).
-- Native suite baseline: 4,133 tests, 0 failed, in the hosted `Native
-  tests` run on PR #101's head (real libssh2, 2026-11-21); 4,092 on
-  `automaton` with the libssh2 stub. Earlier hosted counts: 4,132 (#96 to
-  #100), 4,118 (#94), 3,736 (#93), 3,314 (#81). Earlier stub counts: 4,091
-  (#96 to #100), 4,077 (#94), 3,279 (2026-11-03), 3,035
-  (2026-10-19), 2,485 (2026-10-13), 1,960 (2026-09-21). The two counts
-  differ by the libssh2-gated files, so compare like with like. `wintest`:
-  58 tests after PR #101 (56 after PR #96, 52 in PR #94's body, 45 on
-  2026-11-03).
+- Native suite baseline: 4,673 run, 0 failed, 3 skipped, in the hosted
+  `Native tests` run on PR #122's head (real libssh2, 2026-11-28); 4,632
+  run, 3 skipped on `automaton` with the libssh2 stub. The 3 skips are the
+  missing Mistral capture fixtures and stay until they are captured
+  (PR #120, gate waived). Earlier hosted counts: 4,133 (#101), 4,132 (#96
+  to #100), 4,118 (#94), 3,736 (#93), 3,314 (#81). Earlier stub counts:
+  4,092 (#101), 4,077 (#94), 3,279 (2026-11-03), 3,035 (2026-10-19), 2,485
+  (2026-10-13), 1,960 (2026-09-21). The two counts differ by the
+  libssh2-gated files, so compare like with like. `wintest`: 257 run, 6
+  skipped after PR #122 (5 for Wine's WinHTTP, 1 capture); 58 after
+  PR #101, 45 on 2026-11-03.
 - After any change to `NutshellIT.psm1`'s `Add-Type` sources, run the
   harness from a fresh PowerShell window; the module stops at load and says
   so (`tests/integration/README.md`).
@@ -170,9 +200,9 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   `docs/superpowers/specs/2026-09-06-ui-redesign-notes.md`. Checkpoints are
   committed as `docs: checkpoint YYYY-MM-DD — ...`. Retrospectives go in
   `docs/retrospectives/`.
-- `build/win/nutshell.exe` (about 5.6 MB, UPX-packed, version resource left
-  uncompressed) is committed on every build; 201 commits on `main` touch it
-  (2026-11-21). Git LFS
+- `build/win/nutshell.exe` (about 5.7 MB, UPX-packed, version resource left
+  uncompressed) is committed on every build; 224 commits on `main` touch it
+  (2026-11-28). Git LFS
   is an open question, untracking it is not (the gate reads its version).
 - 93 files are CRLF in the index (2026-11-21, unchanged since 2026-11-12); `.gitattributes` holds only
   `tests/fixtures/*.bin binary`. Eight of the 93 are fuzz seeds under
@@ -247,8 +277,11 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
   2026-11-12 it accepted it after the maintainer's explicit go-ahead in the
   session (*reported*). Later on 2026-11-12 it refused `gh pr ready` after
   "proceed and merge", given before PR #96 existed, and accepted it after
-  "Merge it" with PR #96 in play. Without a go-ahead (CLAUDE.md, "Branches,
-  pull requests and the merge gate"), the maintainer runs `ready` and `merge`.
+  "Merge it" with PR #96 in play. Since 2026-11-28 the maintainer's rule
+  is "Always merge when ready" (CLAUDE.md, "Branches, pull requests and
+  the merge gate"), given in the session that merged #123 and #124 that
+  way; a later session that the classifier refuses reports the green
+  checks and leaves `ready` and `merge` to the maintainer.
 - A CodeQL finding on a pull request: read the SARIF before changing code
   (`gh api -H "Accept: application/sarif+json"
   repos/umbongo/nutshell/code-scanning/analyses/<id>`; ids from
@@ -280,24 +313,33 @@ Last updated: 2026-11-26 (the token-use baseline and the loop change; before tha
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-21 (`main` at v1.2.87: PR #103 took the two queued `src/`
-fixes, the Search Engine help text and the dead `chat_thinking.[ch]`;
-PR #101 added the Thinking row's fourth mode, Extended; PR #100 fixed the Windows-host `make test`; PR #97
-moved `github/codeql-action` to v4.39.3; open pull requests: `gh pr list`,
-none on 2026-11-21; no open CodeQL alert: #30 was dismissed as a false
-positive on 2026-11-21): a backlog of Windows hand checks from PRs #85-#101, most of
-them never run (five of those merges were unattended; #96's were reported
-fine, not itemised); tool-gate follow-ups (PR #91); Settings follow-ups
-(PR #93); web_search does not URL-encode
-its query; a `vcpkg.json` manifest with a baseline (deferred by PR #87);
-`ssh_channel_write` can block the UI thread for up to 5 s per write;
-`run_command` live rounds on five of six providers; terminal escapes CSI I,
-HTS, TBC and scroll-region gaps; harness cases never run (telnet,
-`settings_help_tool_count`, `ui_gallery`); no release since v1.1.21;
-web_fetch watchdog and TLS fail-closed; light-theme ANSI palette;
-top-anchored ConPTY reflow; sub-project 3 needs a spec first.
-`src/ui/window.c` is 6,330 lines, `chat_listview.c` 4,893, `ai_chat.c`
-3,134 (the seven `ai_chat*.c` files 7,388 since the PR #86 split).
+As of 2026-11-28 (`main` at v1.3.4 after PR #126; open pull requests:
+`gh pr list`; no open CodeQL alert):
+
+- **Nothing merged since v1.2.94 is recorded as run on Windows** (the
+  maintainer tried v1.2.94 on 2026-11-24, *reported*, not itemised).
+  `docs/test-log/` lists every check still to run, one file per build,
+  written to be walked through with the maintainer when they say they are
+  ready to test. The hand
+  checks for the AI assistant switch (#106), the notice dialog (#107),
+  voice input (#108 to #110), live dictation (#112), conversation mode
+  (#117) and AI speech (#120) are in the Open list, with the older backlog
+  from PRs #85 to #101. The Mistral stream parser is proven first by the
+  maintainer's v1.3.1 hand test: its capture gate was waived.
+- **The todo list is being worked in batches of one pull request**
+  (maintainer, 2026-11-28), quick wins first; the web tool items
+  (`web_search`, `web_fetch`, `winhttp_open`) and the voice follow-ups are
+  held back. Batch 1 was PR #122. Check `gh pr list` and
+  `~/nutshell-wt/*` before starting an Open item: a branch may hold it.
+- Still open and larger: `web_search` does not URL-encode its query; `ssh_channel_write` can block the
+  UI thread for up to 5 s per write; `run_command` live rounds on five of
+  six providers; harness cases never run (telnet, `97-voice.ps1`,
+  `settings_help_tool_count`, `ui_gallery`); no release since v1.1.21;
+  web_fetch watchdog and TLS fail-closed; light-theme ANSI palette;
+  top-anchored ConPTY reflow; sub-project 3 needs a spec first.
+
+`src/ui/window.c` is 6,698 lines, `settings.c` 4,164, `chat_listview.c`
+4,913, `ai_chat.c` 3,174 (the eight `ai_chat*.c` files 8,268).
 
 ## Local shell and keys, facts that outlive the session
 

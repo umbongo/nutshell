@@ -51,6 +51,7 @@ answer and never triggers a retrospective (my rule of 2026-11-21).
 The Makefile's default path: `x86_64-w64-mingw32-gcc` with the vcpkg libs at `~/vcpkg/`. Only on `automaton` (`hostname`): a cloud Linux session has no MinGW, and its `make clean` would delete the tracked `build/win/nutshell.exe`, so it runs `make test` only. On any host, a `make release` that fails after `make clean` leaves the exe deleted: `git restore build/win/nutshell.exe` before committing anything.
 
 - Commands: `make clean && make release`, `make test` (native gcc; it uses the libssh2 stub when no real libssh2 is installed), and `xvfb-run -a make wintest` to run the Win32-only harness under Wine (`WIN_ONLY_TESTS` and `WIN_TEST_SRCS` in the Makefile: icons, ConPTY, Win32 drawing, telnet socket I/O and more). If Wine reports that no driver could be loaded, a stale wineserver is the usual cause: `wineserver -k` clears it, but it kills every Wine process in the prefix, so first check `pgrep -a wine` shows no run another session started.
+- Libraries: `vcpkg.json` at the repo root names the three (libssh2, openssl, zlib) and pins `builtin-baseline` to the vcpkg commit the committed exe is built with. The Makefile does not read it: it keeps using the classic `~/vcpkg/installed/x64-mingw-gcc-static` directory. A new machine checks out that vcpkg commit, adds the `x64-mingw-gcc-static` triplet (a MinGW triplet, not in vcpkg itself), and runs `~/vcpkg/vcpkg install --x-manifest-root=. --x-install-root=$HOME/vcpkg/installed --triplet x64-mingw-gcc-static --host-triplet x64-linux --overlay-triplets=$HOME/vcpkg/custom-triplets`.
 
 ### Building on Windows (MSYS2 MINGW64)
 
@@ -97,10 +98,16 @@ Write tests before implementation code. Include corner cases, positive and negat
   session already holds everything the task needs and a brief would be
   longer than the change. Say so in one line.
 - **Quality checks are sub-agents too.** A second opinion on a decision is
-  the `critique` skill; a review of a diff is an Opus agent given the diff,
-  not a summary of it. A branch gets one final whole-branch review, by
-  whichever of Opus and Fable did not review its tasks, never two (my rule
-  of 2026-11-26). Never poll a running agent; its completion
+  the `critique` skill; a review of a diff is an Opus or Fable agent,
+  never the model that wrote the code (my rule of 2026-11-25), given the
+  diff, not a summary of it. A branch gets one final whole-branch review,
+  by whichever of Opus and Fable did not review its tasks, never two (my
+  rule of 2026-11-26). A branch with no plan (a fix, a batch of small fixes)
+  gets one review of its whole diff by a model that did not write it, Opus
+  or Fable, and the main session reads that diff in full before the merge
+  (my rule of 2026-11-28). The version is bumped and the exe built once,
+  after the final review's fix wave, not before the review (my rule of
+  2026-11-28). Never poll a running agent; its completion
   notification is the signal. I see the findings of every Opus or Fable
   review before any is fixed: the main session shows them to me before it
   dispatches a fixer (a per-task orchestrator returns them instead of
@@ -330,11 +337,23 @@ merging (on 2026-09-23 PR #44 was merged with `analyze` red and `main` did not
 build; `Native tests` now catches that, CodeQL findings it does not). Never
 push to `main` directly; never merge a red check.
 
-**Marking a pull request ready and merging it need my go-ahead in the
-session.** Any explicit instruction to merge counts ("Merge it", "proceed and
-merge"); it needs a pull request number only when more than one pull request
-could be meant (my rule of 2026-11-12). Without one, stop at the green checks
-and say the pull request is ready for me to merge.
+**Merge a pull request as soon as it is ready; do not wait for my go-ahead**
+(my rule of 2026-11-28: "Always merge when ready". It replaces the per-merge
+go-ahead of 2026-11-12). Ready means every check green on the latest commit,
+the branch up to date with `main`, its review done and the findings fixed
+after I have seen them, and the diff checked by the main session. Then mark it
+ready, merge it and tell me what went in. This covers merging only: a new
+feature's design still needs my approval before it is built, and a release tag
+still needs my word.
+
+**Keep the Windows test log** (same rule: "keep a log of what needs to be
+tested that you can guide me on when I say I'm ready to test"). Every pull
+request that changes `src/` adds a file `docs/test-log/vX.Y.Z-<topic>.md`
+listing what it leaves unrun on Windows: what to do, what to expect, what to
+note if it fails (the format is in `docs/test-log/README.md`). When I say I am
+ready to test, take me through the open files one group at a time, newest
+build first, record each result in the file, and move a file whose checks all
+passed to `docs/test-log/done/`.
 
 `Sanitizers`, `Lint` and `Fuzz` (`.github/workflows/quality.yml`) are
 deterministic, expected green before a merge and not in the ruleset; the

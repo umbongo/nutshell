@@ -4,6 +4,7 @@
 #include "selection.h"
 #include "theme.h"
 #include "term_colors.h"
+#include "term_underline.h"
 #include "ns_tokens.h"
 #include "dlog.h"
 #include <stdio.h>
@@ -21,6 +22,8 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi) {
     if (!r) return;
 
     int height = -MulDiv(fontSize, dpi, 72);
+    r->dpi = dpi;
+    r->charAscent = 13;
 
     r->hFont = CreateFont(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                           DEFAULT_CHARSET, OUT_TT_PRECIS,
@@ -65,6 +68,7 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi) {
     GetTextMetrics(hdc, &tm);
     r->charWidth = tm.tmAveCharWidth;
     r->charHeight = tm.tmHeight;
+    r->charAscent = tm.tmAscent;
     SelectObject(hdc, oldFont);
     ReleaseDC(NULL, hdc);
 
@@ -118,6 +122,30 @@ static void resolve_cell(const TermPalette *pal, const TermCell *cell,
     *out_fg = to_colorref(fg);
     *out_bg = to_colorref(bg);
     *out_bold = (cell->attr.flags & TERM_ATTR_BOLD) != 0;
+}
+
+/* Fill the underline bar of every TERM_ATTR_UNDERLINE cell in columns
+ * [from, to) of a row, in `colour`, merging neighbours into one bar. The
+ * geometry is term_underline_geom()'s. The bar is a background-colour fill
+ * (an empty ETO_OPAQUE text out), as the other solid fills here are. The
+ * background colour is restored to what the caller had set. */
+static void draw_underlines(HDC hdc, const Renderer *r, const TermRow *row,
+                            int from, int to, int x, LONG py, COLORREF colour)
+{
+    int ul_top, ul_h;
+    term_underline_geom(r->charHeight, r->charAscent, r->dpi, &ul_top, &ul_h);
+    COLORREF saved_bk = GetBkColor(hdc);
+    for (int ci = from; ci < to; ) {
+        if (!(row->cells[ci].attr.flags & TERM_ATTR_UNDERLINE)) { ci++; continue; }
+        int cj = ci;
+        while (cj < to && (row->cells[cj].attr.flags & TERM_ATTR_UNDERLINE)) cj++;
+        RECT bar = {(LONG)x + (LONG)ci * r->charWidth, py + ul_top,
+                    (LONG)x + (LONG)cj * r->charWidth, py + ul_top + ul_h};
+        SetBkColor(hdc, colour);
+        ExtTextOutW(hdc, bar.left, bar.top, ETO_OPAQUE, &bar, L"", 0, NULL);
+        ci = cj;
+    }
+    SetBkColor(hdc, saved_bk);
 }
 
 void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const RECT *paintRect, const Selection *sel) {
@@ -373,6 +401,14 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
                     SelectObject(hdc, run_bold ? r->hBoldFont : r->hFont);
                 }
             }
+
+            /* Underline (SGR 4): a bar across the full cell width, in the
+             * cell's resolved foreground (run_fg: after reverse video, and
+             * the cursor's or selection's colour on those cells), so it reads
+             * against whatever background the cell has and adjacent
+             * underlined cells join. Drawn after the fallback overdraw,
+             * whose opaque cell rectangles would cover it. */
+            draw_underlines(hdc, r, row, run_start, col_idx, x, py, run_fg);
         }
 
         if (covered)

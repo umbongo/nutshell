@@ -100,6 +100,15 @@ static const MsgRow k_msgs[NOTICE_MSG_COUNT] = {
         "Windows has no British English woman's voice installed, so replies use ",
         ". To get one, add English (United Kingdom) under Windows Settings > Time & "
         "language > Speech, or choose AI speech in Settings > Voice." },
+    /* window.c on_log_toggle, the log file could not be opened; the opening is
+     * log_open_error_text() */
+    [NOTICE_MSG_LOG_START_FAILED] = { NOTICE_WARNING, ARG_TEXT, "Start Logging",
+        "Logging was not started: the log file could not be opened.", NULL },
+    /* window.c, a paste stopped before all of it was sent; the opening is
+     * paste_stopped_text() */
+    [NOTICE_MSG_PASTE_STOPPED] = { NOTICE_WARNING, ARG_TEXT, "Paste Stopped",
+        "The paste stopped because the connection did not accept the data. "
+        "The rest was not sent.", NULL },
 };
 
 int notice_msg(Notice *n, NoticeMsgId id, const char *arg)
