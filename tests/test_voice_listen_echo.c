@@ -354,3 +354,68 @@ int test_vlecho_missing_signal_falls_back_after_3s(void)
     ASSERT_TRUE(t.first_cut - user_at <= 30);
     TEST_END();
 }
+
+/* A user who speaks while the echo is being learned (0.2 s to 1.2 s into the
+ * reply) must not be learned as the echo for the rest of the reply: after they
+ * stop, the same user trying again at 3 s cuts in within 600 ms. */
+int test_vlecho_hd_user_in_learning_period_can_retry(void)
+{
+    TEST_BEGIN();
+    static const double echo[2] = { E_NONE, -52.0 };
+    for (int e = 0; e < 2; e++) {
+        ET t;
+        et_init(&t, VLM_SPEAK_HD);
+        et_started(&t);
+        et_run(&t, 10, echo[e], E_NONE);
+        et_run(&t, 50, echo[e], E_USER);        /* 0.2 s to 1.2 s */
+        et_run(&t, 90, echo[e], E_NONE);
+        ASSERT_EQ(t.cuts, 0);
+        int user_at = t.win;                    /* 3 s */
+        et_run(&t, 60, echo[e], E_USER);
+        ASSERT_EQ(t.cuts, 1);
+        ASSERT_TRUE(t.first_cut - user_at <= 30);
+    }
+    TEST_END();
+}
+
+/* Real echo at -35 dBFS and a user speaking over the learning period: once
+ * they stop the reply does not cut itself, and a user at 5 s still cuts in. */
+int test_vlecho_hd_echo_with_user_in_learning_period(void)
+{
+    TEST_BEGIN();
+    ET t;
+    et_init(&t, VLM_SPEAK_HD);
+    et_started(&t);
+    et_run(&t, 10, -35.0, E_NONE);
+    et_run(&t, 50, -35.0, E_USER);
+    et_run(&t, 230, -35.0, E_NONE);             /* to 5 s: nobody speaks */
+    ASSERT_EQ(t.cuts, 0);
+    ASSERT_EQ(t.ducks, 0);
+    int user_at = t.win;
+    et_run(&t, 60, -35.0, E_USER);
+    ASSERT_EQ(t.cuts, 1);
+    ASSERT_TRUE(t.first_cut - user_at <= 30);
+    TEST_END();
+}
+
+/* The AI speech engine's signal comes a little after its audio: the echo
+ * learned from then on must not cut the reply, in both speak modes. */
+int test_vlecho_signal_100ms_after_echo_does_not_cut(void)
+{
+    TEST_BEGIN();
+    static const VoiceListenMode modes[2] = { VLM_SPEAK_HD, VLM_SPEAK_AEC };
+    static const double level[2][4] = { { -25.0, -30.0, -35.0, -45.0 },    /* half-duplex: the echo */
+                                        { -48.0, -50.0, -52.0, -55.0 } };  /* AEC: a converged residual */
+    for (int m = 0; m < 2; m++)
+        for (int a = 0; a < 4; a++) {
+            ET t;
+            et_init(&t, modes[m]);
+            et_run(&t, 50, E_NONE, E_NONE);
+            et_run(&t, 5, level[m][a], E_NONE); /* the echo starts, the signal is 100 ms late */
+            et_started(&t);
+            et_run(&t, 300, level[m][a], E_NONE);
+            ASSERT_EQ(t.ducks, 0);
+            ASSERT_EQ(t.cuts, 0);
+        }
+    TEST_END();
+}

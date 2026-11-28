@@ -11,6 +11,10 @@
 #define HD_UP_DB 0.5
 #define HD_DOWN_DB 0.1
 #define HD_MIN_DB (-55.0)
+#define HD_FADE_DB 1.0          /* the fall of an unconfirmed estimate, per window */
+#define HD_FADE_CEIL (-33.0)    /* ... down to this level, never below it */
+#define HD_CONFIRM_DB 6.0       /* a window this close to the estimate (or louder) confirms it */
+#define HD_CONFIRM_WINDOWS 25   /* 500 ms without a confirming window and it fades */
 #define AEC_STRICT_WINDOWS 50   /* 1 s from the moment the reply's audio plays */
 #define AEC_EVIDENCE_WINDOWS 10 /* the strict second applies only if residual echo is heard in the first 200 ms */
 #define START_WAIT_WINDOWS 150  /* 3 s: without the playback signal, the capture-level rule takes over */
@@ -188,6 +192,7 @@ static void hd_begin(VoiceListen *l)
     l->hd_win = 0;
     l->hd_age = 0;
     l->hd_resid = 0;
+    l->hd_conf = 0;
 }
 
 void voice_listen_audio_started(VoiceListen *l)
@@ -215,8 +220,17 @@ static int hd_track(VoiceListen *l, double level)
     }
     if (l->echo_db + HD_ECHO_MARGIN > thr) thr = l->echo_db + HD_ECHO_MARGIN;
     cand = level >= thr && level >= HD_MIN_DB;
+    if (l->hd_win >= VL_HD_PRIME) {     /* a window near the estimate confirms it */
+        if (level >= l->echo_db - HD_CONFIRM_DB) l->hd_conf = 0;
+        else if (l->hd_conf < 1000) l->hd_conf++;
+    }
     if (!cand && l->ci_speech == 0) {   /* held while a cut-in accumulates */
-        if (level > l->echo_db) {
+        if (l->hd_win >= VL_HD_PRIME && l->hd_conf >= HD_CONFIRM_WINDOWS && l->echo_db > HD_FADE_CEIL) {
+            /* nothing has been near the estimate for 500 ms (a user's voice that was learned as the
+             * echo, then stopped): it falls, but not below the ceiling, so real echo that pauses
+             * and returns at its old level is not a candidate */
+            l->echo_db -= l->echo_db - HD_FADE_CEIL > HD_FADE_DB ? HD_FADE_DB : l->echo_db - HD_FADE_CEIL;
+        } else if (level > l->echo_db) {
             l->echo_db += level - l->echo_db > HD_UP_DB ? HD_UP_DB : level - l->echo_db;
         } else if (audible) {
             l->echo_db -= l->echo_db - level > HD_DOWN_DB ? HD_DOWN_DB : l->echo_db - level;

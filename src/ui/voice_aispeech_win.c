@@ -74,6 +74,7 @@ typedef struct {
     unsigned pos_chunk;
     uint64_t pos_frames;
     size_t last_off;
+    int audio_posted;              /* the first played-audio message of this reply has been reported */
 } AisCtx;
 
 static AisCtx *g_ctx[AIS_MAX_CTX];        /* UI thread only */
@@ -143,6 +144,7 @@ static void reply_clear(AisCtx *c)
     c->failed = 0; c->fail_chunk = 0; c->fail_hr = 0;
     c->worker_exited = 0; c->pos_valid = 0; c->pos_chunk = 0; c->pos_frames = 0;
     c->last_off = 0;
+    c->audio_posted = 0;
     c->truncated = 0; c->trunc_at = 0;
 }
 
@@ -766,6 +768,14 @@ void voice_ais_on_audio(UINT kind, LPARAM lp)
                 c->pos_frames = m->frames_in_chunk;
             }
             if (kind == VAM_PLAYED) {
+                /* The first played-audio message with frames is the moment samples reach the
+                 * device: the conversation listener's echo learning starts from the first
+                 * VTT_WORD, so it is sent here, not only once the position passes a word. */
+                if (!c->audio_posted && m->frames_in_chunk > 0 && m->chunk < c->n) {
+                    c->audio_posted = 1;
+                    if (cur_offset(c, -1) == c->last_off)
+                        post_tts(c, VTT_WORD, c->reply_id, c->last_off, 0);
+                }
                 if (progress && m->chunk < c->n) {
                     const size_t off = cur_offset(c, -1);
                     if (off != c->last_off) {

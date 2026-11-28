@@ -29,7 +29,7 @@
  *    speech before the cut: VLN_UNDUCK, VLN_TURN_ABANDON.
  *    Windows' canceller has not converged when a reply starts, so when residual
  *    echo is heard in the first 200 ms after voice_listen_audio_started() (the
- *    speech engine's first word event), for the first second (50 windows) from
+ *    speech engine's first audio signal), for the first second (50 windows) from
  *    there a speech window counts only if it also is a half-duplex candidate
  *    (10 dB over the echo learned from that same audio). A converged canceller
  *    leaves no residual, and then the detector alone decides from the start.
@@ -49,6 +49,17 @@
  *    level up by at most 0.5 dB a window and down by 0.1 dB a window, and only
  *    down while the echo is audible: a window at room-noise level (a gap or a
  *    stall in the audio) leaves it alone. Nothing is a candidate before that.
+ *    A user who speaks during the learning period is learned as the echo, so
+ *    after it an estimate that nothing confirms fades: once no window has come
+ *    within 6 dB of the estimate (or louder) for 25 windows (500 ms), it falls
+ *    1 dB a window down to -33 dBFS, never below. (A user at -15 dBFS over a
+ *    -60 dBFS room is cut in on within 500 ms of trying again, 1 s after the
+ *    estimate began to fall.) The ceiling keeps real echo that pauses and
+ *    returns at its old level from becoming a candidate: that holds for echo up
+ *    to about -24 dBFS at the microphone. A user who talks without a pause of
+ *    500 ms from inside the learning period keeps confirming the estimate and
+ *    is not heard until a pause; the voice is the same as a loud echo to this
+ *    code.
  *    It does not move while a cut-in is accumulating (the count is above 0),
  *    so neither the user's voice nor its modulation dips lift it. A candidate window has level >= max(floor + 12, echo + 10) and
  *        >= -55 dBFS. Candidates accumulate under the same 15-window rule. At 10 candidates VLN_DUCK
@@ -98,6 +109,7 @@ typedef struct {
     int mode_win;               /* windows since the speak mode was set, capped at 150 (3 s) */
     int hd_win;                 /* windows since then (learning period) */
     int hd_resid;               /* the reply's audio was audible in its first 200 ms: AEC's strict second applies */
+    int hd_conf;                /* windows since one came within 6 dB of the estimate (after learning) */
     int hd_age;                 /* windows since then, capped at 51 (AEC's strict first second) */
 } VoiceListen;
 
@@ -105,7 +117,7 @@ void voice_listen_init(VoiceListen *l, int pause_ms);
 void voice_listen_set_mode(VoiceListen *l, VoiceListenMode m);  /* resets cut-in counters and
                                          any turn in progress (abandoned silently, no event) */
 void voice_listen_audio_started(VoiceListen *l);   /* the reply's audio is playing now (the speech
-                                         engine's first word event): the echo-learning period and
+                                         engine's first audio signal): the echo-learning period and
                                          AEC's strict first second start here. No-op outside the
                                          speak modes. */
 void voice_listen_feed(VoiceListen *l, const int16_t *s, size_t n, const VoiceListenSink *k);
