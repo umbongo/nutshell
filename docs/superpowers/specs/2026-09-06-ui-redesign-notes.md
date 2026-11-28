@@ -4,16 +4,16 @@
 landed at v1.0.92/v1.0.96 (see "Todo" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **4,133 tests**, 0 failures (hosted `Native tests`, real
-libssh2, PR #101's head, 2026-11-21; 4,092 with the libssh2 stub on `automaton`;
-`wintest` 58). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
-(`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 84 registered cases
+batches). Native suite: **4,673 tests**, 0 failures, 3 skipped (hosted `Native tests`, real
+libssh2, PR #122's head, 2026-11-28; 4,632 with the libssh2 stub on `automaton`;
+`wintest` 257 run, 0 failed, 6 skipped under Wine). Integration suite (`tests/integration/Run-Integration.ps1`): twelve case files
+(`cases\10-terminal` … `97-voice`, `85-telnet` new in PR #81), 84 registered cases
 (the README's case tables and the telnet file), manual only since 2026-09-15, DPI-aware since
-PR #71; `ui_gallery` captures 20 `--ui-demo` states x 4 themes = 80 images. Next action is sub-project 3 (main window
+PR #71; `ui_gallery` captures 22 `--ui-demo` states x 4 themes = 88 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.86 (2026-11-21).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.3.2 (2026-11-28).
 
 ## Decisions so far
 
@@ -484,6 +484,37 @@ Done, in order (details in the commit messages and the specs named):
   OpenAI, Groq and custom get a British-spelling `prompt`, Gemini an instruction, Mistral
   neither. Migration marker `voice_defaults_rev` 3 turns an empty language into en-GB once.
   Its Windows checks are in Open (voice item, (aj) onwards).
+- Merge record of the branches above (2026-11-28): themed checkboxes v1.2.89 (PR #104,
+  4c1a4e7); AI assistant switch and notice dialog v1.2.90 (PR #106, 9467728); the 19
+  OK-only boxes moved onto the notice dialog v1.2.91 (PR #107, 74f2871); voice input
+  v1.2.92 (PR #108, 4b3ebe3); Right Shift and Toggle v1.2.93 (PR #109, 3bcc8fd); voice
+  improvements with review by default v1.2.94 (PR #110, 90fbdbe). Design docs: PR #105
+  (ef74f19). Todo notes: PRs #111, #113, #115, #116.
+- Live dictation, v1.2.95 (PR #112, 36251ea; PR 1 of live voice): words appear in the AI
+  box while speaking, OpenAI `gpt-live-transcribe` and Mistral `voxtral-mini-transcribe-realtime-3`
+  over a delay-loaded WinHTTP WebSocket, with a batch fallback; typing is paused while
+  recording. Its Windows checks are in Open.
+- Conversation mode, v1.2.99 (PR #117, 58dbd00; PR 2 of live voice): a spoken conversation
+  with Windows SAPI speech, echo cancellation, ducking, cut-in and local "carry on". Its
+  Windows checks are in Open.
+- AI speech, v1.3.1 (PR #120, 6b1991d; PR 3 of live voice): spoken replies from Mistral and
+  OpenAI-compatible servers, with the Windows speech fallback; the Mistral capture was
+  waived (2026-11-26). Closes in code the PR 2 follow-ups marked "fixed in code in PR 3".
+  Its Windows checks are in Open.
+- Core quick wins, v1.3.2 (PR #122, 4897425): an empty later tool id or name no longer
+  overwrites the stored one; Anthropic `type: "error"` stream events are shown; an
+  intraword underscore is not emphasis; the telnet auto-login deadline is wrap-safe; the
+  Custom provider models URL for a Base URL with no path (`ai_models_url_from_base`).
+- Process: the main session runs a plan, token use measured at each retrospective (PR #119,
+  1f999b3); one final review per branch, by the model that did not review the tasks
+  (PR #121, c03f4e9); Dependabot's actions group (PR #118, f881e01).
+- 2026-11-21 retrospective (PR #102, 5b33449;
+  `docs/retrospectives/2026-11-21-seven-merges-retrospective.md`).
+- 2026-11-28 retrospective (twenty merges, PRs #102 to #122, since marker `be6599f`):
+  this compaction moved no Open item whole to Done (the history proves only the parts PR #122
+  already struck), updated the counts (4,673 hosted tests, `wintest` 257, `ui_gallery`
+  22 x 4, v1.3.2, 93 CRLF files), and added Open "Live dictation follow-ups" from PR #112's
+  and #108's bodies. The voice items stay Open: nothing of live voice has run on Windows.
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -537,7 +568,7 @@ Open, in priority order:
       `test_voice_stt_cancel_blocked`'s Windows-only "Cancelled" and timing assertions. (n)
       Harness cases never run (no pwsh): `settings_voice_gallery`,
       `self_report_voice_off_clean`, `voice_off_right_shift_reaches_input`, the updated
-      `settings_help_tool_count` (now "1, 1, 107", the arithmetic unverified) and
+      `settings_help_tool_count` (now "1, 1, 110" since PR #112, the arithmetic unverified) and
       `ui_gallery` with its two new states (22 x 4 = 88 captures). (o) A microphone with a
       non-Latin friendly name in the Settings device list: the combo is ANSI, so the name may
       come out as question marks. (p) The mic button's busy look when a card finishes. (q)
@@ -667,8 +698,9 @@ Open, in priority order:
       the Windows box (newer gcc and MSYS2 headers, live spec §7.5). (o) The Live model row
       and the "Live text as you speak needs OpenAI or Mistral" note on the Voice page for each
       provider and with "Use current AI assistant". (p) The upgrade notice line "Voice: live
-      speech-to-text model". (q) The integration harness has no live-dictation case yet: the
-      WAV-injection seam is left to PR 2 (live spec §16 item 28).
+      speech-to-text model". (q) The integration harness had no live-dictation case: the
+      WAV-injection seam came in PR #117 (103e18d) and the case `voice_live_dictation_fixture`
+      is in the Conversation mode item's (n), never run.
 - [ ] **Conversation mode (PR 2 of live voice, feat/voice-conversation): nothing run on
       Windows.** Built and tested here under Wine and the native suite (4519 tests, 170
       `wintest`) with no microphone, no working SAPI and no real audio device; live spec
@@ -853,6 +885,15 @@ Open, in priority order:
       split or rename it. Only the native parser tests cover the error event.
       The 5-minute cap counts decoded frames, so a Mistral stream that never ends and carries no
       audio stays open until the user stops it or the 10-minute Speaking watchdog fires.
+- [ ] Live dictation follow-ups (PR #112, parked minors; nothing run on Windows): an error
+      followed by a ready timeout gives two chat lines; a READY and the 10 s timeout landing
+      at the same moment shows "stopped" instead of "unavailable"; teardown can stall the UI
+      for up to 1 s if slow; the box-changed check is skipped for the fallback and Escape
+      writes (typing is locked then); Shift+Insert is caught as "box changed" (a hand
+      check); messages queued when the window is destroyed are not wiped; the glue has no
+      automated test, so only the hand checks cover it. From PR #108, not built: the live
+      level bar under the input; Gemini's default model `gemini-2.5-flash` is unconfirmed
+      on Google's page.
 - [ ] **The notice move (feat/notice-msgboxes, 2026-11-23), harness cases changed and
       unrun** (no `pwsh` on `automaton`): `ai_panel_docks_with_key` and
       `ai_panel_opens_without_key` (20-ai.ps1) now look for a `#32770` or a
@@ -1014,9 +1055,10 @@ Open, in priority order:
       PR #101's `extended_box` and `mode_change_holds_reader_place`, and
       `test_settings_label_win_labels_fit_column`) have no recorded run on Windows, only
       under Wine.
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.86, which adds telnet, the
-      password eye, keyboard-interactive auth, the tool gate, `run_command` and the Thinking
-      row modes (four since PR #101) since then.
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.3.2, which adds telnet, the
+      password eye, keyboard-interactive auth, the tool gate, `run_command`, the Thinking
+      row modes (four since PR #101), the AI switch, the notice dialog and voice (dictation,
+      conversation mode, AI speech) since then.
       The first tag will also be the first run of `release.yml`'s `.sha256` step (PR #87).
       Tagging is the maintainer's call (`feature-workflow` step 10), best after the Windows
       checks in the first item.
@@ -1066,7 +1108,7 @@ Open, in priority order:
       `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
       `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
-      94 CRLF-indexed files (2026-11-12) in a lone PR when nothing else is in flight;
+      93 CRLF-indexed files (2026-11-28) in a lone PR when nothing else is in flight;
       mark `tests/fuzz/corpus/**` binary first, since eight seeds there carry CR bytes as
       test input. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)

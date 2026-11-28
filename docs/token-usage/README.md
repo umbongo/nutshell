@@ -71,3 +71,56 @@ list of loadable tools ~4k; the brief itself ~1.5k.
   of a branch that had the two blind final reviews; it reads the diff stat,
   any file no task named and the hunks the findings cite (`feature-workflow`
   step 5). Expected: one compaction fewer on a large pull request.
+
+## First window after the loop change: 2026-11-26T00:45 to 2026-11-28T07:25 UTC (`2026-11-28-first-window-after-loop-change.json`)
+
+The loop after the change: the main session runs the plan, there is no
+orchestrator, and a branch gets one final whole-branch review. Command:
+
+```
+python3 .claude/skills/checkpoint/token-usage.py --since 2026-11-26T00:45:00 \
+  --until 2026-11-28T07:25:11 --repo ~/nutshell \
+  --compare docs/token-usage/2026-11-26-baseline.json \
+  --json docs/token-usage/2026-11-28-first-window-after-loop-change.json
+```
+
+The window starts at the baseline's `until`. Its first request is at
+01:04 UTC on 2026-11-26, 19 minutes later; no transcripts are missing. Sessions
+were still running when it was taken (this retrospective among them). The
+script counts every request with a timestamp before `--until` and none after,
+so the last minutes are cut off, not estimated. 5 merges: #118 (Dependabot),
+#119, #120 (voice PR 3), #121, #122. Voice PR 3 was mostly built before the
+window began, so its cost sits in the baseline and its merge in this window.
+26 agents, 821 model requests.
+
+Comparable first:
+
+| Measure | Baseline | This window |
+|---|---|---|
+| Controller cost per implementer agent | 1.25M (77 agents) | 3.18M (2 agents) |
+| Controller share of the index | 40% | 34% |
+| Cache rewrites after a wait over 5 minutes | 106 (28.0M tokens, 15% of the index) | 3 (0.32M tokens, 3%) |
+| Compactions | 4 | 1 |
+| Sub-agent start-up context, median | 56k (266 agents) | 54k (21 agents) |
+| By model, share of the index | Opus 56%, Sonnet 38%, Fable 6%, Haiku 0% | Fable 44%, Opus 32%, Sonnet 24%, Haiku 1% |
+| Cost index | 242.5M | 18.6M |
+| Cost index per merge | 14.3M (17 merges) | 3.7M (5 merges) |
+
+The cost index does not weight Opus against Sonnet or Fable; the by-model
+shares show a move to Fable, whose price the index does not include.
+
+Reading it:
+
+- Controller cost per implementer agent rose, but only 2 implementer agents
+  fall in this window, so the figure is not stable. The controller is now the
+  main session alone (6.4M, 5 sessions).
+- The idle rewrites fell from 106 to 3, all in the main session. The
+  orchestrators, 68 of the 106, are gone.
+- The start-up median fell 2k, not the 8-9k expected from the trimmed
+  `settings.local.json`. Not explained here.
+- The per-merge figure falls 74%, but work and merges fall in different
+  windows: the baseline holds the build of voice PR 3, and this window holds
+  its merge. The 5 merges are mostly small (a Dependabot bump, quick wins).
+  Do not read it as a saving from the loop.
+- The 14-17% saving is not measured: it needs a window with a comparable
+  amount of implementer work. Not measured.

@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-26 (one final review, by the model that did not review the tasks; before that, the main session runs the plan). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-28 (a count corrected at the retrospective; before that, 2026-11-26: one final review, by the model that did not review the tasks). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules live in CLAUDE.md ("Software Development Rules", "Branches, pull
 requests and the merge gate"); this skill walks through them in order, and
 CLAUDE.md wins where they disagree. History and rationale: the retrospectives.
@@ -37,8 +37,8 @@ main session already holds everything the task needs and a brief would
 be longer than the change. Say so in one line.
 
 **Quality checks are sub-agents too.** A second opinion on a decision is
-the `critique` skill. A diff review is an Opus agent given the diff, never a
-summary. Never poll a running agent; its completion notification is the
+the `critique` skill. A diff review is an Opus or Fable agent, never the
+model that wrote the code, given the diff, never a summary. Never poll a running agent; its completion notification is the
 signal. **Every Opus or Fable review's findings reach the maintainer
 before any fix** (CLAUDE.md). `subagent-driven-development` does not stop
 there, so the main session, as its controller, shows the findings and its
@@ -67,8 +67,8 @@ re-review. No sub-agent spans two of these jobs.
   long-lived Opus orchestrators were about 30% of the cost index. Their
   contexts grew to 300k-600k and every request re-read them; and a
   sub-agent's prompt cache lives 5 minutes, so it expired while they
-  waited on an implementer and the next request rewrote it in full (64
-  times). The main session has the 1-hour cache on the subscription. It
+  waited on an implementer and the next request rewrote it in full (68
+  of the 106 idle rewrites). The main session has the 1-hour cache on the subscription. It
   takes on part of the controller's reading, so the expected saving is
   smaller: the critique estimated 14-17% of the index.
 - **The ledger** is the plan-execution skill's own,
