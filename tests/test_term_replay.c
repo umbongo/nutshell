@@ -146,7 +146,12 @@ static int replay_compare(const char *name, int rows, int cols)
     { \
         TEST_BEGIN(); \
         int r = replay_compare(name, rows, cols); \
-        if (r >= 0) ASSERT_EQ(r, 0); \
+        if (r < 0) { /* unreadable fixture: skip, except under CI */ \
+            const char *ci = getenv("CI"); \
+            if (ci && ci[0]) ASSERT_TRUE(0); \
+        } else { \
+            ASSERT_EQ(r, 0); \
+        } \
         TEST_END(); \
     }
 
