@@ -853,6 +853,7 @@ int test_term_wrap_below_region_stays(void);
 int test_term_wrap_inside_region_moves_down(void);
 int test_term_alt_screen_keeps_region(void);
 int test_term_alt_screen_region_resize(void);
+int test_term_alt_screen_grow_then_scrolls(void);
 int test_term_alt_screen_region_repeat(void);
 /* test_term_underline.c */
 int test_term_underline_typical_cell(void);
@@ -7908,6 +7909,7 @@ int main(void) {
     failed += test_term_wrap_inside_region_moves_down();
     failed += test_term_alt_screen_keeps_region();
     failed += test_term_alt_screen_region_resize();
+    failed += test_term_alt_screen_grow_then_scrolls();
     failed += test_term_alt_screen_region_repeat();
     failed += test_term_underline_typical_cell();
     failed += test_term_underline_stays_inside_cell();

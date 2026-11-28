@@ -102,15 +102,16 @@ int test_term_alt_screen_keeps_region(void) {
 
 int test_term_alt_screen_region_resize(void) {
     TEST_BEGIN();
-    /* fits after the resize: kept */
+    /* xterm resets the margins on every resize: after one on the alternate
+     * screen the primary's region is the whole new screen. */
     Terminal *t = term_init(10, 10, 20);
     feed(t, "\x1B[3;7r\x1B[?1049h");
     ASSERT_TRUE(term_resize(t, 8, 10));
     feed(t, "\x1B[?1049l");
-    ASSERT_EQ(t->scroll_top, 2);
-    ASSERT_EQ(t->scroll_bot, 6);
+    ASSERT_EQ(t->scroll_top, 0);
+    ASSERT_EQ(t->scroll_bot, 7);
     term_free(t);
-    /* no longer fits: full screen */
+    /* shrunk below the region */
     t = term_init(10, 10, 20);
     feed(t, "\x1B[3;9r\x1B[?1049h");
     ASSERT_TRUE(term_resize(t, 6, 10));
@@ -118,13 +119,30 @@ int test_term_alt_screen_region_resize(void) {
     ASSERT_EQ(t->scroll_top, 0);
     ASSERT_EQ(t->scroll_bot, 5);
     term_free(t);
-    /* grown: kept */
+    /* grown */
     t = term_init(10, 10, 20);
     feed(t, "\x1B[3;9r\x1B[?1049h");
     ASSERT_TRUE(term_resize(t, 14, 10));
     feed(t, "\x1B[?1049l");
-    ASSERT_EQ(t->scroll_top, 2);
-    ASSERT_EQ(t->scroll_bot, 8);
+    ASSERT_EQ(t->scroll_top, 0);
+    ASSERT_EQ(t->scroll_bot, 13);
+    term_free(t);
+    TEST_END();
+}
+
+/* The everyday path: open vim or less, grow the window, quit. */
+int test_term_alt_screen_grow_then_scrolls(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 10, 50);
+    feed(t, "\x1B[?1049h");
+    ASSERT_TRUE(term_resize(t, 14, 10));
+    feed(t, "\x1B[?1049l");
+    ASSERT_EQ(t->scroll_top, 0);
+    ASSERT_EQ(t->scroll_bot, 13);
+    int before = t->lines_count;
+    for (int i = 0; i < 30; i++) feed(t, "line\r\n");
+    ASSERT_TRUE(t->lines_count > before);   /* scrollback grew */
+    ASSERT_EQ(t->cursor.row, 13);
     term_free(t);
     TEST_END();
 }

@@ -459,6 +459,10 @@ bool term_resize(Terminal *term, int rows, int cols) {
         term->primary_lines_start    = new_pstart;
         term->primary_cursor         = new_pcursor;
         term->primary_lines_recycled += pdropped;
+        /* xterm resets the margins on every resize; so does the primary
+         * screen's path below. The saved region follows. */
+        term->primary_scroll_top = 0;
+        term->primary_scroll_bot = rows - 1;
     }
     term->resize_failing = false;
     term->grow_failing = false;
