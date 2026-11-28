@@ -86,6 +86,8 @@ int test_pty_resize_dedup(void) {
     ch.ssh       = NULL;
     ch.last_cols = 80;
     ch.last_rows = 24;
+    ch.pending_cols = 0;
+    ch.pending_rows = 0;
 
     /* Same dimensions → early return 0, no libssh2 call, fields unchanged */
     ASSERT_EQ(ssh_pty_resize(&ch, 80, 24), 0);
@@ -106,6 +108,8 @@ int test_pty_resize_initial_state(void) {
     ch.ssh       = NULL;
     ch.last_cols = 0;
     ch.last_rows = 0;
+    ch.pending_cols = 0;
+    ch.pending_rows = 0;
 
     ASSERT_EQ(ssh_pty_resize(&ch, 0, 0), -1);  /* NULL channel wins over dedup */
     ASSERT_EQ(ssh_pty_resize(&ch, 80, 24), -1); /* NULL channel → -1 */

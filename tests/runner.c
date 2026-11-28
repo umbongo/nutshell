@@ -1571,6 +1571,64 @@ int test_vt_scroll_down_region_beyond_64_moves_marker(void);
 int test_vt_il_beyond_64_moves_marker(void);
 int test_vt_dl_beyond_64_moves_marker(void);
 
+/* test_paint_poll.c */
+int test_paint_poll_active_with_output(void);
+int test_paint_poll_active_disconnected_dirty(void);
+int test_paint_poll_active_idle(void);
+int test_paint_poll_background_connected_dirty(void);
+int test_paint_poll_background_disconnected_dirty(void);
+int test_paint_poll_background_critical_ignored(void);
+int test_paint_poll_cooldown_edges(void);
+int test_paint_poll_critical_bypasses_cooldown(void);
+int test_paint_poll_cooldown_boundary_scales_with_cooldown(void);
+
+/* test_log_open_error.c */
+int test_log_open_error_names_path_and_reason(void);
+int test_log_open_error_no_errno_and_no_path(void);
+int test_log_open_error_truncates_safely(void);
+int test_log_open_error_long_path_fits_notice(void);
+
+/* test_paste_write.c */
+int test_paste_write_empty(void);
+int test_paste_write_one_byte(void);
+int test_paste_write_chunk_boundary(void);
+int test_paste_write_line_ends(void);
+int test_paste_write_utf8_not_split(void);
+int test_paste_write_malformed_utf8_passthrough(void);
+int test_paste_write_large(void);
+int test_paste_write_failure_stops(void);
+int test_paste_write_short_write_continues(void);
+int test_paste_write_result_complete(void);
+int test_paste_write_result_stopped_first_chunk(void);
+int test_paste_write_result_stopped_midway(void);
+int test_paste_write_result_stopped_last_chunk(void);
+int test_paste_write_result_short_then_complete(void);
+int test_paste_write_zero_then_success_completes(void);
+int test_paste_write_zero_nine_times_stops(void);
+int test_paste_write_negative_stops_at_once(void);
+int test_paste_write_short_then_stop_is_one_failure(void);
+int test_paste_stopped_text_says_how_much(void);
+int test_paste_translated_len_matches_write(void);
+
+/* test_pty_size.c */
+int test_pty_size_first_send(void);
+int test_pty_size_unchanged_sends_nothing(void);
+int test_pty_size_changed_during_connect(void);
+int test_pty_size_one_dimension_differs(void);
+int test_pty_size_not_recorded_until_sent(void);
+int test_pty_size_invalid_and_null(void);
+int test_pty_size_apply_again_then_same_size(void);
+int test_pty_size_apply_again_then_different_size(void);
+int test_pty_size_apply_again_twice(void);
+int test_pty_size_apply_hard_error(void);
+int test_pty_size_apply_no_request_when_unchanged(void);
+int test_pty_size_retry_completes(void);
+int test_pty_size_retry_again_again(void);
+int test_pty_size_retry_nothing_pending(void);
+int test_pty_size_retry_then_grid_changed(void);
+int test_pty_size_wanted_survives_second_again(void);
+int test_pty_size_pending_rule(void);
+
 /* test_connect_anim.c */
 int test_anim_dots_zero_elapsed(void);
 int test_anim_dots_just_under_interval(void);
@@ -4149,6 +4207,9 @@ int test_ai_gate_default_off(void);
 int test_ai_gate_enabled(void);
 int test_ai_gate_override_only(void);
 int test_ai_gate_override_does_not_change_enabled(void);
+/* test_win_only_list.c */
+int test_win_only_list_every_win_file_is_listed(void);
+
 /* test_shortcuts.c */
 int test_shortcuts_every_row_has_section_chord_action(void);
 int test_shortcuts_sections_contiguous_and_in_fixed_order(void);
@@ -4356,6 +4417,8 @@ int test_notice_msg_every_id_has_title_and_text(void);
 int test_notice_msg_voice_british_names_the_voice(void);
 int test_notice_msg_session_not_found_formats_name(void);
 int test_notice_msg_text_args(void);
+int test_notice_msg_log_start_failed(void);
+int test_notice_msg_paste_stopped(void);
 int test_notice_msg_title_args(void);
 int test_notice_msg_long_arg_truncates(void);
 int test_notice_msg_bad_id(void);
@@ -7089,6 +7152,64 @@ int main(void) {
     failed += test_color_colon_rgb_trailing_extra_params();
     failed += test_color_bold_colon_rgb_underline_one_feed();
 
+    printf("\n--- Paint poll ---\n");
+    failed += test_paint_poll_active_with_output();
+    failed += test_paint_poll_active_disconnected_dirty();
+    failed += test_paint_poll_active_idle();
+    failed += test_paint_poll_background_connected_dirty();
+    failed += test_paint_poll_background_disconnected_dirty();
+    failed += test_paint_poll_background_critical_ignored();
+    failed += test_paint_poll_cooldown_edges();
+    failed += test_paint_poll_critical_bypasses_cooldown();
+    failed += test_paint_poll_cooldown_boundary_scales_with_cooldown();
+
+    printf("\n--- Log open error ---\n");
+    failed += test_log_open_error_names_path_and_reason();
+    failed += test_log_open_error_no_errno_and_no_path();
+    failed += test_log_open_error_truncates_safely();
+    failed += test_log_open_error_long_path_fits_notice();
+
+    printf("\n--- Paste write ---\n");
+    failed += test_paste_write_empty();
+    failed += test_paste_write_one_byte();
+    failed += test_paste_write_chunk_boundary();
+    failed += test_paste_write_line_ends();
+    failed += test_paste_write_utf8_not_split();
+    failed += test_paste_write_malformed_utf8_passthrough();
+    failed += test_paste_write_large();
+    failed += test_paste_write_failure_stops();
+    failed += test_paste_write_short_write_continues();
+    failed += test_paste_write_result_complete();
+    failed += test_paste_write_result_stopped_first_chunk();
+    failed += test_paste_write_result_stopped_midway();
+    failed += test_paste_write_result_stopped_last_chunk();
+    failed += test_paste_write_result_short_then_complete();
+    failed += test_paste_write_zero_then_success_completes();
+    failed += test_paste_write_zero_nine_times_stops();
+    failed += test_paste_write_negative_stops_at_once();
+    failed += test_paste_write_short_then_stop_is_one_failure();
+    failed += test_paste_stopped_text_says_how_much();
+    failed += test_paste_translated_len_matches_write();
+
+    printf("\n--- Pty size ---\n");
+    failed += test_pty_size_first_send();
+    failed += test_pty_size_unchanged_sends_nothing();
+    failed += test_pty_size_changed_during_connect();
+    failed += test_pty_size_one_dimension_differs();
+    failed += test_pty_size_not_recorded_until_sent();
+    failed += test_pty_size_invalid_and_null();
+    failed += test_pty_size_apply_again_then_same_size();
+    failed += test_pty_size_apply_again_then_different_size();
+    failed += test_pty_size_apply_again_twice();
+    failed += test_pty_size_apply_hard_error();
+    failed += test_pty_size_apply_no_request_when_unchanged();
+    failed += test_pty_size_retry_completes();
+    failed += test_pty_size_retry_again_again();
+    failed += test_pty_size_retry_nothing_pending();
+    failed += test_pty_size_retry_then_grid_changed();
+    failed += test_pty_size_wanted_survives_second_again();
+    failed += test_pty_size_pending_rule();
+
     printf("\n--- Connect Animation ---\n");
     failed += test_anim_dots_zero_elapsed();
     failed += test_anim_dots_just_under_interval();
@@ -8984,6 +9105,7 @@ int main(void) {
     failed += test_ai_gate_enabled();
     failed += test_ai_gate_override_only();
     failed += test_ai_gate_override_does_not_change_enabled();
+    failed += test_win_only_list_every_win_file_is_listed();
     failed += test_shortcuts_every_row_has_section_chord_action();
     failed += test_shortcuts_sections_contiguous_and_in_fixed_order();
     failed += test_shortcuts_no_chord_and_condition_repeat_within_a_section();
@@ -10007,6 +10129,8 @@ int main(void) {
         failed += test_notice_msg_voice_british_names_the_voice();
         failed += test_notice_msg_session_not_found_formats_name();
         failed += test_notice_msg_text_args();
+        failed += test_notice_msg_log_start_failed();
+        failed += test_notice_msg_paste_stopped();
         failed += test_notice_msg_title_args();
         failed += test_notice_msg_long_arg_truncates();
         failed += test_notice_msg_bad_id();

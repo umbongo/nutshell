@@ -1,0 +1,10 @@
+{
+  "$comment": "Libraries the Makefile links (libssh2, OpenSSL, zlib), pinned to the vcpkg commit the committed exe is built with. The Makefile still reads ~/vcpkg/installed/x64-mingw-gcc-static directly; see CLAUDE.md, Building on Linux.",
+  "name": "nutshell",
+  "dependencies": [
+    "libssh2",
+    "openssl",
+    "zlib"
+  ],
+  "builtin-baseline": "62159a45e18f3a9ac0548628dcaf74fcb60c6ff9"
+}

@@ -7,7 +7,7 @@ approve, markdown tables, role colour, smart scrolling, and pending command
 batches). Native suite: **4,673 tests**, 0 failures, 3 skipped (hosted `Native tests`, real
 libssh2, PR #122's head, 2026-11-28; 4,632 with the libssh2 stub on `automaton`;
 `wintest` 257 run, 0 failed, 6 skipped under Wine). Integration suite (`tests/integration/Run-Integration.ps1`): twelve case files
-(`cases\10-terminal` … `97-voice`, `85-telnet` new in PR #81), 84 registered cases
+(`cases\10-terminal` … `97-voice`, `85-telnet` new in PR #81), 94 registered cases
 (the README's case tables and the telnet file), manual only since 2026-09-15, DPI-aware since
 PR #71; `ui_gallery` captures 22 `--ui-demo` states x 4 themes = 88 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
@@ -515,6 +515,12 @@ Done, in order (details in the commit messages and the specs named):
   already struck), updated the counts (4,673 hosted tests, `wintest` 257, `ui_gallery`
   22 x 4, v1.3.2, 93 CRLF files), and added Open "Live dictation follow-ups" from PR #112's
   and #108's bodies. The voice items stay Open: nothing of live voice has run on Windows.
+- Housekeeping closed on the process branch (2026-11-28): `vcpkg.json` manifest with the
+  `builtin-baseline` of the `~/vcpkg` checkout (e2747d2; the Makefile still reads the
+  classic `installed/` directory); `Install-IntegrationRunner.ps1` deleted (9d0cdd1);
+  a stream posting during the AI panel's destruction no longer leaks its payload (f2cb01d:
+  a failed post frees its payload, and `WM_DESTROY` drains the queued stream messages);
+  the integration suite's case count corrected from 84 to 94 (counted from the cases).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -924,20 +930,17 @@ Open, in priority order:
       `developers.openai.com/api/docs/deprecations.md`, 2026-11-25. Change them in their own
       pull request. Also later: Groq Orpheus once it leaves Preview; resampling for Custom
       servers.
-- [ ] **SSH: a resize during the connect never reaches the server** (maintainer's issue mark,
-      2026-11-25, v1.2.95, `nutshell-20261125-112702-p7428.issue1.log`: tmux drew 25 rows and
-      93 columns in a 49x125 window). `connection_thread` asks for the pty with the grid
-      snapshotted when the connect starts (`j->cols`/`j->rows`, `src/ui/window.c`); the grid
-      sync skips `io.resize` while `s->io.ctx` is NULL, so every resize in those seconds (25
-      of them in the log, 25x93 to 49x125) is dropped, and adopting the channel on connect
-      sends no size. The remote pty keeps the starting size until the next grid change.
-      Fix: after `s->io = io` in the SSH branch of the connect-done handler, call
-      `s->io.resize(s->io.ctx, s->term->cols, s->term->rows)`; have `ssh_pty_request` record
-      `last_cols`/`last_rows` so an unchanged size sends nothing. Telnet already reads the
-      current grid at adoption. Test first: a native test that the adopt step sends the
-      current size when it differs from the requested one, and a harness case that resizes
-      mid-connect and reads `stty size`. Until then, resizing the window by one cell fixes a
-      session.
+- [ ] SSH: a resize during the connect (maintainer's issue mark, 2026-11-25) is fixed in
+      v1.3.4: the current size is sent when the channel is adopted, and the poll keeps the
+      remote pty at the terminal's size, so a request that got EAGAIN is finished and never
+      lost. Left: the harness case that resizes mid-connect and reads `stty size` is not
+      written (no existing case gives the pattern); the hand check is in
+      `docs/test-log/v1.3.4-session-io.md`.
+- [ ] `ssh_channel_write` on a stalled peer: the 5 s `SO_SNDTIMEO` it sets limits nothing,
+      because libssh2 makes the socket non-blocking at the handshake, so a blocking write
+      waits in `poll` without a limit and the UI thread with it (reasoned from the libssh2
+      1.11.1 source in the review of PR #126's branch, not reproduced). The earlier note
+      "up to 5 s per write" is wrong.
 - [ ] The AI assistant cannot run queued commands while the session is inside tmux; they
       run only after tmux is closed (maintainer, 2026-11-25, *reported*, not investigated).
 - [ ] AI panel: find a way to stop the conversation becoming full (maintainer, 2026-11-25,
@@ -998,7 +1001,9 @@ Open, in priority order:
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
-      editor; Start Logging fails silently; a generated README settings block (*reported*).
+      editor; a generated README settings block (*reported*); the automatic log opened at
+      connect (`open_session_log`) still fails silently (Start Logging tells the user since
+      v1.3.4).
 - [ ] Other, from the PR #94 session (*reported*): resize cost with a full history (PR #93
       measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200 columns); a user-supplied
       issue log can hold a typed secret, so `term.rx`/`term.key` payloads are never printed
@@ -1012,8 +1017,6 @@ Open, in priority order:
       clock only between reads).
 - [ ] winhttp_open: fail closed when TLS 1.2 cannot be enforced (today the session keeps
       the OS defaults if the TLS 1.2-only retry is refused).
-- [ ] `vcpkg.json` manifest with a baseline (deferred by PR #87, whose body says it is in
-      this list; it was not until 2026-11-12).
 - [ ] `ssh_channel_write` blocks the UI thread for up to its 5 s send timeout per write
       when the remote window is full (found by PR #79, left alone). The same class of
       symptom as #79's lost input: keys stop while the UI thread waits. Move SSH writes off
@@ -1039,8 +1042,8 @@ Open, in priority order:
       the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
       combining marks and the reflow drop order in PR #76; middle-click now extends, so
       middle-button paste is off the list; the scrollback-size setting and lazy allocation
-      shipped in PR #93): Alt+drag block selection; the per-byte paste writes over SSH
-      (mouse reporting to applications: see "Local shell follow-ups").
+      shipped in PR #93): Alt+drag block selection (mouse reporting to applications: see
+      "Local shell follow-ups").
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
       the 100 ms throttle with its starved-timer check, DPI reorder, logging, the
@@ -1106,9 +1109,6 @@ Open, in priority order:
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
 - [ ] CI review follow-ups (2026-09-10 review; the libssh2 part was done 2026-09-24):
-      `tests/integration/Install-IntegrationRunner.ps1` still exists for the runner
-      decommissioned on 2026-09-15 and names the removed `integration.yml`; deleting it is
-      the maintainer's call;
       `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
       `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
@@ -1117,7 +1117,7 @@ Open, in priority order:
       test input. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
 - [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
-      settings), D (AI extras) — 31 cases planned; the suite has since grown to 84 cases, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
+      settings), D (AI extras) — 31 cases planned; the suite has since grown to 94 cases, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config
@@ -1127,9 +1127,7 @@ Open, in priority order:
       say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
       destination filter shipped in PR #85.
 - [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
-      two user turns in a row in the conversation; a stream posting during the AI
-      panel's destruction leaks its payload (tiny; probably closed by the v1.2.14
-      stream-lifetime rework, f2cb01d -- confirm, then strike).
+      two user turns in a row in the conversation.
 - [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
       device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
       than device rulesets -- keep detecting on strict-locked sessions and add a
@@ -1161,16 +1159,13 @@ Open, in priority order:
 - [ ] Paint-path follow-ups from the 2026-10-14 stale-band investigation (v1.2.34 fixed
       the seed: `renderer_draw` cleared `row->dirty` on a paint that did not contain
       the row, and `term_alt_screen_enter()` now requests a full redraw like the exit
-      path). Two weaknesses the REDRAW_DEBUG log exposed remain: (a) a disconnected
-      background session keeps a row dirty forever, so `term_has_dirty_rows()` makes
-      the WM_TIMER poll loop invalidate the window at 60 fps indefinitely — find why
-      the row never clears (rows of a non-active session are never painted) and stop
-      polling dirty state for sessions that are not on screen; (b) the poll path calls
+      path). Fixed in v1.3.4: a background session's dirty row no longer makes the timer
+      invalidate the window at 60 fps, and the cooldown tick is per session. One weakness
+      the REDRAW_DEBUG log exposed remains: (b) the poll path calls
       `dispbuf_invalidate()` without `force_all_rows`, so a shadow-invalidating repaint
       cannot rescue a row already marked clean — consider making `dispbuf_invalidate`
-      also mark all rows dirty, or routing it through `full_redraw_needed`. The 16 ms
-      cooldown's `g_last_paint_tick` is shared by all sessions, which is what let the
-      background tab's no-op paints starve nano's. Also noted by the review: the poll
+      also mark all rows dirty, or routing it through `full_redraw_needed`. Also noted by
+      the review: the poll
       loop only repaints for connected idle sessions, so a disconnected or connecting
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row

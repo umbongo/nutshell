@@ -9,6 +9,8 @@ typedef struct {
     SshSession *ssh;          /* back-pointer for waitsocket in writes */
     int last_cols;
     int last_rows;
+    int pending_cols;         /* a size request that returned EAGAIN; see pty_size.h */
+    int pending_rows;
 } SSHChannel;
 
 SSHChannel *ssh_channel_open(SshSession *session);

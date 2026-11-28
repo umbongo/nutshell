@@ -51,6 +51,7 @@ answer and never triggers a retrospective (my rule of 2026-11-21).
 The Makefile's default path: `x86_64-w64-mingw32-gcc` with the vcpkg libs at `~/vcpkg/`. Only on `automaton` (`hostname`): a cloud Linux session has no MinGW, and its `make clean` would delete the tracked `build/win/nutshell.exe`, so it runs `make test` only. On any host, a `make release` that fails after `make clean` leaves the exe deleted: `git restore build/win/nutshell.exe` before committing anything.
 
 - Commands: `make clean && make release`, `make test` (native gcc; it uses the libssh2 stub when no real libssh2 is installed), and `xvfb-run -a make wintest` to run the Win32-only harness under Wine (`WIN_ONLY_TESTS` and `WIN_TEST_SRCS` in the Makefile: icons, ConPTY, Win32 drawing, telnet socket I/O and more). If Wine reports that no driver could be loaded, a stale wineserver is the usual cause: `wineserver -k` clears it, but it kills every Wine process in the prefix, so first check `pgrep -a wine` shows no run another session started.
+- Libraries: `vcpkg.json` at the repo root names the three (libssh2, openssl, zlib) and pins `builtin-baseline` to the vcpkg commit the committed exe is built with. The Makefile does not read it: it keeps using the classic `~/vcpkg/installed/x64-mingw-gcc-static` directory. A new machine checks out that vcpkg commit, adds the `x64-mingw-gcc-static` triplet (a MinGW triplet, not in vcpkg itself), and runs `~/vcpkg/vcpkg install --x-manifest-root=. --x-install-root=$HOME/vcpkg/installed --triplet x64-mingw-gcc-static --host-triplet x64-linux --overlay-triplets=$HOME/vcpkg/custom-triplets`.
 
 ### Building on Windows (MSYS2 MINGW64)
 
@@ -101,7 +102,12 @@ Write tests before implementation code. Include corner cases, positive and negat
   never the model that wrote the code (my rule of 2026-11-25), given the
   diff, not a summary of it. A branch gets one final whole-branch review,
   by whichever of Opus and Fable did not review its tasks, never two (my
-  rule of 2026-11-26). Never poll a running agent; its completion
+  rule of 2026-11-26). A branch with no plan (a fix, a batch of small fixes)
+  gets one review of its whole diff by a model that did not write it, Opus
+  or Fable, and the main session reads that diff in full before the merge
+  (my rule of 2026-11-28). The version is bumped and the exe built once,
+  after the final review's fix wave, not before the review (my rule of
+  2026-11-28). Never poll a running agent; its completion
   notification is the signal. I see the findings of every Opus or Fable
   review before any is fixed: the main session shows them to me before it
   dispatches a fixer (a per-task orchestrator returns them instead of
