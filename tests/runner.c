@@ -846,6 +846,12 @@ int test_json_fuzz_obj_str_on_null_node(void);
 int test_json_fuzz_obj_num_on_null_node(void);
 int test_json_fuzz_obj_bool_on_null_node(void);
 
+/* test_term_escapes.c */
+int test_term_wrap_scrolls_region_only(void);
+int test_term_wrap_full_screen_unchanged(void);
+int test_term_wrap_below_region_stays(void);
+int test_term_wrap_inside_region_moves_down(void);
+
 /* test_term_fuzz.c */
 int test_term_fuzz_incomplete_esc(void);
 int test_term_fuzz_incomplete_csi(void);
@@ -7883,6 +7889,10 @@ int main(void) {
     failed += test_json_fuzz_obj_bool_on_null_node();
 
     printf("\n--- Terminal Fuzz ---\n");
+    failed += test_term_wrap_scrolls_region_only();
+    failed += test_term_wrap_full_screen_unchanged();
+    failed += test_term_wrap_below_region_stays();
+    failed += test_term_wrap_inside_region_moves_down();
     failed += test_term_fuzz_incomplete_esc();
     failed += test_term_fuzz_incomplete_csi();
     failed += test_term_fuzz_csi_no_params();

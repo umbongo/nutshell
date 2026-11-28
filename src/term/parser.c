@@ -57,10 +57,13 @@ static void term_put_char(Terminal *term, uint32_t c) {
     if (term->cursor.col >= term->cols) {
         // Auto-wrap
         term->cursor.col = 0;
-        term->cursor.row++;
-        if (term->cursor.row >= term->rows) {
-            term_scroll(term);
-            term->cursor.row = term->rows - 1;
+        /* The line feed a wrap implies, as LF and IND do it: scroll the
+         * region from its bottom row, otherwise just move down (a cursor
+         * below the region on the last row stays). */
+        if (term->cursor.row == term->scroll_bot) {
+            term_scroll_up(term, term->scroll_top, term->scroll_bot, 1);
+        } else if (term->cursor.row < term->rows - 1) {
+            term->cursor.row++;
         }
         
         // Mark new line as wrapped
