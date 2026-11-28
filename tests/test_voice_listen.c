@@ -164,19 +164,20 @@ int test_vlisten_cutin_aec_duck_then_cut(void)
     voice_listen_set_mode(&t.l, VLM_LISTEN);
     lt_run(&t, 40, NONE_DB, 0.0, -60.0);
     voice_listen_set_mode(&t.l, VLM_SPEAK_AEC);
-    lt_run(&t, 10, NONE_DB, 0.0, -60.0);
-    lt_run(&t, 40, -20.0, 0.4, -60.0);          /* voice from window 50 */
+    lt_run(&t, 20, -45.0, 0.4, -60.0);          /* the reply's faint residual: its first second starts */
+    lt_run(&t, 40, NONE_DB, 0.0, -60.0);
+    lt_run(&t, 40, -20.0, 0.4, -60.0);          /* voice from window 100, after the first second */
     lt_run(&t, 60, NONE_DB, 0.0, -60.0);
     int d = lt_find(&t, VLN_DUCK), s = lt_find(&t, VLN_TURN_START), c = lt_find(&t, VLN_CUT);
     int e = lt_find(&t, VLN_TURN_END);
     ASSERT_TRUE(d >= 0 && s == d + 1 && c > s && e > c);
-    ASSERT_TRUE(t.evwin[d] == 59);
-    ASSERT_TRUE(t.evwin[c] == 69);
+    ASSERT_TRUE(t.evwin[d] == 109);
+    ASSERT_TRUE(t.evwin[c] == 119);
     ASSERT_EQ(lt_count(&t, VLN_TURN_START), 1);
     ASSERT_EQ(lt_count(&t, VLN_UNDUCK), 0);
     ASSERT_EQ(t.unknown, 0);
     ASSERT_EQ(t.bad_order, 0);
-    ASSERT_TRUE(t.first_audio < 50);            /* the pre-roll covers the first words */
+    ASSERT_TRUE(t.first_audio < 100);            /* the pre-roll covers the first words */
     ASSERT_EQ(t.first_audio, t.evwin[s] - 14);
     ASSERT_EQ(t.last_audio, t.evwin[e]);
     TEST_END();
@@ -190,16 +191,17 @@ int test_vlisten_cutin_cough_unducks(void)
     voice_listen_set_mode(&t.l, VLM_LISTEN);
     lt_run(&t, 40, NONE_DB, 0.0, -60.0);
     voice_listen_set_mode(&t.l, VLM_SPEAK_AEC);
-    lt_run(&t, 10, NONE_DB, 0.0, -60.0);
-    lt_run(&t, 12, -20.0, 0.4, -60.0);          /* 240 ms of voice from window 50 */
+    lt_run(&t, 20, -45.0, 0.4, -60.0);          /* the reply's faint residual: its first second starts */
+    lt_run(&t, 40, NONE_DB, 0.0, -60.0);
+    lt_run(&t, 12, -20.0, 0.4, -60.0);          /* 240 ms of voice from window 100 */
     lt_run(&t, 60, NONE_DB, 0.0, -60.0);
     int d = lt_find(&t, VLN_DUCK), s = lt_find(&t, VLN_TURN_START);
     int u = lt_find(&t, VLN_UNDUCK), a = lt_find(&t, VLN_TURN_ABANDON);
     ASSERT_TRUE(d >= 0 && s == d + 1 && u == s + 1 && a == u + 1);
     ASSERT_EQ(t.nev, 4);
     ASSERT_EQ(lt_find(&t, VLN_CUT), -1);
-    /* last voice window is 61; 15 silent windows later */
-    ASSERT_TRUE(abs(t.evwin[u] - (61 + 15)) <= 1);
+    /* last voice window is 111; 15 silent windows later */
+    ASSERT_TRUE(abs(t.evwin[u] - (111 + 15)) <= 1);
     TEST_END();
 }
 

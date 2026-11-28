@@ -27,6 +27,12 @@
  *    pre-roll; at 20 (400 ms) VLN_CUT and the mode becomes VLM_LISTEN with the
  *    turn carrying on (the endpointer takes over). 15 windows (300 ms) without
  *    speech before the cut: VLN_UNDUCK, VLN_TURN_ABANDON.
+ *    Windows' canceller has not converged when a reply starts, so for the
+ *    first second (50 windows) from the reply's first loud window (floor +
+ *    12 dB; the half-duplex tracker below) a speech window counts only if it
+ *    also is a half-duplex candidate (10 dB over the echo learned from that
+ *    same audio). A user who speaks inside that second is cut in on after it,
+ *    within about 1.6 s of starting; afterwards the detector alone decides.
  *  - VLM_SPEAK_HD (no echo cancellation): the detector is not run (floor
  *    frozen). The echo estimate starts at the floor. The learning period
  *    starts at the first window loud enough to be the reply (floor + 12 dB),
@@ -86,6 +92,7 @@ typedef struct {
     double echo_db;
     int hd_on;                  /* the reply's audio has been heard (first window >= floor + 12 dB) */
     int hd_win;                 /* windows since then (learning period) */
+    int hd_age;                 /* windows since then, capped at 51 (AEC's strict first second) */
 } VoiceListen;
 
 void voice_listen_init(VoiceListen *l, int pause_ms);

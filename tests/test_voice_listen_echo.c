@@ -205,3 +205,43 @@ int test_vlecho_hd_audio_stall_does_not_cut(void)
     ASSERT_EQ(t.cuts, 0);
     TEST_END();
 }
+
+/* Windows' canceller has not converged at the start of a reply: the leftover
+ * echo is 26 to 34 dB over the room noise, then it falls away within a second
+ * (here: 0.8 s of residual, then 12 dB over the room noise). Nobody speaks, so
+ * the volume must not pump (duck) and the reply must not be cut. */
+int test_vlecho_aec_unconverged_start_does_not_duck(void)
+{
+    TEST_BEGIN();
+    static const double residual[3] = { -34.0, -30.0, -26.0 };
+    static const int delay[2] = { 0, 40 };      /* audio starts at the mode change / 800 ms later */
+    for (int r = 0; r < 3; r++)
+        for (int d = 0; d < 2; d++) {
+            ET t;
+            et_init(&t, VLM_SPEAK_AEC);
+            et_run(&t, delay[d], E_NONE, E_NONE);
+            et_run(&t, 40, residual[r], E_NONE);
+            et_run(&t, 100, -48.0, E_NONE);
+            ASSERT_EQ(t.ducks, 0);
+            ASSERT_EQ(t.cuts, 0);
+        }
+    TEST_END();
+}
+
+/* The same, with the residual falling 30 dB over a second, as a canceller
+ * converges, and a strong one (38 dB over the noise) that only the first
+ * second's stricter rule can hold back. */
+int test_vlecho_aec_converging_residual_does_not_cut(void)
+{
+    TEST_BEGIN();
+    static const double start[2] = { -30.0, -22.0 };
+    for (int a = 0; a < 2; a++) {
+        ET t;
+        et_init(&t, VLM_SPEAK_AEC);
+        for (int i = 0; i < 50; i++) et_win(&t, start[a] - 30.0 * (double)i / 50.0, E_NONE);
+        et_run(&t, 100, E_NONE, E_NONE);
+        ASSERT_EQ(t.ducks, 0);
+        ASSERT_EQ(t.cuts, 0);
+    }
+    TEST_END();
+}

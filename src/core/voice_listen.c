@@ -11,6 +11,7 @@
 #define HD_UP_DB 0.5
 #define HD_DOWN_DB 0.1
 #define HD_MIN_DB (-55.0)
+#define AEC_STRICT_WINDOWS 50   /* 1 s from the reply's first loud window */
 
 static void ev(const VoiceListenSink *k, VoiceListenEvent e)
 {
@@ -78,6 +79,7 @@ void voice_listen_set_mode(VoiceListen *l, VoiceListenMode m)
     ci_reset(l);
     l->hd_win = 0;
     l->hd_on = 0;
+    l->hd_age = 0;
     l->echo_db = voice_vad_floor_db(&l->vad);
     apply_mode(l);
 }
@@ -166,12 +168,6 @@ static void win_cutin(VoiceListen *l, const int16_t *w, int speech, int credit, 
     }
 }
 
-static void win_aec(VoiceListen *l, const int16_t *w, double level, const VoiceListenSink *k)
-{
-    VoiceVadOut o = voice_vad_window(&l->vad, level);
-    win_cutin(l, w, o == VV_SPEECH, VVAD_START_NEED, o == VV_NOISE_RESET, 0, k);
-}
-
 /* The echo estimate and the half-duplex candidate test. The estimate is
  * learned from the reply's own audio: its 25-window learning period starts at
  * the first window loud enough to be that audio (floor + 12 dB), not at the
@@ -189,7 +185,9 @@ static int hd_track(VoiceListen *l, double level)
         if (!audible) return 0;
         l->hd_on = 1;
         l->hd_win = 0;
+        l->hd_age = 0;
     }
+    if (l->hd_age <= AEC_STRICT_WINDOWS) l->hd_age++;
     if (l->hd_win < VL_HD_PRIME) {
         l->hd_win++;
         if (level > l->echo_db) l->echo_db = level;
@@ -209,6 +207,19 @@ static int hd_track(VoiceListen *l, double level)
 static void win_hd(VoiceListen *l, const int16_t *w, double level, const VoiceListenSink *k)
 {
     win_cutin(l, w, hd_track(l, level), 1, 0, 1, k);
+}
+
+/* AEC mode. Windows' canceller has not converged when a reply starts, so for
+ * the first second after the reply's first loud window a window also has to
+ * pass the half-duplex test (10 dB over the echo learned from this same
+ * audio) to count toward a cut-in. After that second the detector alone
+ * decides. */
+static void win_aec(VoiceListen *l, const int16_t *w, double level, const VoiceListenSink *k)
+{
+    VoiceVadOut o = voice_vad_window(&l->vad, level);
+    int cand = hd_track(l, level);
+    int strict = l->hd_age <= AEC_STRICT_WINDOWS;
+    win_cutin(l, w, o == VV_SPEECH && (cand || !strict), VVAD_START_NEED, o == VV_NOISE_RESET, 0, k);
 }
 
 static void process(VoiceListen *l, const int16_t *w, const VoiceListenSink *k)
