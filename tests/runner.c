@@ -2315,6 +2315,9 @@ int test_app_font_zoom_ui_size_is_in_table(void);
 int test_app_font_zoom_full_range_up(void);
 int test_app_font_zoom_preserves_size_after_roundtrip(void);
 int test_app_font_zoom_full_range_down(void);
+int test_app_font_px_height_known_values(void);
+int test_app_font_px_height_bad_input(void);
+int test_app_font_px_height_grows_with_dpi_and_zoom(void);
 
 /* test_selection.c */
 int test_sel_pixel_to_cell_basic(void);
@@ -4332,6 +4335,13 @@ int test_settings_help_every_id_in_settings_c(void);
 int test_settings_help_ai_enable_entry(void);
 int test_settings_help_voice_entries(void);
 
+/* test_profile_help.c */
+int test_profile_help_table_matches_enum(void);
+int test_profile_help_texts_shape(void);
+int test_profile_help_fields_say_what_empty_means(void);
+int test_profile_help_review_wording(void);
+int test_profile_help_every_editable_field_is_mapped(void);
+
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
 int test_sl_scale_144_is_one_and_half(void);
@@ -4377,6 +4387,12 @@ int test_sl_scroll_max_never_negative(void);
 int test_sl_scroll_clamp_within_range(void);
 int test_sl_scroll_clamp_negative_pins_zero(void);
 int test_sl_scroll_clamp_over_max_pins_max(void);
+int test_sl_scroll_to_show_in_view_unchanged(void);
+int test_sl_scroll_to_show_above_scrolls_up(void);
+int test_sl_scroll_to_show_below_scrolls_just_enough(void);
+int test_sl_scroll_to_show_taller_than_view_top_aligned(void);
+int test_sl_scroll_to_show_clamped_at_both_ends(void);
+int test_settings_ctrl_table_has_room(void);
 int test_sl_scroll_clamp_zero_max(void);
 int test_sl_initial_1080p_fits_behaviour(void);
 int test_sl_initial_scroll_expectations(void);
@@ -4386,6 +4402,29 @@ int test_sl_initial_tiny_work_area(void);
 int test_sl_initial_narrow_clamps_width(void);
 int test_sl_initial_144dpi_capped(void);
 int test_sl_initial_negative_origin(void);
+int test_sl_dpi_metrics_scale_with_dpi(void);
+int test_sl_dpi_min_size_scales(void);
+int test_sl_dpi_min_window_adds_the_frame(void);
+int test_sl_dpi_min_size_regions_dont_overlap(void);
+int test_sl_dpi_rows_stay_inside_the_page(void);
+int test_sl_scroll_rescale(void);
+int test_sl_row_layout_matches_plain_rects_when_it_fits(void);
+int test_sl_row_layout_null_safe(void);
+int test_sl_debug_rows_fit_at_min_width_96(void);
+int test_sl_debug_rows_fit_at_min_width_144(void);
+int test_sl_debug_rows_fit_at_min_width_120_and_192(void);
+int test_sl_debug_keep_at_most_edit_keeps_its_width(void);
+int test_sl_row_layout_tiny_page_never_negative(void);
+
+/* test_settings_tab.c */
+int test_stab_order_top_to_bottom_then_left_to_right(void);
+int test_stab_order_skips_disabled_and_hidden(void);
+int test_stab_order_groups_nav_page_buttons(void);
+int test_stab_order_ties_keep_creation_order(void);
+int test_stab_order_degenerate_inputs(void);
+int test_stab_step_forward_backward_wrap(void);
+int test_stab_step_unknown_current_enters_at_the_ends(void);
+int test_stab_step_empty_and_single(void);
 
 /* test_ns_scale.c */
 int test_ns_scale_identity_at_96(void);
@@ -7461,6 +7500,9 @@ int main(void) {
     failed += test_app_font_zoom_full_range_up();
     failed += test_app_font_zoom_preserves_size_after_roundtrip();
     failed += test_app_font_zoom_full_range_down();
+    failed += test_app_font_px_height_known_values();
+    failed += test_app_font_px_height_bad_input();
+    failed += test_app_font_px_height_grows_with_dpi_and_zoom();
 
     printf("\n--- Selection ---\n");
     failed += test_sel_pixel_to_cell_basic();
@@ -9275,6 +9317,12 @@ int main(void) {
     failed += test_sl_scroll_clamp_within_range();
     failed += test_sl_scroll_clamp_negative_pins_zero();
     failed += test_sl_scroll_clamp_over_max_pins_max();
+    failed += test_sl_scroll_to_show_in_view_unchanged();
+    failed += test_sl_scroll_to_show_above_scrolls_up();
+    failed += test_sl_scroll_to_show_below_scrolls_just_enough();
+    failed += test_sl_scroll_to_show_taller_than_view_top_aligned();
+    failed += test_sl_scroll_to_show_clamped_at_both_ends();
+    failed += test_settings_ctrl_table_has_room();
     failed += test_sl_scroll_clamp_zero_max();
     failed += test_sl_initial_1080p_fits_behaviour();
     failed += test_sl_initial_scroll_expectations();
@@ -9284,6 +9332,27 @@ int main(void) {
     failed += test_sl_initial_narrow_clamps_width();
     failed += test_sl_initial_144dpi_capped();
     failed += test_sl_initial_negative_origin();
+    failed += test_sl_dpi_metrics_scale_with_dpi();
+    failed += test_sl_dpi_min_size_scales();
+    failed += test_sl_dpi_min_window_adds_the_frame();
+    failed += test_sl_dpi_min_size_regions_dont_overlap();
+    failed += test_sl_dpi_rows_stay_inside_the_page();
+    failed += test_sl_scroll_rescale();
+    failed += test_sl_row_layout_matches_plain_rects_when_it_fits();
+    failed += test_sl_row_layout_null_safe();
+    failed += test_sl_debug_rows_fit_at_min_width_96();
+    failed += test_sl_debug_rows_fit_at_min_width_144();
+    failed += test_sl_debug_rows_fit_at_min_width_120_and_192();
+    failed += test_sl_debug_keep_at_most_edit_keeps_its_width();
+    failed += test_sl_row_layout_tiny_page_never_negative();
+    failed += test_stab_order_top_to_bottom_then_left_to_right();
+    failed += test_stab_order_skips_disabled_and_hidden();
+    failed += test_stab_order_groups_nav_page_buttons();
+    failed += test_stab_order_ties_keep_creation_order();
+    failed += test_stab_order_degenerate_inputs();
+    failed += test_stab_step_forward_backward_wrap();
+    failed += test_stab_step_unknown_current_enters_at_the_ends();
+    failed += test_stab_step_empty_and_single();
 
     failed += test_search_providers_table();
     failed += test_search_provider_index_case_and_unknown();
@@ -9308,6 +9377,11 @@ int main(void) {
     failed += test_thinking_wheel_takes();
     failed += test_thinking_box_scroll_follow_hold_resume();
     failed += test_thinking_box_scroll_mode_change_holds_place();
+    failed += test_profile_help_table_matches_enum();
+    failed += test_profile_help_texts_shape();
+    failed += test_profile_help_fields_say_what_empty_means();
+    failed += test_profile_help_review_wording();
+    failed += test_profile_help_every_editable_field_is_mapped();
     failed += test_settings_help_table_matches_enum();
     failed += test_settings_help_get_out_of_range();
     failed += test_settings_help_labels_and_pages();

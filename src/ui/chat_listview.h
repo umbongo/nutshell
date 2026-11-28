@@ -206,6 +206,11 @@ int chat_listview_is_near_bottom(HWND hwnd);
 /* Recalculate layout after resize. */
 void chat_listview_relayout(HWND hwnd);
 
+/* Follow a monitor-scale change: every spacing constant, every row's cached
+ * height and the cached Thinking layouts are redone at `dpi`. Call
+ * chat_listview_relayout afterwards. */
+void chat_listview_set_dpi(HWND hwnd, UINT dpi);
+
 /* Set activity state pointer (not owned). */
 void chat_listview_set_activity(HWND hwnd, ActivityState *activity);
 

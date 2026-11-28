@@ -1,6 +1,9 @@
 #include "test_framework.h"
 #include "settings_layout.h"
 #include "ns_scale.h"
+#include "dlog_types.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- ns_scale (settings_layout's own scale alias was removed in the
@@ -572,6 +575,113 @@ int test_sl_scroll_clamp_over_max_pins_max(void) {
     TEST_END();
 }
 
+int test_sl_scroll_to_show_in_view_unchanged(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(100, 150, 30, 200, 1000), 100);
+    ASSERT_EQ(settings_scroll_to_show(100, 100, 200, 200, 1000), 100);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_above_scrolls_up(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(300, 120, 30, 200, 1000), 120);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_below_scrolls_just_enough(void) {
+    TEST_BEGIN();
+    /* bottom at 500 must land on the viewport's bottom edge: 500 - 200 */
+    ASSERT_EQ(settings_scroll_to_show(0, 470, 30, 200, 1000), 300);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_taller_than_view_top_aligned(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(0, 400, 300, 200, 1000), 400);
+    ASSERT_EQ(settings_scroll_to_show(900, 400, 300, 200, 1000), 400);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_clamped_at_both_ends(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(50, -20, 30, 200, 1000), 0);
+    ASSERT_EQ(settings_scroll_to_show(0, 990, 30, 200, 1000), 800);
+    ASSERT_EQ(settings_scroll_to_show(10, 50, 30, 200, 100), 0);
+    TEST_END();
+}
+
+/* Source-reading gate: the Settings window registers its controls in a fixed
+ * table (MAX_SETTINGS_CTRLS) and add_ctrl() refuses one when it is full, so a
+ * row past the cap is silently dropped. Count the registrations in the source
+ * and keep a margin of 8 under the cap. */
+#define SETTINGS_CTRL_MARGIN 8
+
+static char *sl_read_whole(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long len = ftell(f);
+    if (len < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = (char *)malloc((size_t)len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t rd = fread(buf, 1, (size_t)len, f);
+    buf[rd] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static int sl_count_in(const char *line, const char *needle)
+{
+    int n = 0;
+    for (const char *p = line; (p = strstr(p, needle)) != NULL; p += strlen(needle))
+        n++;
+    return n;
+}
+
+int test_settings_ctrl_table_has_room(void) {
+    TEST_BEGIN();
+    char *src = sl_read_whole("src/ui/settings.c");
+    if (!src) {
+        const char *ci = getenv("CI");
+        if (ci && ci[0]) {
+            printf("  src/ui/settings.c not readable under CI\n");
+            ASSERT_TRUE(0);
+        } else {
+            printf("  [settings] src/ui/settings.c not readable from cwd -- skipping\n");
+        }
+        TEST_END();
+    }
+    int cap = 0, count = 0;
+    for (char *line = src; line && *line; ) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        const char *t = line;
+        while (*t == ' ' || *t == '\t') t++;
+        if (strncmp(t, "#define MAX_SETTINGS_CTRLS", 26) == 0) {
+            cap = atoi(t + 26);
+        } else if (strncmp(t, "/*", 2) != 0 && *t != '*' && strncmp(t, "//", 2) != 0) {
+            /* Creation sites pass the window data as `nd`; the helpers'
+             * own `d` calls (inside dbg_add) are not registrations. */
+            count += sl_count_in(t, "add_ctrl(nd,");
+            int dbg = sl_count_in(t, "dbg_add(nd,");
+            if (dbg && strstr(t, "SDBG_LEVEL_RENDER + cat"))
+                count += dbg * (int)DLOG_CAT_COUNT;   /* the per-category loop */
+            else
+                count += dbg;
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    free(src);
+    ASSERT_TRUE(cap > 0);
+    ASSERT_TRUE(count > 0);
+    if (count > cap - SETTINGS_CTRL_MARGIN)
+        printf("  Settings registers %d controls; MAX_SETTINGS_CTRLS is %d "
+               "(needs a margin of %d)\n", count, cap, SETTINGS_CTRL_MARGIN);
+    ASSERT_TRUE(count <= cap - SETTINGS_CTRL_MARGIN);
+    TEST_END();
+}
+
 int test_sl_scroll_clamp_zero_max(void) {
     TEST_BEGIN();
     ASSERT_EQ(settings_scroll_clamp(0, 0), 0);
@@ -672,5 +782,236 @@ int test_sl_initial_negative_origin(void) {
     ASSERT_TRUE(wy + ch + 39 <= 832);
     ASSERT_EQ(wx, -1348);
     ASSERT_EQ(wy, -76);
+    TEST_END();
+}
+
+/* ---- A DPI change (WM_DPICHANGED): the same layout at 96/120/144/192 ---- */
+
+static const int k_dpis[] = { 96, 120, 144, 192 };
+#define N_DPIS ((int)(sizeof(k_dpis) / sizeof(k_dpis[0])))
+
+int test_sl_dpi_metrics_scale_with_dpi(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        ASSERT_EQ(m.dpi, k_dpis[i]);
+        ASSERT_EQ(m.nav_w, ns_scale(168, k_dpis[i]));
+        ASSERT_EQ(m.label_w, ns_scale(168, k_dpis[i]));
+        ASSERT_EQ(m.row_h, ns_scale(30, k_dpis[i]));
+        ASSERT_EQ(m.min_w, ns_scale(620, k_dpis[i]));
+        /* A row's control always fits in its row, at every scale. */
+        ASSERT_TRUE(m.ctrl_h <= m.row_h);
+        ASSERT_TRUE(m.btn_h <= m.btnbar_h);
+    }
+    TEST_END();
+}
+
+int test_sl_dpi_min_size_scales(void) {
+    TEST_BEGIN();
+    SettingsMetrics prev;
+    settings_metrics_init(&prev, 96);
+    for (int i = 1; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        ASSERT_TRUE(m.min_w > prev.min_w);
+        ASSERT_TRUE(m.min_h > prev.min_h);
+        /* The scale is the DPI ratio, to within a pixel of rounding. */
+        int want_w = 620 * k_dpis[i] / 96;
+        ASSERT_TRUE(m.min_w >= want_w - 1 && m.min_w <= want_w + 1);
+        prev = m;
+    }
+    TEST_END();
+}
+
+int test_sl_dpi_min_window_adds_the_frame(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        int w = 0, h = 0;
+        settings_min_window_size(&m, ns_scale(16, k_dpis[i]),
+                                 ns_scale(39, k_dpis[i]), &w, &h);
+        ASSERT_EQ(w, m.min_w + ns_scale(16, k_dpis[i]));
+        ASSERT_EQ(h, m.min_h + ns_scale(39, k_dpis[i]));
+    }
+    int w = 7, h = 7;
+    settings_min_window_size(NULL, 1, 1, &w, &h);
+    ASSERT_EQ(w, 7);                      /* a NULL metrics writes nothing */
+    settings_min_window_size(NULL, 1, 1, NULL, NULL);   /* and nulls are safe */
+    TEST_END();
+}
+
+int test_sl_dpi_min_size_regions_dont_overlap(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        SettingsRect nav, content, buttons;
+        settings_layout_regions(m.min_w, m.min_h, &m, &nav, &content, &buttons);
+        ASSERT_EQ(nav.x + nav.w, content.x);              /* side by side   */
+        ASSERT_EQ(content.x + content.w, m.min_w);        /* no clipping    */
+        ASSERT_EQ(nav.y + nav.h, buttons.y);              /* nav above bar  */
+        ASSERT_EQ(content.y + content.h, buttons.y);
+        ASSERT_EQ(buttons.y + buttons.h, m.min_h);
+        ASSERT_TRUE(content.w > m.label_w + m.gap + 2 * m.pad);  /* a control fits */
+        /* The Save/Cancel pair and the footer fit the bar. */
+        ASSERT_TRUE(2 * m.btn_w + m.gap + 2 * m.pad < buttons.w);
+    }
+    TEST_END();
+}
+
+int test_sl_dpi_rows_stay_inside_the_page(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < N_DPIS; i++) {
+        SettingsMetrics m;
+        settings_metrics_init(&m, k_dpis[i]);
+        SettingsRect nav, content, buttons;
+        settings_layout_regions(m.min_w, m.min_h, &m, &nav, &content, &buttons);
+        for (int row = 0; row < 20; row++) {
+            SettingsRect l, c;
+            settings_row_rects(row, content.w, 0, 0, &m, &l, &c);
+            ASSERT_TRUE(l.x >= 0 && c.x >= l.x + l.w);      /* no overlap   */
+            ASSERT_TRUE(c.x + c.w <= content.w);            /* no clipping  */
+            ASSERT_TRUE(l.y == c.y && c.h <= m.row_h);
+        }
+    }
+    TEST_END();
+}
+
+int test_sl_scroll_rescale(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_rescale(0, 96, 192), 0);
+    ASSERT_EQ(settings_scroll_rescale(100, 96, 192), 200);
+    ASSERT_EQ(settings_scroll_rescale(200, 192, 96), 100);
+    ASSERT_EQ(settings_scroll_rescale(100, 96, 144), 150);
+    ASSERT_EQ(settings_scroll_rescale(100, 120, 120), 100);
+    ASSERT_EQ(settings_scroll_rescale(-5, 96, 192), 0);        /* never negative */
+    ASSERT_EQ(settings_scroll_rescale(100, 0, 192), 100);      /* bad dpi: unchanged */
+    ASSERT_EQ(settings_scroll_rescale(100, 96, 0), 100);
+    /* There and back again returns to within a pixel. */
+    int there = settings_scroll_rescale(333, 96, 120);
+    int back = settings_scroll_rescale(there, 120, 96);
+    ASSERT_TRUE(back >= 332 && back <= 334);
+    TEST_END();
+}
+
+/* ---- Row layout: no row's content past the page at the minimum width ---- */
+
+/* The widest case the dialog has: the page scrolls, so the scrollbar's 14 px
+ * come off the width as well. */
+#define TEST_CSB_W 14
+
+static int usable_at_min(const SettingsMetrics *m)
+{
+    SettingsRect nav, content, buttons;
+    settings_layout_regions(m->min_w, m->min_h, m, &nav, &content, &buttons);
+    return content.w - 1 - TEST_CSB_W;   /* the page host is inset by 1 */
+}
+
+int test_sl_row_layout_matches_plain_rects_when_it_fits(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    SettingsRowSpec sp = { 340, 260, 0, 0, 0 };   /* the Keep-at-most row */
+    SettingsRowGeom g;
+    settings_row_layout(&m, 3, 1000, 0, &sp, &g);
+    ASSERT_EQ(g.ctrl.x, m.pad + m.label_w + m.gap);
+    ASSERT_EQ(g.ctrl.w, 70);                       /* asked width, kept   */
+    ASSERT_EQ(g.extra.x, g.ctrl.x + 70 + m.gap);
+    ASSERT_EQ(g.extra.w, 260);
+    SettingsRowSpec st = { 0, 84, 56, 0, 0 };     /* a stretched row     */
+    settings_row_layout(&m, 3, 1000, 0, &st, &g);
+    ASSERT_EQ(g.extra2.w, 56);
+    ASSERT_EQ(g.extra2.x + g.extra2.w, 1000 - m.pad);
+    ASSERT_EQ(g.extra.x + g.extra.w + m.gap, g.extra2.x);
+    ASSERT_EQ(g.ctrl.x + g.ctrl.w + m.gap, g.extra.x);
+    TEST_END();
+}
+
+int test_sl_row_layout_null_safe(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    SettingsRowSpec sp = { 0, 0, 0, 0, 0 };
+    SettingsRowGeom g;
+    settings_row_layout(NULL, 0, 500, 0, &sp, &g);
+    settings_row_layout(&m, 0, 500, 0, NULL, &g);
+    settings_row_layout(&m, 0, 500, 0, &sp, NULL);
+    SettingsRowSpec out;
+    ASSERT_EQ(settings_debug_slot_spec(-1, &out), 0);
+    ASSERT_EQ(settings_debug_slot_spec(SDBG_COUNT, &out), 0);
+    ASSERT_EQ(settings_debug_slot_spec(SDBG_NOTE, NULL), 0);
+    ASSERT_EQ(settings_debug_slot_spec(SDBG_MAX_TOTAL, &out), 1);
+    ASSERT_EQ(out.extra_w, 260);
+    TEST_END();
+}
+
+static int debug_rows_fit_at(int dpi)
+{
+    SettingsMetrics m; settings_metrics_init(&m, dpi);
+    int usable = usable_at_min(&m);
+    SettingsDebugPos pos[SDBG_COUNT];
+    (void)settings_debug_layout(1, pos);
+    for (int s = 0; s < SDBG_COUNT; s++) {
+        if (!pos[s].visible) continue;
+        SettingsRowSpec sp;
+        if (!settings_debug_slot_spec(s, &sp)) return 0;
+        SettingsRowGeom g;
+        settings_row_layout(&m, pos[s].row, usable, 0, &sp, &g);
+        int right = usable - m.pad;
+        if (g.ctrl.w <= 0) return 0;
+        if (g.ctrl.x + g.ctrl.w > right) return 0;                 /* past the page */
+        if (g.extra.w > 0 && g.extra.x + g.extra.w > right) return 0;
+        if (g.extra2.w > 0 && g.extra2.x + g.extra2.w > right) return 0;
+        if (g.extra.w > 0 && g.ctrl.x + g.ctrl.w > g.extra.x) return 0;   /* overlap */
+        if (g.extra2.w > 0 && g.extra.w > 0 && g.extra.x + g.extra.w > g.extra2.x) return 0;
+        if (!sp.full_w && g.label.x + g.label.w > g.ctrl.x) return 0;
+    }
+    return 1;
+}
+
+int test_sl_debug_rows_fit_at_min_width_96(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(debug_rows_fit_at(96));
+    TEST_END();
+}
+
+int test_sl_debug_rows_fit_at_min_width_144(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(debug_rows_fit_at(144));
+    TEST_END();
+}
+
+int test_sl_debug_rows_fit_at_min_width_120_and_192(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(debug_rows_fit_at(120));
+    ASSERT_TRUE(debug_rows_fit_at(192));
+    TEST_END();
+}
+
+int test_sl_debug_keep_at_most_edit_keeps_its_width(void) {
+    TEST_BEGIN();
+    /* At the minimum width the "using N MB" text gives way, not the edit. */
+    int dpis[2] = { 96, 144 };
+    for (int i = 0; i < 2; i++) {
+        SettingsMetrics m; settings_metrics_init(&m, dpis[i]);
+        SettingsRowSpec sp;
+        ASSERT_EQ(settings_debug_slot_spec(SDBG_MAX_TOTAL, &sp), 1);
+        SettingsRowGeom g;
+        settings_row_layout(&m, 14, usable_at_min(&m), 0, &sp, &g);
+        ASSERT_EQ(g.ctrl.w, ns_scale(70, dpis[i]));
+        ASSERT_TRUE(g.extra.w > ns_scale(100, dpis[i]));   /* the text still has room */
+        ASSERT_TRUE(g.extra.w < ns_scale(260, dpis[i]));   /* and was the part cut    */
+    }
+    TEST_END();
+}
+
+int test_sl_row_layout_tiny_page_never_negative(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    SettingsRowSpec sp = { 340, 260, 0, 0, 0 };
+    SettingsRowGeom g;
+    settings_row_layout(&m, 1, 100, 0, &sp, &g);   /* narrower than the label column */
+    ASSERT_TRUE(g.ctrl.w >= 0);
+    ASSERT_TRUE(g.extra.w >= 0);
     TEST_END();
 }

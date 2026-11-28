@@ -533,6 +533,21 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         return 0;
     }
 
+    case WM_DPICHANGED:
+        if (d) {
+            /* The panel's scale changed (the owner moved to another monitor):
+             * a floating panel is a top-level window and takes the rectangle
+             * Windows suggests; a docked one is sized by the main window. */
+            ai_chat_apply_dpi(d, (int)HIWORD(wParam));
+            const RECT *sr = (const RECT *)lParam;
+            if (sr && !(GetWindowLong(hwnd, GWL_STYLE) & WS_CHILD))
+                SetWindowPos(hwnd, NULL, sr->left, sr->top,
+                             sr->right - sr->left, sr->bottom - sr->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            return 0;
+        }
+        break;
+
     case WM_NCHITTEST: {
         /* When docked, make the left edge transparent to mouse clicks
          * so the parent window can handle splitter dragging. The transparent
@@ -2565,6 +2580,14 @@ void ai_chat_refresh_fonts(HWND hwnd)
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
+
+    /* The main window calls this after its own DPI change: the panel's
+     * scale, its layout and its own fonts follow the window's. */
+    int wdpi = get_window_dpi(hwnd);
+    if (wdpi > 0 && wdpi != d->dpi) {
+        ai_chat_apply_dpi(d, wdpi);
+        return;
+    }
 
     d->hFont = ns_font(FONT_BODY, d->dpi);
     /* The session label's font comes from the same cache (ns_font_flush()

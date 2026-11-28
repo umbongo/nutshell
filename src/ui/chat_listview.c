@@ -1099,6 +1099,25 @@ void chat_listview_relayout(HWND hwnd)
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
+/* A child window never receives WM_DPICHANGED under Per-Monitor v2, so the
+ * owner calls this when its monitor's scale changes. Every gap, padding, chip
+ * and icon follows; every row is measured again (its cached height and any
+ * cached Thinking layout are in the old scale). */
+void chat_listview_set_dpi(HWND hwnd, UINT dpi)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    if (dpi == 0) dpi = 96;
+    lv->dpi_scale = (float)dpi / 96.0f;
+    recalc_dpi_constants(lv);
+    for (ChatMsgItem *di = lv->msg_list ? lv->msg_list->head : NULL;
+         di; di = di->next) {
+        di->dirty = 1;
+        if (di->type == CHAT_ITEM_AI_TEXT) di->u.ai.think_cache_len = -1;
+    }
+    InvalidateRect(hwnd, NULL, TRUE);
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  *  Layout: measure all items, compute total_height
  * ══════════════════════════════════════════════════════════════════════ */
@@ -4865,15 +4884,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
 
     case WM_DPICHANGED: {
         UINT new_dpi = HIWORD(wParam);   /* new DPI value */
-        lv->dpi_scale = (float)new_dpi / 96.0f;
-        recalc_dpi_constants(lv);
-        /* Finished rows keep their cached height unless marked: every
-         * height and cached Thinking layout is in the old DPI. */
-        for (ChatMsgItem *di = lv->msg_list ? lv->msg_list->head : NULL;
-             di; di = di->next) {
-            di->dirty = 1;
-            if (di->type == CHAT_ITEM_AI_TEXT) di->u.ai.think_cache_len = -1;
-        }
+        chat_listview_set_dpi(hwnd, new_dpi);
         /* Use the suggested window rect provided by the system */
         RECT *suggested = (RECT *)lParam;
         SetWindowPos(hwnd, NULL,

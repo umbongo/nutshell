@@ -92,6 +92,37 @@ void settings_row_rects(int row, int content_w, int ctrl_w, int y_offset,
                         const SettingsMetrics *m,
                         SettingsRect *label, SettingsRect *ctrl);
 
+/* How one row is built from its controls (96-dpi widths, scaled by the row
+ * layout). ctrl_w > 0 is the row's explicit total width (the control and any
+ * companions beside it), 0 stretches to the pane; full_w drops the label
+ * column; extra_w / extra2_w are the companion controls to the right of the
+ * main one (extra2 the rightmost); extra_off keeps extra on the row at no
+ * width. */
+typedef struct {
+    int ctrl_w;
+    int extra_w;
+    int extra2_w;
+    int full_w;
+    int extra_off;
+} SettingsRowSpec;
+
+typedef struct {
+    SettingsRect label;   /* the label column's box (meaningful unless full_w) */
+    SettingsRect ctrl;
+    SettingsRect extra;   /* w == 0 when the row has no extra */
+    SettingsRect extra2;  /* w == 0 when the row has no extra2 */
+} SettingsRowGeom;
+
+/* Place every control of row `row` in a page `usable_w` wide (the scrollbar
+ * already taken off). Whatever the width, nothing extends past
+ * usable_w - m->pad: an explicit total (ctrl_w) is cut to the room left, and
+ * the companion `extra` gives way first, the main control keeping the width
+ * it was asked for (ctrl_w minus its companions) for as long as there is room.
+ * A stretched row's control takes what the companions leave, as always. */
+void settings_row_layout(const SettingsMetrics *m, int row, int usable_w,
+                         int y_offset, const SettingsRowSpec *spec,
+                         SettingsRowGeom *g);
+
 /* Total pixel height a page of `rows` rows occupies (including top/bottom pad). */
 int settings_page_height(int rows, const SettingsMetrics *m);
 
@@ -113,11 +144,30 @@ void settings_initial_placement(const SettingsMetrics *m, int target_rows,
                                 int *client_w, int *client_h,
                                 int *win_x, int *win_y);
 
+/* The smallest outer window size the dialog may be dragged to on the monitor
+ * whose metrics are `m`: the minimum client size plus the window frame
+ * (nc_w, nc_h) measured at that monitor's DPI. Writes nothing for a NULL
+ * `m`; either out pointer may be NULL. (WM_GETMINMAXINFO.) */
+void settings_min_window_size(const SettingsMetrics *m, int nc_w, int nc_h,
+                              int *w, int *h);
+
+/* A scroll offset in pixels at old_dpi, expressed at new_dpi (the page is
+ * laid out again at the new scale after a monitor move, so the same rows stay
+ * in view). Never negative; an offset is returned unchanged for a dpi <= 0. */
+int settings_scroll_rescale(int pos, int old_dpi, int new_dpi);
+
 /* Maximum scroll offset. 0 when the content fits. Never negative. */
 int settings_scroll_max(int view_h, int content_h);
 
 /* Clamp pos into [0, max]. */
 int settings_scroll_clamp(int pos, int max);
+
+/* The scroll offset that shows the span y..y+h (page coordinates, before
+ * scrolling) in a viewport view_h tall, given the current offset `scroll` and
+ * the page's content height. Already in view: unchanged. Above: scrolls up to
+ * y. Below: scrolls down just enough. Taller than the viewport: top aligned.
+ * The result is clamped to 0..settings_scroll_max(view_h, content_h). */
+int settings_scroll_to_show(int scroll, int y, int h, int view_h, int content_h);
 
 /* ---- The Debugging page (spec 2026-10-17-debug-logging-design.md, section 9)
  *
@@ -159,6 +209,10 @@ typedef struct {
  * Visible slots are packed from row 1 in enum order; hidden ones take none.
  * Unticked, the page is the tickbox, its one-line hint and the current file. */
 int settings_debug_layout(int enabled, SettingsDebugPos pos[SDBG_COUNT]);
+
+/* The row recipe of slot `slot` (the widths the Debugging page builds its
+ * controls with): 0 and *spec untouched for an unknown slot, else 1. */
+int settings_debug_slot_spec(int slot, SettingsRowSpec *spec);
 
 /* How many rows slot `slot` spans when visible (0 for an unknown slot). */
 int settings_debug_slot_rows(int slot);
