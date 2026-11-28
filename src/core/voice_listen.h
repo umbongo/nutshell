@@ -27,24 +27,28 @@
  *    pre-roll; at 20 (400 ms) VLN_CUT and the mode becomes VLM_LISTEN with the
  *    turn carrying on (the endpointer takes over). 15 windows (300 ms) without
  *    speech before the cut: VLN_UNDUCK, VLN_TURN_ABANDON.
- *    Windows' canceller has not converged when a reply starts, so for the
- *    first second (50 windows) from the reply's first loud window (floor +
- *    12 dB; the half-duplex tracker below) a speech window counts only if it
- *    also is a half-duplex candidate (10 dB over the echo learned from that
- *    same audio). A user who speaks inside that second is cut in on after it,
- *    within about 1.6 s of starting; afterwards the detector alone decides.
+ *    Windows' canceller has not converged when a reply starts, so when residual
+ *    echo is heard in the first 200 ms after voice_listen_audio_started() (the
+ *    speech engine's first word event), for the first second (50 windows) from
+ *    there a speech window counts only if it also is a half-duplex candidate
+ *    (10 dB over the echo learned from that same audio). A converged canceller
+ *    leaves no residual, and then the detector alone decides from the start.
+ *    A user who speaks inside the strict second is cut in on after it, within
+ *    about 1.6 s of starting. If the signal has not come 3 s (150 windows)
+ *    after the mode was set, the first window at floor + 12 dB starts the
+ *    period instead.
  *  - VLM_SPEAK_HD (no echo cancellation): the detector is not run (floor
  *    frozen). The echo estimate starts at the floor. The learning period
- *    starts at the first window loud enough to be the reply (floor + 12 dB),
- *    not at the mode change (the first audio of an AI reply often comes
- *    later): during VL_HD_PRIME = 25 windows (500 ms) from there the estimate
+ *    starts at voice_listen_audio_started(), not at the mode change (the first
+ *    audio of an AI reply often comes later) and not at the first loud
+ *    microphone window (a user with no audible echo would be learned as the
+ *    echo; 3 s without the signal falls back to that rule): during VL_HD_PRIME = 25 windows (500 ms) from there the estimate
  *    follows the capture level up at once (the builder's call: else our own
  *    reply, entering from a floor 30 dB under it, would count as a cut-in
  *    until the 0.5 dB steps caught up); afterwards it follows the capture
  *    level up by at most 0.5 dB a window and down by 0.1 dB a window, and only
  *    down while the echo is audible: a window at room-noise level (a gap or a
- *    stall in the audio) leaves it alone. Nothing is a candidate before that
- *    first loud window.
+ *    stall in the audio) leaves it alone. Nothing is a candidate before that.
  *    It does not move while a cut-in is accumulating (the count is above 0),
  *    so neither the user's voice nor its modulation dips lift it. A candidate window has level >= max(floor + 12, echo + 10) and
  *        >= -55 dBFS. Candidates accumulate under the same 15-window rule. At 10 candidates VLN_DUCK
@@ -90,14 +94,20 @@ typedef struct {
     int ci_started;             /* a cut-in turn has started (AEC) / duck given (HD) */
     int ci_ducked;
     double echo_db;
-    int hd_on;                  /* the reply's audio has been heard (first window >= floor + 12 dB) */
+    int hd_on;                  /* the reply's audio is playing (voice_listen_audio_started, or the fallback) */
+    int mode_win;               /* windows since the speak mode was set, capped at 150 (3 s) */
     int hd_win;                 /* windows since then (learning period) */
+    int hd_resid;               /* the reply's audio was audible in its first 200 ms: AEC's strict second applies */
     int hd_age;                 /* windows since then, capped at 51 (AEC's strict first second) */
 } VoiceListen;
 
 void voice_listen_init(VoiceListen *l, int pause_ms);
 void voice_listen_set_mode(VoiceListen *l, VoiceListenMode m);  /* resets cut-in counters and
                                          any turn in progress (abandoned silently, no event) */
+void voice_listen_audio_started(VoiceListen *l);   /* the reply's audio is playing now (the speech
+                                         engine's first word event): the echo-learning period and
+                                         AEC's strict first second start here. No-op outside the
+                                         speak modes. */
 void voice_listen_feed(VoiceListen *l, const int16_t *s, size_t n, const VoiceListenSink *k);
 void voice_listen_wipe(VoiceListen *l);   /* secure_zero the ring and partial window */
 

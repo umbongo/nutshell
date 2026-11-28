@@ -97,6 +97,7 @@ void voice_audio_test_ingest_live(int live, unsigned token, int gain_db, int cap
 int  voice_audio_conv_begin(const char *device_id_utf8, unsigned token, double gain_db,
                             int pause_ms);
 void voice_audio_conv_mode(unsigned token, VoiceListenMode m);   /* HOLD wipes a turn in progress */
+void voice_audio_conv_audio_started(unsigned token);   /* the reply's audio plays now (the speak modes' echo learning starts) */
 void voice_audio_conv_attach_live(unsigned token, unsigned live_token);  /* turn so far is replayed */
 void voice_audio_conv_end(unsigned token);    /* close the device, wipe the turn */
 /* End the open turn now, as the endpointer's pause would: VAM_CONV_EVENT TURN_END, the live

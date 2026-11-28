@@ -11,7 +11,9 @@
 #define HD_UP_DB 0.5
 #define HD_DOWN_DB 0.1
 #define HD_MIN_DB (-55.0)
-#define AEC_STRICT_WINDOWS 50   /* 1 s from the reply's first loud window */
+#define AEC_STRICT_WINDOWS 50   /* 1 s from the moment the reply's audio plays */
+#define AEC_EVIDENCE_WINDOWS 10 /* the strict second applies only if residual echo is heard in the first 200 ms */
+#define START_WAIT_WINDOWS 150  /* 3 s: without the playback signal, the capture-level rule takes over */
 
 static void ev(const VoiceListenSink *k, VoiceListenEvent e)
 {
@@ -80,6 +82,7 @@ void voice_listen_set_mode(VoiceListen *l, VoiceListenMode m)
     l->hd_win = 0;
     l->hd_on = 0;
     l->hd_age = 0;
+    l->mode_win = 0;
     l->echo_db = voice_vad_floor_db(&l->vad);
     apply_mode(l);
 }
@@ -169,12 +172,31 @@ static void win_cutin(VoiceListen *l, const int16_t *w, int speech, int credit, 
 }
 
 /* The echo estimate and the half-duplex candidate test. The estimate is
- * learned from the reply's own audio: its 25-window learning period starts at
- * the first window loud enough to be that audio (floor + 12 dB), not at the
- * mode change, since the first sound of an AI reply often arrives later than
- * that. Until then nothing is a candidate. Windows at room-noise level (a gap
- * or a stall in the audio) leave the estimate alone: they say nothing about
- * how loud the echo is. Returns 1 when the window is a candidate. */
+ * learned from what the microphone hears once the reply's audio is playing:
+ * the learning period (25 windows) and AEC's strict first second start at
+ * voice_listen_audio_started(), a signal from the playback side, never from
+ * the microphone level (a user with no audible echo would have their own
+ * voice learned as the echo). If the signal has not come 3 s after the mode
+ * was set, the first window loud enough to be the reply (floor + 12 dB)
+ * starts them instead. Until then nothing is a candidate. Windows at
+ * room-noise level (a gap or a stall in the audio) leave the estimate alone:
+ * they say nothing about how loud the echo is. Returns 1 when the window is
+ * a candidate. */
+static void hd_begin(VoiceListen *l)
+{
+    l->hd_on = 1;
+    l->hd_win = 0;
+    l->hd_age = 0;
+    l->hd_resid = 0;
+}
+
+void voice_listen_audio_started(VoiceListen *l)
+{
+    if (!l || l->hd_on) return;
+    if (l->mode != VLM_SPEAK_AEC && l->mode != VLM_SPEAK_HD) return;
+    hd_begin(l);
+}
+
 static int hd_track(VoiceListen *l, double level)
 {
     double floor_db = voice_vad_floor_db(&l->vad);
@@ -182,12 +204,11 @@ static int hd_track(VoiceListen *l, double level)
     int audible = level >= thr;
     int cand;
     if (!l->hd_on) {
-        if (!audible) return 0;
-        l->hd_on = 1;
-        l->hd_win = 0;
-        l->hd_age = 0;
+        if (!audible || l->mode_win < START_WAIT_WINDOWS) return 0;
+        hd_begin(l);
     }
     if (l->hd_age <= AEC_STRICT_WINDOWS) l->hd_age++;
+    if (audible && l->hd_age <= AEC_EVIDENCE_WINDOWS) l->hd_resid = 1;
     if (l->hd_win < VL_HD_PRIME) {
         l->hd_win++;
         if (level > l->echo_db) l->echo_db = level;
@@ -218,13 +239,15 @@ static void win_aec(VoiceListen *l, const int16_t *w, double level, const VoiceL
 {
     VoiceVadOut o = voice_vad_window(&l->vad, level);
     int cand = hd_track(l, level);
-    int strict = l->hd_age <= AEC_STRICT_WINDOWS;
+    int strict = l->hd_resid && l->hd_age <= AEC_STRICT_WINDOWS;
     win_cutin(l, w, o == VV_SPEECH && (cand || !strict), VVAD_START_NEED, o == VV_NOISE_RESET, 0, k);
 }
 
 static void process(VoiceListen *l, const int16_t *w, const VoiceListenSink *k)
 {
     double level = voice_window_db(w, VVAD_WIN);
+    if ((l->mode == VLM_SPEAK_AEC || l->mode == VLM_SPEAK_HD) && l->mode_win < START_WAIT_WINDOWS)
+        l->mode_win++;
     switch (l->mode) {
     case VLM_HOLD:
         (void)voice_vad_window(&l->vad, level);

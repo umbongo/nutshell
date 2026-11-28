@@ -3892,6 +3892,11 @@ int test_vlecho_hd_late_echo_start_does_not_cut(void);
 int test_vlecho_hd_audio_stall_does_not_cut(void);
 int test_vlecho_aec_unconverged_start_does_not_duck(void);
 int test_vlecho_aec_converging_residual_does_not_cut(void);
+int test_vlecho_hd_no_echo_user_cuts_within_600ms(void);
+int test_vlecho_aec_quiet_residual_user_cuts(void);
+int test_vlecho_aec_user_into_silence_cuts_fast(void);
+int test_vlecho_late_start_signal_does_not_cut(void);
+int test_vlecho_missing_signal_falls_back_after_3s(void);
 /* test_voice_transcript.c */
 int test_vt_draft_sep(void);
 int test_vt_rendered_full_text(void);
@@ -8708,6 +8713,11 @@ int main(void) {
     failed += test_vlecho_hd_audio_stall_does_not_cut();
     failed += test_vlecho_aec_unconverged_start_does_not_duck();
     failed += test_vlecho_aec_converging_residual_does_not_cut();
+    failed += test_vlecho_hd_no_echo_user_cuts_within_600ms();
+    failed += test_vlecho_aec_quiet_residual_user_cuts();
+    failed += test_vlecho_aec_user_into_silence_cuts_fast();
+    failed += test_vlecho_late_start_signal_does_not_cut();
+    failed += test_vlecho_missing_signal_falls_back_after_3s();
     failed += test_vt_draft_sep();
     failed += test_vt_rendered_full_text();
     failed += test_vt_openai_revision();

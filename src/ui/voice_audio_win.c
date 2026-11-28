@@ -105,7 +105,7 @@ static size_t va_cap_samples(int cap_ms)
 #define VA_LEVEL_MS     50u
 
 typedef enum { VC_ENUM = 1, VC_BEGIN, VC_END, VC_WATCH, VC_SET_GAIN,
-               VC_CONV_BEGIN, VC_CONV_MODE, VC_CONV_ATTACH, VC_CONV_END, VC_CONV_END_TURN,
+               VC_CONV_BEGIN, VC_CONV_MODE, VC_CONV_ATTACH, VC_CONV_END, VC_CONV_END_TURN, VC_CONV_AUDIO,
                VC_TEST_CONV_OPEN, VC_TEST_CONV_INGEST,
                VC_R_OPEN, VC_R_DATA, VC_R_END, VC_R_FLUSH, VC_R_GAIN, VC_R_CLOSE,
                /* a failed unlosable push, replayed at its place in the queue (va_pop makes these) */
@@ -855,6 +855,13 @@ static void va_conv_set_mode(VaState *st, unsigned token, VoiceListenMode m)
     if (wiped) va_conv_post_event(st, VLN_TURN_ABANDON);   /* the controller must not wait for it */
 }
 
+/* The speech engine's first word event for the reply: its audio is playing now. */
+static void va_conv_audio_started(VaState *st, unsigned token)
+{
+    if (!va_conv_is(st, token)) return;
+    voice_listen_audio_started(&st->conv->listen);
+}
+
 static void va_conv_attach(VaState *st, unsigned token, unsigned live_token)
 {
     if (!va_conv_is(st, token)) return;
@@ -1446,6 +1453,7 @@ static DWORD WINAPI va_thread(LPVOID arg)
             case VC_CONV_ATTACH: va_conv_attach(&st, c.token, c.token2); break;
             case VC_CONV_END:    va_conv_end(&st, c.token); break;
             case VC_CONV_END_TURN: va_conv_end_turn(&st, c.token); break;
+            case VC_CONV_AUDIO:  va_conv_audio_started(&st, c.token); break;
             case VC_P_CONV_END:  va_conv_end(&st, c.token); break;
             case VC_P_FLUSH:     va_r_flush(&st, c.token, c.token2); break;
             case VC_P_CLOSE:     if (va_r_is(&st, c.token)) va_r_close(&st); break;
@@ -1769,6 +1777,15 @@ void voice_audio_conv_mode(unsigned token, VoiceListenMode m)
     c.kind = VC_CONV_MODE;
     c.token = token;
     c.flag = (int)m;
+    va_push_raw(&c);
+}
+
+void voice_audio_conv_audio_started(unsigned token)
+{
+    VaCmd c;
+    memset(&c, 0, sizeof(c));
+    c.kind = VC_CONV_AUDIO;
+    c.token = token;
     va_push_raw(&c);
 }
 

@@ -729,6 +729,11 @@ static void rc_cap_mode(unsigned token, VoiceListenMode m)
     if (g_audio_up) voice_audio_conv_mode(token, m);
 }
 
+static void rc_cap_audio_started(unsigned token)
+{
+    if (g_audio_up) voice_audio_conv_audio_started(token);
+}
+
 static void rc_cap_attach_live(unsigned token, unsigned live_token)
 {
     if (g_audio_up) voice_audio_conv_attach_live(token, live_token);
@@ -962,7 +967,7 @@ static int rc_notice_due(char *name, size_t cap)
 static void rc_level(double frac) { ai_chat_voice_set_level(ui_ai_panel(), frac); }
 
 static const VoiceConvOps k_conv_ops = {
-    rc_cap_begin, rc_cap_end, rc_cap_mode, rc_cap_attach_live, rc_cap_end_turn,
+    rc_cap_begin, rc_cap_end, rc_cap_mode, rc_cap_audio_started, rc_cap_attach_live, rc_cap_end_turn,
     rc_link_start, rc_link_close,
     rc_stt_submit, rc_stt_cancel,
     rc_tts_start, rc_tts_speak, rc_tts_stop, rc_tts_volume, rc_tts_quit,

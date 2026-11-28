@@ -22,7 +22,7 @@
 #define VC_REPLY_B "This is the second answer to a second question, long enough to cut it in the middle. "
 
 typedef struct {
-    int cap_begin, cap_end, cap_mode, attach_live, cap_end_turn;
+    int cap_begin, cap_end, cap_mode, attach_live, cap_end_turn, audio_started;
     unsigned stt_token; int stt_ok;
     unsigned cap_token; VoiceListenMode mode;
     int link_start, link_close, link_ok; unsigned live_token;
@@ -54,6 +54,7 @@ static Fake F;
 static int f_cap_begin(unsigned t) { F.cap_begin++; F.cap_token = t; voice_ledger_acquire(VRES_CAPTURE); return 1; }
 static void f_cap_end(unsigned t) { (void)t; F.cap_end++; voice_ledger_release(VRES_CAPTURE); }
 static void f_cap_mode(unsigned t, VoiceListenMode m) { (void)t; F.cap_mode++; F.mode = m; }
+static void f_audio_started(unsigned t) { (void)t; F.audio_started++; }
 static void f_attach(unsigned t, unsigned l) { (void)t; (void)l; F.attach_live++; }
 static void f_end_turn(unsigned t) { (void)t; F.cap_end_turn++; }
 static int f_link_start(unsigned l)
@@ -179,7 +180,7 @@ static VoiceConvOps fake_ops(void)
 {
     VoiceConvOps o;
     memset(&o, 0, sizeof o);
-    o.cap_begin = f_cap_begin; o.cap_end = f_cap_end; o.cap_mode = f_cap_mode;
+    o.cap_begin = f_cap_begin; o.cap_end = f_cap_end; o.cap_mode = f_cap_mode; o.cap_audio_started = f_audio_started;
     o.cap_attach_live = f_attach; o.cap_end_turn = f_end_turn;
     o.link_start = f_link_start; o.link_close = f_link_close;
     o.stt_submit = f_stt_submit; o.stt_cancel = f_stt_cancel;
@@ -498,6 +499,27 @@ static void tts_msg(VoiceTtsKind kind, unsigned id, size_t off)
     m.reply_id = id;
     m.offset = off;
     voice_conv_on_tts(&m);
+}
+
+/* The listener is told once per speak, at the speech engine's first word event. */
+int test_vconv_win_first_word_tells_the_listener_audio_started(void)
+{
+    TEST_BEGIN();
+    HWND w = vc_begin();
+    voice_conv_start(1);
+    const unsigned tok = voice_conv_capture_token();
+    voice_conv_on_audio(VAM_CONV_OPENED, VOICE_CONV_PACK(2, tok));
+    to_working();
+    chat_finishes(VC_REPLY_A);
+    const unsigned id_a = F.speak_id;
+    ASSERT_EQ(F.audio_started, 0);           /* the speak was started; nothing is playing yet */
+    tts_msg(VTT_WORD, id_a, 12);
+    ASSERT_EQ(F.audio_started, 1);
+    tts_msg(VTT_WORD, id_a, 20);
+    ASSERT_EQ(F.audio_started, 1);           /* once per speak */
+    voice_conv_event(VCE_END, VCX_OFF, 0);
+    vc_end(w);
+    TEST_END();
 }
 
 int test_vconv_win_stale_reply_events_ignored(void)

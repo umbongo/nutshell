@@ -49,6 +49,7 @@ static int g_ai_off;                        /* AI speech cannot work this conver
 static int g_aec = -1;                      /* the last VAM_CONV_OPENED value */
 static VoiceListenMode g_want_mode = VLM_HOLD;
 static int g_have_mode;
+static int g_audio_started;                 /* this speak's first word event has been reported to the listener */
 
 static VoiceTranscript g_vt;
 static int g_vt_on;
@@ -272,6 +273,10 @@ static void apply_mode(void)
 {
     if (!g_cap_open || !g_have_mode) return;
     g_ops->cap_mode(g_cap_token, g_want_mode);
+    /* A mode command resets the listener: the speech already playing tells it again. */
+    if (g_audio_started && g_playing && g_ops->cap_audio_started &&
+        (g_want_mode == VLM_SPEAK_AEC || g_want_mode == VLM_SPEAK_HD))
+        g_ops->cap_audio_started(g_cap_token);
 }
 
 static VoiceListenMode speak_mode(void)
@@ -516,6 +521,7 @@ static void speak_with_context(const char *text, size_t from, int is_reply)
     if (g_ops->tts_volume) g_ops->tts_volume(g_tts_token, 100);
     g_ducked = 0;
     g_progress_at = 0;
+    g_audio_started = 0;
     g_cur_id = ++g_reply_seq;
     g_cur_is_reply = is_reply;
     voice_trail_reset(&g_trail);
@@ -1114,6 +1120,14 @@ void voice_conv_on_tts(const VoiceTtsMsg *m)
             const unsigned long t = now_ms();
             if (g_cur_is_reply) g_cut = m->offset;
             voice_trail_note(&g_trail, t, m->offset);
+            /* The first word event of a speak (both engines send it when the audio plays): the
+             * listener's echo learning starts here, not at the first loud microphone window. */
+            if (!g_audio_started) {
+                g_audio_started = 1;
+                if (g_cap_open && g_ops->cap_audio_started &&
+                    (g_want_mode == VLM_SPEAK_AEC || g_want_mode == VLM_SPEAK_HD))
+                    g_ops->cap_audio_started(g_cap_token);
+            }
             /* The speech is advancing: the Speaking watchdog restarts (at most once a second). */
             if (g_progress_at == 0 || t - g_progress_at >= 1000ul) {
                 g_progress_at = t ? t : 1ul;

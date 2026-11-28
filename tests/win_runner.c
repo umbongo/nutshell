@@ -160,6 +160,7 @@ int test_voice_tts_reap_by_generation(void);
 int test_vconv_win_ends_ledger_zero(void);
 int test_vconv_win_activate_and_enable_pause(void);
 int test_vconv_win_full_turn(void);
+int test_vconv_win_first_word_tells_the_listener_audio_started(void);
 int test_vconv_win_stale_reply_events_ignored(void);
 int test_vconv_win_notice_once(void);
 int test_vconv_win_off_mid_reply(void);
@@ -623,6 +624,7 @@ int main(int argc, char **argv)
     failed += test_vconv_win_ends_ledger_zero();
     failed += test_vconv_win_activate_and_enable_pause();
     failed += test_vconv_win_full_turn();
+    failed += test_vconv_win_first_word_tells_the_listener_audio_started();
     failed += test_vconv_win_stale_reply_events_ignored();
     failed += test_vconv_win_notice_once();
     failed += test_vconv_win_off_mid_reply();

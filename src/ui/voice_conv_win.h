@@ -30,6 +30,7 @@
 typedef struct {     /* every effect the glue has; the real table calls the modules above */
     int  (*cap_begin)(unsigned token);  void (*cap_end)(unsigned token);
     void (*cap_mode)(unsigned token, VoiceListenMode m);
+    void (*cap_audio_started)(unsigned token);   /* the reply's audio plays now (may be NULL) */
     void (*cap_attach_live)(unsigned token, unsigned live_token);
     void (*cap_end_turn)(unsigned token);   /* end the open turn now, as the pause would (Send while hearing) */
     int  (*link_start)(unsigned live_token); void (*link_close)(unsigned live_token);
