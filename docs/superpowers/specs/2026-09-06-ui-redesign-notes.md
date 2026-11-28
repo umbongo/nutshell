@@ -924,20 +924,17 @@ Open, in priority order:
       `developers.openai.com/api/docs/deprecations.md`, 2026-11-25. Change them in their own
       pull request. Also later: Groq Orpheus once it leaves Preview; resampling for Custom
       servers.
-- [ ] **SSH: a resize during the connect never reaches the server** (maintainer's issue mark,
-      2026-11-25, v1.2.95, `nutshell-20261125-112702-p7428.issue1.log`: tmux drew 25 rows and
-      93 columns in a 49x125 window). `connection_thread` asks for the pty with the grid
-      snapshotted when the connect starts (`j->cols`/`j->rows`, `src/ui/window.c`); the grid
-      sync skips `io.resize` while `s->io.ctx` is NULL, so every resize in those seconds (25
-      of them in the log, 25x93 to 49x125) is dropped, and adopting the channel on connect
-      sends no size. The remote pty keeps the starting size until the next grid change.
-      Fix: after `s->io = io` in the SSH branch of the connect-done handler, call
-      `s->io.resize(s->io.ctx, s->term->cols, s->term->rows)`; have `ssh_pty_request` record
-      `last_cols`/`last_rows` so an unchanged size sends nothing. Telnet already reads the
-      current grid at adoption. Test first: a native test that the adopt step sends the
-      current size when it differs from the requested one, and a harness case that resizes
-      mid-connect and reads `stty size`. Until then, resizing the window by one cell fixes a
-      session.
+- [ ] SSH: a resize during the connect (maintainer's issue mark, 2026-11-25) is fixed in
+      v1.3.4: the current size is sent when the channel is adopted, and the poll keeps the
+      remote pty at the terminal's size, so a request that got EAGAIN is finished and never
+      lost. Left: the harness case that resizes mid-connect and reads `stty size` is not
+      written (no existing case gives the pattern); the hand check is in
+      `docs/test-log/v1.3.4-session-io.md`.
+- [ ] `ssh_channel_write` on a stalled peer: the 5 s `SO_SNDTIMEO` it sets limits nothing,
+      because libssh2 makes the socket non-blocking at the handshake, so a blocking write
+      waits in `poll` without a limit and the UI thread with it (reasoned from the libssh2
+      1.11.1 source in the review of PR #126's branch, not reproduced). The earlier note
+      "up to 5 s per write" is wrong.
 - [ ] The AI assistant cannot run queued commands while the session is inside tmux; they
       run only after tmux is closed (maintainer, 2026-11-25, *reported*, not investigated).
 - [ ] AI panel: find a way to stop the conversation becoming full (maintainer, 2026-11-25,
@@ -998,7 +995,9 @@ Open, in priority order:
 - [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
       order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
       the minimum width the widest Debugging row overflows; hover help for the profile
-      editor; Start Logging fails silently; a generated README settings block (*reported*).
+      editor; a generated README settings block (*reported*); the automatic log opened at
+      connect (`open_session_log`) still fails silently (Start Logging tells the user since
+      v1.3.4).
 - [ ] Other, from the PR #94 session (*reported*): resize cost with a full history (PR #93
       measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200 columns); a user-supplied
       issue log can hold a typed secret, so `term.rx`/`term.key` payloads are never printed
@@ -1039,8 +1038,8 @@ Open, in priority order:
       the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
       combining marks and the reflow drop order in PR #76; middle-click now extends, so
       middle-button paste is off the list; the scrollback-size setting and lazy allocation
-      shipped in PR #93): Alt+drag block selection; the per-byte paste writes over SSH
-      (mouse reporting to applications: see "Local shell follow-ups").
+      shipped in PR #93): Alt+drag block selection (mouse reporting to applications: see
+      "Local shell follow-ups").
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
       the 100 ms throttle with its starved-timer check, DPI reorder, logging, the
@@ -1161,16 +1160,13 @@ Open, in priority order:
 - [ ] Paint-path follow-ups from the 2026-10-14 stale-band investigation (v1.2.34 fixed
       the seed: `renderer_draw` cleared `row->dirty` on a paint that did not contain
       the row, and `term_alt_screen_enter()` now requests a full redraw like the exit
-      path). Two weaknesses the REDRAW_DEBUG log exposed remain: (a) a disconnected
-      background session keeps a row dirty forever, so `term_has_dirty_rows()` makes
-      the WM_TIMER poll loop invalidate the window at 60 fps indefinitely — find why
-      the row never clears (rows of a non-active session are never painted) and stop
-      polling dirty state for sessions that are not on screen; (b) the poll path calls
+      path). Fixed in v1.3.4: a background session's dirty row no longer makes the timer
+      invalidate the window at 60 fps, and the cooldown tick is per session. One weakness
+      the REDRAW_DEBUG log exposed remains: (b) the poll path calls
       `dispbuf_invalidate()` without `force_all_rows`, so a shadow-invalidating repaint
       cannot rescue a row already marked clean — consider making `dispbuf_invalidate`
-      also mark all rows dirty, or routing it through `full_redraw_needed`. The 16 ms
-      cooldown's `g_last_paint_tick` is shared by all sessions, which is what let the
-      background tab's no-op paints starve nano's. Also noted by the review: the poll
+      also mark all rows dirty, or routing it through `full_redraw_needed`. Also noted by
+      the review: the poll
       loop only repaints for connected idle sessions, so a disconnected or connecting
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row
