@@ -13,6 +13,7 @@
 #include "config.h"
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <stdio.h>
 #include <time.h>
 #include <stdint.h>
@@ -39,6 +40,9 @@
 #include "paste_dlg.h"
 #include "clipboard.h"
 #include "paste_filter.h"
+#include "paste_write.h"
+#include "log_open_error.h"
+#include "paint_poll.h"
 #include "ai_chat.h"
 #include "ai_gate.h"
 #include "voice_audio_win.h"
@@ -155,6 +159,7 @@ typedef struct Session {
     SessionIo   io;            /* transport vtable; io.ctx != NULL is the "connected" predicate */
     FILE       *session_log;   /* NULL when logging disabled */
     unsigned    log_id;        /* debug-log session id: prints as s<N> (0 = none) */
+    DWORD       last_poll_paint_tick; /* this session's last poll-driven invalidate (the cooldown is per session) */
     RenderStuck poll_stuck;    /* render.stuck_dirty from the poll tick: a background tab's dirty row */
     /* Connection thread state */
     ConnState       conn_state;
@@ -761,7 +766,6 @@ static void sync_session_grid(HWND hwnd, Session *s)
 
 /* Paint cooldown: cap repaints at ~60fps to prevent thrashing on heavy output */
 #define PAINT_COOLDOWN_MS 16
-static DWORD g_last_paint_tick;
 
 /* Set by WM_SIZE(SIZE_MINIMIZED), cleared by the next WM_SIZE. The window
  * surface does not survive the iconic state, but the renderer's
@@ -781,6 +785,8 @@ typedef struct {
     int       (*io_write)(void *ctx, const char *data, size_t len);
     bool        bracketed; /* send \033[201~ when paste completes */
     bool        local;     /* send \r for a line end: a console child reads Enter, not LF */
+    size_t      sent;      /* bytes the transport accepted so far, for the stopped-paste notice */
+    size_t      total;     /* bytes the whole paste translates to */
     struct Session *session; /* the target, for write diagnostics only; valid while io_ctx is
                               * (a closing tab cancels its paste before the session is freed) */
 } PasteState;
@@ -790,22 +796,15 @@ typedef struct {
  * local session gets \r for the line end instead, because the console child
  * on the other side of the pseudo-console reads Enter, not LF (spec section
  * 3, "Writing"). */
-static void paste_chunk_write(void *ctx,
+static PasteWriteResult paste_chunk_write(void *ctx,
                               int (*write_fn)(void *, const char *, size_t),
                               const char *p, size_t chunk, bool local,
                               WriteAgg *agg)
 {
-    for (size_t i = 0; i < chunk; i++) {
-        if (p[i] == '\r') continue;
-        int rc;
-        if (p[i] == '\n' && local) {
-            static const char CR = '\r';
-            rc = write_fn(ctx, &CR, 1);
-        } else {
-            rc = write_fn(ctx, &p[i], 1);
-        }
-        write_agg_add(agg, rc, 1u);
-    }
+    /* One write per chunk of the line instead of one per byte; the line-end
+     * mapping above is done by paste_write_chunked_ex(). */
+    return paste_write_chunked_ex(p, chunk, local ? 1 : 0, write_fn, ctx,
+                                  PASTE_WRITE_CHUNK, agg);
 }
 
 static PasteState g_paste = {0};
@@ -1049,6 +1048,7 @@ static Session *create_session(int rows, int cols) {
     s->log_id = ++g_next_log_id;
     s->term->log_id = s->log_id;
     render_stuck_init(&s->poll_stuck);
+    s->last_poll_paint_tick = 0;
     DLOG(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.new", "rows=%d cols=%d", rows, cols);
     s->ssh = NULL;
     s->channel = NULL;
@@ -3025,12 +3025,21 @@ static void on_log_toggle(int index, void *user_data) {
                             ? s->conn_profile.name : s->conn_profile.host;
         time_t now = time(NULL);
         char path[512];
+        /* As open_session_log() does: the folder may not exist yet. */
+        CreateDirectoryA(dir, NULL);
         log_format_filename(name, dir,
                             g_config ? g_config->settings.log_format : NULL,
                             localtime(&now), path, sizeof(path));
+        errno = 0;
         s->session_log = fopen(path, "ab");
         if (s->session_log) {
             tabs_set_logging(g_hwndTabs, tidx, 1);
+        } else {
+            /* Say so: the indicator stays off and the user is told why. */
+            const int open_err = errno;
+            char why[768];
+            (void)log_open_error_text(path, open_err, why, sizeof(why));
+            (void)notice_dlg_msg(GetParent(g_hwndTabs), NOTICE_MSG_LOG_START_FAILED, why, g_theme);
         }
     }
     (void)index;
@@ -3044,11 +3053,13 @@ static void on_log_toggle(int index, void *user_data) {
  * WM_TIMER, so the UI stays responsive. */
 
 /* Send one line from g_paste.pos, advance pos past the '\n'.
- * Returns true if there is more data to send. */
-static bool paste_send_next_line(void)
+ * Returns 1 if there is more data to send, 0 when the paste is done, and -1
+ * when a write stopped: the rest of the line was dropped, so sending the next
+ * line would glue it onto a cut-off one. The caller ends the paste. */
+static int paste_send_next_line(void)
 {
-    if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return false;
-    if (!g_paste.io_ctx || !g_paste.io_write) return false;
+    if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return 0;
+    if (!g_paste.io_ctx || !g_paste.io_write) return 0;
 
     const char *p = g_paste.pos;
     const char *nl = strchr(p, '\n');
@@ -3056,12 +3067,14 @@ static bool paste_send_next_line(void)
 
     WriteAgg wagg;
     write_agg_init(&wagg);
-    paste_chunk_write(g_paste.io_ctx, g_paste.io_write, p, chunk, g_paste.local,
-                      &wagg);
+    PasteWriteResult pr = paste_chunk_write(g_paste.io_ctx, g_paste.io_write,
+                                            p, chunk, g_paste.local, &wagg);
     session_note_write_agg(g_paste.session, &wagg, "paste");
 
     g_paste.pos += chunk;
-    return *g_paste.pos != '\0';
+    g_paste.sent += pr.accepted;
+    if (pr.stopped) return -1;
+    return *g_paste.pos != '\0' ? 1 : 0;
 }
 
 /* Cancel any in-progress paste and free state (no bracket-close sent) */
@@ -3077,6 +3090,8 @@ static void paste_cancel(void)
         g_paste.session  = NULL;
         g_paste.bracketed = false;
         g_paste.local     = false;
+        g_paste.sent      = 0;
+        g_paste.total     = 0;
     }
 }
 
@@ -3092,16 +3107,29 @@ static void paste_finish(void)
     paste_cancel();
 }
 
+/* One notice for a paste that stopped before all of it was sent, with how
+ * much went. Never for a cancelled or a complete paste. */
+static void paste_notice_stopped(HWND owner, size_t sent, size_t total)
+{
+    char why[256];
+    (void)paste_stopped_text(sent, total, why, sizeof(why));
+    (void)notice_dlg_msg(owner, NOTICE_MSG_PASTE_STOPPED, why, g_theme);
+}
+
 /* Called by WM_TIMER when wParam == PASTE_TIMER_ID */
 static void paste_timer_tick(void)
 {
     session_mark_terminal_input();
-    bool more = paste_send_next_line();
+    int more = paste_send_next_line();
+    const bool stopped = (more < 0);
+    const size_t sent = g_paste.sent, total = g_paste.total;
+    HWND owner = g_paste.hwnd;
     if (g_active_session && g_active_session->term) {
         g_active_session->term->scrollback_offset = 0;
         invalidate_terminal(g_paste.hwnd);
     }
-    if (!more) paste_finish();
+    if (more <= 0) paste_finish();   /* done, or a write stopped: cancel the rest */
+    if (stopped) paste_notice_stopped(owner, sent, total);   /* after the timer is gone */
 }
 
 /* Read the clipboard as text, preferring CF_UNICODETEXT (converted to
@@ -3260,17 +3288,12 @@ static void do_paste(HWND hwnd)
         if (bpm)
             (void)session_write_noted(target, BRACKET_OPEN,
                                       sizeof(BRACKET_OPEN) - 1, "paste");
-        const char *p = local;
         WriteAgg wagg;
         write_agg_init(&wagg);
-        while (*p) {
-            const char *nl = strchr(p, '\n');
-            size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
-            paste_chunk_write(target->io.ctx,
-                              target->io.write,
-                              p, chunk, local_line_ends, &wagg);
-            p += chunk;
-        }
+        /* The whole block in chunks of up to PASTE_WRITE_CHUNK bytes. */
+        PasteWriteResult pr = paste_write_chunked_ex(local, filtered_len,
+                                  local_line_ends ? 1 : 0, target->io.write,
+                                  target->io.ctx, PASTE_WRITE_CHUNK, &wagg);
         session_note_write_agg(target, &wagg, "paste");  /* one WARN per paste */
         if (bpm)
             (void)session_write_noted(target, BRACKET_CLOSE,
@@ -3278,6 +3301,7 @@ static void do_paste(HWND hwnd)
         target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
         free(local);
+        if (pr.stopped) paste_notice_stopped(hwnd, pr.accepted, pr.expected);
     } else {
         /* Multi-line with delay: use timer-driven paste (takes ownership of local) */
         g_paste.buf       = local;
@@ -3289,17 +3313,23 @@ static void do_paste(HWND hwnd)
         g_paste.bracketed = bpm;
         g_paste.local     = local_line_ends;
         g_paste.session   = target;
+        g_paste.sent      = 0;
+        g_paste.total     = paste_translated_len(local, filtered_len,
+                                                 local_line_ends ? 1 : 0);
 
         /* Send the first line immediately */
-        paste_send_next_line();
+        int first = paste_send_next_line();
         target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
 
-        /* Start timer for remaining lines, or finish if buffer exhausted */
-        if (g_paste.pos && *g_paste.pos) {
+        /* Start timer for remaining lines, or finish if buffer exhausted or
+         * the first line's write stopped */
+        if (first > 0 && g_paste.pos && *g_paste.pos) {
             SetTimer(hwnd, PASTE_TIMER_ID, (UINT)delay_ms, NULL);
         } else {
+            const size_t sent = g_paste.sent, total = g_paste.total;
             paste_finish();
+            if (first < 0) paste_notice_stopped(hwnd, sent, total);
         }
     }
 }
@@ -5327,27 +5357,40 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 DLOG(DLOG_RENDER, DLOG_INFO, s->log_id, "render.stuck_dirty",
                                      "src=poll rows=%d ticks=%d active=0", bg_dirty, stuck_ticks);
                         }
-                        if (poll_rc > 0 || term_has_dirty_rows(s->term)) {
-                            DWORD now = GetTickCount();
-                            bool critical = (s == g_active_session &&
-                                             s->term->full_redraw_needed);
-                            if (critical || now - g_last_paint_tick >= PAINT_COOLDOWN_MS) {
+                        /* Only the active session's terminal is painted, so
+                         * only it may ask for a paint (paint_poll_decide()):
+                         * a background tab's rows stay dirty until it is
+                         * activated, and on_tab_select() redraws it in full
+                         * then. The cooldown runs on this session's own tick,
+                         * so another session's paints cannot delay it. */
+                        {
+                            const DWORD now = GetTickCount();
+                            const bool is_active = (s == g_active_session);
+                            const bool critical = is_active &&
+                                                  s->term->full_redraw_needed;
+                            const unsigned long since =
+                                (unsigned long)(DWORD)(now - s->last_poll_paint_tick);
+                            const PaintPollAction act = paint_poll_decide(
+                                is_active ? 1 : 0, poll_rc > 0 ? 1 : 0,
+                                term_has_dirty_rows(s->term) ? 1 : 0,
+                                critical ? 1 : 0, since, PAINT_COOLDOWN_MS);
+                            if (act == PAINT_POLL_INVALIDATE) {
                                 if (poll_rc > 0 || critical)
                                     dispbuf_invalidate(&g_renderer.dispbuf);
                                 DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "poll.invalidate",
                                      "poll_rc=%d dirty_rows=%d critical=%d since_paint_ms=%lu",
                                      poll_rc, term_dirty_row_flags(s->term, NULL, 0),
-                                     critical ? 1 : 0, (unsigned long)(now - g_last_paint_tick));
+                                     critical ? 1 : 0, since);
                                 invalidate_terminal_why(hwnd, "poll");
-                                g_last_paint_tick = now;
-                            } else {
+                                s->last_poll_paint_tick = now;
+                            } else if (act == PAINT_POLL_COOLDOWN_SKIP) {
                                 /* The v1.2.34 diagnosis had to infer this one: a poll
                                  * tick that wanted a paint but fell inside the cooldown. */
                                 g_cooldown_skips++;
                                 DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "poll.cooldown_skip",
                                      "poll_rc=%d dirty_rows=%d critical=0 since_paint_ms=%lu",
                                      poll_rc, term_dirty_row_flags(s->term, NULL, 0),
-                                     (unsigned long)(now - g_last_paint_tick));
+                                     since);
                             }
                         }
                     }
@@ -5864,6 +5907,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     SessionIo io = session_io_ssh(s->ssh, s->channel);
                     io.last_input_tick = &s->last_term_input_tick;
                     s->io = io;
+                    /* The grid may have changed while connecting: the pty was
+                     * requested with the size snapshotted at connect start and
+                     * resizes in between were skipped (no transport yet). Send
+                     * the current size; ssh_pty_resize() sends nothing when it
+                     * is the size the pty already has. */
+                    if (s->io.ctx && s->io.resize)
+                        (void)s->io.resize(s->io.ctx, s->term->cols, s->term->rows);
                     term_process(s->term, "\r\nConnected.\r\n", 14);
                 }
                 /* Keep a log the user already started from the File menu
