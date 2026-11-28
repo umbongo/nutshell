@@ -59,6 +59,7 @@ int test_pw_reveal_win_emptied_by_backspace(void);
 int test_pw_reveal_win_emptied_by_clear(void);
 int test_pw_reveal_win_emptied_by_replacesel(void);
 int test_pw_reveal_win_emptied_by_delete_key(void);
+int test_pw_reveal_win_unlisted_message_that_empties_field_masks(void);
 int test_pw_reveal_win_replaced_text_masks(void);
 int test_pw_reveal_win_eye_click_activates_and_no_context_menu(void);
 int test_pw_reveal_win_setfont_keeps_margin(void);
@@ -524,6 +525,7 @@ int main(int argc, char **argv)
     failed += test_pw_reveal_win_emptied_by_clear();
     failed += test_pw_reveal_win_emptied_by_replacesel();
     failed += test_pw_reveal_win_emptied_by_delete_key();
+    failed += test_pw_reveal_win_unlisted_message_that_empties_field_masks();
     failed += test_pw_reveal_win_replaced_text_masks();
     failed += test_pw_reveal_win_eye_click_activates_and_no_context_menu();
     failed += test_pw_reveal_win_setfont_keeps_margin();

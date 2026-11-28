@@ -421,6 +421,11 @@ int test_config_roundtrip_settings(void);
 int test_config_roundtrip_profile(void);
 int test_config_roundtrip_multiple_profiles(void);
 int test_config_save_null(void);
+#ifndef _WIN32
+int test_config_save_fails_when_dir_unwritable(void);
+int test_config_save_rename_failure_removes_tmp(void);
+int test_config_save_write_failure_keeps_original(void);
+#endif
 int test_config_default_colour_scheme(void);
 int test_config_roundtrip_colour_scheme(void);
 int test_config_default_ai_provider(void);
@@ -4238,6 +4243,7 @@ int test_cheatsheet_layout_scrolls_on_1366x768_at_120(void);
 int test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p(void);
 int test_cheatsheet_layout_192_is_twice_96(void);
 int test_cheatsheet_layout_every_action_fits_360(void);
+int test_cheatsheet_layout_voice_rows_are_measured_and_held(void);
 int test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p(void);
 int test_cheatsheet_layout_tiny_work_area_stays_sane(void);
 int test_cheatsheet_layout_degenerate_inputs(void);
@@ -4688,6 +4694,11 @@ int test_local_shell_resolve_bare_noop_for_non_custom(void);
 int test_local_shell_resolve_bare_noop_when_already_has_path(void);
 int test_local_shell_resolve_bare_rejects_relative_path_with_separator(void);
 int test_local_shell_resolve_bare_rejects_relative_path_quoted(void);
+int test_local_shell_custom_forward_slash_absolute_path_accepted(void);
+int test_local_shell_custom_unc_path_accepted(void);
+int test_local_shell_custom_quoted_forward_slash_with_spaces_exact(void);
+int test_local_shell_custom_unc_unquoted_spaced_resolves_existing(void);
+int test_local_shell_custom_single_leading_backslash_is_relative(void);
 int test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces(void);
 int test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix(void);
 int test_local_shell_resolve_bare_unquoted_spaced_appends_exe(void);
@@ -5530,6 +5541,11 @@ int main(void) {
     failed += test_config_roundtrip_profile();
     failed += test_config_roundtrip_multiple_profiles();
     failed += test_config_save_null();
+#ifndef _WIN32
+    failed += test_config_save_fails_when_dir_unwritable();
+    failed += test_config_save_rename_failure_removes_tmp();
+    failed += test_config_save_write_failure_keeps_original();
+#endif
     failed += test_config_default_colour_scheme();
     failed += test_config_roundtrip_colour_scheme();
     failed += test_config_default_ai_provider();
@@ -9132,6 +9148,7 @@ int main(void) {
     failed += test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p();
     failed += test_cheatsheet_layout_192_is_twice_96();
     failed += test_cheatsheet_layout_every_action_fits_360();
+    failed += test_cheatsheet_layout_voice_rows_are_measured_and_held();
     failed += test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p();
     failed += test_cheatsheet_layout_tiny_work_area_stays_sane();
     failed += test_cheatsheet_layout_degenerate_inputs();
@@ -9529,6 +9546,11 @@ int main(void) {
     failed += test_local_shell_resolve_bare_noop_when_already_has_path();
     failed += test_local_shell_resolve_bare_rejects_relative_path_with_separator();
     failed += test_local_shell_resolve_bare_rejects_relative_path_quoted();
+    failed += test_local_shell_custom_forward_slash_absolute_path_accepted();
+    failed += test_local_shell_custom_unc_path_accepted();
+    failed += test_local_shell_custom_quoted_forward_slash_with_spaces_exact();
+    failed += test_local_shell_custom_unc_unquoted_spaced_resolves_existing();
+    failed += test_local_shell_custom_single_leading_backslash_is_relative();
     failed += test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces();
     failed += test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix();
     failed += test_local_shell_resolve_bare_unquoted_spaced_appends_exe();
