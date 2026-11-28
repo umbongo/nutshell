@@ -21,7 +21,8 @@
  * Late messages of a released context: a Windows-speech VTT_ERROR carries
  * reply id 0 and VTT_READY none, so the machine cannot tell an old context's
  * from the new one's. The controller does: it records the context's
- * generation when the start succeeds and drops every message of another one.
+ * generation when the start succeeds and drops every message of another one;
+ * the held context's own VTT_EXITED counts as an engine error (reply id 0).
  */
 
 #define VOICE_READ_TOKEN 0x7FFFFFF3u   /* beside VOICE_TTS_SAMPLE_TOKEN and VOICE_AIS_SAMPLE_TOKEN */
@@ -37,8 +38,9 @@ typedef struct {
     void  (*binding)(VoiceBinding *out);
     int   (*resolve_error)(char *out, size_t cap);     /* 1 with AI speech's resolve reason */
     /* The generation (VoiceTtsMsg.gen) of the context just started under
-     * token, 0 when unknown. Optional (NULL = unknown): the controller then
-     * adopts the generation of the first message it sees from the context. */
+     * token. REQUIRED: without it (NULL) a press is refused before start, and
+     * 0 after a successful start quits that context and counts as a refused
+     * start. Messages of any other generation are dropped. */
     unsigned (*context_gen)(unsigned token);
 } VoiceReadOps;
 

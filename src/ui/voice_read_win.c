@@ -13,7 +13,7 @@ static VoiceRead g_m;
 static char *g_text;            /* the turn's text until it is spoken or the reading ends */
 static VoiceBinding g_bind;     /* the chat the press came from */
 static uint64_t g_digest;       /* voice_settings_digest at the held context's start */
-static unsigned g_gen;          /* generation of the held context; 0 = not known yet */
+static unsigned g_gen;          /* generation of the held context; 0 = none held */
 static int g_running, g_shown, g_recording;
 
 static void text_drop(void)
@@ -37,8 +37,15 @@ static void run_start(const VoiceReadOut *o, const Settings *s)
 {
     int ok = g_ops->start != NULL && g_ops->start(VOICE_READ_TOKEN, o->engine);
     if (ok) {
-        g_digest = s != NULL ? voice_settings_digest(s) : 0;
-        g_gen = g_ops->context_gen != NULL ? g_ops->context_gen(VOICE_READ_TOKEN) : 0;
+        unsigned gen = g_ops->context_gen != NULL ? g_ops->context_gen(VOICE_READ_TOKEN) : 0;
+        if (gen == 0) {               /* a context nobody can tell apart from a stale one */
+            if (g_ops->quit != NULL)
+                g_ops->quit(VOICE_READ_TOKEN);
+            ok = 0;
+        } else {
+            g_digest = s != NULL ? voice_settings_digest(s) : 0;
+            g_gen = gen;
+        }
     }
     run(voice_read_on_started(&g_m, ok), s);
 }
@@ -78,6 +85,18 @@ static void run(VoiceReadOut o, const Settings *s)
 
 void voice_read_win_set_ops(const VoiceReadOps *ops)
 {
+    if (g_ops != NULL && (g_m.ctx || g_m.state != VRS_IDLE)) {
+        /* Release what is held through the ops that started it. */
+        if (g_m.state != VRS_IDLE) {
+            run(voice_read_on_stop(&g_m, VRX_PANEL), NULL);     /* stop, quit, view */
+        } else {
+            if (g_ops->quit != NULL)
+                g_ops->quit(VOICE_READ_TOKEN);
+            g_m.ctx = 0;
+            g_gen = 0;
+            push_view(NULL);
+        }
+    }
     text_drop();
     g_ops = ops;
     voice_read_init(&g_m);
@@ -94,9 +113,18 @@ void voice_read_win_press(const Settings *s, int item_id, int recording)
     int gate;
     if (g_ops == NULL || s == NULL)
         return;
-    gate = g_running && voice_read_gate(opt_feature_active(s, OPT_VOICE), s->voice_mode, recording);
+    gate = g_running && voice_read_gate(opt_feature_active(s, OPT_VOICE), s->voice_mode,
+                                        recording || g_recording);
     if (!gate)
         return;
+    if (g_ops->context_gen == NULL) {      /* required: nothing is started without it */
+        if (g_ops->note != NULL) {
+            char msgtxt[320];
+            voice_read_error_text(s->voice_speech_engine, 0, NULL, msgtxt, sizeof msgtxt);
+            g_ops->note(msgtxt);
+        }
+        return;
+    }
     if (g_ops->turn_text != NULL)
         text = g_ops->turn_text(item_id);
     p.item_id = item_id;
@@ -128,18 +156,17 @@ void voice_read_win_on_tts(const VoiceTtsMsg *m)
     case VTT_READY: kind = VRM_READY; break;
     case VTT_DONE:  kind = VRM_DONE;  break;
     case VTT_ERROR: kind = VRM_ERROR; break;
-    default: return;                  /* VTT_WORD, VTT_EXITED */
+    case VTT_EXITED:                  /* the held context's own thread ended: an error, no reply */
+        kind = VRM_ERROR;
+        break;
+    default: return;                  /* VTT_WORD */
     }
     /* Only the held context's own messages count: one of a released context
      * (a late VTT_ERROR with reply id 0, a late VTT_READY) must not reach
      * the next one. */
-    if (!g_m.ctx)
+    if (!g_m.ctx || g_gen == 0 || m->gen != g_gen)
         return;
-    if (g_gen == 0)
-        g_gen = m->gen;               /* generation not told at start: the first message names it */
-    else if (m->gen != g_gen)
-        return;
-    run(voice_read_on_engine(&g_m, kind, m->reply_id, m->hr), NULL);
+    run(voice_read_on_engine(&g_m, kind, m->kind == VTT_EXITED ? 0 : m->reply_id, m->hr), NULL);
 }
 
 void voice_read_win_apply(const Settings *s, int running)
@@ -156,6 +183,8 @@ void voice_read_win_apply(const Settings *s, int running)
 void voice_read_win_set_recording(int on)
 {
     g_recording = on ? 1 : 0;
+    if (g_recording && g_ops != NULL)
+        voice_read_win_stop(VRX_DICTATION);   /* the microphone must not hear the speakers */
     push_view(NULL);
 }
 
