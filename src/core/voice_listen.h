@@ -28,11 +28,17 @@
  *    turn carrying on (the endpointer takes over). 15 windows (300 ms) without
  *    speech before the cut: VLN_UNDUCK, VLN_TURN_ABANDON.
  *  - VLM_SPEAK_HD (no echo cancellation): the detector is not run (floor
- *    frozen). The echo estimate starts at the floor; during the first
- *    VL_HD_PRIME = 25 windows (500 ms) it follows the capture level at once
- *    (the builder's call: else our own reply, entering from a floor 30 dB under
- *    it, would count as a cut-in until the 0.5 dB steps caught up); afterwards it follows the
- *    capture level up by at most 0.5 dB a window and down by 0.1 dB a window.
+ *    frozen). The echo estimate starts at the floor. The learning period
+ *    starts at the first window loud enough to be the reply (floor + 12 dB),
+ *    not at the mode change (the first audio of an AI reply often comes
+ *    later): during VL_HD_PRIME = 25 windows (500 ms) from there the estimate
+ *    follows the capture level up at once (the builder's call: else our own
+ *    reply, entering from a floor 30 dB under it, would count as a cut-in
+ *    until the 0.5 dB steps caught up); afterwards it follows the capture
+ *    level up by at most 0.5 dB a window and down by 0.1 dB a window, and only
+ *    down while the echo is audible: a window at room-noise level (a gap or a
+ *    stall in the audio) leaves it alone. Nothing is a candidate before that
+ *    first loud window.
  *    It does not move while a cut-in is accumulating (the count is above 0),
  *    so neither the user's voice nor its modulation dips lift it. A candidate window has level >= max(floor + 12, echo + 10) and
  *        >= -55 dBFS. Candidates accumulate under the same 15-window rule. At 10 candidates VLN_DUCK
@@ -78,7 +84,8 @@ typedef struct {
     int ci_started;             /* a cut-in turn has started (AEC) / duck given (HD) */
     int ci_ducked;
     double echo_db;
-    int hd_win;                 /* windows since entering HD */
+    int hd_on;                  /* the reply's audio has been heard (first window >= floor + 12 dB) */
+    int hd_win;                 /* windows since then (learning period) */
 } VoiceListen;
 
 void voice_listen_init(VoiceListen *l, int pause_ms);

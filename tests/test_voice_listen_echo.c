@@ -107,8 +107,8 @@ static void et_run(ET *t, int n, double echo_db, double user_db)
 int test_vlecho_hd_user_over_echo_cuts_within_600ms(void)
 {
     TEST_BEGIN();
-    static const int delay[1] = { 0 };          /* the echo starts at the mode change */
-    for (int d = 0; d < 1; d++) {
+    static const int delay[3] = { 0, 30, 50 };  /* the echo starts at the mode change / 600 ms / 1 s later */
+    for (int d = 0; d < 3; d++) {
         ET t;
         et_init(&t, VLM_SPEAK_HD);
         et_run(&t, delay[d], E_NONE, E_NONE);
@@ -172,6 +172,36 @@ int test_vlecho_hd_small_level_jump_does_not_cut(void)
     et_init(&t, VLM_SPEAK_HD);
     et_run(&t, 100, -35.0, E_NONE);
     et_run(&t, 200, -29.0, E_NONE);             /* the volume is turned up 6 dB */
+    ASSERT_EQ(t.cuts, 0);
+    TEST_END();
+}
+
+int test_vlecho_hd_late_echo_start_does_not_cut(void)
+{
+    TEST_BEGIN();
+    static const double level[2] = { -35.0, -30.0 };
+    static const int delay[2] = { 30, 50 };     /* the reply's first audio comes 600 ms / 1 s after the mode change */
+    for (int a = 0; a < 2; a++)
+        for (int d = 0; d < 2; d++) {
+            ET t;
+            et_init(&t, VLM_SPEAK_HD);
+            et_run(&t, delay[d], E_NONE, E_NONE);
+            et_run(&t, 200, level[a], E_NONE);  /* 4 s of the reply, nobody speaking */
+            ASSERT_EQ(t.ducks, 0);
+            ASSERT_EQ(t.cuts, 0);
+        }
+    TEST_END();
+}
+
+int test_vlecho_hd_audio_stall_does_not_cut(void)
+{
+    TEST_BEGIN();
+    ET t;
+    et_init(&t, VLM_SPEAK_HD);
+    et_run(&t, 75, -30.0, E_NONE);
+    et_run(&t, 125, E_NONE, E_NONE);            /* the network stalls for 2.5 s */
+    et_run(&t, 150, -30.0, E_NONE);             /* and the audio resumes at the same volume */
+    ASSERT_EQ(t.ducks, 0);
     ASSERT_EQ(t.cuts, 0);
     TEST_END();
 }

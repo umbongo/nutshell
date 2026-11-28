@@ -77,6 +77,7 @@ void voice_listen_set_mode(VoiceListen *l, VoiceListenMode m)
     ring_clear(l);
     ci_reset(l);
     l->hd_win = 0;
+    l->hd_on = 0;
     l->echo_db = voice_vad_floor_db(&l->vad);
     apply_mode(l);
 }
@@ -171,10 +172,24 @@ static void win_aec(VoiceListen *l, const int16_t *w, double level, const VoiceL
     win_cutin(l, w, o == VV_SPEECH, VVAD_START_NEED, o == VV_NOISE_RESET, 0, k);
 }
 
-static void win_hd(VoiceListen *l, const int16_t *w, double level, const VoiceListenSink *k)
+/* The echo estimate and the half-duplex candidate test. The estimate is
+ * learned from the reply's own audio: its 25-window learning period starts at
+ * the first window loud enough to be that audio (floor + 12 dB), not at the
+ * mode change, since the first sound of an AI reply often arrives later than
+ * that. Until then nothing is a candidate. Windows at room-noise level (a gap
+ * or a stall in the audio) leave the estimate alone: they say nothing about
+ * how loud the echo is. Returns 1 when the window is a candidate. */
+static int hd_track(VoiceListen *l, double level)
 {
-    double thr = voice_vad_floor_db(&l->vad) + HD_FLOOR_MARGIN;
+    double floor_db = voice_vad_floor_db(&l->vad);
+    double thr = floor_db + HD_FLOOR_MARGIN;
+    int audible = level >= thr;
     int cand;
+    if (!l->hd_on) {
+        if (!audible) return 0;
+        l->hd_on = 1;
+        l->hd_win = 0;
+    }
     if (l->hd_win < VL_HD_PRIME) {
         l->hd_win++;
         if (level > l->echo_db) l->echo_db = level;
@@ -184,11 +199,16 @@ static void win_hd(VoiceListen *l, const int16_t *w, double level, const VoiceLi
     if (!cand && l->ci_speech == 0) {   /* held while a cut-in accumulates */
         if (level > l->echo_db) {
             l->echo_db += level - l->echo_db > HD_UP_DB ? HD_UP_DB : level - l->echo_db;
-        } else {
+        } else if (audible) {
             l->echo_db -= l->echo_db - level > HD_DOWN_DB ? HD_DOWN_DB : l->echo_db - level;
         }
     }
-    win_cutin(l, w, cand, 1, 0, 1, k);
+    return cand;
+}
+
+static void win_hd(VoiceListen *l, const int16_t *w, double level, const VoiceListenSink *k)
+{
+    win_cutin(l, w, hd_track(l, level), 1, 0, 1, k);
 }
 
 static void process(VoiceListen *l, const int16_t *w, const VoiceListenSink *k)
