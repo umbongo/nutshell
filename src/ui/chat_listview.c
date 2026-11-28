@@ -187,6 +187,10 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define CLV_CODE_COPY_ID(iid, blk) \
     (CLV_CODE_COPY_BASE + (iid) * CLV_CODE_BLOCKS_PER_ITEM + (blk))
 #define CLV_READ_BTN_BASE         0x60000000
+/* A turn button is shown (measured and painted) only for an item id a hit
+ * can be recorded for. */
+#define clv_read_btn_shown(it) \
+    ((it)->u.ai.turn_btn && (it)->id >= 0 && (it)->id < CLV_ITEM_ID_LIMIT)
 #define CLV_READ_BTN_ID(iid)      (CLV_READ_BTN_BASE + (iid))
 
 /* Geometry for the empty/no-key/no-session state, shared by
@@ -1631,7 +1635,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
         /* Read aloud button row (the stored flag; paint_ai_item adds the
          * same row). */
-        if (item->u.ai.turn_btn) total += read_button_row_h(CLV_DPI(lv));
+        if (clv_read_btn_shown(item)) total += read_button_row_h(CLV_DPI(lv));
 
         return total;
     }
@@ -2195,7 +2199,7 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     /* Read aloud button, in the row measure_item() reserved under the text
      * (the stored flag only; no turn walk while painting). */
-    if (item->u.ai.turn_btn) {
+    if (clv_read_btn_shown(item)) {
         ReadButtonLayout rb;
         read_button_layout(text_rc.left, content_top + text_h, CLV_DPI(lv), &rb);
         painted_h += rb.row.h;
@@ -2212,9 +2216,9 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             clr = RGB_FROM_THEME(
                 ns_hover_state_for(&lv->hover, CLV_READ_BTN_ID(item->id))
                     ? tok->text_main : tok->text_dim);
-        ns_icon_draw(hdc, icon, &grc, clr, (UINT)CLV_DPI(lv));
-        if (item->id >= 0 && item->id < CLV_ITEM_ID_LIMIT &&
-            lv->n_read_hits < CLV_READ_HITS_MAX) {
+        /* No glyph where no hit can be recorded (table full). */
+        if (lv->n_read_hits < CLV_READ_HITS_MAX) {
+            ns_icon_draw(hdc, icon, &grc, clr, (UINT)CLV_DPI(lv));
             lv->read_hits[lv->n_read_hits].item_id = item->id;
             lv->read_hits[lv->n_read_hits].rc = grc;
             lv->n_read_hits++;
@@ -3818,12 +3822,13 @@ static const ClvCodeHit *chatlv_code_hit_at(const ChatListView *lv, int mx,
     return NULL;
 }
 
-/* The Read aloud glyph under (mx, my), as recorded by the last paint, or -1;
- * never while the buttons are disabled. */
-static int chatlv_read_hit_at(const ChatListView *lv, int mx, int my,
-                              RECT *out_rc)
+/* The Read aloud glyph under (mx, my), as recorded by the last paint, or -1.
+ * A disabled glyph is found only with include_disabled (to swallow its press
+ * and double-click); the hover and the press ask without. */
+static int chatlv_read_rect_at(const ChatListView *lv, int mx, int my,
+                               int include_disabled, RECT *out_rc)
 {
-    if (lv->read_disabled) return -1;
+    if (lv->read_disabled && !include_disabled) return -1;
     if (my < lv->sticky_bottom) return -1;
     for (int i = 0; i < lv->n_read_hits; i++) {
         const RECT *r = &lv->read_hits[i].rc;
@@ -3833,6 +3838,20 @@ static int chatlv_read_hit_at(const ChatListView *lv, int mx, int my,
         }
     }
     return -1;
+}
+
+static int chatlv_read_hit_at(const ChatListView *lv, int mx, int my,
+                              RECT *out_rc)
+{
+    return chatlv_read_rect_at(lv, mx, my, 0, out_rc);
+}
+
+/* Ask the panel to read (or stop reading) item_id's turn. */
+static void chatlv_read_post(const ChatListView *lv, int item_id)
+{
+    PostMessage(GetParent(lv->hwnd), WM_COMMAND,
+                MAKEWPARAM(4017 /* IDC_CHAT_READ_ALOUD */, 0),
+                (LPARAM)item_id);
 }
 
 /* What a click on a command row's text, tag or copy glyph does: the glyph
@@ -4225,21 +4244,11 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
     /* Read aloud button: tell the panel (the list view starts no speech)
      * and consume the click, so no band selection starts. */
     {
-        int read_item = chatlv_read_hit_at(lv, mx, my, NULL);
+        /* A disabled glyph swallows its click without posting. */
+        int read_item = chatlv_read_rect_at(lv, mx, my, 1, NULL);
         if (read_item >= 0) {
-            PostMessage(GetParent(lv->hwnd), WM_COMMAND,
-                        MAKEWPARAM(4017 /* IDC_CHAT_READ_ALOUD */, 0),
-                        (LPARAM)read_item);
+            if (!lv->read_disabled) chatlv_read_post(lv, read_item);
             return 1;
-        }
-        if (lv->read_disabled) {
-            /* A disabled glyph swallows its click too. */
-            for (int i = 0; i < lv->n_read_hits; i++) {
-                const RECT *r = &lv->read_hits[i].rc;
-                if (my >= lv->sticky_bottom && mx >= r->left &&
-                    mx < r->right && my >= r->top && my < r->bottom)
-                    return 1;
-            }
         }
     }
 
@@ -4577,6 +4586,16 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
         UpdateWindow(hwnd);  /* hit-test against current runs */
+        /* The Read aloud button: a quick second press (speaker, then Stop)
+         * arrives as a double-click and acts as a press; a disabled one
+         * does nothing at all (no word selection). */
+        {
+            int read_item = chatlv_read_rect_at(lv, mx, my, 1, NULL);
+            if (read_item >= 0) {
+                if (!lv->read_disabled) chatlv_read_post(lv, read_item);
+                return 0;
+            }
+        }
         /* Over a glyph, tickbox, button, link or the Thinking header it
          * does nothing, as the unhandled message did: the first click of
          * the pair already acted, and it is not forwarded, so nothing

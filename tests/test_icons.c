@@ -94,6 +94,46 @@ int test_icons_render_at_multiple_sizes(void)
     TEST_END();
 }
 
+/* Ink (distance from white over 64 in some channel, 0 or 1) of the speaker
+ * glyph rendered at 32 px, black on white, at (gx, gy) on the 128 grid;
+ * a (2r+1)-square neighbourhood, for the thin outer arc. */
+static int speaker_ink_at(int gx, int gy, int r)
+{
+    enum { SZ = 32 };
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bmi;
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = SZ;
+    bmi.bmiHeader.biHeight = -SZ;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    void *bits = NULL;
+    HBITMAP bmp = CreateDIBSection(mem, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    RECT rc = { 0, 0, SZ, SZ };
+    HBRUSH br = CreateSolidBrush(RGB(255, 255, 255));
+    FillRect(mem, &rc, br);
+    DeleteObject(br);
+    ns_icon_draw(mem, NS_ICON_SPEAKER, &rc, RGB(0, 0, 0), 96);
+    GdiFlush();
+    int cx = gx * SZ / 128, cy = gy * SZ / 128, ink = 0;
+    const DWORD *px = (const DWORD *)bits;
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++) {
+            int x = cx + dx, y = cy + dy;
+            if (x < 0 || y < 0 || x >= SZ || y >= SZ) continue;
+            if ((px[y * SZ + x] & 0xFF) < 255 - 64) ink = 1;
+        }
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    return ink;
+}
+
 int test_icons_speaker_renders(void)
 {
     TEST_BEGIN();
@@ -103,6 +143,12 @@ int test_icons_speaker_renders(void)
     int st = count_non_bg(NS_ICON_STOP, 32, RGB(0, 0, 0), RGB(255, 255, 255), 64);
     ASSERT_TRUE(sp > 0);
     ASSERT_TRUE(sp != st);
+    /* The shape, on the 128-grid scaled to the 32 px render: ink inside the
+     * cone (50,64), none between the cone and the arcs (80,40), ink on the
+     * outer arc (118,64). */
+    ASSERT_TRUE(speaker_ink_at(50, 64, 0) > 0);
+    ASSERT_EQ(speaker_ink_at(80, 40, 0), 0);
+    ASSERT_TRUE(speaker_ink_at(118, 64, 1) > 0);
     ns_icons_shutdown();
     TEST_END();
 }

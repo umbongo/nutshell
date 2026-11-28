@@ -42,6 +42,8 @@ int test_chat_read_win_off_heights_unchanged(void);
 int test_chat_read_win_tail_busy_hides_last(void);
 int test_chat_read_win_click_posts_id(void);
 int test_chat_read_win_reading_draws_stop(void);
+int test_chat_read_win_button_moves_to_new_row(void);
+int test_chat_read_win_off_paints_as_never_on(void);
 
 /* test_ns_slider_win.c */
 int test_ns_slider_win_keys_and_notify(void);
@@ -538,6 +540,8 @@ int main(int argc, char **argv)
     failed += test_chat_read_win_tail_busy_hides_last();
     failed += test_chat_read_win_click_posts_id();
     failed += test_chat_read_win_reading_draws_stop();
+    failed += test_chat_read_win_button_moves_to_new_row();
+    failed += test_chat_read_win_off_paints_as_never_on();
     InitCommonControls();
     failed += test_ns_check_win_check_state_round_trips();
     failed += test_ns_check_win_click_toggles_and_paints();

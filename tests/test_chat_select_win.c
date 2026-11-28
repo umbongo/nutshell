@@ -23,6 +23,9 @@
 #include "ai_prompt.h"
 #include "resource.h"
 #include "ai_panel_layout.h"
+#include "ns_scale.h"
+#include "ns_type.h"
+#include "icons.h"
 
 /* window.c owns these in the app; this harness links without it. */
 static ThemeTokens g_win_tokens;
@@ -1344,6 +1347,22 @@ int test_chat_read_win_button_rows(void)
     }
     ASSERT_NOT_NULL(read_hit_of(lv, f.a2->id));
     ASSERT_NOT_NULL(read_hit_of(lv, f.a3->id));
+    /* Where each glyph sits: at the AI text's left edge, in the row that
+     * ends the item (item top + height - row height + the row's top inset);
+     * the turn's earlier text row has none. */
+    ASSERT_NULL(read_hit_of(lv, f.a1->id));
+    int want_left = ns_scale(8 /* BASE_SIDE_PAD */, 96) + lv->ai_indent;
+    ASSERT_EQ(lv->ai_indent, ns_scale(30 /* BASE_AI_INDENT */, 96));
+    ChatMsgItem *btn[2] = { f.a2, f.a3 };
+    for (int i = 0; i < 2; i++) {
+        const ClvReadHit *h = read_hit_of(lv, btn[i]->id);
+        ASSERT_NOT_NULL(h);
+        int top = item_top_of(lv, btn[i]) - lv->scroll_y
+                  + btn[i]->measured_height - read_button_row_h(96)
+                  + ns_scale(SP_XS, 96);
+        ASSERT_EQ((int)h->rc.left, want_left);
+        ASSERT_EQ((int)h->rc.top, top);
+    }
     view_close(&tv);
     chat_msg_list_clear(&list);
     TEST_END();
@@ -1431,6 +1450,33 @@ int test_chat_read_win_tail_busy_hides_last(void)
     ASSERT_EQ(f.a3->u.ai.turn_btn, 0);
     ASSERT_EQ(f.a2->u.ai.turn_btn, 1);
     ASSERT_EQ(lv_of(tv.lv)->n_read_hits, 1);
+
+    /* The busy tail measures as the feature off; clearing the flag brings
+     * the button and its row back; setting it again changes nothing. */
+    ChatMsgList lo;
+    ReadFix fo;
+    fill_read_fixture(&lo, &fo);
+    TestView to;
+    ASSERT_TRUE(read_view_open(&to, &lo, 96, 1));
+    view_paint(&to, READ_W);
+    int off_h = fo.a3->measured_height;
+    ASSERT_EQ(f.a3->measured_height, off_h);
+    chat_listview_set_tail_busy(tv.lv, 0);
+    view_paint(&tv, READ_W);
+    ASSERT_EQ(f.a3->u.ai.turn_btn, 1);
+    ASSERT_EQ(f.a3->measured_height, off_h + read_button_row_h(96));
+    ASSERT_EQ(lv_of(tv.lv)->n_read_hits, 2);
+    chat_listview_set_tail_busy(tv.lv, 1);
+    view_paint(&tv, READ_W);
+    int busy_h = f.a3->measured_height;
+    chat_listview_set_tail_busy(tv.lv, 1);
+    view_paint(&tv, READ_W);
+    ASSERT_EQ(busy_h, off_h);
+    ASSERT_EQ(f.a3->measured_height, busy_h);
+    ASSERT_EQ(f.a3->u.ai.turn_btn, 0);
+    ASSERT_EQ(lv_of(tv.lv)->n_read_hits, 1);
+    view_close(&to);
+    chat_msg_list_clear(&lo);
     view_close(&tv);
     chat_msg_list_clear(&list);
     TEST_END();
@@ -1465,12 +1511,156 @@ int test_chat_read_win_click_posts_id(void)
     SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(cx, cy));
     pump_messages();
     ASSERT_EQ(g_read_cmds, 1);
+
+    /* A double-click on a disabled glyph does nothing at all: no command,
+     * no word selected, no triple-click armed. */
+    SendMessageA(tv.lv, WM_LBUTTONDBLCLK, MK_LBUTTON, pt(cx, cy));
+    pump_messages();
+    ASSERT_EQ(g_read_cmds, 1);
+    ASSERT_EQ(lv_of(tv.lv)->dbl_armed, 0);
+    ASSERT_EQ(lv_of(tv.lv)->sel_valid, 0);
+
+    /* Enabled: the second press of a quick pair (speaker, then Stop) acts
+     * as a press. */
+    chat_listview_set_read_aloud(tv.lv, 1, f.a3->id, 0);
+    view_paint(&tv, READ_W);
+    SendMessageA(tv.lv, WM_LBUTTONDBLCLK, MK_LBUTTON, pt(cx, cy));
+    SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(cx, cy));
+    pump_messages();
+    ASSERT_EQ(g_read_cmds, 2);
+    ASSERT_EQ((int)g_read_cmd_id, f.a3->id);
     view_close(&tv);
     chat_msg_list_clear(&list);
     TEST_END();
 }
 
+/* Theme colour 0x00RRGGBB to a GDI COLORREF. */
+static COLORREF theme_rgb(unsigned int c)
+{
+    return RGB((c >> 16) & 0xFFu, (c >> 8) & 0xFFu, c & 0xFFu);
+}
+
+/* Render `id` in `clr` at `dpi` into a w x h DIB filled with `bg`, the way
+ * the list draws a glyph (same rectangle size, colour and DPI); the pixels
+ * (0x00RRGGBB) go to `out`. */
+static int ref_glyph(NsIconId id, int w, int h, COLORREF bg, COLORREF clr,
+                     int dpi, DWORD *out)
+{
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void *bits = NULL;
+    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    int ok = 0;
+    if (bmp && bits) {
+        HGDIOBJ old = SelectObject(mem, bmp);
+        RECT rc = { 0, 0, w, h };
+        HBRUSH br = CreateSolidBrush(bg);
+        FillRect(mem, &rc, br);
+        DeleteObject(br);
+        ns_icon_draw(mem, id, &rc, clr, (UINT)dpi);
+        GdiFlush();
+        memcpy(out, bits, (size_t)w * (size_t)h * sizeof(DWORD));
+        SelectObject(mem, old);
+        ok = 1;
+    }
+    if (bmp) DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    return ok;
+}
+
+/* Pixels of `rc` in the list's paint `px` that differ from the reference
+ * glyph (-1: the reference could not be made). */
+static long glyph_diff(const DWORD *px, const RECT *rc, NsIconId id,
+                       COLORREF clr, int dpi)
+{
+    int w = (int)(rc->right - rc->left), h = (int)(rc->bottom - rc->top);
+    DWORD *ref = (DWORD *)malloc((size_t)w * (size_t)h * sizeof(DWORD));
+    if (!ref) return -1;
+    DWORD b = px[(size_t)rc->top * READ_W + (size_t)(rc->left - 1)] & 0xFFFFFFu;
+    COLORREF bg = RGB((b >> 16) & 0xFF, (b >> 8) & 0xFF, b & 0xFF);
+    long n = -1;
+    if (ref_glyph(id, w, h, bg, clr, dpi, ref)) {
+        n = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                DWORD a = px[(size_t)(rc->top + y) * (size_t)READ_W
+                             + (size_t)(rc->left + x)] & 0xFFFFFFu;
+                if (a != (ref[(size_t)y * (size_t)w + (size_t)x] & 0xFFFFFFu)) n++;
+            }
+    }
+    free(ref);
+    return n;
+}
+
 int test_chat_read_win_reading_draws_stop(void)
+{
+    TEST_BEGIN();
+    static const int dpis[2] = { 96, 144 };
+    const ThemeTokens *tok = ns_tokens();
+    COLORREF accent = theme_rgb(tok->accent.base);
+    COLORREF dim = theme_rgb(tok->text_dim);
+    COLORREF off = theme_rgb(tok->text_disabled);
+    for (int d = 0; d < 2; d++) {
+        int dpi = dpis[d];
+        ChatMsgList list;
+        ReadFix f;
+        fill_read_fixture(&list, &f);
+        TestView tv;
+        ASSERT_TRUE(read_view_open(&tv, &list, dpi, 1));
+        RECT rc;
+        DWORD *p;
+
+        /* Idle: the speaker in the dim text colour. */
+        chat_listview_set_read_aloud(tv.lv, 1, 0, 0);
+        p = view_pixels(&tv, READ_W);
+        ASSERT_NOT_NULL(p);
+        const ClvReadHit *h = read_hit_of(lv_of(tv.lv), f.a3->id);
+        ASSERT_NOT_NULL(h);
+        rc = h->rc;
+        ASSERT_EQ((int)glyph_diff(p, &rc, NS_ICON_SPEAKER, dim, dpi), 0);
+        ASSERT_TRUE(glyph_diff(p, &rc, NS_ICON_STOP, dim, dpi) > 0);
+        free(p);
+
+        /* Reading: Stop in the accent colour. */
+        chat_listview_set_read_aloud(tv.lv, 1, f.a3->id, 0);
+        p = view_pixels(&tv, READ_W);
+        ASSERT_NOT_NULL(p);
+        h = read_hit_of(lv_of(tv.lv), f.a3->id);
+        ASSERT_NOT_NULL(h);
+        rc = h->rc;
+        ASSERT_EQ((int)glyph_diff(p, &rc, NS_ICON_STOP, accent, dpi), 0);
+        ASSERT_TRUE(glyph_diff(p, &rc, NS_ICON_SPEAKER, accent, dpi) > 0);
+        free(p);
+
+        /* Disabled: the speaker in the disabled text colour. */
+        chat_listview_set_read_aloud(tv.lv, 1, 0, 1);
+        p = view_pixels(&tv, READ_W);
+        ASSERT_NOT_NULL(p);
+        h = read_hit_of(lv_of(tv.lv), f.a3->id);
+        ASSERT_NOT_NULL(h);
+        rc = h->rc;
+        ASSERT_EQ((int)glyph_diff(p, &rc, NS_ICON_SPEAKER, off, dpi), 0);
+        ASSERT_TRUE(glyph_diff(p, &rc, NS_ICON_SPEAKER, dim, dpi) > 0);
+        free(p);
+
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
+    TEST_END();
+}
+
+/* A new assistant text row appended to a finished turn takes the button from
+ * the row that had it: the old row loses its hit and its extra height. */
+int test_chat_read_win_button_moves_to_new_row(void)
 {
     TEST_BEGIN();
     ChatMsgList list;
@@ -1479,19 +1669,54 @@ int test_chat_read_win_reading_draws_stop(void)
     TestView tv;
     ASSERT_TRUE(read_view_open(&tv, &list, 96, 1));
     chat_listview_set_read_aloud(tv.lv, 1, 0, 0);
-    DWORD *p0 = view_pixels(&tv, READ_W);
-    ASSERT_NOT_NULL(p0);
-    const ClvReadHit *h = read_hit_of(lv_of(tv.lv), f.a3->id);
-    ASSERT_NOT_NULL(h);
-    int y0 = (int)h->rc.top, y1 = (int)h->rc.bottom;
-    chat_listview_set_read_aloud(tv.lv, 1, f.a3->id, 0);
-    DWORD *p1 = view_pixels(&tv, READ_W);
-    ASSERT_NOT_NULL(p1);
-    ASSERT_TRUE(diff_rows(p0, p1, READ_W, y0, y1) > 0);
-    free(p0);
-    free(p1);
+    view_paint(&tv, READ_W);
+    ChatListView *lv = lv_of(tv.lv);
+    int old_h = f.a3->measured_height;
+    ASSERT_EQ(f.a3->u.ai.turn_btn, 1);
+    ASSERT_NOT_NULL(read_hit_of(lv, f.a3->id));
+
+    ChatMsgItem *a4 = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "Anything else?");
+    ASSERT_NOT_NULL(a4);
+    chat_listview_invalidate(tv.lv);
+    view_paint(&tv, READ_W);
+    ASSERT_EQ(f.a3->u.ai.turn_btn, 0);
+    ASSERT_EQ(a4->u.ai.turn_btn, 1);
+    ASSERT_EQ(f.a3->measured_height, old_h - read_button_row_h(96));
+    ASSERT_TRUE(a4->measured_height >= read_button_row_h(96));
+    ASSERT_NULL(read_hit_of(lv, f.a3->id));
+    ASSERT_NOT_NULL(read_hit_of(lv, a4->id));
+    ASSERT_EQ(lv->n_read_hits, 2);   /* A2 and the new row */
     view_close(&tv);
     chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* A view that had Read aloud switched on and then off paints exactly as one
+ * that never had it on. */
+int test_chat_read_win_off_paints_as_never_on(void)
+{
+    TEST_BEGIN();
+    ChatMsgList la, lb;
+    ReadFix fa, fb;
+    fill_read_fixture(&la, &fa);
+    fill_read_fixture(&lb, &fb);
+    TestView ta, tb;
+    ASSERT_TRUE(read_view_open(&ta, &la, 96, 1));
+    ASSERT_TRUE(read_view_open(&tb, &lb, 96, 1));
+    chat_listview_set_read_aloud(tb.lv, 1, fb.a3->id, 0);
+    view_paint(&tb, READ_W);
+    chat_listview_set_read_aloud(tb.lv, 0, 0, 0);
+    DWORD *pa = view_pixels(&ta, READ_W);
+    DWORD *pb = view_pixels(&tb, READ_W);
+    ASSERT_NOT_NULL(pa);
+    ASSERT_NOT_NULL(pb);
+    ASSERT_EQ((int)diff_rows(pa, pb, READ_W, 0, ta.height), 0);
+    free(pa);
+    free(pb);
+    view_close(&ta);
+    view_close(&tb);
+    chat_msg_list_clear(&la);
+    chat_msg_list_clear(&lb);
     TEST_END();
 }
 
