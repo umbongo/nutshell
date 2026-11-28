@@ -4,6 +4,28 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-28 — the retrospective's recommendations R7, R3 and R4, accepted
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-fable-5-2 (main session, the edits); claude-sonnet-5-5 (the R4 test).
+
+The maintainer answered the three recommendations of the 2026-11-28 retrospective that
+needed a yes or no: "R7. Yes. R3. Yes. R4. Ok."
+
+- **R7, CLAUDE.md** (quality checks) and **`skills/feature-workflow/SKILL.md`** (step 5): a
+  branch with no plan (a fix, a batch of small fixes) gets one review of its whole diff by a
+  model that did not write it, Opus or Fable, and the main session reads that diff in full
+  before the merge. It is what PRs #122 and #123 did; the wording is the one proposed in
+  PR #124's body.
+- **R3, CLAUDE.md** and **`skills/feature-workflow/SKILL.md`** ("Running a plan", step 6):
+  the version is bumped and the exe built once, after the final review's fix wave. The work
+  after the last task is now ordered: final review, fix wave and re-review, then the build.
+- **R4**: a native test that every `tests/*_win.c` file is in the Makefile's
+  `WIN_ONLY_TESTS` (in this pull request; **`memory/MEMORY.md`** names it). It changes what
+  `make test`, and so the `Native tests` check, enforces: a Windows-only test file left out
+  of the list now fails the suite on every host, where before only a Windows-host build
+  could show it.
+
 ## 2026-11-28 — merge when ready; the Windows test log
 
 Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.

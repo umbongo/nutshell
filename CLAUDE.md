@@ -101,7 +101,12 @@ Write tests before implementation code. Include corner cases, positive and negat
   never the model that wrote the code (my rule of 2026-11-25), given the
   diff, not a summary of it. A branch gets one final whole-branch review,
   by whichever of Opus and Fable did not review its tasks, never two (my
-  rule of 2026-11-26). Never poll a running agent; its completion
+  rule of 2026-11-26). A branch with no plan (a fix, a batch of small fixes)
+  gets one review of its whole diff by a model that did not write it, Opus
+  or Fable, and the main session reads that diff in full before the merge
+  (my rule of 2026-11-28). The version is bumped and the exe built once,
+  after the final review's fix wave, not before the review (my rule of
+  2026-11-28). Never poll a running agent; its completion
   notification is the signal. I see the findings of every Opus or Fable
   review before any is fixed: the main session shows them to me before it
   dispatches a fixer (a per-task orchestrator returns them instead of
