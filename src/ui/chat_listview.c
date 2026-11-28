@@ -32,6 +32,7 @@
 #include "ns_font.h"
 #include "stick_scroll.h"
 #include "thinking_mode.h"
+#include "main_chord_win.h"
 #include "chat_exec.h"
 #include "chat_copy.h"
 #include "chat_cursor.h"
@@ -4850,6 +4851,13 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         if ((GetKeyState(VK_CONTROL) & 0x8000) &&
             (wParam == VK_OEM_PLUS  || wParam == (WPARAM)'='
           || wParam == VK_OEM_MINUS || wParam == (WPARAM)'-')) {
+            HWND parent = GetParent(hwnd);
+            if (parent) SendMessage(parent, msg, wParam, lParam);
+            return 0;
+        }
+        /* A main-window chord (Ctrl+0 resets the chat zoom; the rest reach the
+         * main window): the panel decides. */
+        if (main_chord_now(wParam) != MCHORD_NONE) {
             HWND parent = GetParent(hwnd);
             if (parent) SendMessage(parent, msg, wParam, lParam);
             return 0;

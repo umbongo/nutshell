@@ -10,6 +10,7 @@
 #include "voice_config.h"
 #include "voice_gate.h"
 #include "voice_win.h"
+#include "main_chord_win.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -23,6 +24,13 @@ LRESULT CALLBACK ai_chat_btn_noerase_subclass(
 {
     (void)dwRefData;
     if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_KEYDOWN && main_chord_now(wParam) != MCHORD_NONE) {
+        /* A focused button hands the main-window chords (and Ctrl+0) to the
+         * panel, as the input box and the list do. */
+        HWND panel = GetParent(hwnd);
+        if (panel) SendMessage(panel, msg, wParam, lParam);
+        return 0;
+    }
     if (msg == WM_NCDESTROY)
         RemoveWindowSubclass(hwnd, ai_chat_btn_noerase_subclass, uIdSubclass);
     if (msg == WM_SETTEXT) {
@@ -574,7 +582,13 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc)
 void ai_chat_apply_zoom(AiChatData *d, int delta)
 {
     if (!d) return;
-    int new_size = app_font_zoom(d->ui_font_size, delta);
+    ai_chat_zoom_to(d, app_font_zoom(d->ui_font_size, delta));
+}
+
+/* As ai_chat_apply_zoom, to an absolute size (Ctrl+0 resets to the default). */
+void ai_chat_zoom_to(AiChatData *d, int new_size)
+{
+    if (!d) return;
     if (new_size == d->ui_font_size)
         return;
     d->ui_font_size = new_size;

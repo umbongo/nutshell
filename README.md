@@ -426,8 +426,9 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **Ctrl+Shift+T** | New session (opens the Session Manager) | from the terminal, not the AI panel |
-| **Ctrl+Shift+W** | Close the active tab | from the terminal |
+| **Ctrl+Shift+T** | New session (opens the Session Manager) | |
+| **Ctrl+Shift+W** | Close the active tab | |
+| **Ctrl+Tab, Ctrl+Shift+Tab** | Next tab, previous tab | |
 | **Alt+F4** | Exit | |
 | **Alt** | Open the menu bar | |
 | **Alt+Space** | Open the system menu | |
@@ -451,8 +452,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **PgUp** | History up a page; vim and less get it | |
 | **PgDn** | History down a page; vim and less get it | |
 | **Ctrl+PgUp, Ctrl+PgDn** | Sent to the program, always | |
-| **Ctrl+=** | Zoom the terminal font in | US layout |
-| **Ctrl+-** | Zoom the terminal font out | US layout |
+| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the terminal font in, out, reset to 10 pt | US layout |
 
 #### Keys the terminal sends to the shell
 
@@ -471,12 +471,11 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **Ctrl+Shift+Space** | Show or hide the panel | from the terminal, not from inside the panel |
+| **Ctrl+Shift+Space** | Show or hide the panel | |
 | **Enter** | Send | while a reply streams or commands run: stop them |
 | **Shift+Enter** | New line | |
 | **Ctrl+V** | Paste text, or attach an image from the clipboard | |
-| **Ctrl+=** | Zoom the chat in | US layout |
-| **Ctrl+-** | Zoom the chat out | US layout |
+| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the chat in, out or reset | US layout |
 | **Ctrl+C** | Copy the selected text | conversation list focused |
 | **Ctrl+A** | Select all messages | list focused |
 | **Esc** | Clear the selection | list focused |
@@ -488,8 +487,8 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **F11** | Fullscreen | from the terminal |
-| **Ctrl+Shift+M** | Mark an issue in the debug log | from the terminal |
+| **F11** | Fullscreen | |
+| **Ctrl+Shift+M** | Mark an issue in the debug log | |
 | **Esc, Enter** | Close a dialog | most dialogs |
 | **Help > Keyboard Shortcuts** | This sheet | |
 

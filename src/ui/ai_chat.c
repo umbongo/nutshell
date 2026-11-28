@@ -4,6 +4,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
+#include "main_chord_win.h"
 #include "dll_record.h"
 #include "notice_dlg.h"
 #include "voice_win.h"
@@ -2064,7 +2065,23 @@ next_coalesce:;
         }
         break;
 
-    case WM_KEYDOWN:
+    case WM_KEYDOWN: {
+        /* Ctrl+0 resets the chat zoom; the main window's other chords (tabs,
+         * fullscreen, the panel toggle, Mark Issue) go on to it, which owns
+         * the panel (GA_ROOTOWNER: its parent when docked, its owner when
+         * floating). The input box and the list send their chords here. */
+        const MainChord mc = main_chord_now(wParam);
+        if (mc == MCHORD_ZOOM_RESET) {
+            if (d) ai_chat_zoom_to(d, zoom_reset_size(1));
+            return 0;
+        }
+        if (main_chord_forwarded_from_panel(mc)) {
+            /* Sent as WM_APP_MAIN_CHORD, not as the key: the main window runs
+             * the action and nothing else. Swallowed while it is disabled
+             * (a modal is up over a floating panel). */
+            main_chord_forward(hwnd, mc, lParam);
+            return 0;
+        }
         if (d && (GetKeyState(VK_CONTROL) & 0x8000)) {
             if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
                 ai_chat_apply_zoom(d, 1);
@@ -2076,6 +2093,7 @@ next_coalesce:;
             }
         }
         break;
+    }
 
     case WM_MOUSEWHEEL:
         if (d) {
