@@ -38,7 +38,7 @@ whole file. Each check has four lines:
 
 One exe carries everything, so test the newest build first and work back.
 
-1. Start with `v1.3.3-terminal-escapes.md`, then `v1.3.2-core-quick-wins.md`.
+1. Start with the file of the highest version, then the next one down.
 2. Within a file, the checks that can lose work or data come first (a
    recording or a conversation that ends and drops words, a notice that hides
    behind another window). Cosmetic checks come later.
@@ -71,13 +71,7 @@ firewall. Terminal checks use a Linux host or the local shell.
 
 ## Files
 
-- `v1.3.3-terminal-escapes.md`
-- `v1.3.2-core-quick-wins.md`
-- `v1.3.1-voice-ai-speech.md`
-- `v1.2.99-voice-conversation.md`
-- `v1.2.95-voice-live-dictation.md`
-- `v1.2.92-94-voice-input.md`
-- `v1.2.90-91-ai-switch-and-notices.md`
-- `v1.2.89-checkboxes.md`
-- `older-backlog.md`
-- `harness.md`
+List the folder: every `v*.md` file here is a build with open checks, and a
+higher version is a newer build. `older-backlog.md` and `harness.md` come
+last. This README keeps no index, so that two pull requests adding a file each
+never touch the same line.

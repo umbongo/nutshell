@@ -21,10 +21,15 @@ needed a yes or no: "R7. Yes. R3. Yes. R4. Ok."
   the version is bumped and the exe built once, after the final review's fix wave. The work
   after the last task is now ordered: final review, fix wave and re-review, then the build.
 - **R4**: a native test that every `tests/*_win.c` file is in the Makefile's
-  `WIN_ONLY_TESTS` (in this pull request; **`memory/MEMORY.md`** names it). It changes what
+  `WIN_ONLY_TESTS` (`tests/test_win_only_list.c`, in this pull request; **`memory/MEMORY.md`**
+  names it and drops the open item for `test_ai_netcancel_win.c`, fixed in PR #126). It changes what
   `make test`, and so the `Native tests` check, enforces: a Windows-only test file left out
   of the list now fails the suite on every host, where before only a Windows-host build
   could show it.
+- **CLAUDE.md**, "Building on Linux": `vcpkg.json` at the repo root pins the three libraries
+  to the vcpkg commit the exe is built with; the Makefile still reads the classic `installed/`
+  directory. **`docs/test-log/README.md`** drops its index of files (two pull requests adding
+  a file each would otherwise edit the same lines).
 
 ## 2026-11-28 — merge when ready; the Windows test log
 
