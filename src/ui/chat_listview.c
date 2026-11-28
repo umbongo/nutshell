@@ -34,6 +34,7 @@
 #include "thinking_mode.h"
 #include "chat_exec.h"
 #include "chat_copy.h"
+#include "chat_cursor.h"
 #include "text_runs.h"
 #include "secure_zero.h"
 #include <windowsx.h>
@@ -4531,8 +4532,15 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             GetCursorPos(&pt);
             ScreenToClient(hwnd, &pt);
             int hit_id = chatlv_hover_hit(lv, pt.x, pt.y, NULL);
-            SetCursor(LoadCursor(NULL, chatlv_hit_is_actionable(hit_id)
-                                        ? IDC_HAND : IDC_ARROW));
+            const TextRuns *cur_runs = NULL;
+            const TextRun *cur_run = NULL;
+            ChatHitKind kind = chatlv_hit_is_actionable(hit_id) ? CHAT_HIT_ACTION
+                : clv_run_at(lv, pt.x, pt.y, &cur_runs, &cur_run) ? CHAT_HIT_TEXT
+                : CHAT_HIT_NONE;
+            ChatCursorKind ck = chat_cursor_for_hit(kind, lv->sel_active);
+            SetCursor(LoadCursor(NULL, ck == CHAT_CURSOR_HAND  ? IDC_HAND
+                                     : ck == CHAT_CURSOR_IBEAM ? IDC_IBEAM
+                                                               : IDC_ARROW));
             return TRUE;
         }
         break;

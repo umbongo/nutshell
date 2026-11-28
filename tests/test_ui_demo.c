@@ -157,9 +157,10 @@ int test_ui_demo_build_approval_counts_and_statuses(void)
     ApprovalQueue approval, approval2;
     ASSERT_EQ(ui_demo_build("approval", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 3);
-    /* 2026-10-13: a fifth row, the long pending command, was added. */
-    ASSERT_EQ(approval.count, 5);
-    ASSERT_EQ(count_status(&approval, APPROVE_PENDING), 2);
+    /* 2026-10-13: a fifth row, the long pending command, was added; a sixth,
+     * the sensitive credentials read, follows it. */
+    ASSERT_EQ(approval.count, 6);
+    ASSERT_EQ(count_status(&approval, APPROVE_PENDING), 3);
     ASSERT_EQ(count_status(&approval, APPROVE_APPROVED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_DENIED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_BLOCKED), 1);
@@ -335,11 +336,40 @@ int test_ui_demo_build_all_is_union(void)
     /* 1 shared system + (chat 2) + (approval 2) + (executing 2) + (tool 4)
      * + (error 2) + (batches 4) = 17 conversation messages. */
     ASSERT_EQ(conv.msg_count, 17);
-    /* approval(5) + executing(2) + batches' first batch(2) = 9 entries
-     * (approval grew from 4 to 5 on 2026-10-13: the long pending command). */
-    ASSERT_EQ(approval.count, 9);
+    /* approval(6) + executing(2) + batches' first batch(2) = 10 entries
+     * (approval grew from 4 to 5 on 2026-10-13: the long pending command,
+     * and to 6: the sensitive credentials read). */
+    ASSERT_EQ(approval.count, 10);
     /* batches' second batch. */
     ASSERT_EQ(approval2.count, 2);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* The "approval" state shows one sensitive row: a command the classifier
+ * recognises as a credentials read. It always asks (pending, never
+ * approved), carries the reason the card prints after the command, and its
+ * note like every other row. The number of demo states is pinned by
+ * test_ui_demo_states_list_ends_in_all(); this row adds no state. */
+int test_ui_demo_approval_has_a_sensitive_row(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("approval", &conv, &approval, &approval2, NULL, 0), 0);
+    int n_sensitive = 0;
+    for (int i = 0; i < approval.count; i++) {
+        const ApprovalEntry *e = &approval.entries[i];
+        if (!(e->safety_mask & CMD_MASK_SENSITIVE)) {
+            ASSERT_EQ((int)e->reason[0], 0); /* only a sensitive row carries a reason */
+            continue;
+        }
+        n_sensitive++;
+        ASSERT_TRUE(e->reason[0] != '\0');
+        ASSERT_TRUE(e->note[0] != '\0');
+        ASSERT_EQ((int)e->status, (int)APPROVE_PENDING);
+    }
+    ASSERT_EQ(n_sensitive, 1);
     ai_conv_reset(&conv);
     TEST_END();
 }

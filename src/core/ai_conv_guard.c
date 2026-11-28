@@ -275,3 +275,66 @@ const char *ai_body_failure_text(const AiConversation *conv)
 {
     return ai_body_failure_text_for(conv, NULL, NULL);
 }
+
+int ai_conv_add_stopped_reply(AiConversation *conv, const char *partial, size_t len)
+{
+    return ai_conv_add_ended_reply(conv, partial, len, AI_REPLY_STOPPED);
+}
+
+int ai_conv_add_ended_reply(AiConversation *conv, const char *partial, size_t len,
+                            AiReplyEnd why)
+{
+    if (!conv || conv->msg_count <= 0) return 0;
+    if (conv->messages[conv->msg_count - 1].role != AI_ROLE_USER) return 0;
+    if (conv->msg_count >= AI_MAX_MESSAGES) return 0;
+    if (!partial) len = 0;
+    while (len > 0 && (partial[len - 1] == ' ' || partial[len - 1] == '\n' ||
+                       partial[len - 1] == '\r' || partial[len - 1] == '\t'))
+        len--;
+    /* The turn is the partial text alone, or the marker alone when nothing
+     * arrived: the marker is never appended to a model's words. */
+    char *text = (char *)malloc(len + 1);
+    if (!text) return -1;
+    if (len > 0) memcpy(text, partial, len);
+    text[len] = '\0';
+    int rc = ai_conv_add(conv, AI_ROLE_ASSISTANT, len > 0 ? text
+                  : why == AI_REPLY_LOST ? AI_LOST_REPLY_TEXT : AI_STOPPED_REPLY_TEXT);
+    free(text);
+    if (rc != 0) return -1;
+    conv->messages[conv->msg_count - 1].stopped_reply = (int)(why == AI_REPLY_LOST ? AI_REPLY_LOST : AI_REPLY_STOPPED);
+    return 1;
+}
+
+/* The status row for an assistant turn: by its flag, else by a content that is
+ * exactly one of the markers. 0 when it is neither. */
+static int stop_kind(const AiMessage *msg)
+{
+    const char *c = ai_msg_content(msg);
+    if (msg->stopped_reply == AI_REPLY_LOST) return AI_REPLY_LOST;
+    if (msg->stopped_reply) return AI_REPLY_STOPPED;
+    if (strcmp(c, AI_STOPPED_REPLY_TEXT) == 0) return AI_REPLY_STOPPED;
+    if (strcmp(c, AI_LOST_REPLY_TEXT) == 0) return AI_REPLY_LOST;
+    return 0;
+}
+
+static int is_marker_only(const AiMessage *msg)
+{
+    const char *c = ai_msg_content(msg);
+    return strcmp(c, AI_STOPPED_REPLY_TEXT) == 0 || strcmp(c, AI_LOST_REPLY_TEXT) == 0;
+}
+
+const char *ai_msg_stop_status(const AiMessage *msg)
+{
+    if (!msg || msg->role != AI_ROLE_ASSISTANT) return NULL;
+    switch (stop_kind(msg)) {
+    case AI_REPLY_STOPPED: return AI_STOPPED_STATUS_TEXT;
+    case AI_REPLY_LOST:    return AI_LOST_STATUS_TEXT;
+    default:               return NULL;
+    }
+}
+
+int ai_msg_stop_has_text(const AiMessage *msg)
+{
+    if (!ai_msg_stop_status(msg)) return 0;
+    return !is_marker_only(msg);
+}

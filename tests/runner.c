@@ -731,6 +731,9 @@ int test_classify_open_quote_first_word_overrun(void);
 int test_ios_configure_terminal_prefixes(void);
 int test_ios_debug(void);
 int test_ios_do(void);
+int test_nxos_asa_do_own_tables(void);
+int test_class_reasons_never_blank(void);
+int test_class_reason_keeps_a_colon_the_command_has(void);
 int test_crontab(void);
 int test_cmd_classify_probes(void);
 int test_nxos_asa_debug_aligned(void);
@@ -2777,6 +2780,10 @@ int test_rebuild_replay_exec_text_in_a_tool_round_is_split(void);
 int test_rebuild_replay_exec_text_with_live_card_is_split(void);
 int test_rebuild_replay_plain_reply_text_is_kept_whole_with_a_record(void);
 int test_rebuild_replay_partless_tool_turn(void);
+int test_rebuild_replay_stopped_marker_only_is_a_status_row(void);
+int test_rebuild_replay_stopped_partial_is_ai_text(void);
+int test_rebuild_replay_stopped_partial_never_yields_a_command(void);
+int test_rebuild_replay_lost_reply_row(void);
 int test_rebuild_replay_orphan_tool_turn_and_empty_part(void);
 int test_rebuild_replay_live_cards_come_last_in_order(void);
 int test_rebuild_replay_demo_tool_state_shows_the_cut(void);
@@ -3521,6 +3528,16 @@ int test_pairs_partial_results_fails(void);
 int test_pairs_wrong_id_fails(void);
 int test_pairs_orphan_result_fails(void);
 int test_pairs_open_at_end_fails(void);
+
+/* test_ai_conv_guard.c: stopped and lost replies, the body builder */
+int test_stopped_reply_before_any_text(void);
+int test_stopped_reply_after_partial_text(void);
+int test_stopped_reply_rule_is_one_function(void);
+int test_lost_reply_has_its_own_text(void);
+int test_stopped_reply_twice_is_one_turn(void);
+int test_stopped_reply_in_a_tool_round(void);
+int test_body_does_not_invent_a_stopped_reply(void);
+
 int test_conv_note_queued_while_open(void);
 int test_conv_note_deferred_while_busy(void);
 int test_conv_note_refusals(void);
@@ -4975,8 +4992,13 @@ int test_md_blocks_indented_fence_not_counted(void);
 int test_md_blocks_max_smaller_than_count_returns_full_count(void);
 int test_md_blocks_respects_len_not_nul(void);
 
+/* test_chat_cursor.c */
+int test_chat_cursor_every_hit_kind(void);
+int test_chat_cursor_unknown_kind_is_arrow(void);
+
 /* test_ui_demo.c */
 int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
+int test_ui_demo_approval_has_a_sensitive_row(void);
 int test_ui_demo_cmddetail_matches_approval(void);
 int test_ui_demo_chat_selection_spans_every_kind(void);
 int test_ui_demo_chat_drag_across_items_golden(void);
@@ -5849,6 +5871,9 @@ int main(void) {
     failed += test_ios_configure_terminal_prefixes();
     failed += test_ios_debug();
     failed += test_ios_do();
+    failed += test_nxos_asa_do_own_tables();
+    failed += test_class_reasons_never_blank();
+    failed += test_class_reason_keeps_a_colon_the_command_has();
     failed += test_crontab();
     failed += test_cmd_classify_probes();
     failed += test_nxos_asa_debug_aligned();
@@ -7788,6 +7813,10 @@ int main(void) {
     failed += test_rebuild_replay_exec_text_with_live_card_is_split();
     failed += test_rebuild_replay_plain_reply_text_is_kept_whole_with_a_record();
     failed += test_rebuild_replay_partless_tool_turn();
+    failed += test_rebuild_replay_stopped_marker_only_is_a_status_row();
+    failed += test_rebuild_replay_stopped_partial_is_ai_text();
+    failed += test_rebuild_replay_stopped_partial_never_yields_a_command();
+    failed += test_rebuild_replay_lost_reply_row();
     failed += test_rebuild_replay_orphan_tool_turn_and_empty_part();
     failed += test_rebuild_replay_live_cards_come_last_in_order();
     failed += test_rebuild_replay_demo_tool_state_shows_the_cut();
@@ -9891,7 +9920,12 @@ int main(void) {
     failed += test_md_blocks_max_smaller_than_count_returns_full_count();
     failed += test_md_blocks_respects_len_not_nul();
 
+    /* test_chat_cursor.c */
+    failed += test_chat_cursor_every_hit_kind();
+    failed += test_chat_cursor_unknown_kind_is_arrow();
+
     failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
+    failed += test_ui_demo_approval_has_a_sensitive_row();
     failed += test_ui_demo_cmddetail_matches_approval();
     failed += test_ui_demo_chat_selection_spans_every_kind();
     failed += test_ui_demo_chat_drag_across_items_golden();
@@ -10176,6 +10210,16 @@ int main(void) {
         failed += test_pairs_wrong_id_fails();
         failed += test_pairs_orphan_result_fails();
         failed += test_pairs_open_at_end_fails();
+
+        /* test_ai_conv_guard.c: stopped and lost replies, the body builder */
+        failed += test_stopped_reply_before_any_text();
+        failed += test_stopped_reply_after_partial_text();
+        failed += test_stopped_reply_rule_is_one_function();
+        failed += test_lost_reply_has_its_own_text();
+        failed += test_stopped_reply_twice_is_one_turn();
+        failed += test_stopped_reply_in_a_tool_round();
+        failed += test_body_does_not_invent_a_stopped_reply();
+
         failed += test_conv_note_queued_while_open();
         failed += test_conv_note_deferred_while_busy();
         failed += test_conv_note_refusals();

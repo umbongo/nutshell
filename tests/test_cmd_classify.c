@@ -4865,6 +4865,205 @@ int test_ios_do(void) {
     TEST_END();
 }
 
+/* "do CMD" on NX-OS and ASA: the inner command is classified by that
+ * platform's own table, never looser than the IOS rules did before. `today`
+ * pins the classification before the change (both platforms used the IOS
+ * rules for the inner command); `nxos` and `asa` are the required levels
+ * now. A row where nxos < today or asa < today would be a loosening. */
+typedef struct {
+    const char *cmd;
+    int today;
+    int nxos;
+    int asa;
+} DoRow;
+
+int test_nxos_asa_do_own_tables(void) {
+    TEST_BEGIN();
+    static const DoRow rows[] = {
+        /* read-only */
+        { "do show version", 0, 0, 0 },
+        { "do show running-config", 0, 0, 0 },
+        { "do SHOW VERSION", 0, 0, 0 },
+        { "Do Show Ip Route", 0, 0, 0 },
+        { "do   show   version", 0, 0, 0 },
+        { "do\tshow version", 0, 0, 0 },
+        { "do show version | include x", 0, 0, 0 },
+        { "do show tech-support", 0, 0, 0 },
+        { "do ping 1.1.1.1", 0, 0, 0 },
+        { "do terminal length 0", 0, 0, 0 },
+        /* disruptive or config-changing, same as before */
+        { "do reload", 3, 3, 3 },
+        { "do reload module 3", 3, 3, 3 },
+        { "do write erase", 3, 3, 3 },
+        { "do write memory", 2, 2, 2 },
+        { "do copy running-config startup-config", 3, 3, 3 },
+        { "do copy tftp: flash:", 2, 2, 2 },
+        { "do clear counters", 2, 2, 2 },
+        { "do clear ip route *", 3, 3, 3 },
+        { "do clear arp", 2, 2, 2 },
+        { "do erase startup-config", 3, 3, 3 },
+        { "do delete flash:x", 3, 3, 3 },
+        { "do conf t", 2, 2, 2 },
+        { "do debug all", 3, 3, 3 },
+        { "do shutdown", 3, 3, 3 },
+        { "do enable secret x", 2, 2, 2 },
+        { "do install activate x", 3, 3, 3 },
+        /* unknown, nested and malformed */
+        { "do xyz", 1, 1, 1 },
+        { "do sh run", 1, 1, 1 },
+        { "do", 1, 1, 1 },
+        { "do ", 1, 1, 1 },
+        { "do do", 1, 1, 1 },
+        { "do do show version", 0, 0, 0 },
+        { "do do reload", 3, 3, 3 },
+        { "do show; reload", 3, 3, 3 },
+        { "do show version && do reload", 3, 3, 3 },
+        /* NX-OS table: stricter than IOS for these */
+        { "do install all", 1, 3, 1 },
+        { "do do do install all", 1, 3, 1 },
+        { "do system switchover", 1, 3, 1 },
+        { "do poweroff module 3", 1, 3, 1 },
+        { "do run bash", 1, 3, 1 },
+        { "do boot nxos bootflash:x", 2, 3, 2 },
+        { "do guestshell destroy", 1, 3, 1 },
+        { "do guestshell enable", 1, 2, 1 },
+        { "do rollback running-config checkpoint x", 1, 3, 1 },
+        { "do checkpoint x", 1, 2, 1 },
+        { "do feature bgp", 1, 2, 1 },
+        { "do no feature bgp", 2, 3, 2 },
+        { "do no vpc", 2, 3, 2 },
+        { "do vpc role preempt", 1, 3, 1 },
+        { "do switchto vdc x", 1, 2, 1 },
+        { "do vdc x", 1, 2, 1 },
+        /* ASA table: stricter than IOS for these */
+        { "do failover active", 1, 1, 3 },
+        { "do failover reload-standby", 1, 1, 3 },
+        { "do no failover", 2, 2, 3 },
+        { "do nat (a,b) x", 1, 1, 2 },
+        { "do crypto key zeroize rsa", 2, 2, 3 },
+        { "do capture x", 1, 1, 2 },
+        { "do shun 1.1.1.1", 1, 1, 2 },
+        { "do access-group x in interface y", 1, 1, 2 },
+        { "do route outside 0 0 1.1.1.1", 1, 1, 2 },
+        { "do clear xlate", 2, 2, 3 },
+        { "do clear configure all", 2, 2, 3 },
+        { "do configure factory-default", 2, 2, 3 },
+        /* NX-OS rates "reload" critical before its IOS "cancel" exception, so
+         * the stricter NX-OS answer now wins here; ASA keeps the IOS READ. */
+        { "do reload cancel", 0, 3, 0 },
+    };
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        /* never looser than today, whatever the row says */
+        ASSERT_TRUE(rows[i].nxos >= rows[i].today);
+        ASSERT_TRUE(rows[i].asa >= rows[i].today);
+        ASSERT_TRUE(cls_is(rows[i].cmd, CMD_PLATFORM_CISCO_NXOS, (CmdSafetyLevel)rows[i].nxos));
+        ASSERT_TRUE(cls_is(rows[i].cmd, CMD_PLATFORM_CISCO_ASA, (CmdSafetyLevel)rows[i].asa));
+        /* IOS itself is unchanged */
+        ASSERT_TRUE(cls_is(rows[i].cmd, CMD_PLATFORM_CISCO_IOS, (CmdSafetyLevel)rows[i].today));
+    }
+    /* The reason names the winning rule, never blank. */
+    {
+        char why[256] = "";
+        CmdSafetyLevel lv = cmd_classify_ex("do install all", CMD_PLATFORM_CISCO_NXOS, why, sizeof why);
+        ASSERT_EQ((int)lv, (int)CMD_CRITICAL);
+        ASSERT_NOT_NULL(strstr(why, "install"));
+    }
+    /* The own-table rule applies to the platform it belongs to only. */
+    ASSERT_TRUE(cls_is("do install all", CMD_PLATFORM_LINUX, CMD_UNKNOWN));
+    TEST_END();
+}
+
+/* The "why this level" text is never blank and never a bare prefix such as
+ * "sh -c: ". `level` pins today's classification (no level changed). */
+static int reason_is_clean(const char *why, CmdSafetyLevel lv)
+{
+    size_t n = strlen(why);
+    if (lv > CMD_READ && n == 0) return 0;
+    while (n > 0 && why[n - 1] == ' ') n--;
+    if (n > 0 && why[n - 1] == ':') return 0;
+    return 1;
+}
+
+int test_class_reasons_never_blank(void) {
+    TEST_BEGIN();
+    static const struct { const char *cmd; int level; } rows[] = {
+        { "sh -c 'ls'", 0 }, { "bash -c 'ls -l'", 0 }, { "sh -c ''", 1 },
+        { "sh -c '   '", 0 }, { "sh -c", 1 }, { "sh -c 'echo hi' arg0", 1 },
+        { "sh -c 'ls' > /tmp/x", 2 }, { "sudo ls", 2 }, { "sudo", 2 },
+        { "env", 0 }, { "env ls", 0 }, { "xargs", 2 }, { "xargs ls", 2 },
+        { "parallel ls", 2 }, { "watch ls", 0 }, { "watch", 1 },
+        { "watch ls > /tmp/x", 2 }, { "eval ls", 0 }, { "eval", 1 },
+        { "eval ''", 1 }, { "eval ls > /tmp/x", 2 },
+        { "ls | grep x", 0 }, { "ls; pwd", 0 }, { "echo $(ls)", 1 },
+        { "sudo sh -c 'ls'", 2 }, { "sudo bash -c 'ls -l'", 2 },
+        { "sudo sh -c ''", 2 }, { "sudo eval ls", 2 }, { "sudo watch ls", 2 },
+        { "sudo xargs ls", 2 }, { "sudo env ls", 2 },
+        { "sudo sh -c 'sudo sh -c ls'", 2 }, { "sh -c 'sh -c ls > /etc/out'", 2 },
+        { "sh -c '\\' > /tmp/x", 2 }, { "sudo sh -c '\\'", 2 },
+        { "eval '\\''", 1 }, { "sudo eval '\\''", 2 },
+        { "ls > /tmp/x", 2 }, { "sudo ls > /tmp/x", 2 },
+        { "sh -c 'rm -rf /'", 3 }, { "sh -c 'frobnicate'", 1 },
+        { "sh -c 'echo $(ls)'", 1 }, { "frobnicate", 1 },
+        { "sh -c 'ls", 1 }, { "", 0 }, { "   ", 0 }, { "\t", 0 },
+    };
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        char why[256] = "";
+        CmdSafetyLevel lv = cmd_classify_ex(rows[i].cmd, CMD_PLATFORM_LINUX, why, sizeof why);
+        if (!reason_is_clean(why, lv) || (int)lv != rows[i].level)
+            printf("  [%s] level %d (want %d) reason [%s]\n", rows[i].cmd, (int)lv,
+                   rows[i].level, why);
+        ASSERT_EQ((int)lv, rows[i].level);
+        ASSERT_TRUE(reason_is_clean(why, lv));
+        /* the same shapes under the other rulesets: reason clean, level free */
+        static const CmdPlatform others[] = {
+            CMD_PLATFORM_UNKNOWN, CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_JUNOS };
+        for (size_t k = 0; k < sizeof others / sizeof others[0]; k++) {
+            char w2[256] = "";
+            CmdSafetyLevel l2 = cmd_classify_ex(rows[i].cmd, others[k], w2, sizeof w2);
+            if (!reason_is_clean(w2, l2))
+                printf("  [%s] platform %d level %d reason [%s]\n", rows[i].cmd,
+                       (int)others[k], (int)l2, w2);
+            ASSERT_TRUE(reason_is_clean(w2, l2));
+        }
+    }
+    /* A wrapper whose level comes from sudo or a redirect says so. */
+    {
+        char why[256] = "";
+        (void)cmd_classify_ex("sudo sh -c 'ls'", CMD_PLATFORM_LINUX, why, sizeof why);
+        ASSERT_NOT_NULL(strstr(why, "sudo"));
+        why[0] = '\0';
+        (void)cmd_classify_ex("sh -c 'ls' > /tmp/x", CMD_PLATFORM_LINUX, why, sizeof why);
+        ASSERT_NOT_NULL(strstr(why, "redirect"));
+        why[0] = '\0';
+        (void)cmd_classify_ex("eval ls > /tmp/x", CMD_PLATFORM_LINUX, why, sizeof why);
+        ASSERT_NOT_NULL(strstr(why, "redirect"));
+    }
+    TEST_END();
+}
+
+/* A command that itself ends in a colon (an IOS file system, a label) leaves
+ * a reason ending in a colon: that is the command, not a bare prefix. */
+int test_class_reason_keeps_a_colon_the_command_has(void) {
+    TEST_BEGIN();
+    static const struct { const char *cmd; CmdPlatform pl; } rows[] = {
+        { "bootflash:", CMD_PLATFORM_CISCO_IOS },
+        { "bootflash:", CMD_PLATFORM_CISCO_NXOS },
+        { "flash:", CMD_PLATFORM_CISCO_IOS },
+        { "foo:", CMD_PLATFORM_LINUX },
+        { "sh -c \"foo:\"", CMD_PLATFORM_LINUX },
+    };
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        char why[256] = "";
+        CmdSafetyLevel lv = cmd_classify_ex(rows[i].cmd, rows[i].pl, why, sizeof why);
+        if (strstr(why, "nothing more specific") != NULL)
+            printf("  [%s] level %d reason [%s]\n", rows[i].cmd, (int)lv, why);
+        ASSERT_TRUE(strstr(why, "nothing more specific") == NULL);
+        ASSERT_TRUE(why[0] != '\0');
+        ASSERT_TRUE(strlen(why) > 2 && why[strlen(why) - 1] == ':');   /* as the rules wrote it */
+    }
+    TEST_END();
+}
+
 int test_nxos_asa_debug_aligned(void) {
     TEST_BEGIN();
     ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));

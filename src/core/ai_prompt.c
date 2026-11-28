@@ -420,6 +420,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->parts = NULL;
     m->n_parts = 0;
     m->nutshell_note = 0;
+    m->stopped_reply = 0;
     conv->msg_count++;
     return 0;
 }
@@ -1778,6 +1779,7 @@ static size_t build_body_core(const AiConversation *conv,
         }
 
         /* ---- Normal message (system/user/assistant without tool_calls) ---- */
+
         if (emitted) {
             if (pos + 1 >= buf_size) return 0;
             buf[pos++] = ',';
