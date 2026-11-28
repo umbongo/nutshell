@@ -242,21 +242,21 @@ int test_vclass_cutin_fragments(void)
     r.cut_in = 1;
     r.spoken_end_at = 10000;
     r.recent = "The C drive has 120 GB free and the D drive";
-    /* two words from the last 3 s: echo, adjacent or not, case ignored */
+    /* two adjacent words from the recent text: echo, case ignored */
     ASSERT_EQ(voice_turn_classify("120 GB", &r, 70000), VTC_ECHO);
-    ASSERT_EQ(voice_turn_classify("Drive free", &r, 70000), VTC_ECHO);
+    ASSERT_EQ(voice_turn_classify("Drive has", &r, 70000), VTC_ECHO);
     /* two words that are not in it, or in the wrong order: the user's */
     ASSERT_EQ(voice_turn_classify("stop please", &r, 70000), VTC_TEXT);
     ASSERT_EQ(voice_turn_classify("free has", &r, 70000), VTC_TEXT);
     ASSERT_EQ(voice_turn_classify("120 stop", &r, 70000), VTC_TEXT);
-    /* a word of the reply that was not said in the last 3 s */
+    /* a word of the reply that was not said in the recent text */
     ASSERT_EQ(voice_turn_classify("healthy", &r, 70000), VTC_TEXT);
     ASSERT_EQ(voice_turn_classify("everything healthy", &r, 70000), VTC_TEXT);
-    /* one word: the user's unless the last 3 s contain it */
+    /* one word: the user's unless the recent text contains it */
     ASSERT_EQ(voice_turn_classify("stop", &r, 70000), VTC_TEXT);
     ASSERT_EQ(voice_turn_classify("drive", &r, 70000), VTC_ECHO);
-    r.recent = "and then stop";
-    ASSERT_EQ(voice_turn_classify("stop", &r, 70000), VTC_ECHO);
+    r.recent = "and then restart";
+    ASSERT_EQ(voice_turn_classify("restart", &r, 70000), VTC_ECHO);
     /* no recent text, or not a cut-in: nothing to compare with */
     r.recent = NULL;
     ASSERT_EQ(voice_turn_classify("drive", &r, 70000), VTC_TEXT);
@@ -270,10 +270,12 @@ int test_vclass_cutin_fragment_helper(void)
 {
     TEST_BEGIN();
     ASSERT_EQ(voice_echo_fragment("a b c", "b c"), 1);
-    ASSERT_EQ(voice_echo_fragment("a b c", "a c"), 1);
+    ASSERT_EQ(voice_echo_fragment("a b c", "a c"), 0);       /* in order, not adjacent: kept */
     ASSERT_EQ(voice_echo_fragment("a b c", "c a"), 0);
     ASSERT_EQ(voice_echo_fragment("a b c", "b b"), 0);
     ASSERT_EQ(voice_echo_fragment("a b b", "b b"), 1);
+    ASSERT_EQ(voice_echo_fragment("a b c d", "c d"), 1);
+    ASSERT_EQ(voice_echo_fragment("a b c d", "b d"), 0);
     ASSERT_EQ(voice_echo_fragment("a b c", "a b c"), 0);     /* 3 words: the 90% rule's business */
     ASSERT_EQ(voice_echo_fragment("a b c", ""), 0);
     ASSERT_EQ(voice_echo_fragment("a b c", "  ,. "), 0);
@@ -295,11 +297,11 @@ int test_vtrail_recent_text(void)
     ASSERT_STR_EQ(out, "");
     for (int i = 0; i < 8; i++) voice_trail_note(&t, 1000ul + 500ul * (unsigned long)i, off[i]);
     /* cut as "eight" is reported (4500): the words reported from 1500 on */
-    ASSERT_EQ((int)voice_trail_recent(&t, spoken, 4500, VOICE_ECHO_RECENT_MS, out, sizeof out),
+    ASSERT_EQ((int)voice_trail_recent(&t, spoken, 4500, 3000, out, sizeof out),
               (int)strlen("two three four five six seven eight"));
     ASSERT_STR_EQ(out, "two three four five six seven eight");
     /* cut at 3000 (after "five"): the words from 1000 (3000 - 3000 included) to "five" */
-    voice_trail_recent(&t, spoken, 3000, VOICE_ECHO_RECENT_MS, out, sizeof out);
+    voice_trail_recent(&t, spoken, 3000, 3000, out, sizeof out);
     ASSERT_STR_EQ(out, "one two three four five");
     /* a shorter window */
     voice_trail_recent(&t, spoken, 4500, 1000, out, sizeof out);
@@ -309,7 +311,7 @@ int test_vtrail_recent_text(void)
     ASSERT_STR_EQ(out, "");
     /* a cap smaller than the text: cut short, NUL-terminated */
     char small[8];
-    voice_trail_recent(&t, spoken, 4500, VOICE_ECHO_RECENT_MS, small, sizeof small);
+    voice_trail_recent(&t, spoken, 4500, 3000, small, sizeof small);
     ASSERT_EQ((int)strlen(small), 7);
     ASSERT_EQ(strncmp(small, "two thr", 7), 0);
     TEST_END();
@@ -327,7 +329,7 @@ int test_vtrail_wraps_and_resets(void)
     for (int i = 0; i < 200; i++) voice_trail_note(&t, 100ul * (unsigned long)i, (size_t)i * 3);
     ASSERT_TRUE(t.n <= VOICE_TRAIL_MAX);
     /* cut at 19900: the words reported from 16900 to 19900, w169 .. w199 (digit = i % 10) */
-    voice_trail_recent(&t, spoken, 19900, VOICE_ECHO_RECENT_MS, out, sizeof out);
+    voice_trail_recent(&t, spoken, 19900, 3000, out, sizeof out);
     ASSERT_EQ((int)strlen(out), 31 * 3 - 1);
     ASSERT_EQ(strncmp(out, "w9 w0 w1", 8), 0);
     voice_trail_reset(&t);
@@ -335,5 +337,78 @@ int test_vtrail_wraps_and_resets(void)
     /* an offset past the text is ignored */
     voice_trail_note(&t, 1000, 99999);
     ASSERT_EQ((int)voice_trail_recent(&t, spoken, 1000, VOICE_ECHO_RECENT_MS, out, sizeof out), 0);
+    TEST_END();
+}
+
+int test_vecho_bargein_words_are_never_fragments(void)
+{
+    TEST_BEGIN();
+    static const char *const words[] = { "stop", "wait", "no", "yes", "cancel", "hold on",
+                                         "pause", "quiet", "Stop!", "HOLD ON.", NULL };
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.spoken = REPLY;
+    r.cut_in = 1;
+    r.spoken_end_at = 10000;
+    r.recent = "and then stop wait no yes cancel hold on pause quiet please";
+    for (int i = 0; words[i]; i++) {
+        ASSERT_EQ(voice_echo_fragment(r.recent, words[i]), 0);
+        ASSERT_EQ(voice_turn_classify(words[i], &r, 70000), VTC_TEXT);
+    }
+    /* other words of that text are still fragments */
+    ASSERT_EQ(voice_turn_classify("please", &r, 70000), VTC_ECHO);
+    TEST_END();
+}
+
+int test_vclass_phrase_is_not_a_fragment(void)
+{
+    TEST_BEGIN();
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.spoken = REPLY;
+    r.cut_in = 1;
+    r.spoken_end_at = 10000;
+    r.reply = "The disk is fine.";
+    r.reply_at = 69000;
+    r.recent = "shall I repeat that and carry on";
+    ASSERT_EQ(voice_turn_classify("repeat that", &r, 70000), VTC_REPEAT);
+    ASSERT_EQ(voice_turn_classify("Carry on", &r, 70000), VTC_CONTINUE);
+    ASSERT_EQ(voice_turn_classify("please repeat that", &r, 70000), VTC_REPEAT);
+    /* a phrase with no recent reply to act on is the user's text, not an echo */
+    r.reply = NULL;
+    ASSERT_EQ(voice_turn_classify("repeat that", &r, 70000), VTC_TEXT);
+    TEST_END();
+}
+
+int test_vecho_fragment_two_words_must_be_adjacent(void)
+{
+    TEST_BEGIN();
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.spoken = REPLY;
+    r.cut_in = 1;
+    r.spoken_end_at = 10000;
+    r.recent = "the C drive has 120 GB free";
+    ASSERT_EQ(voice_turn_classify("drive has", &r, 70000), VTC_ECHO);       /* adjacent */
+    ASSERT_EQ(voice_turn_classify("drive free", &r, 70000), VTC_TEXT);      /* in order, not adjacent */
+    ASSERT_EQ(voice_turn_classify("c has", &r, 70000), VTC_TEXT);
+    TEST_END();
+}
+
+int test_vtrail_recent_window_is_1500ms(void)
+{
+    TEST_BEGIN();
+    const char *spoken = "alpha bravo charlie delta echo";
+    static const size_t off[5] = { 0, 6, 12, 20, 26 };
+    VoiceWordTrail t;
+    char out[64];
+    ASSERT_EQ(VOICE_ECHO_RECENT_MS, 1500);
+    voice_trail_reset(&t);
+    for (int i = 0; i < 5; i++) voice_trail_note(&t, 1000ul + 500ul * (unsigned long)i, off[i]);
+    /* cut at 3000: "alpha" was said 2 s before and is not recent */
+    voice_trail_recent(&t, spoken, 3000, VOICE_ECHO_RECENT_MS, out, sizeof out);
+    ASSERT_STR_EQ(out, "bravo charlie delta echo");
+    voice_trail_recent(&t, spoken, 2900, VOICE_ECHO_RECENT_MS, out, sizeof out);
+    ASSERT_STR_EQ(out, "bravo charlie delta");
     TEST_END();
 }

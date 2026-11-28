@@ -126,23 +126,41 @@ int voice_echo_match(const char *spoken, const char *transcript)
     return result;
 }
 
+/* The words a user says to take the floor: never taken for the assistant's own words, even
+ * when the reply just said them ("stop" and "yes" are common in a terminal assistant). */
+static const char *const BARGE_IN[] = {
+    "stop", "wait", "no", "yes", "cancel", "hold on", "pause", "quiet", NULL
+};
+
+static int is_bargein(const Words *t)
+{
+    char all[32];
+    size_t o = 0;
+    int r;
+    if (t->n < 1 || t->n > 2) return 0;
+    for (size_t i = 0; i < t->n; i++) {
+        if (i > 0) { if (o + 1 >= sizeof all) return 0; all[o++] = ' '; }
+        if (o + t->len[i] >= sizeof all) return 0;
+        memcpy(all + o, t->text + t->off[i], t->len[i]);
+        o += t->len[i];
+    }
+    all[o] = '\0';
+    r = 0;
+    for (const char *const *b = BARGE_IN; *b; b++) if (strcmp(*b, all) == 0) r = 1;
+    return r;
+}
+
 int voice_echo_fragment(const char *recent, const char *transcript)
 {
     int result = 0;
     Words t, s;
     if (!recent || !transcript) return 0;
     if (!words_split(transcript, &t)) return 0;
-    if (t.n < 1 || t.n > 2) { words_free(&t); return 0; }
+    if (t.n < 1 || t.n > 2 || is_bargein(&t)) { words_free(&t); return 0; }
     if (!words_split(recent, &s)) { words_free(&t); return 0; }
-    size_t j = 0;
-    while (j < s.n && !word_eq(&t, 0, &s, j)) j++;
-    if (j < s.n) {
-        if (t.n == 1) {
-            result = 1;
-        } else {
-            for (j++; j < s.n; j++)
-                if (word_eq(&t, 1, &s, j)) { result = 1; break; }
-        }
+    for (size_t j = 0; j + t.n <= s.n && !result; j++) {
+        if (!word_eq(&t, 0, &s, j)) continue;
+        if (t.n == 1 || word_eq(&t, 1, &s, j + 1)) result = 1;
     }
     words_free(&t); words_free(&s);
     return result;
@@ -275,7 +293,9 @@ VoiceTurnClass voice_turn_classify(const char *transcript, const VoiceReplyCtx *
          * can take longer than the window). */
         int window = r->cut_in || r->playing || (long)(now - r->spoken_end_at) <= VOICE_ECHO_AFTER_MS;
         if (window && voice_echo_match(r->spoken, transcript)) return VTC_ECHO;
-        if (r->cut_in && voice_echo_fragment(r->recent, transcript)) return VTC_ECHO;
+        /* the conversation's own commands are never a fragment of the reply */
+        if (r->cut_in && voice_phrase_match(transcript) == VPH_NONE
+            && voice_echo_fragment(r->recent, transcript)) return VTC_ECHO;
     }
     if (r->reply && (long)(now - r->reply_at) <= VOICE_PHRASE_MAX_AGE_MS
         && !voice_speak_ends_with_question(r->reply)) {

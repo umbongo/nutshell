@@ -21,16 +21,18 @@
  * lower-cased. */
 int voice_echo_match(const char *spoken, const char *transcript);
 
-/* 1 when `transcript` has 1 or 2 words and they occur in `recent`, in order
- * (not necessarily next to each other): a fragment of the assistant's own
- * words, as heard back after a cut-in. `recent` is the part of the reply said
- * in the VOICE_ECHO_RECENT_MS before the cut. Same word rules as above. */
+/* 1 when `transcript` has 1 or 2 words and they occur in `recent` (two words:
+ * next to each other, in order): a fragment of the assistant's own words, as
+ * heard back after a cut-in. `recent` is the part of the reply said in the
+ * VOICE_ECHO_RECENT_MS before the cut. Same word rules as above. A barge-in
+ * word ("stop", "wait", "no", "yes", "cancel", "hold on", "pause", "quiet",
+ * case and punctuation ignored) is never a fragment, whatever `recent` holds. */
 int voice_echo_fragment(const char *recent, const char *transcript);
 
 /* The word events of the speech being played (the offset of each word's first
  * byte in the spoken text, with the time it was reported), newest last, so the
  * text said in the seconds before a cut can be found. */
-#define VOICE_ECHO_RECENT_MS 3000
+#define VOICE_ECHO_RECENT_MS 1500
 #define VOICE_TRAIL_MAX 64
 typedef struct {
     unsigned long at[VOICE_TRAIL_MAX];
@@ -63,7 +65,7 @@ typedef struct {
     int           read_to_end;   /* it was read to the end */
     int           cut_in;        /* the turn began with a cut-in on `spoken`: it is checked as echo
                                   * however late it arrives */
-    const char   *recent;        /* with cut_in: the part of `spoken` said in the 3 s before the
+    const char   *recent;        /* with cut_in: the part of `spoken` said in the 1.5 s before the
                                   * cut (voice_trail_recent), or NULL */
 } VoiceReplyCtx;
 
