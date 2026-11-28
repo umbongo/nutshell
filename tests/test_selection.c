@@ -1263,6 +1263,18 @@ int test_sel_block_copy_past_row_len(void)
     TEST_END();
 }
 
+/* Alt starts a block; Ctrl with it (Ctrl+Alt, or AltGr, which Windows reports
+ * as Ctrl+Alt) does not. */
+int test_sel_block_modifiers(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(selection_block_modifiers(true, false));
+    ASSERT_TRUE(!selection_block_modifiers(false, false));
+    ASSERT_TRUE(!selection_block_modifiers(true, true));      /* AltGr, Ctrl+Alt */
+    ASSERT_TRUE(!selection_block_modifiers(false, true));
+    TEST_END();
+}
+
 /* Across the scrollback and the screen. */
 int test_sel_block_across_scrollback(void)
 {

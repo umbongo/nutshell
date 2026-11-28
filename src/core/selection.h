@@ -58,6 +58,10 @@ void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
  * (both inclusive). */
 void selection_begin_block(Selection *s, const Terminal *t, int screen_row, int col,
                            int px, int py);
+/* Whether a left press with these modifiers down starts a block: Alt, and
+ * not Ctrl (Ctrl+Alt, and AltGr, which Windows reports as Ctrl+Alt, are
+ * chords of their own). */
+bool selection_block_modifiers(bool alt, bool ctrl);
 /* Shift+click / middle-click: keep the selection and its mode, move one end to
  * the screen cell and make it a live drag again (active = true, press and last
  * pixels reset, no drag threshold). Which end moves is PuTTY's rule: the click

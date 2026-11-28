@@ -6431,6 +6431,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_drag_session && g_drag_button != MK_LBUTTON) return 0;  /* the middle button's drag */
             const bool alt_press = (GetKeyState(VK_MENU) & 0x8000) != 0;
             if (alt_press) alt_tap_mouse_press(&g_alt_tap);   /* Alt is a modifier now: no menu on release */
+            const bool block_press = selection_block_modifiers(alt_press, (GetKeyState(VK_CONTROL) & 0x8000) != 0);
             /* Shift+click extends the selection (PuTTY); with none it is a
              * plain press. Shift comes from the message, not GetKeyState:
              * the harness posts its clicks from another thread. */
@@ -6443,7 +6444,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             int clicks = terminal_press_clicks(mx, my);
-            start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks, alt_press);
+            start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks, block_press);
             return 0;
         }
 

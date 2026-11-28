@@ -277,6 +277,11 @@ void selection_begin_block(Selection *s, const Terminal *t, int screen_row, int 
     s->block = (t != NULL);
 }
 
+bool selection_block_modifiers(bool alt, bool ctrl)
+{
+    return alt && !ctrl;
+}
+
 void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
                       int px, int py, int drag_cx, int drag_cy)
 {
