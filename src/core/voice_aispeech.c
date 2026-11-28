@@ -96,12 +96,12 @@ static int base_unreadable(const char *url)
     if (host == 0) return 1;
     if (host < n) {
         unsigned long port = 0;
-        if (n - host - 1 > 5) return 1;      /* an empty port is the default, as parse_url reads it */
+        if (n > host + 6) return 1;      /* an empty port is the default, as parse_url reads it */
         for (size_t i = host + 1; i < n; i++) {
             if (p[i] < '0' || p[i] > '9') return 1;
             port = port * 10 + (unsigned long)(p[i] - '0');
         }
-        if (n - host - 1 > 0 && (port == 0 || port > 65535)) return 1;
+        if (n > host + 1 && (port == 0 || port > 65535)) return 1;   /* a port was given */
     }
     return 0;
 }

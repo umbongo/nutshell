@@ -531,8 +531,8 @@ Done, in order (details in the commit messages and the specs named):
   Ctrl+Shift+Tab and Ctrl+0, and the main-window chords forwarded from the AI panel; Settings
   has a Tab order, F1 help, `WM_DPICHANGED`, `WM_GETMINMAXINFO`, no Debugging overflow and
   help tips in the profile editor. Approve/deny keys were decided against on 2026-11-28.
-- v1.3.6 (PR pending; second combined close-out build of 2026-11-28, hand checks in
-  `docs/test-log/v1.3.6-*.md`): Alt+drag block selection; `ESC c` is a full reset; EL, ED,
+- v1.3.7 (PR pending; second combined close-out build of 2026-11-28, hand checks in
+  `docs/test-log/v1.3.7-*.md`): Alt+drag block selection; `ESC c` is a full reset; EL, ED,
   ECH, DCH and ICH keep `TermRow.len` right, with the reflow rule for a row followed by a
   continuation; the Session Manager's empty list shows its hint; `web_search` URL-encodes its
   query; `web_fetch` has a watchdog that closes the request at the hop's deadline or on
@@ -1102,8 +1102,8 @@ Open, in priority order:
       provenance, secret scanning -- the settings changes need the maintainer's
       say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
       destination filter shipped in PR #85.
-- [ ] v1.3.6 follow-ups (second combined close-out build of 2026-11-28; hand checks in
-      `docs/test-log/v1.3.6-*.md`): Alt+drag block selection is in the README but not on
+- [ ] v1.3.7 follow-ups (second combined close-out build of 2026-11-28; hand checks in
+      `docs/test-log/v1.3.7-*.md`): Alt+drag block selection is in the README but not on
       the in-app shortcut sheet (a row or note for it breaks the one-page rule at 1080p:
       the maintainer decides); a block selection is cleared by output anywhere in its rows;
       web fetch keeps a few-instruction window between its last check and a WinHTTP call on
