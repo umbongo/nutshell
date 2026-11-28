@@ -985,3 +985,18 @@ int test_ai_panel_voice_hint_wordings(void)
     ASSERT_TRUE(blen > 0 && (size_t)blen + 1 + strlen(b) < sizeof body);
     TEST_END();
 }
+
+int test_read_button_layout_96_and_144(void)
+{
+    TEST_BEGIN();
+    ReadButtonLayout l;
+    ASSERT_EQ(read_button_row_h(96), 24);
+    read_button_layout(30, 100, 96, &l);
+    ASSERT_EQ(l.glyph.x, 30); ASSERT_EQ(l.glyph.y, 104);
+    ASSERT_EQ(l.glyph.w, 20); ASSERT_EQ(l.glyph.h, 20);
+    ASSERT_EQ(l.row.y, 100);  ASSERT_EQ(l.row.h, 24);
+    ASSERT_EQ(read_button_row_h(144), 36);
+    read_button_layout(45, 200, 144, &l);
+    ASSERT_EQ(l.glyph.y, 206); ASSERT_EQ(l.glyph.w, 30);
+    TEST_END();
+}

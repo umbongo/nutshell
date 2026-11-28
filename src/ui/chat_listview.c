@@ -23,6 +23,7 @@
 #include "ns_reduced_motion.h"
 #include "chat_approval.h"
 #include "chat_msg.h"
+#include "chat_turn.h"
 #include "tool_decision.h"
 #include "clipboard.h"
 #include "md_blocks.h"
@@ -167,7 +168,13 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
  *                          which keeps the id inside a signed int. Blocks
  *                          past the 15th in one reply get no glyph.
  *
- * Both are decoded by chatlv_hover_hit/chatlv_hover_rect_for_id and are
+ *   Read aloud button     -> CLV_READ_BTN_ID(item id)
+ *                          = 0x60000000 + item id, for item ids below
+ *                          CLV_ITEM_ID_LIMIT. The code-copy decode has no
+ *                          upper bound, so this range is always tested
+ *                          BEFORE it.
+ *
+ * All are decoded by chatlv_hover_hit/chatlv_hover_rect_for_id and are
  * always actionable (hand cursor). */
 #define CLV_SETTLED_HIT_BASE      0x20000000
 #define CLV_SETTLED_HIT_ID(iid, hit) \
@@ -179,6 +186,8 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define CLV_ITEM_ID_LIMIT         0x2000000
 #define CLV_CODE_COPY_ID(iid, blk) \
     (CLV_CODE_COPY_BASE + (iid) * CLV_CODE_BLOCKS_PER_ITEM + (blk))
+#define CLV_READ_BTN_BASE         0x60000000
+#define CLV_READ_BTN_ID(iid)      (CLV_READ_BTN_BASE + (iid))
 
 /* Geometry for the empty/no-key/no-session state, shared by
  * paint_empty_state() and chatlv_empty_state_hit()/
@@ -995,6 +1004,38 @@ void chat_listview_set_thinking_pref(HWND hwnd, int pref)
     chat_listview_invalidate(hwnd);
 }
 
+void chat_listview_set_read_aloud(HWND hwnd, int on, int reading_id, int disabled)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    on = on != 0;
+    disabled = disabled != 0;
+    if (lv->read_on == on && lv->read_id == reading_id &&
+        lv->read_disabled == disabled)
+        return;
+    int relayout = lv->read_on != on;
+    lv->read_on = on;
+    lv->read_id = reading_id;
+    lv->read_disabled = disabled;
+    if (relayout) {
+        recalc_layout(lv);
+        update_scrollbar(lv);
+    }
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+void chat_listview_set_tail_busy(HWND hwnd, int busy)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    busy = busy != 0;
+    if (lv->tail_busy == busy) return;
+    lv->tail_busy = busy;
+    recalc_layout(lv);
+    update_scrollbar(lv);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
 void chat_listview_set_state(HWND hwnd, int state_id, int context_lines)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
@@ -1298,10 +1339,16 @@ static void recalc_layout(ChatListView *lv)
      * and put the view back on it after Pass 3. A click on the fold row
      * refreshes first itself, so it finds no change and does not anchor. */
     int fold_changed = 0;
+    int turn_changed = 0;
     int anchor_id = -1, anchor_old_top = 0;
     if (lv->msg_list) {
         fold_changed = chat_msg_fold_refresh(lv->msg_list);
-        if (fold_changed > 0 && !lv->stick_to_bottom) {
+        /* Which rows carry the Read aloud button: one pass, and a row whose
+         * flag changed is marked dirty so it measures again. It anchors the
+         * view like a fold change. */
+        turn_changed = chat_turn_refresh(lv->msg_list, lv->read_on,
+                                         lv->tail_busy);
+        if ((fold_changed > 0 || turn_changed > 0) && !lv->stick_to_bottom) {
             /* The heights are still the last layout's here. A row that has
              * just been hidden anchors on its group's first row, at its top
              * (offset 0), instead of on the rows it hid. */
@@ -1463,7 +1510,8 @@ static void recalc_layout(ChatListView *lv)
     /* Content/viewport change: follow the bottom while stuck, otherwise
      * keep the current position (re-clamped to the new valid range). */
     int max_scroll = lv->total_height - lv->viewport_height;
-    if ((fold_changed > 0 || think_anchored) && anchor_id >= 0 &&
+    if ((fold_changed > 0 || turn_changed > 0 || think_anchored) &&
+        anchor_id >= 0 &&
         anchor_new_h > 0)
         lv->scroll_y = stick_scroll_anchor(lv->stick_to_bottom, lv->scroll_y,
                                            anchor_old_top, anchor_new_top,
@@ -1580,6 +1628,10 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             build_thinking_layout(lv, hdc, item, 0, text_w, 0, &tl, NULL);
             total += tl.total_h + ns_scale(SP_SM, CLV_DPI(lv));
         }
+
+        /* Read aloud button row (the stored flag; paint_ai_item adds the
+         * same row). */
+        if (item->u.ai.turn_btn) total += read_button_row_h(CLV_DPI(lv));
 
         return total;
     }
@@ -2140,6 +2192,34 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
      * taller than measure_item() predicted for it (very rare after the
      * measure_ai_text_with_exec() fix, but on_paint() must still cope). */
     int painted_h = (content_top - rc->top) + text_h;
+
+    /* Read aloud button, in the row measure_item() reserved under the text
+     * (the stored flag only; no turn walk while painting). */
+    if (item->u.ai.turn_btn) {
+        ReadButtonLayout rb;
+        read_button_layout(text_rc.left, content_top + text_h, CLV_DPI(lv), &rb);
+        painted_h += rb.row.h;
+        RECT grc = { rb.glyph.x, rb.glyph.y, rb.glyph.x + rb.glyph.w,
+                     rb.glyph.y + rb.glyph.h };
+        int reading = item->id == lv->read_id;
+        NsIconId icon = reading ? NS_ICON_STOP : NS_ICON_SPEAKER;
+        COLORREF clr;
+        if (reading)
+            clr = RGB_FROM_THEME(tok->accent.base);
+        else if (lv->read_disabled)
+            clr = RGB_FROM_THEME(tok->text_disabled);
+        else
+            clr = RGB_FROM_THEME(
+                ns_hover_state_for(&lv->hover, CLV_READ_BTN_ID(item->id))
+                    ? tok->text_main : tok->text_dim);
+        ns_icon_draw(hdc, icon, &grc, clr, (UINT)CLV_DPI(lv));
+        if (item->id >= 0 && item->id < CLV_ITEM_ID_LIMIT &&
+            lv->n_read_hits < CLV_READ_HITS_MAX) {
+            lv->read_hits[lv->n_read_hits].item_id = item->id;
+            lv->read_hits[lv->n_read_hits].rc = grc;
+            lv->n_read_hits++;
+        }
+    }
     item->painted_height = painted_h;
     return painted_h > (rc->bottom - rc->top) ? painted_h : (rc->bottom - rc->top);
 }
@@ -3273,6 +3353,7 @@ static void paint_frame(ChatListView *lv, HDC hdc)
 {
     /* Copy glyphs on code blocks are re-recorded by this paint. */
     clv_code_hits_clear(lv);
+    lv->n_read_hits = 0;
     lv->sticky_bottom = 0;
 
     /* Character selection: every item's runs are re-recorded by this paint
@@ -3737,6 +3818,23 @@ static const ClvCodeHit *chatlv_code_hit_at(const ChatListView *lv, int mx,
     return NULL;
 }
 
+/* The Read aloud glyph under (mx, my), as recorded by the last paint, or -1;
+ * never while the buttons are disabled. */
+static int chatlv_read_hit_at(const ChatListView *lv, int mx, int my,
+                              RECT *out_rc)
+{
+    if (lv->read_disabled) return -1;
+    if (my < lv->sticky_bottom) return -1;
+    for (int i = 0; i < lv->n_read_hits; i++) {
+        const RECT *r = &lv->read_hits[i].rc;
+        if (mx >= r->left && mx < r->right && my >= r->top && my < r->bottom) {
+            if (out_rc) *out_rc = *r;
+            return lv->read_hits[i].item_id;
+        }
+    }
+    return -1;
+}
+
 /* What a click on a command row's text, tag or copy glyph does: the glyph
  * copies the command (no trailing newline) to the clipboard, the text and
  * the tag ask the panel to open the details popup. Posted rather than run
@@ -3861,6 +3959,16 @@ static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
         }
     }
 
+    /* Read aloud button under a finished turn */
+    {
+        RECT rrc;
+        int rid = chatlv_read_hit_at(lv, mx, my, &rrc);
+        if (rid >= 0) {
+            if (out_rc) *out_rc = rrc;
+            return CLV_READ_BTN_ID(rid);
+        }
+    }
+
     /* [Retry] link, below all items */
     RECT client_rc;
     GetClientRect(lv->hwnd, &client_rc);
@@ -3888,6 +3996,18 @@ static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
 static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
 {
     if (id < 0) return 0;
+
+    /* Before the code-copy decode below, which has no upper bound. */
+    if (id >= CLV_READ_BTN_BASE) {
+        int item_id = id - CLV_READ_BTN_BASE;
+        for (int i = 0; i < lv->n_read_hits; i++) {
+            if (lv->read_hits[i].item_id == item_id) {
+                *out = lv->read_hits[i].rc;
+                return 1;
+            }
+        }
+        return 0;
+    }
 
     if (id >= CLV_CODE_COPY_BASE) {
         int item_id = (id - CLV_CODE_COPY_BASE) / CLV_CODE_BLOCKS_PER_ITEM;
@@ -4099,6 +4219,27 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
             if (code_hit->text && code_hit->len > 0)
                 clip_copy_utf8(lv->hwnd, code_hit->text, code_hit->len);
             return 1;
+        }
+    }
+
+    /* Read aloud button: tell the panel (the list view starts no speech)
+     * and consume the click, so no band selection starts. */
+    {
+        int read_item = chatlv_read_hit_at(lv, mx, my, NULL);
+        if (read_item >= 0) {
+            PostMessage(GetParent(lv->hwnd), WM_COMMAND,
+                        MAKEWPARAM(4017 /* IDC_CHAT_READ_ALOUD */, 0),
+                        (LPARAM)read_item);
+            return 1;
+        }
+        if (lv->read_disabled) {
+            /* A disabled glyph swallows its click too. */
+            for (int i = 0; i < lv->n_read_hits; i++) {
+                const RECT *r = &lv->read_hits[i].rc;
+                if (my >= lv->sticky_bottom && mx >= r->left &&
+                    mx < r->right && my >= r->top && my < r->bottom)
+                    return 1;
+            }
         }
     }
 

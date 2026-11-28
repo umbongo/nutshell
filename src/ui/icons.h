@@ -45,6 +45,7 @@ typedef enum {
     NS_ICON_USER,
     NS_ICON_SPARKLE,
     NS_ICON_EYE,
+    NS_ICON_SPEAKER,
     NS_ICON_COUNT
 } NsIconId;
 

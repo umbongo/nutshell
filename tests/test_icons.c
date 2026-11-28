@@ -94,4 +94,17 @@ int test_icons_render_at_multiple_sizes(void)
     TEST_END();
 }
 
+int test_icons_speaker_renders(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(ns_icons_init());
+    ASSERT_EQ((int)NS_ICON_SPEAKER, (int)NS_ICON_EYE + 1);   /* appended: no id moved */
+    int sp = count_non_bg(NS_ICON_SPEAKER, 32, RGB(0, 0, 0), RGB(255, 255, 255), 64);
+    int st = count_non_bg(NS_ICON_STOP, 32, RGB(0, 0, 0), RGB(255, 255, 255), 64);
+    ASSERT_TRUE(sp > 0);
+    ASSERT_TRUE(sp != st);
+    ns_icons_shutdown();
+    TEST_END();
+}
+
 #endif /* _WIN32 */

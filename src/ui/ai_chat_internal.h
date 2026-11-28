@@ -111,6 +111,7 @@ typedef struct {
 #define IDC_CHAT_DENY     4012
 #define IDC_CHAT_UNDOCK   4013
 #define IDC_CHAT_AUTOAPPROVE 4015  /* toggles the Auto-approve button */
+#define IDC_CHAT_READ_ALOUD 4017   /* list view press on a Read aloud button; lParam = item id */
 #define IDC_CHAT_MIC      4016     /* owner-drawn microphone button (voice input) */
 /* The level's absolute setter: post 4030 + stop to put the level on a
  * named stop. The integration harness drives the control through these

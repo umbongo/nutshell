@@ -251,3 +251,23 @@ int thinking_wheel_scroll(int old_scroll, int wheel_delta, int scroll_amount_px,
     if (new_scroll > max_scroll) new_scroll = max_scroll;
     return new_scroll;
 }
+
+int read_button_row_h(int dpi)
+{
+    return ns_scale(SP_XS, dpi) + ns_scale(SZ_ICON, dpi);
+}
+
+void read_button_layout(int text_left, int text_bottom, int dpi,
+                        ReadButtonLayout *out)
+{
+    if (!out) return;
+    int icon = ns_scale(SZ_ICON, dpi);
+    out->row.x = text_left;
+    out->row.y = text_bottom;
+    out->row.w = icon;
+    out->row.h = read_button_row_h(dpi);
+    out->glyph.x = text_left;
+    out->glyph.y = text_bottom + ns_scale(SP_XS, dpi);
+    out->glyph.w = icon;
+    out->glyph.h = icon;
+}

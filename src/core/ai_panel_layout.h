@@ -174,4 +174,15 @@ int thinking_wheel_should_chain(int old_scroll, int max_scroll, int wheel_delta)
 int thinking_wheel_scroll(int old_scroll, int wheel_delta, int scroll_amount_px,
                            int max_scroll);
 
+/* The Read aloud button's row under an AI item's last text row (Voice on,
+ * Dictation mode; spec 2026-11-28-voice-read-aloud-design.md section 2):
+ * a row SP_XS above a SZ_ICON square glyph at the text's left edge.
+ * read_button_row_h() is the height an item grows by while it shows the
+ * button; measure and paint both take it from here so they cannot differ. */
+typedef struct { NsRect row, glyph; } ReadButtonLayout;
+
+int read_button_row_h(int dpi);
+void read_button_layout(int text_left, int text_bottom, int dpi,
+                        ReadButtonLayout *out);
+
 #endif /* NUTSHELL_AI_PANEL_LAYOUT_H */

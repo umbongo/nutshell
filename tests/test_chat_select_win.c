@@ -22,6 +22,7 @@
 #include "ns_reduced_motion.h"
 #include "ai_prompt.h"
 #include "resource.h"
+#include "ai_panel_layout.h"
 
 /* window.c owns these in the app; this harness links without it. */
 static ThemeTokens g_win_tokens;
@@ -81,12 +82,21 @@ static ChatListView *lv_of(HWND lvh);
  * the new ThinkPref); the host records the last one. */
 static int g_think_cmds = 0;
 static LPARAM g_think_cmd_pref = -1;
+/* The Read aloud button's press tells its parent (IDC_CHAT_READ_ALOUD, 4017,
+ * lParam = the item id). */
+static int g_read_cmds = 0;
+static LPARAM g_read_cmd_id = -1;
 
 static LRESULT CALLBACK host_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_COMMAND && LOWORD(w) == IDC_CHAT_THINKING_MODE) {
         g_think_cmds++;
         g_think_cmd_pref = l;
+        return 0;
+    }
+    if (m == WM_COMMAND && LOWORD(w) == 4017 /* IDC_CHAT_READ_ALOUD */) {
+        g_read_cmds++;
+        g_read_cmd_id = l;
         return 0;
     }
     return DefWindowProcA(h, m, w, l);
@@ -1275,6 +1285,213 @@ int test_chat_select_win_short_list(void)
         view_close(&tv);
         chat_msg_list_clear(&list);
     }
+    TEST_END();
+}
+
+/* ---- Read aloud button (docs/superpowers/specs/2026-11-28-voice-read-aloud-
+ * design.md section 2) ------------------------------------------------- */
+
+#define READ_W 760
+#define READ_H 2000     /* at 96 DPI: every row paints */
+
+typedef struct { ChatMsgItem *u1, *a1, *c, *a2, *u2, *a3; } ReadFix;
+
+static void fill_read_fixture(ChatMsgList *list, ReadFix *f)
+{
+    chat_msg_list_init(list);
+    f->u1 = chat_msg_append(list, CHAT_ITEM_USER, "Why is eth0 down?");
+    f->a1 = chat_msg_append(list, CHAT_ITEM_AI_TEXT, "Let me check the interface:");
+    f->c  = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(f->c, "ip link", CMD_READ, 0);
+    f->c->u.cmd.approved = 1;
+    f->c->u.cmd.settled = 1;
+    f->c->u.cmd.run = CHAT_RUN_DONE;
+    f->a2 = chat_msg_append(list, CHAT_ITEM_AI_TEXT, "Check the cable first.");
+    f->u2 = chat_msg_append(list, CHAT_ITEM_USER, "And eth1?");
+    f->a3 = chat_msg_append(list, CHAT_ITEM_AI_TEXT, "It is up.");
+}
+
+static int read_view_open(TestView *tv, ChatMsgList *list, int dpi, int markdown)
+{
+    return view_open_h(tv, list, READ_W, READ_H * dpi / 96, dpi, markdown);
+}
+
+static const ClvReadHit *read_hit_of(const ChatListView *lv, int item_id)
+{
+    for (int i = 0; i < lv->n_read_hits; i++)
+        if (lv->read_hits[i].item_id == item_id) return &lv->read_hits[i];
+    return NULL;
+}
+
+int test_chat_read_win_button_rows(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    ReadFix f;
+    fill_read_fixture(&list, &f);
+    TestView tv;
+    ASSERT_TRUE(read_view_open(&tv, &list, 96, 1));
+    chat_listview_set_read_aloud(tv.lv, 1, 0, 0);
+    view_paint(&tv, READ_W);
+    ChatListView *lv = lv_of(tv.lv);
+    ASSERT_EQ(f.a1->u.ai.turn_btn, 0);
+    ASSERT_EQ(f.a2->u.ai.turn_btn, 1);
+    ASSERT_EQ(f.a3->u.ai.turn_btn, 1);
+    ASSERT_EQ(lv->n_read_hits, 2);
+    for (int i = 0; i < lv->n_read_hits; i++) {
+        ASSERT_EQ((int)(lv->read_hits[i].rc.right - lv->read_hits[i].rc.left), 20);
+        ASSERT_EQ((int)(lv->read_hits[i].rc.bottom - lv->read_hits[i].rc.top), 20);
+    }
+    ASSERT_NOT_NULL(read_hit_of(lv, f.a2->id));
+    ASSERT_NOT_NULL(read_hit_of(lv, f.a3->id));
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_read_win_painted_equals_measured(void)
+{
+    TEST_BEGIN();
+    static const int dpis[2] = { 96, 144 };
+    for (int d = 0; d < 2; d++) {
+        for (int md = 0; md < 2; md++) {
+            ChatMsgList list;
+            ReadFix f;
+            fill_read_fixture(&list, &f);
+            TestView tv;
+            ASSERT_TRUE(read_view_open(&tv, &list, dpis[d], md));
+            chat_listview_set_read_aloud(tv.lv, 1, 0, 0);
+            view_paint(&tv, READ_W);
+            int checked = 0, bad = 0;
+            for (ChatMsgItem *it = list.head; it; it = it->next)
+                bad += check_item(it, md, &checked);
+            if (bad) printf("  (dpi %d, markdown %d)\n", dpis[d], md);
+            ASSERT_EQ(bad, 0);
+            ASSERT_EQ(checked, 5);
+            ASSERT_EQ(lv_of(tv.lv)->n_read_hits, 2);
+            view_close(&tv);
+            chat_msg_list_clear(&list);
+        }
+    }
+    TEST_END();
+}
+
+static void read_heights(const ChatMsgList *list, int *out)
+{
+    int n = 0;
+    for (const ChatMsgItem *it = list->head; it; it = it->next) out[n++] = it->measured_height;
+}
+
+int test_chat_read_win_off_heights_unchanged(void)
+{
+    TEST_BEGIN();
+    static const int dpis[2] = { 96, 144 };
+    for (int d = 0; d < 2; d++) {
+        ChatMsgList la, lb;
+        ReadFix fa, fb;
+        fill_read_fixture(&la, &fa);
+        fill_read_fixture(&lb, &fb);
+        TestView ta, tb;
+        ASSERT_TRUE(read_view_open(&ta, &la, dpis[d], 1));
+        ASSERT_TRUE(read_view_open(&tb, &lb, dpis[d], 1));
+        view_paint(&ta, READ_W);           /* never told about Read aloud */
+        int ha[8], hon[8], hoff[8];
+        read_heights(&la, ha);
+        chat_listview_set_read_aloud(tb.lv, 1, 0, 0);
+        view_paint(&tb, READ_W);
+        read_heights(&lb, hon);
+        chat_listview_set_read_aloud(tb.lv, 0, 0, 0);
+        view_paint(&tb, READ_W);
+        read_heights(&lb, hoff);
+        for (int i = 0; i < 6; i++) {
+            ASSERT_EQ(ha[i], hoff[i]);
+            int want = (i == 3 || i == 5) ? read_button_row_h(dpis[d]) : 0;
+            ASSERT_EQ(hon[i] - hoff[i], want);
+        }
+        ASSERT_EQ(lv_of(tb.lv)->n_read_hits, 0);
+        view_close(&ta);
+        view_close(&tb);
+        chat_msg_list_clear(&la);
+        chat_msg_list_clear(&lb);
+    }
+    TEST_END();
+}
+
+int test_chat_read_win_tail_busy_hides_last(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    ReadFix f;
+    fill_read_fixture(&list, &f);
+    TestView tv;
+    ASSERT_TRUE(read_view_open(&tv, &list, 96, 1));
+    chat_listview_set_read_aloud(tv.lv, 1, 0, 0);
+    chat_listview_set_tail_busy(tv.lv, 1);
+    view_paint(&tv, READ_W);
+    ASSERT_EQ(f.a3->u.ai.turn_btn, 0);
+    ASSERT_EQ(f.a2->u.ai.turn_btn, 1);
+    ASSERT_EQ(lv_of(tv.lv)->n_read_hits, 1);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_read_win_click_posts_id(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    ReadFix f;
+    fill_read_fixture(&list, &f);
+    TestView tv;
+    ASSERT_TRUE(read_view_open(&tv, &list, 96, 1));
+    chat_listview_set_read_aloud(tv.lv, 1, 0, 0);
+    view_paint(&tv, READ_W);
+    g_read_cmds = 0;
+    g_read_cmd_id = -1;
+    const ClvReadHit *h = read_hit_of(lv_of(tv.lv), f.a3->id);
+    ASSERT_NOT_NULL(h);
+    int cx = (int)(h->rc.left + h->rc.right) / 2;
+    int cy = (int)(h->rc.top + h->rc.bottom) / 2;
+    SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(cx, cy));
+    SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(cx, cy));
+    pump_messages();
+    ASSERT_EQ(g_read_cmds, 1);
+    ASSERT_EQ((int)g_read_cmd_id, f.a3->id);
+
+    /* Disabled: the glyph is dim and a press does nothing. */
+    chat_listview_set_read_aloud(tv.lv, 1, 0, 1);
+    view_paint(&tv, READ_W);
+    SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(cx, cy));
+    SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(cx, cy));
+    pump_messages();
+    ASSERT_EQ(g_read_cmds, 1);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_read_win_reading_draws_stop(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    ReadFix f;
+    fill_read_fixture(&list, &f);
+    TestView tv;
+    ASSERT_TRUE(read_view_open(&tv, &list, 96, 1));
+    chat_listview_set_read_aloud(tv.lv, 1, 0, 0);
+    DWORD *p0 = view_pixels(&tv, READ_W);
+    ASSERT_NOT_NULL(p0);
+    const ClvReadHit *h = read_hit_of(lv_of(tv.lv), f.a3->id);
+    ASSERT_NOT_NULL(h);
+    int y0 = (int)h->rc.top, y1 = (int)h->rc.bottom;
+    chat_listview_set_read_aloud(tv.lv, 1, f.a3->id, 0);
+    DWORD *p1 = view_pixels(&tv, READ_W);
+    ASSERT_NOT_NULL(p1);
+    ASSERT_TRUE(diff_rows(p0, p1, READ_W, y0, y1) > 0);
+    free(p0);
+    free(p1);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
     TEST_END();
 }
 

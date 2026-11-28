@@ -18,6 +18,7 @@ int _tf_skipped = 0;
 /* test_icons.c */
 int test_icons_all_render_non_empty(void);
 int test_icons_render_at_multiple_sizes(void);
+int test_icons_speaker_renders(void);
 
 /* test_md_render_win.c */
 int test_md_render_win_measure_equals_paint_and_runs(void);
@@ -35,6 +36,12 @@ int test_chat_select_win_mouse_and_keys(void);
 int test_chat_select_win_query_word(void);
 int test_chat_select_win_drag_ignores_buttonless_move(void);
 int test_chat_select_win_short_list(void);
+int test_chat_read_win_button_rows(void);
+int test_chat_read_win_painted_equals_measured(void);
+int test_chat_read_win_off_heights_unchanged(void);
+int test_chat_read_win_tail_busy_hides_last(void);
+int test_chat_read_win_click_posts_id(void);
+int test_chat_read_win_reading_draws_stop(void);
 
 /* test_ns_slider_win.c */
 int test_ns_slider_win_keys_and_notify(void);
@@ -496,6 +503,7 @@ int main(int argc, char **argv)
     int failed = 0;
     failed += test_icons_all_render_non_empty();
     failed += test_icons_render_at_multiple_sizes();
+    failed += test_icons_speaker_renders();
     failed += test_md_render_win_measure_equals_paint_and_runs();
     failed += test_chat_select_win_runs_match_paint();
     failed += test_chat_select_win_reason_in_row();
@@ -509,6 +517,12 @@ int main(int argc, char **argv)
     failed += test_chat_select_win_query_word();
     failed += test_chat_select_win_drag_ignores_buttonless_move();
     failed += test_chat_select_win_short_list();
+    failed += test_chat_read_win_button_rows();
+    failed += test_chat_read_win_painted_equals_measured();
+    failed += test_chat_read_win_off_heights_unchanged();
+    failed += test_chat_read_win_tail_busy_hides_last();
+    failed += test_chat_read_win_click_posts_id();
+    failed += test_chat_read_win_reading_draws_stop();
     InitCommonControls();
     failed += test_ns_check_win_check_state_round_trips();
     failed += test_ns_check_win_click_toggles_and_paints();

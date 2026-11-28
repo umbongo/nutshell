@@ -217,6 +217,13 @@ static const uint8_t g_glyphs[NS_ICON_COUNT][192] = {
     { OP_MOVE, 12, 64, OP_CURVE, 36, 28, 92, 28, 116, 64,
       OP_CURVE, 92, 100, 36, 100, 12, 64, OP_CLOSE, OP_STROKE,
       OP_DOT, 64, 64, 14, OP_END },
+
+    /* NS_ICON_SPEAKER — loudspeaker cone with two sound arcs */
+    { OP_MOVE, 20, 50, OP_LINE, 44, 50, OP_LINE, 72, 26, OP_LINE, 72, 102,
+      OP_LINE, 44, 78, OP_LINE, 20, 78, OP_CLOSE, OP_FILLSTROKE,
+      OP_MOVE, 88, 46, OP_CURVE, 98, 56, 98, 72, 88, 82, OP_STROKE,
+      OP_MOVE, 100, 32, OP_CURVE, 120, 50, 120, 78, 100, 96, OP_STROKE,
+      OP_END },
 };
 
 static ULONG_PTR g_gdip_token = 0;
@@ -411,6 +418,7 @@ void ns_icon_draw(HDC hdc, NsIconId id, const RECT *rc,
         [NS_ICON_PASSWORD] = 255,
         [NS_ICON_INFO]     = 255,
         [NS_ICON_EYE]      = 255,
+        [NS_ICON_SPEAKER]  = 255,
     };
     ns_icon_draw_ex(hdc, id, rc, fg, k_fill[id], dpi);
 }

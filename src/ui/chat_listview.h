@@ -23,6 +23,15 @@ typedef struct {
     size_t  len;
 } ClvCodeHit;
 
+/* One Read aloud button under a finished turn's last text row, as last
+ * painted (rebuilt by every paint, like ClvCodeHit). `rc` is the glyph's
+ * rect in client coordinates. */
+#define CLV_READ_HITS_MAX 32
+typedef struct {
+    int     item_id;    /* ChatMsgItem.id of the row carrying the button */
+    RECT    rc;
+} ClvReadHit;
+
 typedef struct {
     HWND hwnd;              /* The owner-drawn panel window */
     ChatMsgList *msg_list;  /* Pointer to message list (not owned) */
@@ -139,6 +148,15 @@ typedef struct {
      * the code-block and settled-row hit tests ignore points above it. */
     int sticky_bottom;
 
+    /* Read aloud (spec 2026-11-28-voice-read-aloud-design.md): `read_on` shows
+     * the button under each finished turn, `read_id` is the item whose reply
+     * is being read (its glyph is Stop), `read_disabled` draws the glyphs
+     * dim and ignores presses, `tail_busy` is the panel's busy flag. The
+     * hits are rebuilt by every paint. */
+    int read_on, read_id, read_disabled, tail_busy;
+    ClvReadHit read_hits[CLV_READ_HITS_MAX];
+    int n_read_hits;
+
 } ChatListView;
 
 /* The risk tag's chip colours and text for a command's safety level -- the
@@ -237,6 +255,17 @@ void chat_listview_set_thinking_pref(HWND hwnd, int pref);
  * substituted into AI_STATE_EMPTY's body ("last N lines"); ignored by the
  * other states. Triggers a repaint; a no-op HWND is ignored. */
 void chat_listview_set_state(HWND hwnd, int state_id, int context_lines);
+
+/* Read aloud button: `on` shows it under each finished turn (a change
+ * relayouts), `reading_id` is the item id whose glyph is Stop (0 = none),
+ * `disabled` draws it dim and ignores presses. A press posts
+ * WM_COMMAND(IDC_CHAT_READ_ALOUD) to the parent with lParam = the item id;
+ * the list view starts no speech. */
+void chat_listview_set_read_aloud(HWND hwnd, int on, int reading_id, int disabled);
+
+/* The panel's busy flag: the last turn is open while it is set. A change
+ * relayouts. */
+void chat_listview_set_tail_busy(HWND hwnd, int busy);
 
 /* One extra line of body text (UTF-8, at most 95 bytes) shown under
  * AI_STATE_EMPTY's body only; NULL or "" removes it. Triggers a repaint. */

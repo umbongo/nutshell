@@ -4647,6 +4647,7 @@ int test_ai_panel_state_titles_actions_and_suggestions_flag(void);
 int test_ai_panel_state_null_for_bad_id(void);
 int test_ai_panel_state_body_empty_substitutes_thousands(void);
 int test_ai_panel_voice_hint_wordings(void);
+int test_read_button_layout_96_and_144(void);
 int test_ai_panel_state_body_other_states_ignore_context_lines(void);
 int test_ai_panel_suggestions_exactly_three_nonempty(void);
 
@@ -9542,6 +9543,7 @@ int main(void) {
     failed += test_ai_panel_state_null_for_bad_id();
     failed += test_ai_panel_state_body_empty_substitutes_thousands();
     failed += test_ai_panel_voice_hint_wordings();
+    failed += test_read_button_layout_96_and_144();
     failed += test_ai_panel_state_body_other_states_ignore_context_lines();
     failed += test_ai_panel_suggestions_exactly_three_nonempty();
 
