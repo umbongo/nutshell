@@ -31,6 +31,11 @@ int main_chord_forwarded_from_panel(MainChord c)
     return c != MCHORD_NONE && c != MCHORD_ZOOM_RESET;
 }
 
+int main_chord_should_forward(MainChord c, int main_enabled)
+{
+    return main_enabled && main_chord_forwarded_from_panel(c);
+}
+
 int tab_chord_target(int count, int current, int delta)
 {
     if (count < 2 || (delta != 1 && delta != -1)) return -1;

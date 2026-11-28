@@ -1609,6 +1609,7 @@ int test_main_chords_zoom_reset(void);
 int test_main_chords_existing_chords(void);
 int test_main_chords_ai_panel_needs_the_assistant_on(void);
 int test_main_chords_forwarded_from_panel(void);
+int test_main_chords_should_forward_needs_the_main_window_enabled(void);
 int test_main_chords_typing_is_never_a_chord(void);
 int test_main_chords_tab_target_wraps_forward(void);
 int test_main_chords_tab_target_wraps_backward(void);
@@ -7132,6 +7133,7 @@ int main(void) {
     failed += test_main_chords_existing_chords();
     failed += test_main_chords_ai_panel_needs_the_assistant_on();
     failed += test_main_chords_forwarded_from_panel();
+    failed += test_main_chords_should_forward_needs_the_main_window_enabled();
     failed += test_main_chords_typing_is_never_a_chord();
     failed += test_main_chords_tab_target_wraps_forward();
     failed += test_main_chords_tab_target_wraps_backward();

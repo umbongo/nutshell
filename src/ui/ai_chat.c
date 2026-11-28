@@ -2076,8 +2076,11 @@ next_coalesce:;
             return 0;
         }
         if (main_chord_forwarded_from_panel(mc)) {
+            /* A disabled main window means a modal dialog is up over a
+             * floating panel: the chord is swallowed, not run under it. */
             HWND main_wnd = GetAncestor(hwnd, GA_ROOTOWNER);
-            if (main_wnd && main_wnd != hwnd)
+            if (main_wnd && main_wnd != hwnd &&
+                main_chord_should_forward(mc, IsWindowEnabled(main_wnd) != 0))
                 SendMessage(main_wnd, WM_KEYDOWN, wParam, lParam);
             return 0;
         }

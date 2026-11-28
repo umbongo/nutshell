@@ -39,6 +39,13 @@ MainChord main_chord_classify(unsigned vk, int shift, int ctrl, int alt, int ai_
  * panel handles it itself, as it does Ctrl+= and Ctrl+-. 0 for MCHORD_NONE. */
 int main_chord_forwarded_from_panel(MainChord c);
 
+/* 1 when the AI panel sends chord `c` on to the main window now: the chord
+ * is one the panel forwards AND the main window is enabled. A disabled main
+ * window means a modal dialog (Session Manager, Settings, the notice dialog,
+ * Confirm Paste, the password prompt) is up over a floating panel, which
+ * stays enabled; the chord is then swallowed, never run under the modal. */
+int main_chord_should_forward(MainChord c, int main_enabled);
+
 /* The tab index a tab chord moves to, with wrap-around at the ends. `delta`
  * is +1 or -1. Returns -1 when nothing moves: fewer than two tabs, or a
  * delta that is not +-1. A `current` outside 0..count-1 goes to the first tab

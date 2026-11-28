@@ -86,6 +86,21 @@ int test_main_chords_typing_is_never_a_chord(void)
     TEST_END();
 }
 
+/* A disabled main window (a modal dialog is up) takes no forwarded chord. */
+int test_main_chords_should_forward_needs_the_main_window_enabled(void)
+{
+    TEST_BEGIN();
+    for (int c = MCHORD_NONE; c <= MCHORD_ZOOM_RESET; c++) {
+        ASSERT_EQ(main_chord_should_forward((MainChord)c, 0), 0);
+        ASSERT_EQ(main_chord_should_forward((MainChord)c, 1),
+                  main_chord_forwarded_from_panel((MainChord)c));
+    }
+    ASSERT_EQ(main_chord_should_forward(MCHORD_NEW_TAB, 1), 1);
+    ASSERT_EQ(main_chord_should_forward(MCHORD_NEW_TAB, 0), 0);
+    ASSERT_EQ(main_chord_should_forward(MCHORD_ZOOM_RESET, 1), 0);
+    TEST_END();
+}
+
 int test_main_chords_tab_target_wraps_forward(void)
 {
     TEST_BEGIN();
