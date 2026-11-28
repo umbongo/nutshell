@@ -330,6 +330,37 @@ int test_vais_key_binding(void)
     TEST_END();
 }
 
+/* "Too long" matters only when a key of its own is typed: a keyless Custom server, or one that
+ * shares the speech-to-text key, never reads the binding. */
+int test_vais_too_long_only_with_own_typed_key(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200], url[CFG_STR_MAX];
+    base_settings(&s);
+    memcpy(url, "http://", 7);
+    memset(url + 7, 'h', 245);
+    url[252] = '\0';
+    set_custom(&s, url, "kokoro", "bf_emma");
+    /* no key typed: usable */
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(voice_ais_key(&s, &t), "");
+    /* a typed own key cannot be bound: refused */
+    snprintf(s.tts_api_key, sizeof s.tts_api_key, "secret");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+    ASSERT_STR_EQ(err, "The speech Base URL is too long");
+    ASSERT_TRUE(strstr(err, "secret") == NULL);
+    /* the speech-to-text key at the same base is used: usable even with an own key typed */
+    snprintf(s.voice_stt_provider, sizeof s.voice_stt_provider, "custom");
+    snprintf(s.voice_stt_url, sizeof s.voice_stt_url, "%s", url);
+    snprintf(s.stt_api_key, sizeof s.stt_api_key, "stt-key");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_EQ(t.key_from, VAIS_KEY_STT);
+    ASSERT_STR_EQ(voice_ais_key(&s, &t), "stt-key");
+    TEST_END();
+}
+
 int test_vais_binding_too_long_never_matches(void)
 {
     TEST_BEGIN();

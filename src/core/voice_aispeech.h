@@ -44,7 +44,7 @@ typedef struct {
 /* 1 and *t filled, or 0 with a user-facing reason in err (err may be NULL). The
  * reasons: "The speech provider is not known", "Enter the speech Base URL", "The
  * speech Base URL is not valid", "The speech Base URL is too long" (the key binding "custom "
- * + the base would not fit), "Enter the speech model your server uses", "Enter
+ * + the base would not fit, and the speech key is its own and one is typed), "Enter the speech model your server uses", "Enter
  * the voice your server uses" and, when the provider needs a key and
  * voice_ais_key() gives "", "Enter a speech API key". An empty model or voice takes
  * Mistral's default; Custom has none. */

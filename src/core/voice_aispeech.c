@@ -155,7 +155,10 @@ int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t ca
         url_host(base, t->host, sizeof t->host);
         char bind[CFG_STR_MAX];
         voice_ais_binding(s, bind, sizeof bind);
-        if (bind[0] == '\0') {          /* "custom " + base does not fit: no key could ever match */
+        /* "custom " + base does not fit: no own key could ever match. That matters only when an
+         * own key is the one in use and one is typed; a keyless server, or one that shares the
+         * speech-to-text or chat key, never reads the binding. */
+        if (bind[0] == '\0' && voice_ais_key_shared(s) == VAIS_KEY_OWN && s->tts_api_key[0]) {
             put_err(err, cap, "The speech Base URL is too long");
             return 0;
         }

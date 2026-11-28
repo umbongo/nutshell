@@ -3059,6 +3059,7 @@ int test_vais_key_shared(void);
 int test_vais_key_not_shared(void);
 int test_vais_key_binding(void);
 int test_vais_binding_too_long_never_matches(void);
+int test_vais_too_long_only_with_own_typed_key(void);
 int test_vais_body_mistral(void);
 int test_vais_body_openai_shape(void);
 int test_vais_body_escapes(void);
@@ -8780,6 +8781,7 @@ int main(void) {
     failed += test_vais_key_not_shared();
     failed += test_vais_key_binding();
     failed += test_vais_binding_too_long_never_matches();
+    failed += test_vais_too_long_only_with_own_typed_key();
     failed += test_vais_body_mistral();
     failed += test_vais_body_openai_shape();
     failed += test_vais_body_escapes();
