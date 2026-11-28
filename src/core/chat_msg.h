@@ -67,6 +67,9 @@ typedef struct ChatMsgItem {
             int think_cache_line_h;
             int think_cache_full_h;
             int think_cache_text_w;
+            int turn_btn;            /* 1 = this row carries its turn's Read aloud
+                                      * button; written only by chat_turn_refresh()
+                                      * (chat_turn.h), 0 from chat_msg_append */
         } ai;
         struct {
             char *command;
