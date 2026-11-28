@@ -4007,6 +4007,7 @@ int test_voice_ais_long_stt_blob_preserved_not_truncated(void);
 int test_voice_ais_empty_key_drops_binding(void);
 int test_dlog_configure_registers_the_tts_key_as_a_secret(void);
 int test_settings_help_play_sample(void);
+int test_settings_help_search_url_says_how_the_query_is_added(void);
 int test_selftest_configs_complete(void);
 int test_selftest_conv_config_mode(void);
 int test_voice_config_load_defaults_and_saved_choices(void);
@@ -9151,6 +9152,7 @@ int main(void) {
     failed += test_settings_help_labels_match_sources();
     failed += test_settings_help_every_id_in_settings_c();
     failed += test_settings_help_ai_enable_entry();
+    failed += test_settings_help_search_url_says_how_the_query_is_added();
     failed += test_settings_help_voice_entries();
 
     printf("\n--- Design System: scale & type ---\n");
