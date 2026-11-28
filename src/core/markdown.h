@@ -149,6 +149,20 @@ typedef struct {
 
 #define MD_MAX_SPANS 128
 
+static inline int md_is_alnum_ascii(char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/* True when the run of `runlen` marker characters at `pos` has an ASCII
+ * letter or digit on both sides. For '_' such a run neither opens nor closes
+ * emphasis (CommonMark), so snake_case_name stays literal. */
+static inline int md_run_is_intraword(const char *line, int len, int pos, int runlen)
+{
+    return pos > 0 && pos + runlen < len &&
+           md_is_alnum_ascii(line[pos - 1]) && md_is_alnum_ascii(line[pos + runlen]);
+}
+
 /* Parse inline spans in a line. Returns the number of spans found.
  * Spans are written to `out` (caller provides array of MD_MAX_SPANS). */
 static inline int md_parse_inline(const char *line, int len, MdSpan *out)
@@ -216,6 +230,12 @@ static inline int md_parse_inline(const char *line, int len, MdSpan *out)
             int stars = 0;
             while (i + stars < len && line[i + stars] == marker) stars++;
 
+            /* An intraword underscore run is plain text. */
+            if (marker == '_' && md_run_is_intraword(line, len, i, stars)) {
+                i += stars;
+                continue;
+            }
+
             if (stars >= 2) {
                 /* Bold (**) or bold+italic (***) */
                 int is_bold_italic = (stars >= 3);
@@ -230,6 +250,11 @@ static inline int md_parse_inline(const char *line, int len, MdSpan *out)
                         int cstars = 0;
                         while (close + cstars < len && line[close + cstars] == marker)
                             cstars++;
+                        if (marker == '_' &&
+                            md_run_is_intraword(line, len, close, cstars)) {
+                            close += cstars;
+                            continue;
+                        }
                         if (cstars >= open_len) {
                             /* Found closing */
                             if (i > text_start) {
@@ -257,8 +282,22 @@ static inline int md_parse_inline(const char *line, int len, MdSpan *out)
                 int start = i + 1;
                 int close = start;
                 while (close < len) {
-                    if (line[close] == marker &&
-                        (close + 1 >= len || line[close + 1] != marker)) {
+                    if (marker == '_' && line[close] == marker) {
+                        /* An intraword run never closes, whatever its length. */
+                        int cstars = 0;
+                        while (close + cstars < len && line[close + cstars] == marker)
+                            cstars++;
+                        if (md_run_is_intraword(line, len, close, cstars)) {
+                            close += cstars;
+                            continue;
+                        }
+                    }
+                    /* close > start: an empty span would swallow the markers. */
+                    if (line[close] == marker && close > start &&
+                        (close + 1 >= len || line[close + 1] != marker) &&
+                        !(marker == '_' && close > 0 &&
+                          md_is_alnum_ascii(line[close - 1]) && close + 1 < len &&
+                          md_is_alnum_ascii(line[close + 1]))) {
                         /* Found single closing marker */
                         if (i > text_start) {
                             out[count].type = MD_SPAN_TEXT;
