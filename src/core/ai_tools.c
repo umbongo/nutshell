@@ -802,7 +802,7 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
         JsonNode *func = json_obj_get(tc_node, "function");
         if (func && func->type == JSON_OBJECT) {
             const char *name = json_obj_str(func, "name");
-            if (name) {
+            if (name && name[0]) {   /* later chunks may repeat the name as "" */
                 snprintf(state->pending_tool_calls[slot].name,
                          sizeof(state->pending_tool_calls[slot].name), "%s", name);
             }

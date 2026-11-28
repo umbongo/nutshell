@@ -3312,6 +3312,7 @@ int test_ai_stream_chunk_error_string_form(void);
 int test_ai_stream_chunk_error_not_an_error(void);
 int test_ai_stream_chunk_error_anthropic(void);
 int test_ai_stream_openai_empty_later_id_keeps_id(void);
+int test_ai_stream_openai_empty_later_name_keeps_name(void);
 int test_ai_stream_chunk_error_sanitised_and_capped(void);
 int test_ai_stream_error_reset(void);
 int test_ai_stream_anthropic_invalid_json(void);
@@ -8134,6 +8135,7 @@ int main(void) {
     failed += test_ai_stream_chunk_error_not_an_error();
     failed += test_ai_stream_chunk_error_anthropic();
     failed += test_ai_stream_openai_empty_later_id_keeps_id();
+    failed += test_ai_stream_openai_empty_later_name_keeps_name();
     failed += test_ai_stream_chunk_error_sanitised_and_capped();
     failed += test_ai_stream_error_reset();
     failed += test_ai_stream_anthropic_invalid_json();

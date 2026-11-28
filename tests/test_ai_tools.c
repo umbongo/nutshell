@@ -1097,6 +1097,30 @@ int test_ai_stream_openai_empty_later_id_keeps_id(void)
     TEST_END();
 }
 
+int test_ai_stream_openai_empty_later_name_keeps_name(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"call_1\",\"function\":{\"name\":\"web_search\","
+        "\"arguments\":\"\"}}]}}]}", &st), 0);
+    /* Later chunk of the same call carries "name":"" */
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"function\":{\"name\":\"\",\"arguments\":\"{}\"}}]}}]}", &st), 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{}");
+    /* A later different non-empty name still replaces it (unchanged rule) */
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"function\":{\"name\":\"other\"}}]}}]}", &st), 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "other");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
 int test_ai_stream_openai_whole_call_in_finish_chunk(void)
 {
     TEST_BEGIN();
