@@ -785,6 +785,8 @@ typedef struct {
     int       (*io_write)(void *ctx, const char *data, size_t len);
     bool        bracketed; /* send \033[201~ when paste completes */
     bool        local;     /* send \r for a line end: a console child reads Enter, not LF */
+    size_t      sent;      /* bytes the transport accepted so far, for the stopped-paste notice */
+    size_t      total;     /* bytes the whole paste translates to */
     struct Session *session; /* the target, for write diagnostics only; valid while io_ctx is
                               * (a closing tab cancels its paste before the session is freed) */
 } PasteState;
@@ -3070,6 +3072,7 @@ static int paste_send_next_line(void)
     session_note_write_agg(g_paste.session, &wagg, "paste");
 
     g_paste.pos += chunk;
+    g_paste.sent += pr.accepted;
     if (pr.stopped) return -1;
     return *g_paste.pos != '\0' ? 1 : 0;
 }
@@ -3087,6 +3090,8 @@ static void paste_cancel(void)
         g_paste.session  = NULL;
         g_paste.bracketed = false;
         g_paste.local     = false;
+        g_paste.sent      = 0;
+        g_paste.total     = 0;
     }
 }
 
@@ -3102,16 +3107,29 @@ static void paste_finish(void)
     paste_cancel();
 }
 
+/* One notice for a paste that stopped before all of it was sent, with how
+ * much went. Never for a cancelled or a complete paste. */
+static void paste_notice_stopped(HWND owner, size_t sent, size_t total)
+{
+    char why[256];
+    (void)paste_stopped_text(sent, total, why, sizeof(why));
+    (void)notice_dlg_msg(owner, NOTICE_MSG_PASTE_STOPPED, why, g_theme);
+}
+
 /* Called by WM_TIMER when wParam == PASTE_TIMER_ID */
 static void paste_timer_tick(void)
 {
     session_mark_terminal_input();
     int more = paste_send_next_line();
+    const bool stopped = (more < 0);
+    const size_t sent = g_paste.sent, total = g_paste.total;
+    HWND owner = g_paste.hwnd;
     if (g_active_session && g_active_session->term) {
         g_active_session->term->scrollback_offset = 0;
         invalidate_terminal(g_paste.hwnd);
     }
     if (more <= 0) paste_finish();   /* done, or a write stopped: cancel the rest */
+    if (stopped) paste_notice_stopped(owner, sent, total);   /* after the timer is gone */
 }
 
 /* Read the clipboard as text, preferring CF_UNICODETEXT (converted to
@@ -3273,9 +3291,9 @@ static void do_paste(HWND hwnd)
         WriteAgg wagg;
         write_agg_init(&wagg);
         /* The whole block in chunks of up to PASTE_WRITE_CHUNK bytes. */
-        (void)paste_write_chunked(local, filtered_len, local_line_ends ? 1 : 0,
-                                  target->io.write, target->io.ctx,
-                                  PASTE_WRITE_CHUNK, &wagg);
+        PasteWriteResult pr = paste_write_chunked_ex(local, filtered_len,
+                                  local_line_ends ? 1 : 0, target->io.write,
+                                  target->io.ctx, PASTE_WRITE_CHUNK, &wagg);
         session_note_write_agg(target, &wagg, "paste");  /* one WARN per paste */
         if (bpm)
             (void)session_write_noted(target, BRACKET_CLOSE,
@@ -3283,6 +3301,7 @@ static void do_paste(HWND hwnd)
         target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
         free(local);
+        if (pr.stopped) paste_notice_stopped(hwnd, pr.accepted, pr.expected);
     } else {
         /* Multi-line with delay: use timer-driven paste (takes ownership of local) */
         g_paste.buf       = local;
@@ -3294,6 +3313,9 @@ static void do_paste(HWND hwnd)
         g_paste.bracketed = bpm;
         g_paste.local     = local_line_ends;
         g_paste.session   = target;
+        g_paste.sent      = 0;
+        g_paste.total     = paste_translated_len(local, filtered_len,
+                                                 local_line_ends ? 1 : 0);
 
         /* Send the first line immediately */
         int first = paste_send_next_line();
@@ -3305,7 +3327,9 @@ static void do_paste(HWND hwnd)
         if (first > 0 && g_paste.pos && *g_paste.pos) {
             SetTimer(hwnd, PASTE_TIMER_ID, (UINT)delay_ms, NULL);
         } else {
+            const size_t sent = g_paste.sent, total = g_paste.total;
             paste_finish();
+            if (first < 0) paste_notice_stopped(hwnd, sent, total);
         }
     }
 }

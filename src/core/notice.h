@@ -96,6 +96,7 @@ typedef enum {
     NOTICE_MSG_CHAT_SAVE_FAILED,     /* ai_chat.c Save                 */
     NOTICE_MSG_VOICE_BRITISH,        /* voice_win.c; arg: the voice's name */
     NOTICE_MSG_LOG_START_FAILED,     /* window.c Start Logging; arg: log_open_error_text() */
+    NOTICE_MSG_PASTE_STOPPED,        /* window.c paste; arg: paste_stopped_text() */
     NOTICE_MSG_COUNT
 } NoticeMsgId;
 

@@ -315,3 +315,33 @@ int test_paste_write_short_then_stop_is_one_failure(void)
     ASSERT_EQ(a.rc, -1);
     TEST_END();
 }
+
+int test_paste_stopped_text_says_how_much(void)
+{
+    TEST_BEGIN();
+    char out[256];
+    size_t n = paste_stopped_text(4096, 9000, out, sizeof out);
+    ASSERT_EQ(n, strlen(out));
+    ASSERT_TRUE(strstr(out, "did not accept the data") != NULL);
+    ASSERT_TRUE(strstr(out, "4096 of 9000 bytes") != NULL);
+    ASSERT_TRUE(strstr(out, "rest was not sent") != NULL);
+    ASSERT_TRUE(strstr(out, "Check what arrived") != NULL);
+    /* Truncation stays terminated; NULL and zero cap write nothing. */
+    char tiny[12];
+    ASSERT_TRUE(paste_stopped_text(1, 2, tiny, sizeof tiny) < sizeof tiny);
+    ASSERT_EQ(tiny[sizeof tiny - 1], '\0');
+    ASSERT_EQ(paste_stopped_text(1, 2, NULL, 10), (size_t)0);
+    ASSERT_EQ(paste_stopped_text(1, 2, out, 0), (size_t)0);
+    TEST_END();
+}
+
+int test_paste_translated_len_matches_write(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(paste_translated_len("a\r\nb\n", 5, 0), (size_t)4);
+    ASSERT_EQ(paste_translated_len("a\r\nb\n", 5, 1), (size_t)4);
+    ASSERT_EQ(paste_translated_len("\xc3\xa9", 2, 0), (size_t)2);
+    ASSERT_EQ(paste_translated_len(NULL, 3, 0), (size_t)0);
+    ASSERT_EQ(paste_translated_len("", 0, 0), (size_t)0);
+    TEST_END();
+}

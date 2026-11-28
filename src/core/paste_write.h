@@ -55,4 +55,14 @@ size_t paste_write_chunked(const char *in, size_t in_len, int local,
                            PasteWriteFn write_fn, void *ctx,
                            size_t max_chunk, WriteAgg *agg);
 
+/* How many bytes in[0..in_len) translates to (the "M" of paste_stopped_text);
+ * nothing is written. 0 for NULL in with in_len > 0. */
+size_t paste_translated_len(const char *in, size_t in_len, int local);
+
+/* The plain-words opening of the notice shown when a paste stopped before all
+ * of it was sent: that the connection did not accept the data, "sent of total
+ * bytes", and that the rest was not sent. Always NUL-terminated, truncated at
+ * cap; returns the length written, 0 with out untouched for NULL out or cap 0. */
+size_t paste_stopped_text(size_t sent, size_t total, char *out, size_t cap);
+
 #endif

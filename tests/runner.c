@@ -1582,6 +1582,8 @@ int test_paste_write_zero_then_success_completes(void);
 int test_paste_write_zero_nine_times_stops(void);
 int test_paste_write_negative_stops_at_once(void);
 int test_paste_write_short_then_stop_is_one_failure(void);
+int test_paste_stopped_text_says_how_much(void);
+int test_paste_translated_len_matches_write(void);
 
 /* test_pty_size.c */
 int test_pty_size_first_send(void);
@@ -4377,6 +4379,7 @@ int test_notice_msg_voice_british_names_the_voice(void);
 int test_notice_msg_session_not_found_formats_name(void);
 int test_notice_msg_text_args(void);
 int test_notice_msg_log_start_failed(void);
+int test_notice_msg_paste_stopped(void);
 int test_notice_msg_title_args(void);
 int test_notice_msg_long_arg_truncates(void);
 int test_notice_msg_bad_id(void);
@@ -7138,6 +7141,8 @@ int main(void) {
     failed += test_paste_write_zero_nine_times_stops();
     failed += test_paste_write_negative_stops_at_once();
     failed += test_paste_write_short_then_stop_is_one_failure();
+    failed += test_paste_stopped_text_says_how_much();
+    failed += test_paste_translated_len_matches_write();
 
     printf("\n--- Pty size ---\n");
     failed += test_pty_size_first_send();
@@ -10039,6 +10044,7 @@ int main(void) {
         failed += test_notice_msg_session_not_found_formats_name();
         failed += test_notice_msg_text_args();
         failed += test_notice_msg_log_start_failed();
+        failed += test_notice_msg_paste_stopped();
         failed += test_notice_msg_title_args();
         failed += test_notice_msg_long_arg_truncates();
         failed += test_notice_msg_bad_id();

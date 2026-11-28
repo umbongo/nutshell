@@ -455,6 +455,19 @@ int test_notice_msg_log_start_failed(void)
     TEST_END();
 }
 
+int test_notice_msg_paste_stopped(void)
+{
+    TEST_BEGIN();
+    Notice n;
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_PASTE_STOPPED, "12 of 99 bytes"), 1);
+    ASSERT_STR_EQ(n.title, "Paste Stopped");
+    ASSERT_EQ(n.tone, NOTICE_WARNING);
+    ASSERT_STR_EQ(n.opening, "12 of 99 bytes");
+    ASSERT_EQ(notice_msg(&n, NOTICE_MSG_PASTE_STOPPED, NULL), 1);
+    ASSERT_TRUE(strstr(n.opening, "did not accept") != NULL);
+    TEST_END();
+}
+
 int test_notice_msg_title_args(void)
 {
     TEST_BEGIN();

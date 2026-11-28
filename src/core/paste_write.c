@@ -1,5 +1,6 @@
 #include "paste_write.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #define PW_BUF_MAX PASTE_WRITE_CHUNK
@@ -101,4 +102,29 @@ size_t paste_write_chunked(const char *in, size_t in_len, int local,
 {
     return paste_write_chunked_ex(in, in_len, local, write_fn, ctx, max_chunk,
                                   agg).accepted;
+}
+
+static int sink_write(void *ctx, const char *data, size_t len)
+{
+    (void)ctx; (void)data;
+    return (int)len;
+}
+
+size_t paste_translated_len(const char *in, size_t in_len, int local)
+{
+    return paste_write_chunked_ex(in, in_len, local, sink_write, NULL,
+                                  PASTE_WRITE_CHUNK, NULL).expected;
+}
+
+size_t paste_stopped_text(size_t sent, size_t total, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    int n = snprintf(out, cap,
+                     "The paste stopped because the connection did not accept "
+                     "the data. %lu of %lu bytes were sent; the rest was not "
+                     "sent.\n"
+                     "Check what arrived before pasting again.",
+                     (unsigned long)sent, (unsigned long)total);
+    if (n < 0) { out[0] = '\0'; return 0; }
+    return strlen(out);
 }
