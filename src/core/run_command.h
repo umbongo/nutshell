@@ -214,8 +214,8 @@ void runcmd_capture_start(RunCmdCapture *c, const Terminal *t);
  *  - alternate screen on at the start or now, reflow_seq or region_scroll_seq
  *    (primary-screen scrolls only) moved: the visible screen rows, SCREEN;
  *  - else erase_seq moved (an ED 2 on the primary screen, or an ED 0 straight
- *    after a CUP/HVP to row 0 column 0, which is how `clear` erases; ED 3 and RIS are
- *    not handled by the parser), or the primary range [start_line, cursor line)
+ *    after a CUP/HVP to row 0 column 0, which is how `clear` erases; RIS counts too, as a
+ *    whole-screen erase; ED 3 is not handled by the parser), or the primary range [start_line, cursor line)
  *    is empty or inverted: the screen rows, SCREEN | REDRAWN (just SCREEN when
  *    the screen is blank). A cursor move alone (a home, an up-and-erase of a
  *    two-line prompt, a save-and-restore clock) is not a trigger: a program
