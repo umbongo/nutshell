@@ -78,6 +78,7 @@ static VoiceConvOut go_idle(VoiceConv *c, VoiceConvNote note, int cancel_work)
     c->sending = 0;
     c->idle_seen = 0;
     c->speaking_reply = 0;
+    c->false_cuts = c->no_cutin = 0;
     c->held = 0;
     c->held_continue = 0;
     c->held_phrase = 0;
@@ -126,6 +127,7 @@ static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase
     c->speaking_reply = reply;
     c->local_speech = 0;
     c->idle_seen = 0;
+    if (!(speak & VCA_SPEAK_CONTINUE)) c->false_cuts = c->no_cutin = 0;   /* a new reply or phrase */
     if (!c->stopcap) { c->stopcap = 1; a |= VCA_STOP_CAPTION; }
     o = out(a, VCH_SPEAKING);
     o.phrase = ph;
@@ -167,9 +169,35 @@ static VoiceConvOut ending_to_listening(VoiceConv *c, unsigned extra, VoiceConvH
     return enter_listening(c, a, h);
 }
 
+/* The cut-in's turn was the assistant's own echo or nothing: the reply carries on from the cut
+ * point by the same path as "carry on". The second false cut within a reply turns voice cut-in
+ * off for the rest of it: the listener is held while the reply is read and the header says so.
+ * Nothing here touches the silence clock: it is not a turn the user took. x: the releases of the
+ * turn being dropped. */
+static VoiceConvOut false_cut(VoiceConv *c, unsigned x, VoiceConvHeader h)
+{
+    const int local = c->local_speech;
+    VoiceConvOut o;
+    c->false_cuts++;
+    o = enter_speaking(c, VCA_SPEAK_CONTINUE, VCPH_NONE, 1);
+    o.actions |= x | VCA_DROP_TURN;
+    c->local_speech = local;   /* enter_speaking cleared it: a local speech stays local */
+    if (c->false_cuts >= VOICE_CONV_FALSE_CUT_MAX) {
+        c->no_cutin = 1;
+        o.actions = (o.actions & ~(unsigned)VCA_MODE_SPEAK) | VCA_MODE_HOLD;
+        o.header = VCH_IGNORING_OWN_VOICE;
+    } else if (h != VCH_NONE) {
+        o.header = h;
+    }
+    return o;
+}
+
 static VoiceConvOut on_transcript(VoiceConv *c, int cls)
 {
     if (c->state != VCS_ENDING || c->sending || c->batch) return out(0, VCH_NONE);
+    if ((cls == VTC_EMPTY || cls == VTC_ECHO) && c->cut_turn && c->cut_reply)
+        return false_cut(c, release_typing(c) | release_link(c) | release_batch(c),
+                         cls == VTC_ECHO ? VCH_IGNORED_ECHO : VCH_NONE);
     if (cls == VTC_EMPTY)
         return ending_to_listening(c, VCA_DROP_TURN, VCH_DIDNT_CATCH);
     if (cls == VTC_ECHO)
@@ -412,6 +440,7 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
 
     case VCE_TURN_START: {
         unsigned x = VCA_LOCK_TYPING;
+        if (st == VCS_SPEAKING && c->no_cutin) return none;
         int ok = (st == VCS_LISTENING && c->pause == VCP_NONE)
               || ((st == VCS_HEARING || st == VCS_SPEAKING) && !c->turn);
         if (!ok) return none;
@@ -431,6 +460,8 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             return out(VCA_DROP_TURN | release_link(c) | release_typing(c), VCH_SPEAKING);
         }
         if (st != VCS_HEARING) return none;
+        if (c->cut_turn && c->cut_reply)   /* the cut was for nothing: the reply carries on */
+            return false_cut(c, release_link(c) | release_typing(c), VCH_NONE);
         c->state = VCS_LISTENING;
         c->turn = 0;
         return out(VCA_DROP_TURN | release_link(c) | release_typing(c), VCH_LISTENING);
@@ -547,12 +578,13 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
     case VCE_PAUSE: return on_pause(c, a, now);
     case VCE_RESUME: return on_resume(c, now);
 
-    case VCE_DUCK:   return st == VCS_SPEAKING ? out(VCA_DUCK, VCH_NONE) : none;
+    case VCE_DUCK:   return st == VCS_SPEAKING && !c->no_cutin ? out(VCA_DUCK, VCH_NONE) : none;
     case VCE_UNDUCK: return st == VCS_SPEAKING ? out(VCA_UNDUCK, VCH_NONE) : none;
     case VCE_CUT:
-        if (st != VCS_SPEAKING) return none;
+        if (st != VCS_SPEAKING || c->no_cutin) return none;
         c->state = VCS_HEARING;   /* the turn opens now (AEC) or at TURN_START (half-duplex) */
         c->cut_turn = 1;
+        c->cut_reply = c->speaking_reply;
         /* no mode command: the listener has moved itself to LISTEN with the turn carrying on,
          * and a mode command would wipe that turn */
         return out(VCA_STOP_SPEECH | VCA_UNDUCK | release_caption(c), VCH_HEARING);
@@ -568,7 +600,7 @@ VoiceConvOut voice_conv_step(VoiceConv *c, VoiceConvEvent ev, int a, int b, unsi
     VoiceConvOut o = step_inner(c, ev, a, b, now);
     if (c->state != before) c->state_at = now;
     /* the cut-in's turn is over once the conversation is neither hearing it nor awaiting its text */
-    if (c->state != VCS_HEARING && c->state != VCS_ENDING) c->cut_turn = 0;
+    if (c->state != VCS_HEARING && c->state != VCS_ENDING) c->cut_turn = c->cut_reply = 0;
     return o;
 }
 
@@ -620,6 +652,7 @@ const char *voice_conv_header_text(VoiceConvHeader h)
     case VCH_LIVE_UNAVAILABLE: return "Live text is unavailable: the words will appear when you stop";
     case VCH_LIVE_STOPPED:     return "Live text stopped: the rest will appear when you stop";
     case VCH_AI_FAILED:        return "AI speech failed: using Windows speech";
+    case VCH_IGNORING_OWN_VOICE: return "Ignoring the assistant's own voice for the rest of this reply.";
     case VCH_NONE:
     default:                   return "";
     }

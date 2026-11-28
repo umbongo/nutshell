@@ -1764,3 +1764,252 @@ int test_vconv_cut_turn_flag(void)
     ASSERT_TRUE(clean());
     TEST_END();
 }
+
+/* ---- a false cut undoes itself; self-triggers are bounded ---- */
+
+/* From SPEAKING (a reply being read) to a cut-in turn whose end is awaited:
+ * duck, turn start, cut, turn end, final text. Returns the clock. */
+static unsigned long to_cut_turn(VoiceConv *c, unsigned long t)
+{
+    run(c, VCE_DUCK, 0, 0, t += 10);
+    run(c, VCE_TURN_START, 0, 0, t += 10);
+    run(c, VCE_LINK_READY, 0, 0, t += 10);
+    run(c, VCE_CUT, 0, 0, t += 200);
+    run(c, VCE_TURN_END, 0, 0, t += 1000);
+    run(c, VCE_LINK_FINAL, 0, 0, t += 100);
+    return t;
+}
+
+/* A false cut by transcript class cls; returns the resulting output. */
+static VoiceConvOut false_cut_by(VoiceConv *c, unsigned long *t, VoiceTurnClass cls)
+{
+    *t = to_cut_turn(c, *t);
+    return run(c, VCE_TRANSCRIPT, (int)cls, 0, *t += 10);
+}
+
+int test_vconv_false_cut_echo_resumes_from_cut_point(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    o = false_cut_by(&c, &t, VTC_ECHO);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_CONTINUE | VCA_MODE_SPEAK | VCA_DROP_TURN));
+    ASSERT_FALSE(o.actions & (VCA_SEND_TURN | VCA_SPEAK_REPLY | VCA_SPEAK_REPEAT | VCA_MODE_HOLD));
+    ASSERT_EQ(o.header, VCH_IGNORED_ECHO);
+    ASSERT_EQ(c.cut_turn, 0);
+    ASSERT_EQ(c.speaking_reply, 1);
+    ASSERT_TRUE(has(o, VCA_STOP_CAPTION));               /* Send shows Stop again */
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_false_cut_empty_resumes(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    o = false_cut_by(&c, &t, VTC_EMPTY);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_CONTINUE | VCA_MODE_SPEAK | VCA_DROP_TURN));
+    ASSERT_EQ(o.header, VCH_SPEAKING);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_false_cut_abandoned_turn_resumes(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    run(&c, VCE_DUCK, 0, 0, t += 10);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_CUT, 0, 0, t += 200);
+    ASSERT_EQ(c.state, VCS_HEARING);
+    o = run(&c, VCE_TURN_ABANDON, 0, 0, t += 100);   /* too short to be a turn */
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_CONTINUE | VCA_MODE_SPEAK | VCA_DROP_TURN));
+    ASSERT_EQ(c.cut_turn, 0);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_real_cut_does_not_resume(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    o = false_cut_by(&c, &t, VTC_TEXT);
+    ASSERT_TRUE(has(o, VCA_SEND_TURN));
+    ASSERT_FALSE(o.actions & (VCA_SPEAK_CONTINUE | VCA_MODE_SPEAK));
+    ASSERT_EQ(c.state, VCS_ENDING);
+    o = run(&c, VCE_SENT, VSS_SENT, 0, t += 10);
+    ASSERT_EQ(c.state, VCS_WORKING);
+    ASSERT_EQ(c.false_cuts, 0);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_second_false_cut_turns_voice_cutin_off(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    o = false_cut_by(&c, &t, VTC_ECHO);
+    ASSERT_TRUE(has(o, VCA_MODE_SPEAK));
+    ASSERT_EQ(c.no_cutin, 0);
+    o = false_cut_by(&c, &t, VTC_ECHO);                       /* the second one */
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_CONTINUE | VCA_MODE_HOLD | VCA_DROP_TURN));
+    ASSERT_FALSE(o.actions & VCA_MODE_SPEAK);               /* the microphone no longer listens for a cut-in */
+    ASSERT_EQ(o.header, VCH_IGNORING_OWN_VOICE);
+    ASSERT_STR_EQ(voice_conv_header_text(VCH_IGNORING_OWN_VOICE),
+                  "Ignoring the assistant's own voice for the rest of this reply.");
+    ASSERT_EQ(c.no_cutin, 1);
+    /* a third self-trigger cannot happen: the listener's events mean nothing now */
+    ASSERT_EQ(run(&c, VCE_DUCK, 0, 0, t += 10).actions, 0u);
+    ASSERT_EQ(run(&c, VCE_TURN_START, 0, 0, t += 10).actions, 0u);
+    ASSERT_EQ(run(&c, VCE_CUT, 0, 0, t += 10).actions, 0u);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(c.cut_turn, 0);
+    /* the key and the Stop button still work */
+    o = run(&c, VCE_STOP, 0, 0, t += 10);
+    ASSERT_TRUE(has(o, VCA_STOP_SPEECH | VCA_MODE_LISTEN));
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_second_false_cut_by_abandon_and_empty(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    run(&c, VCE_DUCK, 0, 0, t += 10);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_CUT, 0, 0, t += 200);
+    run(&c, VCE_TURN_ABANDON, 0, 0, t += 100);                /* the first: an abandoned turn */
+    o = false_cut_by(&c, &t, VTC_EMPTY);                      /* the second: an empty one */
+    ASSERT_TRUE(has(o, VCA_SPEAK_CONTINUE | VCA_MODE_HOLD));
+    ASSERT_EQ(o.header, VCH_IGNORING_OWN_VOICE);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_false_cut_count_resets_with_the_next_reply(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    false_cut_by(&c, &t, VTC_ECHO);
+    false_cut_by(&c, &t, VTC_ECHO);
+    ASSERT_EQ(c.no_cutin, 1);
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    /* the user speaks, the chat answers: a new reply */
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_LINK_READY, 0, 0, t += 10);
+    run(&c, VCE_TURN_END, 0, 0, t += 1000);
+    run(&c, VCE_LINK_FINAL, 0, 0, t += 100);
+    run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, t += 10);
+    run(&c, VCE_SENT, VSS_SENT, 0, t += 10);
+    o = run(&c, VCE_CHAT_IDLE, 1, 0, t += 1000);
+    ASSERT_TRUE(has(o, VCA_SPEAK_REPLY | VCA_MODE_SPEAK));
+    ASSERT_EQ(c.no_cutin, 0);
+    ASSERT_EQ(c.false_cuts, 0);
+    ASSERT_EQ(run(&c, VCE_DUCK, 0, 0, t += 10).actions, (unsigned)VCA_DUCK);   /* cut-in works again */
+    run(&c, VCE_UNDUCK, 0, 0, t += 10);
+    o = false_cut_by(&c, &t, VTC_ECHO);                       /* one false cut: back to the first */
+    ASSERT_TRUE(has(o, VCA_MODE_SPEAK));
+    ASSERT_EQ(c.no_cutin, 0);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_false_cuts_do_not_keep_the_silence_timer_alive(void)
+{
+    TEST_BEGIN();
+    VoiceConv c;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1), idle0, done;
+    idle0 = c.idle_at;
+    ASSERT_EQ(idle0, t);                                      /* the chat finished at t */
+    t += 20000;
+    false_cut_by(&c, &t, VTC_ECHO);
+    false_cut_by(&c, &t, VTC_EMPTY);
+    ASSERT_EQ(c.idle_at, idle0);                              /* a false cut restarts nothing */
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 5000);
+    done = t;
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    ASSERT_EQ(c.idle_at, done);                               /* as for any reply: counted from its end */
+    ASSERT_EQ(run(&c, VCE_TICK, 0, 0, done + VOICE_CONV_SILENCE_END_MS - 1).actions, 0u);
+    ASSERT_EQ(c.state, VCS_LISTENING);
+    run(&c, VCE_TICK, 0, 0, done + VOICE_CONV_SILENCE_END_MS);
+    ASSERT_EQ(c.state, VCS_IDLE);
+    TEST_END();
+}
+
+int test_vconv_false_cut_keeps_a_local_speech_local(void)
+{
+    TEST_BEGIN();
+    VoiceConv c;
+    unsigned long t = goto_state(&c, VCS_SPEAKING, 1);
+    /* "carry on" style local speech: the silence clock is not restarted when it ends */
+    run(&c, VCE_SPEECH_DONE, 0, 0, t += 3000);
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_LINK_READY, 0, 0, t += 10);
+    run(&c, VCE_TURN_END, 0, 0, t += 1000);
+    run(&c, VCE_LINK_FINAL, 0, 0, t += 100);
+    run(&c, VCE_TRANSCRIPT, VTC_REPEAT, 0, t += 10);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(c.local_speech, 1);
+    false_cut_by(&c, &t, VTC_ECHO);
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_EQ(c.local_speech, 1);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
+
+int test_vconv_cut_on_a_phrase_does_not_resume(void)
+{
+    TEST_BEGIN();
+    VoiceConv c; VoiceConvOut o;
+    unsigned long t = goto_state(&c, VCS_WORKING, 1);
+    run(&c, VCE_CARD, VCARD_COMMAND, 0, t += 10);             /* an approval phrase is spoken */
+    ASSERT_EQ(c.state, VCS_WORKING);
+    /* the reply speech path needs SPEAKING: a refused send speaks a phrase */
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    begin(&c, 1);
+    t = 0;
+    run(&c, VCE_TURN_START, 0, 0, t += 10);
+    run(&c, VCE_LINK_READY, 0, 0, t += 10);
+    run(&c, VCE_TURN_END, 0, 0, t += 100);
+    run(&c, VCE_LINK_FINAL, 0, 0, t += 100);
+    run(&c, VCE_TRANSCRIPT, VTC_TEXT, 0, t += 10);
+    o = run(&c, VCE_SENT, VSS_BUSY, 0, t += 10);              /* "I couldn't send that" */
+    ASSERT_EQ(c.state, VCS_SPEAKING);
+    ASSERT_TRUE(has(o, VCA_SPEAK_PHRASE));
+    ASSERT_EQ(c.speaking_reply, 0);
+    o = false_cut_by(&c, &t, VTC_ECHO);
+    ASSERT_EQ(c.state, VCS_LISTENING);                        /* as before: nothing to resume */
+    ASSERT_FALSE(o.actions & VCA_SPEAK_CONTINUE);
+    ASSERT_EQ(o.header, VCH_IGNORED_ECHO);
+    run(&c, VCE_PRESS, 0, 0, t += 10);
+    ASSERT_TRUE(clean());
+    TEST_END();
+}
