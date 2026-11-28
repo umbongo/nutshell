@@ -1603,6 +1603,20 @@ int test_zoom_zero_char_h(void);
 int test_zoom_zero_client_w(void);
 int test_zoom_zero_term_h(void);
 
+/* test_main_chords.c */
+int test_main_chords_tab_next_and_prev(void);
+int test_main_chords_zoom_reset(void);
+int test_main_chords_existing_chords(void);
+int test_main_chords_ai_panel_needs_the_assistant_on(void);
+int test_main_chords_forwarded_from_panel(void);
+int test_main_chords_typing_is_never_a_chord(void);
+int test_main_chords_tab_target_wraps_forward(void);
+int test_main_chords_tab_target_wraps_backward(void);
+int test_main_chords_tab_target_none_to_move_to(void);
+int test_main_chords_tab_target_bad_current(void);
+int test_main_chords_zoom_reset_sizes(void);
+int test_main_chords_are_in_the_shortcut_table(void);
+
 /* test_snap.c */
 int test_snap_calc_exact_fit(void);
 int test_snap_calc_right_gutter(void);
@@ -7112,6 +7126,18 @@ int main(void) {
     failed += test_zoom_zero_char_h();
     failed += test_zoom_zero_client_w();
     failed += test_zoom_zero_term_h();
+    failed += test_main_chords_tab_next_and_prev();
+    failed += test_main_chords_zoom_reset();
+    failed += test_main_chords_existing_chords();
+    failed += test_main_chords_ai_panel_needs_the_assistant_on();
+    failed += test_main_chords_forwarded_from_panel();
+    failed += test_main_chords_typing_is_never_a_chord();
+    failed += test_main_chords_tab_target_wraps_forward();
+    failed += test_main_chords_tab_target_wraps_backward();
+    failed += test_main_chords_tab_target_none_to_move_to();
+    failed += test_main_chords_tab_target_bad_current();
+    failed += test_main_chords_zoom_reset_sizes();
+    failed += test_main_chords_are_in_the_shortcut_table();
 
     printf("\n--- Snap ---\n");
     failed += test_snap_calc_exact_fit();

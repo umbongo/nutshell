@@ -699,6 +699,7 @@ void ai_chat_header_sync(AiChatData *d);
 const char *ai_chat_header_text(const AiChatData *d, int *is_word);
 void ai_chat_header_invalidate(AiChatData *d);
 void ai_chat_apply_zoom(AiChatData *d, int delta);
+void ai_chat_zoom_to(AiChatData *d, int new_size);
 
 /* ai_chat_send.c: the box's text as UTF-8, LF line ends; heap, caller frees. */
 char *ai_chat_input_text_utf8(HWND hInput);

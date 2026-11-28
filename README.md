@@ -428,6 +428,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | --- | --- | --- |
 | **Ctrl+Shift+T** | New session (opens the Session Manager) | from the terminal, not the AI panel |
 | **Ctrl+Shift+W** | Close the active tab | from the terminal |
+| **Ctrl+Tab, Ctrl+Shift+Tab** | Next tab, previous tab | |
 | **Alt+F4** | Exit | |
 | **Alt** | Open the menu bar | |
 | **Alt+Space** | Open the system menu | |
@@ -451,8 +452,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **PgUp** | History up a page; vim and less get it | |
 | **PgDn** | History down a page; vim and less get it | |
 | **Ctrl+PgUp, Ctrl+PgDn** | Sent to the program, always | |
-| **Ctrl+=** | Zoom the terminal font in | US layout |
-| **Ctrl+-** | Zoom the terminal font out | US layout |
+| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the terminal font in, out or reset | US layout |
 
 #### Keys the terminal sends to the shell
 
@@ -475,8 +475,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **Enter** | Send | while a reply streams or commands run: stop them |
 | **Shift+Enter** | New line | |
 | **Ctrl+V** | Paste text, or attach an image from the clipboard | |
-| **Ctrl+=** | Zoom the chat in | US layout |
-| **Ctrl+-** | Zoom the chat out | US layout |
+| **Ctrl+=, Ctrl+-, Ctrl+0** | Zoom the chat in, out or reset | US layout |
 | **Ctrl+C** | Copy the selected text | conversation list focused |
 | **Ctrl+A** | Select all messages | list focused |
 | **Esc** | Clear the selection | list focused |

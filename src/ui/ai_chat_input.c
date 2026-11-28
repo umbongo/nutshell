@@ -5,6 +5,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "main_chord_win.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -174,6 +175,12 @@ LRESULT CALLBACK ai_chat_input_subclass_proc(HWND hwnd, UINT msg,
             return 0; /* eat the Enter key */
         }
         /* AI_INPUT_NEWLINE: fall through to default (inserts newline) */
+    }
+    if (msg == WM_KEYDOWN && main_chord_now(wParam) == MCHORD_ZOOM_RESET) {
+        /* Ctrl+0: the panel resets the chat zoom, as it does Ctrl+= and Ctrl+- */
+        HWND parent = GetParent(hwnd);
+        if (parent) SendMessage(parent, msg, wParam, lParam);
+        return 0;
     }
     if (msg == WM_KEYDOWN && (GetKeyState(VK_CONTROL) & 0x8000)) {
         if (wParam == VK_OEM_PLUS  || wParam == (WPARAM)'='

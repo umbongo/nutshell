@@ -4,6 +4,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
+#include "main_chord_win.h"
 #include "dll_record.h"
 #include "notice_dlg.h"
 #include "voice_win.h"
@@ -2072,6 +2073,10 @@ next_coalesce:;
             }
             if (wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
                 ai_chat_apply_zoom(d, -1);
+                return 0;
+            }
+            if (main_chord_now(wParam) == MCHORD_ZOOM_RESET) {
+                ai_chat_zoom_to(d, zoom_reset_size(1));
                 return 0;
             }
         }

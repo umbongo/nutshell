@@ -574,7 +574,13 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc)
 void ai_chat_apply_zoom(AiChatData *d, int delta)
 {
     if (!d) return;
-    int new_size = app_font_zoom(d->ui_font_size, delta);
+    ai_chat_zoom_to(d, app_font_zoom(d->ui_font_size, delta));
+}
+
+/* As ai_chat_apply_zoom, to an absolute size (Ctrl+0 resets to the default). */
+void ai_chat_zoom_to(AiChatData *d, int new_size)
+{
+    if (!d) return;
     if (new_size == d->ui_font_size)
         return;
     d->ui_font_size = new_size;

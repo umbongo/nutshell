@@ -3355,6 +3355,7 @@ static void update_scrollbar(HWND hwnd)
 /* ---- Cell-snapping helpers ----------------------------------------------- */
 #include "snap.h"
 #include "zoom.h"
+#include "main_chords.h"
 #include "connect_anim.h"
 
 /* Return total non-client pixel size (border + title bar) for hwnd. */
@@ -3373,10 +3374,9 @@ static void get_nc_size(HWND hwnd, int *nc_w, int *nc_h)
 
 /* Step to the next/previous discrete font size.
  * delta is +1 (zoom in / larger) or -1 (zoom out / smaller). */
-static void apply_zoom(HWND hwnd, int delta)
+static void apply_zoom_size(HWND hwnd, int new_size)
 {
     int cur = g_config->settings.font_size;
-    int new_size = app_font_zoom(cur, delta);
     if (new_size == cur)
         return;
 
@@ -3398,6 +3398,11 @@ static void apply_zoom(HWND hwnd, int delta)
     SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(rc.right, rc.bottom));
     invalidate_terminal(hwnd);
+}
+
+static void apply_zoom(HWND hwnd, int delta)
+{
+    apply_zoom_size(hwnd, app_font_zoom(g_config->settings.font_size, delta));
 }
 
 /* ---- Owner-draw menu for colour-scheme integration ---- */
@@ -4275,6 +4280,25 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
         if (vk == (WPARAM)'M') {
             drop_queued_char(hwnd, lParam);
             if (!is_repeat) mark_issue(hwnd, "key");
+            return true;
+        }
+    }
+    /* Ctrl+Tab / Ctrl+Shift+Tab: next / previous tab, wrapping; Ctrl+0:
+     * reset the terminal zoom. Taken before the key encoder, so none of them
+     * reaches the shell (with one tab Ctrl+Tab does nothing and sends
+     * nothing). Switching repeats while the keys are held, as in a browser. */
+    {
+        const MainChord mc = main_chord_classify((unsigned)vk, shift, ctrl, alt, ai_gate_on());
+        if (mc == MCHORD_TAB_NEXT || mc == MCHORD_TAB_PREV) {
+            drop_queued_char(hwnd, lParam);
+            int to = tab_chord_target(tabs_count(g_hwndTabs), tabs_get_active(g_hwndTabs),
+                                      mc == MCHORD_TAB_NEXT ? 1 : -1);
+            if (to >= 0) tabs_set_active(g_hwndTabs, to);
+            return true;
+        }
+        if (mc == MCHORD_ZOOM_RESET) {
+            drop_queued_char(hwnd, lParam);
+            apply_zoom_size(hwnd, zoom_reset_size(0));
             return true;
         }
     }
