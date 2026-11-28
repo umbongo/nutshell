@@ -4207,6 +4207,9 @@ int test_ai_gate_default_off(void);
 int test_ai_gate_enabled(void);
 int test_ai_gate_override_only(void);
 int test_ai_gate_override_does_not_change_enabled(void);
+/* test_win_only_list.c */
+int test_win_only_list_every_win_file_is_listed(void);
+
 /* test_shortcuts.c */
 int test_shortcuts_every_row_has_section_chord_action(void);
 int test_shortcuts_sections_contiguous_and_in_fixed_order(void);
@@ -9094,6 +9097,7 @@ int main(void) {
     failed += test_ai_gate_enabled();
     failed += test_ai_gate_override_only();
     failed += test_ai_gate_override_does_not_change_enabled();
+    failed += test_win_only_list_every_win_file_is_listed();
     failed += test_shortcuts_every_row_has_section_chord_action();
     failed += test_shortcuts_sections_contiguous_and_in_fixed_order();
     failed += test_shortcuts_no_chord_and_condition_repeat_within_a_section();

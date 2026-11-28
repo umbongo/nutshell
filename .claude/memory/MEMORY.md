@@ -151,7 +151,10 @@ retrospective of PRs #102-#122).
   PR #98 made it `-Werror`, four `-Wformat-truncation` warnings in a `_WIN32`
   branch of `ai_tool_web_search.c`, which gcc 13 compiles without a word,
   failed it (fixed in PR #100). A new `tests/*_win.c` file goes into
-  `WIN_ONLY_TESTS`; a change to the build flags, or one a newer gcc may warn
+  `WIN_ONLY_TESTS` (since 2026-11-28 the native test
+  `test_win_only_list_every_win_file_is_listed` fails on any host when one
+  is missing; `test_ai_netcancel_win.c`, missed in PR #106, was added in
+  PR #126); a change to the build flags, or one a newer gcc may warn
   on, asks the maintainer for a `mingw32-make test`.
 - **Never-pushed branches** can live in `~/nutshell-wt/*` worktrees, the
   main clone `~/nutshell` or the Windows box; check `automaton`'s
@@ -310,7 +313,7 @@ retrospective of PRs #102-#122).
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-11-28 (`main` at v1.3.3 after PR #123; open pull requests:
+As of 2026-11-28 (`main` at v1.3.4 after PR #126; open pull requests:
 `gh pr list`; no open CodeQL alert):
 
 - **Nothing merged since v1.2.94 is recorded as run on Windows** (the
@@ -328,11 +331,7 @@ As of 2026-11-28 (`main` at v1.3.3 after PR #123; open pull requests:
   (`web_search`, `web_fetch`, `winhttp_open`) and the voice follow-ups are
   held back. Batch 1 was PR #122. Check `gh pr list` and
   `~/nutshell-wt/*` before starting an Open item: a branch may hold it.
-- **`tests/test_ai_netcancel_win.c` is missing from `WIN_ONLY_TESTS`**
-  (found 2026-11-28, not run): a Windows-host `make test` probably fails
-  to link until it is added.
-- Still open and larger: `web_search` does not URL-encode its query; a
-  `vcpkg.json` manifest with a baseline; `ssh_channel_write` can block the
+- Still open and larger: `web_search` does not URL-encode its query; `ssh_channel_write` can block the
   UI thread for up to 5 s per write; `run_command` live rounds on five of
   six providers; harness cases never run (telnet, `97-voice.ps1`,
   `settings_help_tool_count`, `ui_gallery`); no release since v1.1.21;

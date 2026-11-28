@@ -7,7 +7,7 @@ approve, markdown tables, role colour, smart scrolling, and pending command
 batches). Native suite: **4,673 tests**, 0 failures, 3 skipped (hosted `Native tests`, real
 libssh2, PR #122's head, 2026-11-28; 4,632 with the libssh2 stub on `automaton`;
 `wintest` 257 run, 0 failed, 6 skipped under Wine). Integration suite (`tests/integration/Run-Integration.ps1`): twelve case files
-(`cases\10-terminal` … `97-voice`, `85-telnet` new in PR #81), 84 registered cases
+(`cases\10-terminal` … `97-voice`, `85-telnet` new in PR #81), 94 registered cases
 (the README's case tables and the telnet file), manual only since 2026-09-15, DPI-aware since
 PR #71; `ui_gallery` captures 22 `--ui-demo` states x 4 themes = 88 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
@@ -515,6 +515,12 @@ Done, in order (details in the commit messages and the specs named):
   already struck), updated the counts (4,673 hosted tests, `wintest` 257, `ui_gallery`
   22 x 4, v1.3.2, 93 CRLF files), and added Open "Live dictation follow-ups" from PR #112's
   and #108's bodies. The voice items stay Open: nothing of live voice has run on Windows.
+- Housekeeping closed on the process branch (2026-11-28): `vcpkg.json` manifest with the
+  `builtin-baseline` of the `~/vcpkg` checkout (e2747d2; the Makefile still reads the
+  classic `installed/` directory); `Install-IntegrationRunner.ps1` deleted (9d0cdd1);
+  a stream posting during the AI panel's destruction no longer leaks its payload (f2cb01d:
+  a failed post frees its payload, and `WM_DESTROY` drains the queued stream messages);
+  the integration suite's case count corrected from 84 to 94 (counted from the cases).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -1011,8 +1017,6 @@ Open, in priority order:
       clock only between reads).
 - [ ] winhttp_open: fail closed when TLS 1.2 cannot be enforced (today the session keeps
       the OS defaults if the TLS 1.2-only retry is refused).
-- [ ] `vcpkg.json` manifest with a baseline (deferred by PR #87, whose body says it is in
-      this list; it was not until 2026-11-12).
 - [ ] `ssh_channel_write` blocks the UI thread for up to its 5 s send timeout per write
       when the remote window is full (found by PR #79, left alone). The same class of
       symptom as #79's lost input: keys stop while the UI thread waits. Move SSH writes off
@@ -1105,9 +1109,6 @@ Open, in priority order:
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
 - [ ] CI review follow-ups (2026-09-10 review; the libssh2 part was done 2026-09-24):
-      `tests/integration/Install-IntegrationRunner.ps1` still exists for the runner
-      decommissioned on 2026-09-15 and names the removed `integration.yml`; deleting it is
-      the maintainer's call;
       `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
       `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
@@ -1116,7 +1117,7 @@ Open, in priority order:
       test input. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
 - [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
-      settings), D (AI extras) — 31 cases planned; the suite has since grown to 84 cases, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
+      settings), D (AI extras) — 31 cases planned; the suite has since grown to 94 cases, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config
@@ -1126,9 +1127,7 @@ Open, in priority order:
       say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
       destination filter shipped in PR #85.
 - [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
-      two user turns in a row in the conversation; a stream posting during the AI
-      panel's destruction leaks its payload (tiny; probably closed by the v1.2.14
-      stream-lifetime rework, f2cb01d -- confirm, then strike).
+      two user turns in a row in the conversation.
 - [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
       device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
       than device rulesets -- keep detecting on strict-locked sessions and add a

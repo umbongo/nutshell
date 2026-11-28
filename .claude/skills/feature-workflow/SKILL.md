@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-28 (merge when ready, and the Windows test log; the same day, a count corrected at the retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-28 (the review of a branch with no plan; build once, after the fix wave; merge when ready and the Windows test log). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules live in CLAUDE.md ("Software Development Rules", "Branches, pull
 requests and the merge gate"); this skill walks through them in order, and
 CLAUDE.md wins where they disagree. History and rationale: the retrospectives.
@@ -58,9 +58,9 @@ final. Finish means the pull request merged (step 9), once it is ready.
 the controller for `superpowers:subagent-driven-development`: it dispatches
 every agent the plan needs as a background agent and takes their
 completion notifications. That is each task's implementer, reviewer and
-fixer, and the work after the last task: the version bump, build and
-verification (a Sonnet agent), the final review, the fix wave and its
-re-review. No sub-agent spans two of these jobs.
+fixer, and the work after the last task, in this order: the final review,
+its fix wave and re-review, and then, once, the version bump, build and
+verification (a Sonnet agent). No sub-agent spans two of these jobs.
 
 - **Why** (measured over 2026-11-21 to 26, `docs/token-usage/`): the
   long-lived Opus orchestrators were about 30% of the cost index. Their
@@ -155,14 +155,20 @@ open as drafts, ending with the `Models:` line and the Claude Code footer.
    `git diff --stat origin/main...HEAD`, compares it with the files the
    plan's tasks named, reads in full any file no task named, and reads the
    hunks the review's findings cite and the fixes made to them. A branch
-   with no final review (a small fix, docs, a config change) is still read
-   in full. Stage new files by path and read every `??` line first (CLAUDE.md, "Git
+   with no plan (a fix, a batch of small fixes) gets one review of its
+   whole diff by a model that did not write it, Opus or Fable, and is read
+   in full by the main session (maintainer, 2026-11-28); a docs or config
+   change is read in full. Stage new files by path and read every `??` line first (CLAUDE.md, "Git
    commits"). A PR stacked on an unmerged branch is retargeted to `main`
    when its base is deleted (else `gh api -X PATCH
    repos/umbongo/nutshell/pulls/N -f base=main`; `gh pr edit` fails here);
    it then needs `gh api -X PUT repos/umbongo/nutshell/pulls/N/update-branch`
    and about 2.5 minutes for the checks to rerun.
-6. **The gate.** Any change under `src/`, the Makefile or `nutshell.rc`
+6. **The gate.** **Bump and build once, after the final review's fix
+   wave** (maintainer, 2026-11-28): the review reads sources, and every
+   check but `Version bump` runs without the exe, so a draft pushed before
+   the build shows that one check red until then. PR #117 built four exes
+   in 70 minutes, one per review wave. Any change under `src/`, the Makefile or `nutshell.rc`
    needs `APP_VERSION` and `APP_VERSION_BINARY` raised in
    `src/ui/resource.h`, README's `**Version**:` line to match, and a
    rebuilt `build/win/nutshell.exe` committed, built on the Windows box
