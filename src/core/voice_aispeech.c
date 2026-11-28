@@ -379,6 +379,11 @@ int voice_ais_frames_over(uint64_t total, uint64_t add, uint64_t cap)
     return add > cap - total;
 }
 
+int voice_ais_request_too_long(uint64_t start_ms, uint64_t now_ms, uint64_t cap_ms)
+{
+    return (uint64_t)(now_ms - start_ms) > cap_ms;
+}
+
 int voice_ais_audio_over_cap(uint64_t total, uint64_t add)
 {
     return voice_ais_frames_over(total, add, VOICE_AIS_MAX_FRAMES);

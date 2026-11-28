@@ -3081,6 +3081,7 @@ int test_vais_offset_complete(void);
 int test_vais_offset_estimate(void);
 int test_vais_offset_utf8(void);
 int test_vais_audio_cap(void);
+int test_vais_request_time_cap(void);
 int test_vais_sample_failure_note(void);
 int test_vais_redirect_reason_per_provider(void);
 int test_vais_decoder_failure_hr(void);
@@ -8805,6 +8806,7 @@ int main(void) {
     failed += test_vais_offset_estimate();
     failed += test_vais_offset_utf8();
     failed += test_vais_audio_cap();
+    failed += test_vais_request_time_cap();
     failed += test_vais_sample_failure_note();
     failed += test_vais_redirect_reason_per_provider();
     failed += test_vais_decoder_failure_hr();

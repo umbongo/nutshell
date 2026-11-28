@@ -342,6 +342,7 @@ typedef struct {
     int fmt_err;                        /* the decoder error was "unsupported audio format" */
     int notwav_err;                     /* the decoder error was "not a WAV stream" */
     uint64_t frames;                    /* decoded frames of this request, against VOICE_AIS_MAX_FRAMES */
+    ULONGLONG started;                  /* GetTickCount64() at the request, against VOICE_AIS_MAX_REQUEST_MS */
     VoiceWavStream wav;
     SseLine sse;
     VoiceAisSse st;
@@ -398,6 +399,13 @@ static int fetch_sse_line(const char *line, size_t len, void *ctx)
 static int fetch_stream_cb(const char *data, size_t len, void *ctx)
 {
     AisFetch *f = (AisFetch *)ctx;
+    /* A stream that runs past the wall-clock cap, audio or not (keep-alive lines carry none), is
+     * closed and fails as a stream, the same way as the frame cap. */
+    if (voice_ais_request_too_long((uint64_t)f->started, (uint64_t)GetTickCount64(),
+                                   VOICE_AIS_MAX_REQUEST_MS)) {
+        f->failed = 1;
+        return 1;
+    }
     if (f->mistral) return sse_line_feed(&f->sse, data, len, fetch_sse_line, f);
     return fetch_feed(f, (const unsigned char *)data, len);
 }
@@ -431,6 +439,7 @@ static long ais_fetch(void *job, const VoiceAisTarget *t, const char *key, const
         f->job = job;
         f->push = push;
         f->mistral = t->shape == VAIS_SHAPE_MISTRAL;
+        f->started = GetTickCount64();
         voice_wavs_init(&f->wav, f->mistral ? AIS_MISTRAL_RAW : VWS_RAW_NONE);
         sse_line_init(&f->sse);
         voice_ais_sse_init(&f->st);                      /* once per request: audio_seen is per stream */

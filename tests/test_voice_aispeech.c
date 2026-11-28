@@ -761,6 +761,26 @@ int test_vais_failure_reasons(void)
     TEST_END();
 }
 
+/* The wall-clock cap on one request, beside the frame-count cap: a stream that never ends and
+ * carries no audio is closed too. Elapsed time is a wrap-safe unsigned difference of ticks. */
+int test_vais_request_time_cap(void)
+{
+    TEST_BEGIN();
+    const uint64_t cap = VOICE_AIS_MAX_REQUEST_MS;
+    ASSERT_TRUE(cap >= 60000u);                          /* not shorter than a minute */
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000, cap), 0);
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000 + cap - 1, cap), 0);   /* below */
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000 + cap, cap), 0);       /* at: allowed */
+    ASSERT_EQ(voice_ais_request_too_long(1000, 1000 + cap + 1, cap), 1);   /* above */
+    ASSERT_EQ(voice_ais_request_too_long(0, UINT64_MAX, cap), 1);
+    /* across a wrap of the tick counter: start just before it, now just after it */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, 4, cap), 0);      /* 10 ms elapsed */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, cap - 7, cap), 0);   /* cap - 1 ms */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, cap - 6, cap), 0);   /* exactly cap */
+    ASSERT_EQ(voice_ais_request_too_long(UINT64_MAX - 5, cap - 5, cap), 1);   /* cap + 1 ms */
+    TEST_END();
+}
+
 /* The cap on the audio one request may deliver: 5 minutes at 24 kHz. */
 int test_vais_audio_cap(void)
 {
