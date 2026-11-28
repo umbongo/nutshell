@@ -1,4 +1,5 @@
 #include "ai_tool_web_fetch.h"
+#include "ai_watchdog.h"
 #include "html_util.h"
 #include "json_parser.h"
 #include <string.h>
@@ -495,11 +496,16 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     AiNetCancel *nc = fetch ? fetch->nc : NULL;
     HINTERNET session = NULL, connect = NULL, req = NULL;
     int own_session = 0;   /* opened here, so closed here */
-    int armed = 0;         /* req is registered on nc: fire may close it */
+    AiNetCancel hop_nc;    /* stands in for nc when the caller has none */
+    AiNetCancel *tok;      /* the token req is armed on: nc, or hop_nc */
+    AiWatchdog *wd = NULL; /* closes req at hop_end or on the cancel flag */
+    int armed = 0;         /* req is registered on tok: it may be closed from elsewhere */
     int tls_refused = 0;   /* no session: TLS 1.2 could not be enforced */
     char *buf = NULL;
     size_t len = 0, cap = 0;
     const size_t max_body = (size_t)AI_TOOL_RESULT_MAX * 4;
+    ai_nc_init(&hop_nc);
+    tok = nc ? nc : &hop_nc;
 
     if (fetch && fetch->session) {
         session = fetch->session;
@@ -525,8 +531,18 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     /* From here a fire from the UI thread closes req and the blocked call
      * returns an error. After any failure the token is read before req is
      * touched again; only the disarm decides who closes it. */
-    if (ai_nc_arm(nc, (uintptr_t)req, wf_close_cb) != 0) goto fail;   /* fired: closed below */
-    armed = nc != NULL;
+    if (ai_nc_arm(tok, (uintptr_t)req, wf_close_cb) != 0) goto fail;   /* fired: closed below */
+    armed = 1;
+    /* A read can block past the hop's end (a server that trickles bytes), and
+     * the checks between calls cannot interrupt it: the watchdog closes req
+     * at hop_end or when the cancel flag rises, through the token, so it is
+     * closed exactly once. It is joined before req is disarmed or closed. If
+     * the thread cannot start the fetch goes on as it did before. */
+    {
+        unsigned long long t0 = (unsigned long long)GetTickCount64();
+        unsigned long long left0 = hop_end > t0 ? hop_end - t0 : 1;
+        wd = ai_wd_start(tok, left0 > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (unsigned long)left0, cancel);
+    }
 
     DWORD no_redirects = WINHTTP_DISABLE_REDIRECTS;
     if (!WinHttpSetOption(req, WINHTTP_OPTION_DISABLE_FEATURE,
@@ -616,7 +632,9 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     }
     buf[len] = '\0';
 
-    if (!armed || ai_nc_disarm(nc)) WinHttpCloseHandle(req);
+    (void)ai_wd_stop(wd);   /* joined: nothing can close req behind the disarm */
+    wd = NULL;
+    if (!armed || ai_nc_disarm(tok)) WinHttpCloseHandle(req);
     WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);
     *status   = (int)code;
@@ -626,9 +644,10 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
 
 fail:
     free(buf);
+    (void)ai_wd_stop(wd);   /* NULL when never started; joined before the disarm */
     if (req) {
-        /* armed: fire may already have closed it (disarm says 0) */
-        if (!armed || ai_nc_disarm(nc)) WinHttpCloseHandle(req);
+        /* armed: fire or the watchdog may already have closed it (disarm says 0) */
+        if (!armed || ai_nc_disarm(tok)) WinHttpCloseHandle(req);
     }
     if (connect) WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);   /* a shared one stays for wf_end() */

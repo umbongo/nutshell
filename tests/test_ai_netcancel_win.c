@@ -10,9 +10,14 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "test_framework.h"
 #include "thread_join.h"
 #include "ai_netcancel.h"
+#include "ai_tool_web_fetch.h"
+#include "net_guard.h"
+#include "http_loopback_win.h"
 
 /* ---- thread_join -------------------------------------------------------- */
 
@@ -186,6 +191,99 @@ int test_ai_nc_fire_wakes_blocked_winhttp_call(void)
     if (w != WAIT_OBJECT_0) TerminateThread(t, 1);
     CloseHandle(t);
     closesocket(ls);
+    TEST_END();
+}
+
+/* ---- the web_fetch hop watchdog ------------------------------------------ */
+
+/* One raw hop (the default backend's get, which does no address checks) at a
+ * loopback server that trickles its response head, one byte per 100 ms: each
+ * byte restarts WinHTTP's receive timeout, so only the watchdog ends the
+ * wait. Not run by the author (no Wine on the authoring session). */
+typedef struct {
+    int  port;
+    int  timeout_ms;
+    volatile int *cancel;
+    int  rc;
+    int  status;
+    DWORD ms;
+    volatile int done;
+} TrickleArg;
+
+static DWORD WINAPI trickle_thread(LPVOID p)
+{
+    TrickleArg *a = (TrickleArg *)p;
+    char url[64];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/", a->port);
+    NetUrlParts parts;
+    char location[256];
+    char *body = NULL;
+    size_t body_len = 0;
+    a->rc = -99;
+    if (net_url_parse(url, &parts) == 0) {
+        const WebFetchBackend *be = web_fetch_default_backend();
+        DWORD t0 = GetTickCount();
+        a->rc = be->get(be->ctx, &parts, a->timeout_ms, a->cancel, &a->status,
+                        location, sizeof(location), &body, &body_len);
+        a->ms = GetTickCount() - t0;
+    }
+    free(body);
+    a->done = 1;
+    return 0;
+}
+
+int test_web_fetch_trickling_head_ends_at_hop_deadline(void)
+{
+    TEST_BEGIN();
+    HttpLoop *h = hl_start(HLS_TRICKLE_HEAD, NULL);
+    ASSERT_NOT_NULL(h);
+    if (h) {
+        static TrickleArg a;
+        memset(&a, 0, sizeof(a));
+        a.port = hl_port(h);
+        a.timeout_ms = 700;
+        HANDLE t = CreateThread(NULL, 0, trickle_thread, &a, 0, NULL);
+        ASSERT_NOT_NULL(t);
+        DWORD w = t ? WaitForSingleObject(t, 8000) : WAIT_FAILED;
+        ASSERT_EQ((int)w, (int)WAIT_OBJECT_0);        /* far inside the 60 s trickle */
+        ASSERT_EQ(a.rc, -1);
+        ASSERT_EQ(a.status, 0);
+        ASSERT_TRUE(a.ms < 4000);
+        hl_stop(h);
+        if (t) {
+            if (w != WAIT_OBJECT_0) TerminateThread(t, 1);
+            CloseHandle(t);
+        }
+    }
+    TEST_END();
+}
+
+int test_web_fetch_trickling_head_ends_on_cancel_flag(void)
+{
+    TEST_BEGIN();
+    HttpLoop *h = hl_start(HLS_TRICKLE_HEAD, NULL);
+    ASSERT_NOT_NULL(h);
+    if (h) {
+        static TrickleArg a;
+        static volatile int cancel;
+        memset(&a, 0, sizeof(a));
+        cancel = 0;
+        a.port = hl_port(h);
+        a.timeout_ms = 30000;                          /* the hop's own limit is far off */
+        a.cancel = &cancel;
+        HANDLE t = CreateThread(NULL, 0, trickle_thread, &a, 0, NULL);
+        ASSERT_NOT_NULL(t);
+        Sleep(500);
+        cancel = 1;
+        DWORD w = t ? WaitForSingleObject(t, 5000) : WAIT_FAILED;
+        ASSERT_EQ((int)w, (int)WAIT_OBJECT_0);
+        ASSERT_EQ(a.rc, -1);
+        hl_stop(h);
+        if (t) {
+            if (w != WAIT_OBJECT_0) TerminateThread(t, 1);
+            CloseHandle(t);
+        }
+    }
     TEST_END();
 }
 

@@ -64,6 +64,12 @@ int ai_nc_disarm(AiNetCancel *c);
  * Idempotent; the handle is closed at most once, outside the lock. */
 void ai_nc_fire(AiNetCancel *c);
 
+/* Any thread: close the armed handle, if any, exactly like ai_nc_fire() but
+ * WITHOUT cancelling the token: a later arm still succeeds. For a deadline of
+ * one request (ai_watchdog.h), not a cancel of the whole job. Returns 1 when it
+ * closed a handle, 0 when nothing was armed. */
+int ai_nc_expire(AiNetCancel *c);
+
 /* Non-zero once fired. NULL counts as not cancelled (a tool run without a
  * token). */
 int ai_nc_cancelled(const AiNetCancel *c);

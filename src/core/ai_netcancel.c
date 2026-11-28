@@ -94,6 +94,22 @@ void ai_nc_fire(AiNetCancel *c)
     }
 }
 
+int ai_nc_expire(AiNetCancel *c)
+{
+    if (!c) return 0;
+    nc_lock(c);
+    uintptr_t   h = c->h;
+    AiNcCloseFn close = c->close;
+    c->h = 0;
+    c->close = NULL;
+    if (h && close) __atomic_store_n(&c->closing, 1, __ATOMIC_RELEASE);
+    nc_unlock(c);
+    if (!(h && close)) return 0;
+    close(h);
+    __atomic_store_n(&c->closing, 0, __ATOMIC_RELEASE);
+    return 1;
+}
+
 int ai_nc_cancelled(const AiNetCancel *c)
 {
     if (!c) return 0;
