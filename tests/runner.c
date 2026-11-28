@@ -1274,6 +1274,8 @@ int test_tn_login_device_prompt_switches_off(void);
 int test_tn_login_failure_reprompt_after_password_does_nothing(void);
 int test_tn_login_second_login_before_password_switches_off(void);
 int test_tn_login_timeout(void);
+int test_tn_login_deadline_across_tick_wrap(void);
+int test_tn_login_settle_across_tick_wrap(void);
 int test_tn_login_null_cursor_line_is_ignored(void);
 /* test_telnet_session.c */
 int test_term_cursor_row_prompt_text_public(void);
@@ -6184,6 +6186,8 @@ int main(void) {
     failed += test_tn_login_failure_reprompt_after_password_does_nothing();
     failed += test_tn_login_second_login_before_password_switches_off();
     failed += test_tn_login_timeout();
+    failed += test_tn_login_deadline_across_tick_wrap();
+    failed += test_tn_login_settle_across_tick_wrap();
     failed += test_tn_login_null_cursor_line_is_ignored();
     failed += test_term_cursor_row_prompt_text_public();
     failed += test_tn_session_autologin_user_and_password();
