@@ -53,6 +53,58 @@ int test_ai_nc_expire_closes_once_and_does_not_cancel(void)
     TEST_END();
 }
 
+int test_ai_nc_expired_state_is_distinct_from_cancelled(void)
+{
+    TEST_BEGIN();
+    wd_reset();
+    AiNetCancel nc; ai_nc_init(&nc);
+    ASSERT_EQ(ai_nc_expired(&nc), 0);
+    ASSERT_EQ(ai_nc_ended(&nc), 0);
+    ASSERT_EQ(ai_nc_arm(&nc, 0x21, wd_fake_close), 0);
+    ASSERT_EQ(ai_nc_expire(&nc), 1);
+    ASSERT_EQ(ai_nc_expired(&nc), 1);             /* the worker can see it */
+    ASSERT_EQ(ai_nc_cancelled(&nc), 0);           /* ...and it is not a cancel */
+    ASSERT_EQ(ai_nc_ended(&nc), 1);
+    ASSERT_EQ(ai_nc_disarm(&nc), 0);              /* already closed */
+    ASSERT_EQ(g_closes, 1);
+    /* the next hop starts clean */
+    ASSERT_EQ(ai_nc_arm(&nc, 0x22, wd_fake_close), 0);
+    ASSERT_EQ(ai_nc_expired(&nc), 0);
+    ASSERT_EQ(ai_nc_ended(&nc), 0);
+    ASSERT_EQ(ai_nc_disarm(&nc), 1);
+    /* expire with nothing armed still marks the hop */
+    ASSERT_EQ(ai_nc_expire(&nc), 0);
+    ASSERT_EQ(ai_nc_expired(&nc), 1);
+    ASSERT_EQ(g_closes, 1);
+    /* fire: cancelled, ended, not expired */
+    AiNetCancel fc; ai_nc_init(&fc);
+    ai_nc_fire(&fc);
+    ASSERT_EQ(ai_nc_cancelled(&fc), 1);
+    ASSERT_EQ(ai_nc_expired(&fc), 0);
+    ASSERT_EQ(ai_nc_ended(&fc), 1);
+    /* NULL token */
+    ASSERT_EQ(ai_nc_expired(NULL), 0);
+    ASSERT_EQ(ai_nc_ended(NULL), 0);
+    TEST_END();
+}
+
+int test_ai_wd_deadline_marks_token_expired(void)
+{
+    TEST_BEGIN();
+    wd_reset();
+    AiNetCancel nc; ai_nc_init(&nc);
+    ASSERT_EQ(ai_nc_arm(&nc, 0x31, wd_fake_close), 0);
+    AiWatchdog *wd = ai_wd_start(&nc, 20, NULL);
+    ASSERT_NOT_NULL(wd);
+    WD_SLEEP(400);
+    ASSERT_EQ(ai_nc_expired(&nc), 1);             /* visible before the join */
+    ASSERT_EQ(ai_nc_cancelled(&nc), 0);
+    ASSERT_EQ(ai_wd_stop(wd), 1);
+    ASSERT_EQ(ai_nc_disarm(&nc), 0);
+    ASSERT_EQ(g_closes, 1);
+    TEST_END();
+}
+
 int test_ai_wd_closes_at_deadline_once(void)
 {
     TEST_BEGIN();

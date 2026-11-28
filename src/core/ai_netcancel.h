@@ -47,6 +47,7 @@ typedef struct {
     uintptr_t   h;           /* the armed handle, 0 when none */
     AiNcCloseFn close;       /* how to close it */
     int         closing;     /* fire's close callback is running (outside the lock) */
+    int         expired;     /* set by expire, cleared by the next arm (one hop's deadline) */
 } AiNetCancel;
 
 void ai_nc_init(AiNetCancel *c);
@@ -69,6 +70,15 @@ void ai_nc_fire(AiNetCancel *c);
  * one request (ai_watchdog.h), not a cancel of the whole job. Returns 1 when it
  * closed a handle, 0 when nothing was armed. */
 int ai_nc_expire(AiNetCancel *c);
+
+/* Non-zero once ai_nc_expire() has run since the last arm: the hop's request
+ * handle was closed (or was about to be) by the deadline, so the worker must
+ * make no further call on it. Cleared by ai_nc_arm() for the next hop. */
+int ai_nc_expired(const AiNetCancel *c);
+
+/* Non-zero when the token was fired or expired: the armed handle is gone.
+ * The one predicate a worker checks before each use of its request handle. */
+int ai_nc_ended(const AiNetCancel *c);
 
 /* Non-zero once fired. NULL counts as not cancelled (a tool run without a
  * token). */

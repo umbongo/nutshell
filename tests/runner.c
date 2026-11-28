@@ -3440,6 +3440,8 @@ int test_ai_nc_null_token_is_harmless(void);
 int test_ai_nc_disarm_waits_for_running_close(void);
 int test_ai_nc_concurrent_fire_and_disarm_close_exactly_once(void);
 int test_ai_nc_expire_closes_once_and_does_not_cancel(void);
+int test_ai_nc_expired_state_is_distinct_from_cancelled(void);
+int test_ai_wd_deadline_marks_token_expired(void);
 int test_ai_wd_closes_at_deadline_once(void);
 int test_ai_wd_stop_before_deadline_closes_nothing(void);
 int test_ai_wd_cancel_flag_closes_once(void);
@@ -8304,6 +8306,8 @@ int main(void) {
     failed += test_ai_nc_disarm_waits_for_running_close();
     failed += test_ai_nc_concurrent_fire_and_disarm_close_exactly_once();
     failed += test_ai_nc_expire_closes_once_and_does_not_cancel();
+    failed += test_ai_nc_expired_state_is_distinct_from_cancelled();
+    failed += test_ai_wd_deadline_marks_token_expired();
     failed += test_ai_wd_closes_at_deadline_once();
     failed += test_ai_wd_stop_before_deadline_closes_nothing();
     failed += test_ai_wd_cancel_flag_closes_once();

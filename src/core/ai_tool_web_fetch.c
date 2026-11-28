@@ -457,6 +457,16 @@ static int wf_stopped(volatile int *cancel, const AiNetCancel *nc)
     return (cancel && *cancel) || ai_nc_cancelled(nc);
 }
 
+/* True when the worker must make no further call on its request handle: the
+ * caller cancelled, the token was fired, the watchdog already closed the
+ * handle (expired), or the hop's end has passed (the watchdog is about to). */
+static int wf_dead(volatile int *cancel, const AiNetCancel *tok,
+                   unsigned long long hop_end)
+{
+    return wf_stopped(cancel, tok) || ai_nc_ended(tok) ||
+           (unsigned long long)GetTickCount64() >= hop_end;
+}
+
 static void wf_close_cb(uintptr_t h)
 {
     WinHttpCloseHandle((HINTERNET)h);
@@ -544,25 +554,33 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         wd = ai_wd_start(tok, left0 > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (unsigned long)left0, cancel);
     }
 
+    /* From here the watchdog may close req at any moment, so every call on it
+     * is preceded by wf_dead(): after the watchdog (or a fire) has closed it
+     * no call is made. A check followed by a close before the call is a few
+     * instructions wide and accepted (ai_netcancel.h); the call fails. */
     DWORD no_redirects = WINHTTP_DISABLE_REDIRECTS;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSetOption(req, WINHTTP_OPTION_DISABLE_FEATURE,
                           &no_redirects, sizeof(no_redirects)))
         goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSetTimeouts(req, t, t, t, t)) goto fail;
     /* WinHttpSetTimeouts leaves the wait for the response headers at the
      * system default (90 s): bound it by the hop's time too, or a server that
      * accepts the request and then trickles holds WinHttpReceiveResponse. */
     DWORD resp_ms = (DWORD)t;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSetOption(req, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT,
                           &resp_ms, sizeof(resp_ms)))
         goto fail;
 
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
         goto fail;
-    if (wf_stopped(cancel, nc)) goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpReceiveResponse(req, NULL)) goto fail;
-    if (wf_stopped(cancel, nc)) goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
 
     DWORD code = 0, code_sz = sizeof(code);
     if (!WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
@@ -572,6 +590,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
 
     wchar_t w_loc[NET_URL_MAX];
     DWORD loc_sz = (DWORD)sizeof(w_loc);
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
                             w_loc, &loc_sz, WINHTTP_NO_HEADER_INDEX)) {
         /* A Location that does not fit or is not valid UTF-8 is reported as
@@ -590,7 +609,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     /* Body, capped; cancel between reads, and the hop's own time limit so a
      * server that trickles bytes cannot outlast it. */
     for (;;) {
-        if (wf_stopped(cancel, nc)) goto fail;
+        if (wf_dead(cancel, tok, hop_end)) goto fail;
         unsigned long long now = (unsigned long long)GetTickCount64();
         if (now >= hop_end) goto fail;
 
@@ -602,6 +621,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         if (!WinHttpSetTimeouts(req, r, r, r, r)) goto fail;
 
         DWORD avail = 0;
+        if (wf_dead(cancel, tok, hop_end)) goto fail;
         if (!WinHttpQueryDataAvailable(req, &avail)) goto fail;
         if (avail == 0) break;
 
@@ -619,12 +639,13 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         }
 
         DWORD got = 0;
+        if (wf_dead(cancel, tok, hop_end)) goto fail;
         if (!WinHttpReadData(req, buf + len, avail, &got)) goto fail;
         if (got == 0) break;
         len += got;
         if (len >= max_body) break;
     }
-    if (wf_stopped(cancel, nc)) goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
 
     if (!buf) {
         buf = malloc(1);
