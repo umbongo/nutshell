@@ -172,3 +172,73 @@ int test_paste_write_short_write_continues(void)
     ASSERT_TRUE(a.bad > 0u);
     TEST_END();
 }
+
+/* The report: a complete paste says so. */
+int test_paste_write_result_complete(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("a\r\nbc\n", 6, 0, rec_write, &r, 16, &a);
+    ASSERT_EQ(res.accepted, (size_t)5);
+    ASSERT_EQ(res.expected, (size_t)5);
+    ASSERT_EQ(res.stopped, 0);
+    TEST_END();
+}
+
+/* A write that fails at the first chunk: nothing accepted, all expected. */
+int test_paste_write_result_stopped_first_chunk(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.fail_after = 0;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("0123456789abcdefghij", 20, 0, rec_write, &r, 8, &a);
+    ASSERT_EQ(res.accepted, (size_t)0);
+    ASSERT_EQ(res.expected, (size_t)20);
+    ASSERT_EQ(res.stopped, 1);
+    ASSERT_EQ(r.calls, 1);
+    TEST_END();
+}
+
+/* Stopped part way: what was accepted, the whole expected total. */
+int test_paste_write_result_stopped_midway(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.fail_after = 1;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("0123456789abcdefghij", 20, 0, rec_write, &r, 8, &a);
+    ASSERT_EQ(res.accepted, (size_t)8);
+    ASSERT_EQ(res.expected, (size_t)20);
+    ASSERT_EQ(res.stopped, 1);
+    TEST_END();
+}
+
+/* A stop on the final partial chunk is reported too. */
+int test_paste_write_result_stopped_last_chunk(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.fail_after = 2;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("0123456789abcdefghij", 20, 0, rec_write, &r, 8, &a);
+    ASSERT_EQ(res.accepted, (size_t)16);
+    ASSERT_EQ(res.expected, (size_t)20);
+    ASSERT_EQ(res.stopped, 1);
+    TEST_END();
+}
+
+/* A short write that is then completed is not a stop. */
+int test_paste_write_result_short_then_complete(void)
+{
+    TEST_BEGIN();
+    Rec r; rec_init(&r);
+    r.short_cap = 3;
+    WriteAgg a; write_agg_init(&a);
+    PasteWriteResult res = paste_write_chunked_ex("0123456789", 10, 0, rec_write, &r, 16, &a);
+    ASSERT_EQ(res.accepted, (size_t)10);
+    ASSERT_EQ(res.expected, (size_t)10);
+    ASSERT_EQ(res.stopped, 0);
+    TEST_END();
+}

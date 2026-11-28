@@ -1573,6 +1573,11 @@ int test_paste_write_malformed_utf8_passthrough(void);
 int test_paste_write_large(void);
 int test_paste_write_failure_stops(void);
 int test_paste_write_short_write_continues(void);
+int test_paste_write_result_complete(void);
+int test_paste_write_result_stopped_first_chunk(void);
+int test_paste_write_result_stopped_midway(void);
+int test_paste_write_result_stopped_last_chunk(void);
+int test_paste_write_result_short_then_complete(void);
 
 /* test_pty_size.c */
 int test_pty_size_first_send(void);
@@ -7120,6 +7125,11 @@ int main(void) {
     failed += test_paste_write_large();
     failed += test_paste_write_failure_stops();
     failed += test_paste_write_short_write_continues();
+    failed += test_paste_write_result_complete();
+    failed += test_paste_write_result_stopped_first_chunk();
+    failed += test_paste_write_result_stopped_midway();
+    failed += test_paste_write_result_stopped_last_chunk();
+    failed += test_paste_write_result_short_then_complete();
 
     printf("\n--- Pty size ---\n");
     failed += test_pty_size_first_send();

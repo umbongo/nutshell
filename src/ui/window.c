@@ -794,15 +794,15 @@ typedef struct {
  * local session gets \r for the line end instead, because the console child
  * on the other side of the pseudo-console reads Enter, not LF (spec section
  * 3, "Writing"). */
-static void paste_chunk_write(void *ctx,
+static PasteWriteResult paste_chunk_write(void *ctx,
                               int (*write_fn)(void *, const char *, size_t),
                               const char *p, size_t chunk, bool local,
                               WriteAgg *agg)
 {
     /* One write per chunk of the line instead of one per byte; the line-end
-     * mapping above is done by paste_write_chunked(). */
-    (void)paste_write_chunked(p, chunk, local ? 1 : 0, write_fn, ctx,
-                              PASTE_WRITE_CHUNK, agg);
+     * mapping above is done by paste_write_chunked_ex(). */
+    return paste_write_chunked_ex(p, chunk, local ? 1 : 0, write_fn, ctx,
+                                  PASTE_WRITE_CHUNK, agg);
 }
 
 static PasteState g_paste = {0};
@@ -3051,11 +3051,13 @@ static void on_log_toggle(int index, void *user_data) {
  * WM_TIMER, so the UI stays responsive. */
 
 /* Send one line from g_paste.pos, advance pos past the '\n'.
- * Returns true if there is more data to send. */
-static bool paste_send_next_line(void)
+ * Returns 1 if there is more data to send, 0 when the paste is done, and -1
+ * when a write stopped: the rest of the line was dropped, so sending the next
+ * line would glue it onto a cut-off one. The caller ends the paste. */
+static int paste_send_next_line(void)
 {
-    if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return false;
-    if (!g_paste.io_ctx || !g_paste.io_write) return false;
+    if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return 0;
+    if (!g_paste.io_ctx || !g_paste.io_write) return 0;
 
     const char *p = g_paste.pos;
     const char *nl = strchr(p, '\n');
@@ -3063,12 +3065,13 @@ static bool paste_send_next_line(void)
 
     WriteAgg wagg;
     write_agg_init(&wagg);
-    paste_chunk_write(g_paste.io_ctx, g_paste.io_write, p, chunk, g_paste.local,
-                      &wagg);
+    PasteWriteResult pr = paste_chunk_write(g_paste.io_ctx, g_paste.io_write,
+                                            p, chunk, g_paste.local, &wagg);
     session_note_write_agg(g_paste.session, &wagg, "paste");
 
     g_paste.pos += chunk;
-    return *g_paste.pos != '\0';
+    if (pr.stopped) return -1;
+    return *g_paste.pos != '\0' ? 1 : 0;
 }
 
 /* Cancel any in-progress paste and free state (no bracket-close sent) */
@@ -3103,12 +3106,12 @@ static void paste_finish(void)
 static void paste_timer_tick(void)
 {
     session_mark_terminal_input();
-    bool more = paste_send_next_line();
+    int more = paste_send_next_line();
     if (g_active_session && g_active_session->term) {
         g_active_session->term->scrollback_offset = 0;
         invalidate_terminal(g_paste.hwnd);
     }
-    if (!more) paste_finish();
+    if (more <= 0) paste_finish();   /* done, or a write stopped: cancel the rest */
 }
 
 /* Read the clipboard as text, preferring CF_UNICODETEXT (converted to
@@ -3293,12 +3296,13 @@ static void do_paste(HWND hwnd)
         g_paste.session   = target;
 
         /* Send the first line immediately */
-        paste_send_next_line();
+        int first = paste_send_next_line();
         target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
 
-        /* Start timer for remaining lines, or finish if buffer exhausted */
-        if (g_paste.pos && *g_paste.pos) {
+        /* Start timer for remaining lines, or finish if buffer exhausted or
+         * the first line's write stopped */
+        if (first > 0 && g_paste.pos && *g_paste.pos) {
             SetTimer(hwnd, PASTE_TIMER_ID, (UINT)delay_ms, NULL);
         } else {
             paste_finish();

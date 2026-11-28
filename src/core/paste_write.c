@@ -31,16 +31,19 @@ static int flush_buf(const char *buf, size_t len, PasteWriteFn write_fn,
     return 0;
 }
 
-size_t paste_write_chunked(const char *in, size_t in_len, int local,
-                           PasteWriteFn write_fn, void *ctx,
-                           size_t max_chunk, WriteAgg *agg)
+PasteWriteResult paste_write_chunked_ex(const char *in, size_t in_len,
+                                        int local, PasteWriteFn write_fn,
+                                        void *ctx, size_t max_chunk,
+                                        WriteAgg *agg)
 {
-    if (!write_fn || (!in && in_len > 0)) return 0;
+    PasteWriteResult res = { 0, 0, 0 };
+    if (!write_fn || (!in && in_len > 0)) return res;
     if (max_chunk < 4u) max_chunk = 4u;
     if (max_chunk > PW_BUF_MAX) max_chunk = PW_BUF_MAX;
 
     char buf[PW_BUF_MAX];
-    size_t n = 0, accepted = 0, i = 0;
+    size_t n = 0, accepted = 0, expected = 0, i = 0;
+    int stopped = 0;
 
     while (i < in_len) {
         unsigned char b = (unsigned char)in[i];
@@ -61,13 +64,30 @@ size_t paste_write_chunked(const char *in, size_t in_len, int local,
                 unit[ulen++] = in[i++];
             }
         }
+        expected += ulen;
+        if (stopped) continue;   /* keep counting, so the report knows the total */
         if (n + ulen > max_chunk) {
-            if (flush_buf(buf, n, write_fn, ctx, agg, &accepted)) return accepted;
+            if (flush_buf(buf, n, write_fn, ctx, agg, &accepted)) {
+                stopped = 1;
+                continue;
+            }
             n = 0;
         }
         memcpy(buf + n, unit, ulen);
         n += ulen;
     }
-    if (n > 0) (void)flush_buf(buf, n, write_fn, ctx, agg, &accepted);
-    return accepted;
+    if (!stopped && n > 0 && flush_buf(buf, n, write_fn, ctx, agg, &accepted))
+        stopped = 1;
+    res.accepted = accepted;
+    res.expected = expected;
+    res.stopped = stopped;
+    return res;
+}
+
+size_t paste_write_chunked(const char *in, size_t in_len, int local,
+                           PasteWriteFn write_fn, void *ctx,
+                           size_t max_chunk, WriteAgg *agg)
+{
+    return paste_write_chunked_ex(in, in_len, local, write_fn, ctx, max_chunk,
+                                  agg).accepted;
 }

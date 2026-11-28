@@ -21,6 +21,14 @@
 
 typedef int (*PasteWriteFn)(void *ctx, const char *data, size_t len);
 
+/* What a paste write did: bytes accepted by the transport, bytes the whole
+ * text translates to, and whether the paste stopped before all were sent. */
+typedef struct {
+    size_t accepted;
+    size_t expected;
+    int    stopped;   /* 1 when a write failed and the rest was dropped */
+} PasteWriteResult;
+
 /*
  * Translates in[0..in_len) and writes the result through write_fn in chunks
  * of at most max_chunk bytes (values under 4 are raised to 4, so a whole
@@ -29,9 +37,18 @@ typedef int (*PasteWriteFn)(void *ctx, const char *data, size_t len);
  * (rc, bytes wanted); a short write continues with the rest, a write that
  * returns 0 or less stops the paste (the rest would fail the same way).
  *
- * Returns the number of bytes handed to write_fn and accepted.
+ * Returns the number of bytes handed to write_fn and accepted. The _ex form
+ * also reports the expected total and whether the paste stopped; a stopped
+ * paste drops the rest of the text, so a caller sending line by line must not
+ * send the next line.
  * NULL write_fn or NULL in with in_len > 0 writes nothing and returns 0.
  */
+PasteWriteResult paste_write_chunked_ex(const char *in, size_t in_len,
+                                        int local, PasteWriteFn write_fn,
+                                        void *ctx, size_t max_chunk,
+                                        WriteAgg *agg);
+
+/* The same, returning only the accepted byte count. */
 size_t paste_write_chunked(const char *in, size_t in_len, int local,
                            PasteWriteFn write_fn, void *ctx,
                            size_t max_chunk, WriteAgg *agg);
