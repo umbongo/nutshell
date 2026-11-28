@@ -27,6 +27,8 @@ typedef struct {
 #endif
     int charWidth;
     int charHeight;
+    int charAscent;   /* tmAscent: baseline distance from the cell top */
+    int dpi;          /* the DPI the fonts were built for */
 
     /* Debug log (spec 2026-10-17-debug-logging-design.md section 2). The
      * caller sets log_sid to the session being painted before renderer_draw();

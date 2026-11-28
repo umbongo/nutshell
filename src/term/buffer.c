@@ -107,6 +107,9 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->insert_mode      = false;
     term->scroll_top       = 0;
     term->scroll_bot       = rows - 1;
+    term->primary_scroll_top = 0;
+    term->primary_scroll_bot = rows - 1;
+    term_tabs_reset(term);
     term->alt_screen_active   = false;
     term->primary_lines       = NULL;
     term->full_redraw_needed  = false;
@@ -456,6 +459,10 @@ bool term_resize(Terminal *term, int rows, int cols) {
         term->primary_lines_start    = new_pstart;
         term->primary_cursor         = new_pcursor;
         term->primary_lines_recycled += pdropped;
+        /* xterm resets the margins on every resize; so does the primary
+         * screen's path below. The saved region follows. */
+        term->primary_scroll_top = 0;
+        term->primary_scroll_bot = rows - 1;
     }
     term->resize_failing = false;
     term->grow_failing = false;
@@ -463,6 +470,12 @@ bool term_resize(Terminal *term, int rows, int cols) {
     /* Reflow renumbered every row: a selection's line numbers no longer apply. */
     term->epoch++;
     term->reflow_seq++;
+
+    /* Stops stay; the columns the terminal gained get the default. */
+    for (int c = old_cols; c < cols && c < TERM_TAB_COLS; c++) {
+        if (c % 8 == 0) term->tab_stops[c / 8] |= (uint8_t)(1u << (c % 8));
+        else            term->tab_stops[c / 8] &= (uint8_t)~(1u << (c % 8));
+    }
 
     term->rows = rows;
     term->cols = cols;
@@ -482,6 +495,12 @@ bool term_resize(Terminal *term, int rows, int cols) {
          old_rows, rows, old_cols, cols, old_lines, term->lines_count,
          term->alt_screen_active ? 1 : 0);
     return true;
+}
+
+void term_tabs_reset(Terminal *term) {
+    memset(term->tab_stops, 0, sizeof term->tab_stops);
+    for (int c = 0; c < TERM_TAB_COLS; c += 8)
+        term->tab_stops[c / 8] |= (uint8_t)(1u << (c % 8));
 }
 
 void term_scroll(Terminal *term) {
@@ -786,6 +805,8 @@ void term_alt_screen_enter(Terminal *term)
     term->primary_lines_count     = term->lines_count;
     term->primary_lines_start     = term->lines_start;
     term->primary_cursor          = term->cursor;
+    term->primary_scroll_top      = term->scroll_top;
+    term->primary_scroll_bot      = term->scroll_bot;
     term->primary_lines_recycled  = term->lines_recycled;
     term->lines_recycled          = 0;
     term->epoch++;
@@ -833,8 +854,17 @@ void term_alt_screen_exit(Terminal *term)
     term->primary_lines   = NULL;
     term->alt_screen_active = false;
     term->scrollback_offset = 0;
-    term->scroll_top = 0;
-    term->scroll_bot = term->rows - 1;
+    /* The primary's region comes back, unless a resize on the alternate
+     * screen left it outside the screen. */
+    if (term->primary_scroll_top >= 0 &&
+        term->primary_scroll_top < term->primary_scroll_bot &&
+        term->primary_scroll_bot < term->rows) {
+        term->scroll_top = term->primary_scroll_top;
+        term->scroll_bot = term->primary_scroll_bot;
+    } else {
+        term->scroll_top = 0;
+        term->scroll_bot = term->rows - 1;
+    }
 
     /* Reset SGR attributes so text after alt screen exit uses defaults,
      * not whatever colors the alt-screen application (e.g. man/less) set. */
