@@ -4182,6 +4182,7 @@ int test_cheatsheet_layout_scrolls_on_1366x768_at_120(void);
 int test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p(void);
 int test_cheatsheet_layout_192_is_twice_96(void);
 int test_cheatsheet_layout_every_action_fits_360(void);
+int test_cheatsheet_layout_voice_rows_are_measured_and_held(void);
 int test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p(void);
 int test_cheatsheet_layout_tiny_work_area_stays_sane(void);
 int test_cheatsheet_layout_degenerate_inputs(void);
@@ -9017,6 +9018,7 @@ int main(void) {
     failed += test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p();
     failed += test_cheatsheet_layout_192_is_twice_96();
     failed += test_cheatsheet_layout_every_action_fits_360();
+    failed += test_cheatsheet_layout_voice_rows_are_measured_and_held();
     failed += test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p();
     failed += test_cheatsheet_layout_tiny_work_area_stays_sane();
     failed += test_cheatsheet_layout_degenerate_inputs();
