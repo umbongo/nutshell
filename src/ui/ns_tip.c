@@ -88,4 +88,58 @@ void ns_tip_move_rect(HWND tip, HWND host, UINT_PTR id, const RECT *rc)
     SendMessageA(tip, TTM_NEWTOOLRECTA, 0, (LPARAM)&ti);
 }
 
+/* The id of the one tracking tool ns_tip_pop uses. */
+#define NS_TIP_POP_ID ((UINT_PTR)0x4E5F01u)
+
+static void pop_fill(TOOLINFOA *ti, HWND host)
+{
+    memset(ti, 0, sizeof(*ti));
+    ti->cbSize = sizeof(TOOLINFOA);
+    ti->hwnd = host;
+    ti->uId = NS_TIP_POP_ID;
+}
+
+int ns_tip_pop(HWND tip, HWND host, const char *text, const RECT *anchor)
+{
+    if (!tip || !host || !text || !anchor) return 0;
+    TOOLINFOA ti;
+    pop_fill(&ti, host);
+    if (!SendMessageA(tip, TTM_GETTOOLINFOA, 0, (LPARAM)&ti)) {
+        pop_fill(&ti, host);
+        ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
+        ti.lpszText = (LPSTR)text;
+        if (!SendMessageA(tip, TTM_ADDTOOLA, 0, (LPARAM)&ti)) return 0;
+    }
+    pop_fill(&ti, host);
+    ti.lpszText = (LPSTR)text;
+    SendMessageA(tip, TTM_UPDATETIPTEXTA, 0, (LPARAM)&ti);
+
+    /* Place it below the control, or above when it would run off the monitor. */
+    int x = anchor->left;
+    int y = anchor->bottom + 2;
+    LRESULT sz = SendMessageA(tip, TTM_GETBUBBLESIZE, 0, (LPARAM)&ti);
+    int w = LOWORD(sz), h = HIWORD(sz);
+    MONITORINFO mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    HMONITOR mon = MonitorFromRect(anchor, MONITOR_DEFAULTTONEAREST);
+    if (mon && GetMonitorInfo(mon, &mi) && h > 0) {
+        if (y + h > mi.rcWork.bottom && anchor->top - 2 - h >= mi.rcWork.top)
+            y = anchor->top - 2 - h;
+        if (x + w > mi.rcWork.right) x = mi.rcWork.right - w;
+        if (x < mi.rcWork.left) x = mi.rcWork.left;
+    }
+    SendMessageA(tip, TTM_TRACKPOSITION, 0, MAKELPARAM(x, y));
+    SendMessageA(tip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
+    return 1;
+}
+
+void ns_tip_unpop(HWND tip, HWND host)
+{
+    if (!tip || !host) return;
+    TOOLINFOA ti;
+    pop_fill(&ti, host);
+    SendMessageA(tip, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
+}
+
 #endif /* _WIN32 */

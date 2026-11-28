@@ -10,6 +10,7 @@
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
 #include "settings_layout.h"
+#include "settings_tab.h"
 #include "ai_prompt.h"
 #include "thinking_mode.h"
 #include "ai_http.h"
@@ -78,6 +79,7 @@
 #define IDC_SSH_IDLE_EDIT   1030
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
+#define IDT_HELP_POP        52  /* F1 help showing: hide it when the focus moves */
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 static const char *PAGE_CLASS     = "Nutshell_SettingsPage";
@@ -211,6 +213,7 @@ typedef struct {
     int      n_dbg_dim;
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
     int      demo;        /* --ui-demo: 1 = settings-debug (debugging ticked in memory), 2 = settings-voice (AI and voice ticked, no device list); Save never writes */
+    HWND     tip_focus;   /* the control whose F1 help is showing, or NULL */
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
     struct FetchModelsCtx *models;   /* the Refresh Models request in flight (UI's reference), or NULL */
     ThreadJoinList models_thread;    /* its thread's handle, kept so closing can join it */
@@ -2268,6 +2271,142 @@ static void voice_page_read(SettingsDlgData *d, Settings *s)
 
 /* ---- Main window procedure ------------------------------------------------ */
 
+/* ---- Keyboard path: Tab order and F1 help --------------------------------
+ * The dialog is a plain window, not a dialog box, so it does its own key
+ * navigation. The order and the stepping are in settings_tab (portable,
+ * tested); this is the wiring. */
+
+/* The control a focus window stands for: the edit inside an editable combo
+ * is the combo. */
+static HWND focus_owner(HWND h)
+{
+    HWND p = h ? GetParent(h) : NULL;
+    if (p && is_combo_class(p)) return p;
+    return h;
+}
+
+/* Can this control take focus by Tab? Labels, hints and the meter are statics. */
+static int tab_focusable(HWND h)
+{
+    char cls[32];
+    if (!h) return 0;
+    GetClassNameA(h, cls, (int)sizeof(cls));
+    return _stricmp(cls, "Static") != 0;
+}
+
+static void tab_item_add(SettingsTabItem *it, HWND *hw, int *n, HWND h,
+                         int group, HWND coord_parent)
+{
+    if (!h || *n >= 2 * MAX_SETTINGS_CTRLS + 8) return;
+    RECT rc;
+    GetWindowRect(h, &rc);
+    /* One common space: the dialog's client coordinates. */
+    POINT pt = { rc.left, rc.top };
+    ScreenToClient(coord_parent, &pt);
+    it[*n].group = group;
+    it[*n].x = pt.x;
+    it[*n].y = pt.y;
+    it[*n].enabled = IsWindowEnabled(h) ? 1 : 0;
+    it[*n].visible = IsWindowVisible(h) ? 1 : 0;
+    hw[*n] = h;
+    (*n)++;
+}
+
+/* Tab / Shift+Tab: move the focus to the next control in visual order. */
+static void tab_move(SettingsDlgData *d, int dir)
+{
+    SettingsTabItem it[2 * MAX_SETTINGS_CTRLS + 8];
+    HWND hw[2 * MAX_SETTINGS_CTRLS + 8];
+    int n = 0;
+    tab_item_add(it, hw, &n, d->hNav, STAB_GROUP_NAV, d->hDlg);
+    for (int i = 0; i < d->n_ctrls; i++) {
+        const SettingsCtrl *c = &d->ctrls[i];
+        if (c->page != d->cur_page || !c->visible) continue;
+        HWND hs[3] = { c->hCtrl, c->hExtra, c->hExtra2 };
+        for (int k = 0; k < 3; k++)
+            if (tab_focusable(hs[k]))
+                tab_item_add(it, hw, &n, hs[k], STAB_GROUP_PAGE, d->hDlg);
+    }
+    tab_item_add(it, hw, &n, d->hBtnOK, STAB_GROUP_BUTTONS, d->hDlg);
+    tab_item_add(it, hw, &n, d->hBtnCancel, STAB_GROUP_BUTTONS, d->hDlg);
+
+    int order[2 * MAX_SETTINGS_CTRLS + 8];
+    int count = settings_tab_order(it, n, order);
+    HWND cur = focus_owner(GetFocus());
+    int cur_idx = -1;
+    for (int i = 0; i < n; i++)
+        if (hw[i] == cur) { cur_idx = i; break; }
+    int next = settings_tab_step(order, count, cur_idx, dir);
+    if (next >= 0) SetFocus(hw[next]);
+}
+
+static void help_pop_hide(SettingsDlgData *d)
+{
+    if (!d->tip_focus) return;
+    d->tip_focus = NULL;
+    KillTimer(d->hDlg, IDT_HELP_POP);
+    ns_tip_unpop(d->hTip, d->hPage);
+}
+
+/* F1: show the help of the focused control, if it has any. */
+static void help_pop_show(SettingsDlgData *d)
+{
+    HWND f = focus_owner(GetFocus());
+    help_pop_hide(d);
+    if (!f || !d->hTip) return;
+    for (int i = 0; i < d->n_tips; i++) {
+        if (d->tips[i].hwnd != f) continue;
+        const SettingsHelp *e = settings_help_get((int)d->tips[i].help);
+        RECT rc;
+        GetWindowRect(f, &rc);
+        /* A combo's window is tall (its drop-down): anchor to the closed box. */
+        if (is_combo_class(f)) {
+            SettingsMetrics m;
+            settings_metrics_init(&m, d->dpi);
+            rc.bottom = rc.top + m.ctrl_h;
+        }
+        if (e && ns_tip_pop(d->hTip, d->hPage, e->text, &rc)) {
+            d->tip_focus = f;
+            SetTimer(d->hDlg, IDT_HELP_POP, 100, NULL);
+        }
+        return;
+    }
+}
+
+/* Called for every message before it is translated. Returns non-zero when
+ * the key was handled here. */
+static int settings_key_pretranslate(HWND hwnd, const MSG *msg)
+{
+    if (msg->message != WM_KEYDOWN) return 0;
+    if (msg->hwnd != hwnd && !IsChild(hwnd, msg->hwnd)) return 0;
+    SettingsDlgData *d = (SettingsDlgData *)(LONG_PTR)
+                         GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d || d->saving) return 0;
+    int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    int alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    if (ctrl || alt) return 0;
+
+    switch (msg->wParam) {
+    case VK_TAB: {
+        /* An open drop-down list uses the key itself. */
+        HWND f = focus_owner(GetFocus());
+        if (f && is_combo_class(f) && SendMessage(f, CB_GETDROPPEDSTATE, 0, 0))
+            return 0;
+        help_pop_hide(d);
+        tab_move(d, (GetKeyState(VK_SHIFT) & 0x8000) ? -1 : +1);
+        return 1;
+    }
+    case VK_F1:
+        help_pop_show(d);
+        return 1;
+    case VK_ESCAPE:
+        if (d->tip_focus) { help_pop_hide(d); return 1; }
+        return 0;
+    default:
+        return 0;
+    }
+}
+
 static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                                         WPARAM wParam, LPARAM lParam)
 {
@@ -3340,6 +3479,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             sys_notes_sync_scroll(d);
             return 0;
         }
+        if (wParam == IDT_HELP_POP && d) {
+            /* The F1 help follows the focus: it goes when the focus moves. */
+            if (focus_owner(GetFocus()) != d->tip_focus) help_pop_hide(d);
+            return 0;
+        }
         break;
 
     case WM_ERASEBKGND:
@@ -4132,6 +4276,7 @@ static int settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
 
         MSG msg;
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
+            if (settings_key_pretranslate(hwnd, &msg)) continue;
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }

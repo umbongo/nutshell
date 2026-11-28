@@ -4279,6 +4279,16 @@ int test_sl_initial_narrow_clamps_width(void);
 int test_sl_initial_144dpi_capped(void);
 int test_sl_initial_negative_origin(void);
 
+/* test_settings_tab.c */
+int test_stab_order_top_to_bottom_then_left_to_right(void);
+int test_stab_order_skips_disabled_and_hidden(void);
+int test_stab_order_groups_nav_page_buttons(void);
+int test_stab_order_ties_keep_creation_order(void);
+int test_stab_order_degenerate_inputs(void);
+int test_stab_step_forward_backward_wrap(void);
+int test_stab_step_unknown_current_enters_at_the_ends(void);
+int test_stab_step_empty_and_single(void);
+
 /* test_ns_scale.c */
 int test_ns_scale_identity_at_96(void);
 int test_ns_scale_monotonic_across_dpis(void);
@@ -9066,6 +9076,14 @@ int main(void) {
     failed += test_sl_initial_narrow_clamps_width();
     failed += test_sl_initial_144dpi_capped();
     failed += test_sl_initial_negative_origin();
+    failed += test_stab_order_top_to_bottom_then_left_to_right();
+    failed += test_stab_order_skips_disabled_and_hidden();
+    failed += test_stab_order_groups_nav_page_buttons();
+    failed += test_stab_order_ties_keep_creation_order();
+    failed += test_stab_order_degenerate_inputs();
+    failed += test_stab_step_forward_backward_wrap();
+    failed += test_stab_step_unknown_current_enters_at_the_ends();
+    failed += test_stab_step_empty_and_single();
 
     failed += test_search_providers_table();
     failed += test_search_provider_index_case_and_unknown();
