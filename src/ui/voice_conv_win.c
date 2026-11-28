@@ -395,7 +395,7 @@ static VoiceTurnClass classify_text(const char *text)
 {
     VoiceReplyCtx ctx;
     VoiceTurnClass cls;
-    char recent[512];
+    char recent[512], tail[512];
     ctx.spoken = g_spoken;
     ctx.playing = g_playing;
     ctx.spoken_end_at = g_spoken_end_at;
@@ -404,12 +404,19 @@ static VoiceTurnClass classify_text(const char *text)
     ctx.read_to_end = g_read_to_end;
     ctx.cut_in = g_c.cut_turn;
     ctx.recent = NULL;
+    ctx.tail = NULL;
     if (g_c.cut_turn && g_spoken) {
         (void)voice_trail_heard(&g_trail, g_spoken, g_cut_at, recent, sizeof recent);
         ctx.recent = recent;
     }
+    tail[0] = '\0';
+    if (!g_c.cut_turn && g_spoken && !g_playing) {   /* what was said as the speech ended */
+        (void)voice_trail_heard(&g_trail, g_spoken, g_spoken_end_at, tail, sizeof tail);
+        ctx.tail = tail;
+    }
     cls = voice_turn_classify(text, &ctx, now_ms());
     secure_zero(recent, sizeof recent);
+    secure_zero(tail, sizeof tail);
     return cls;
 }
 

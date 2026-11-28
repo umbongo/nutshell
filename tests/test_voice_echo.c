@@ -482,3 +482,49 @@ int test_vtrail_heard_includes_the_start_and_a_second_of_lookahead(void)
     ASSERT_STR_EQ(out, "");
     TEST_END();
 }
+
+int test_vclass_tail_fragment_after_the_speech_ends(void)
+{
+    TEST_BEGIN();
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.spoken = REPLY;
+    r.spoken_end_at = 10000;
+    r.tail = "the D drive has 30 GB free";
+    /* the last one or two words, within 2 s of the end: echo */
+    ASSERT_EQ(voice_turn_classify("free", &r, 11000), VTC_ECHO);
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 11000), VTC_ECHO);
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 12000), VTC_ECHO);
+    /* not the last words, or not in order: the user's */
+    ASSERT_EQ(voice_turn_classify("30 GB", &r, 11000), VTC_TEXT);
+    ASSERT_EQ(voice_turn_classify("free GB", &r, 11000), VTC_TEXT);
+    ASSERT_EQ(voice_turn_classify("drive", &r, 11000), VTC_TEXT);
+    ASSERT_EQ(voice_turn_classify("open the logs", &r, 11000), VTC_TEXT);
+    /* too late, or no tail known */
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 12001), VTC_TEXT);
+    r.tail = NULL;
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 11000), VTC_TEXT);
+    /* still playing and not a cut-in: not this rule's business */
+    r.tail = "the D drive has 30 GB free";
+    r.playing = 1;
+    ASSERT_EQ(voice_turn_classify("GB free", &r, 11000), VTC_TEXT);
+    TEST_END();
+}
+
+int test_vclass_tail_fragment_spares_commands(void)
+{
+    TEST_BEGIN();
+    VoiceReplyCtx r;
+    memset(&r, 0, sizeof r);
+    r.spoken = REPLY;
+    r.spoken_end_at = 10000;
+    r.reply = "Shall I clean up and carry on";
+    r.reply_at = 10000;
+    r.tail = "shall we stop or carry on";
+    ASSERT_EQ(voice_turn_classify("carry on", &r, 11000), VTC_CONTINUE);   /* a phrase, not a fragment */
+    r.tail = "do you want to cancel or stop";
+    ASSERT_EQ(voice_turn_classify("stop", &r, 11000), VTC_TEXT);           /* a barge-in word */
+    r.tail = "this will hold on";
+    ASSERT_EQ(voice_turn_classify("hold on", &r, 11000), VTC_TEXT);
+    TEST_END();
+}

@@ -29,6 +29,10 @@ int voice_echo_match(const char *spoken, const char *transcript);
  * case and punctuation ignored) is never a fragment, whatever `recent` holds. */
 int voice_echo_fragment(const char *recent, const char *transcript);
 
+/* 1 when `transcript` has 1 or 2 words and they are the last 1 or 2 words of `tail`: a piece of
+ * the reply's end heard right after it. The barge-in words are never an echo. */
+int voice_echo_tail(const char *tail, const char *transcript);
+
 /* The word events of the speech being played (the offset of each word's first
  * byte in the spoken text, with the time it was reported), newest last, so the
  * text said in the seconds before a cut can be found. */
@@ -76,6 +80,8 @@ typedef struct {
                                   * however late it arrives */
     const char   *recent;        /* with cut_in: the part of `spoken` said in the 1.5 s before the
                                   * cut (voice_trail_recent), or NULL */
+    const char   *tail;          /* without cut_in, after the speech ended: the part of `spoken` said
+                                  * in its final 1.5 s (voice_trail_heard at the end), or NULL */
 } VoiceReplyCtx;
 
 VoiceTurnClass voice_turn_classify(const char *transcript, const VoiceReplyCtx *r,

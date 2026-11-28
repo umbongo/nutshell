@@ -166,6 +166,23 @@ int voice_echo_fragment(const char *recent, const char *transcript)
     return result;
 }
 
+int voice_echo_tail(const char *tail, const char *transcript)
+{
+    int result = 0;
+    Words t, s;
+    if (!tail || !transcript) return 0;
+    if (!words_split(transcript, &t)) return 0;
+    if (t.n < 1 || t.n > 2 || is_bargein(&t)) { words_free(&t); return 0; }
+    if (!words_split(tail, &s)) { words_free(&t); return 0; }
+    if (s.n >= t.n) {
+        result = 1;
+        for (size_t i = 0; i < t.n; i++)
+            if (!word_eq(&t, i, &s, s.n - t.n + i)) result = 0;
+    }
+    words_free(&t); words_free(&s);
+    return result;
+}
+
 void voice_trail_reset(VoiceWordTrail *t)
 {
     if (t) memset(t, 0, sizeof *t);
@@ -340,8 +357,12 @@ VoiceTurnClass voice_turn_classify(const char *transcript, const VoiceReplyCtx *
         int window = r->cut_in || r->playing || (long)(now - r->spoken_end_at) <= VOICE_ECHO_AFTER_MS;
         if (window && voice_echo_match(r->spoken, transcript)) return VTC_ECHO;
         /* the conversation's own commands are never a fragment of the reply */
-        if (r->cut_in && voice_phrase_match(transcript) == VPH_NONE
-            && voice_echo_fragment(r->recent, transcript)) return VTC_ECHO;
+        if (voice_phrase_match(transcript) == VPH_NONE) {
+            if (r->cut_in && voice_echo_fragment(r->recent, transcript)) return VTC_ECHO;
+            /* a piece of the reply's end heard right after it, though no cut-in began the turn */
+            if (!r->cut_in && !r->playing && (long)(now - r->spoken_end_at) <= VOICE_ECHO_AFTER_MS
+                && voice_echo_tail(r->tail, transcript)) return VTC_ECHO;
+        }
     }
     if (r->reply && (long)(now - r->reply_at) <= VOICE_PHRASE_MAX_AGE_MS
         && !voice_speak_ends_with_question(r->reply)) {
