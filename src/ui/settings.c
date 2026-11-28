@@ -703,44 +703,36 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
         }
 
         int eff_rows = c->rows + ((c == stretch) ? extra_rows : 0);
-        int ctrl_w_scaled = (c->ctrl_w > 0) ? ns_scale(c->ctrl_w, m->dpi) : 0;
 
-        SettingsRect lrc, crc;
-        settings_row_rects(row, usable_w, ctrl_w_scaled, d->scroll, m, &lrc, &crc);
-
-        if (c->full_w) {
-            /* No label column. An explicit ctrl_w still sizes the control
-             * (a tickbox with a combo beside it); 0 spans the pane. */
-            crc.x = m->pad;
-            crc.w = ctrl_w_scaled > 0 ? ctrl_w_scaled : usable_w - 2 * m->pad;
-            if (crc.w < 0) crc.w = 0;
-        }
+        /* The row's geometry is settings_row_layout() (settings_layout.c):
+         * the label, the control and up to two companions, none of them
+         * past the page. */
+        SettingsRowSpec spec;
+        spec.ctrl_w    = c->ctrl_w;
+        spec.extra_w   = c->hExtra ? c->extra_w : 0;
+        spec.extra2_w  = c->hExtra2 ? c->extra2_w : 0;
+        spec.full_w    = c->full_w;
+        spec.extra_off = c->extra_off;
+        SettingsRowGeom g;
+        settings_row_layout(m, row, usable_w, d->scroll, &spec, &g);
+        SettingsRect lrc = g.label, crc = g.ctrl;
 
         if (eff_rows > 1)
             crc.h = eff_rows * m->row_h - (m->row_h - m->ctrl_h);
 
         if (c->hExtra2) {
-            /* Rightmost control, carved off first; hExtra then sits left of it. */
-            int w2 = ns_scale(c->extra2_w, m->dpi);
-            int new_w = crc.w - w2 - m->gap;
-            if (new_w < 0) new_w = 0;
-            SetWindowPos(c->hExtra2, NULL, crc.x + new_w + m->gap, crc.y, w2, crc.h,
+            SettingsRect r2 = g.extra2;
+            r2.h = crc.h;
+            SetWindowPos(c->hExtra2, NULL, r2.x, r2.y, r2.w, r2.h,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(c->hExtra2, SW_SHOW);
-            crc.w = new_w;
         }
 
         if (c->hExtra) {
-            /* A hidden extra (the Other language box) reserves no width. */
-            int extra_w_scaled = c->extra_off ? 0 : ns_scale(c->extra_w, m->dpi);
-            int new_w = crc.w - extra_w_scaled - (c->extra_off ? 0 : m->gap);
-            if (new_w < 0) new_w = 0;
-            SettingsRect erc = crc;
-            erc.x = crc.x + new_w + m->gap;
-            erc.w = extra_w_scaled;
+            SettingsRect erc = g.extra;
+            erc.h = crc.h;
             if (is_combo_class(c->hExtra))
                 erc.h = m->ctrl_h + ns_scale(200, m->dpi);
-            crc.w = new_w;
             SetWindowPos(c->hExtra, NULL, erc.x, erc.y, erc.w, erc.h,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(c->hExtra, c->extra_off ? SW_HIDE : SW_SHOW);
@@ -1844,10 +1836,16 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
  * and number rules are settings_debug.c; this is only the Win32 glue. */
 
 static SettingsCtrl *dbg_add(SettingsDlgData *d, int slot, HWND lbl, HWND ctrl,
-                             HWND extra, int ctrl_w, int extra_w, int full_w)
+                             HWND extra)
 {
-    SettingsCtrl *c = add_ctrl(d, lbl, ctrl, extra, SETTINGS_PAGE_DEBUG, ctrl_w,
-                               extra_w, settings_debug_slot_rows(slot), 0, 1, full_w);
+    /* The widths are the slot's recipe in settings_layout.c, where a native
+     * test checks that every row fits the page at the minimum width. */
+    SettingsRowSpec sp;
+    if (!settings_debug_slot_spec(slot, &sp)) memset(&sp, 0, sizeof(sp));
+    SettingsCtrl *c = add_ctrl(d, lbl, ctrl, extra, SETTINGS_PAGE_DEBUG, sp.ctrl_w,
+                               sp.extra_w, settings_debug_slot_rows(slot), 0, 1,
+                               sp.full_w);
+    if (c) c->extra2_w = sp.extra2_w;
     if (slot >= 0 && slot < SDBG_COUNT) d->dbg[slot] = c;
     return c;
 }
@@ -1958,21 +1956,21 @@ static void debug_build_page(SettingsDlgData *nd)
     {
         HWND chk = make_check2(nd, IDC_DBG_ENABLE, SH_DBG_ENABLE);
         SendMessage(chk, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
-        dbg_add(nd, SDBG_ENABLE, NULL, chk, NULL, 0, 0, 1);
+        dbg_add(nd, SDBG_ENABLE, NULL, chk, NULL);
     }
     dbg_add(nd, SDBG_HINT_ON, NULL,
             dbg_dim_static(nd, "Records what Nutshell does so an AI can diagnose a "
-                               "problem you mark."), NULL, 0, 0, 1);
+                               "problem you mark."), NULL);
     dbg_add(nd, SDBG_HINT_OFF, NULL,
             dbg_dim_static(nd, "Errors are still written to the log folder."),
-            NULL, 0, 0, 1);
+            NULL);
 
     for (int cat = 0; cat < DLOG_CAT_COUNT; cat++) {
         HWND lbl = make_label2(nd, k_dbg_level_help[cat]);
         HWND cmb = make_combo2(nd, IDC_DBG_LEVEL_BASE + cat, CBS_DROPDOWNLIST,
                                k_dbg_level_help[cat]);
         dbg_fill_level_combo(cmb, st->debug_levels[cat]);
-        dbg_add(nd, SDBG_LEVEL_RENDER + cat, lbl, cmb, NULL, 120, 0, 0);
+        dbg_add(nd, SDBG_LEVEL_RENDER + cat, lbl, cmb, NULL);
     }
 
     {
@@ -1983,23 +1981,23 @@ static void debug_build_page(SettingsDlgData *nd)
                                SH_DBG_RECORDER);
         dbg_fill_level_combo(cmb, st->debug_recorder_level);
         EnableWindow(cmb, st->debug_recorder ? TRUE : FALSE);
-        dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb, 300 + 10 + 90, 90, 1);
+        dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb);
     }
     {
         HWND chk = make_check2(nd, IDC_DBG_SCREENSHOT, SH_DBG_SCREENSHOT);
         SendMessage(chk, BM_SETCHECK, st->debug_screenshot ? BST_CHECKED : BST_UNCHECKED, 0);
-        dbg_add(nd, SDBG_SCREENSHOT, NULL, chk, NULL, 0, 0, 1);
+        dbg_add(nd, SDBG_SCREENSHOT, NULL, chk, NULL);
     }
     {
         HWND chk = make_check2(nd, IDC_DBG_CONTENT, SH_DBG_CONTENT);
         SendMessage(chk, BM_SETCHECK, st->debug_include_content ? BST_CHECKED : BST_UNCHECKED, 0);
-        dbg_add(nd, SDBG_CONTENT, NULL, chk, NULL, 0, 0, 1);
+        dbg_add(nd, SDBG_CONTENT, NULL, chk, NULL);
     }
     dbg_add(nd, SDBG_CONTENT_WARN, NULL,
             dbg_dim_static(nd, "Adds terminal text and the echo of what you type, AI "
                                "commands, chat text and host names. Passwords and "
                                "keys are never logged."),
-            NULL, 0, 0, 1);
+            NULL);
 
     {
         HWND lbl = make_label2(nd, SH_DBG_FOLDER);
@@ -2009,15 +2007,15 @@ static void debug_build_page(SettingsDlgData *nd)
                                 IDC_DBG_BROWSE, SH_DBG_BROWSE);
         HWND open = page_ctrl(nd, "BUTTON", "Open", BS_OWNERDRAW,
                               IDC_DBG_OPEN, SH_DBG_OPEN);
-        SettingsCtrl *c = dbg_add(nd, SDBG_FOLDER, lbl, ed, browse, 0, 84, 0);
-        if (c) { c->hExtra2 = open; c->extra2_w = 56; }
+        SettingsCtrl *c = dbg_add(nd, SDBG_FOLDER, lbl, ed, browse);
+        if (c) c->hExtra2 = open;
     }
     {
         char buf[16];
         (void)snprintf(buf, sizeof(buf), "%d", st->debug_max_file_mb);
         HWND lbl = make_label2(nd, SH_DBG_MAX_FILE);
         HWND ed  = make_edit2(nd, buf, IDC_DBG_MAX_FILE, ES_NUMBER, SH_DBG_MAX_FILE);
-        dbg_add(nd, SDBG_MAX_FILE, lbl, ed, NULL, 70, 0, 0);
+        dbg_add(nd, SDBG_MAX_FILE, lbl, ed, NULL);
     }
     {
         char buf[16];
@@ -2029,19 +2027,19 @@ static void debug_build_page(SettingsDlgData *nd)
                              SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, 0, SH_DBG_USAGE);
         if (nd->n_dbg_dim < (int)(sizeof(nd->hDbgDim) / sizeof(nd->hDbgDim[0])))
             nd->hDbgDim[nd->n_dbg_dim++] = use;
-        dbg_add(nd, SDBG_MAX_TOTAL, lbl, ed, use, 70 + 10 + 260, 260, 0);
+        dbg_add(nd, SDBG_MAX_TOTAL, lbl, ed, use);
     }
     {
         HWND lbl = make_label2(nd, SH_DBG_CURRENT);
         (void)settings_debug_current_text(line, sizeof(line), &dst);
         HWND ed = make_edit2(nd, line, IDC_DBG_CURRENT, ES_READONLY, SH_DBG_CURRENT);
-        dbg_add(nd, SDBG_CURRENT, lbl, ed, NULL, 0, 0, 0);
+        dbg_add(nd, SDBG_CURRENT, lbl, ed, NULL);
     }
     dbg_add(nd, SDBG_NOTE, NULL,
             dbg_dim_static(nd, "Give this folder to a Claude Code session. AI Assist can "
                                "read it too; what it reads goes to your AI provider. "
                                "Mark issue: Ctrl+Shift+M"),
-            NULL, 0, 0, 1);
+            NULL);
 
     debug_apply_visibility(nd);
 }

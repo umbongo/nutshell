@@ -185,6 +185,62 @@ void settings_row_rects(int row, int content_w, int ctrl_w, int y_offset,
     }
 }
 
+void settings_row_layout(const SettingsMetrics *m, int row, int usable_w,
+                         int y_offset, const SettingsRowSpec *spec,
+                         SettingsRowGeom *g)
+{
+    if (!m || !spec || !g) return;
+    int cw = spec->ctrl_w > 0 ? ns_scale(spec->ctrl_w, m->dpi) : 0;
+    settings_row_rects(row, usable_w, cw, y_offset, m, &g->label, &g->ctrl);
+    if (spec->full_w) {
+        g->ctrl.x = m->pad;
+        g->ctrl.w = cw > 0 ? cw : usable_w - 2 * m->pad;
+        if (g->ctrl.w < 0) g->ctrl.w = 0;
+    }
+    g->extra = g->ctrl;
+    g->extra.w = 0;
+    g->extra2 = g->extra;
+
+    int w2 = spec->extra2_w > 0 ? ns_scale(spec->extra2_w, m->dpi) : 0;
+    int we = (spec->extra_w > 0 && !spec->extra_off) ? ns_scale(spec->extra_w, m->dpi) : 0;
+    int gap_e = (spec->extra_w > 0 && !spec->extra_off) ? m->gap : 0;
+
+    /* The width the main control was asked for, before the row is cut to the
+     * page: an explicit total less its companions. */
+    int own = -1;
+    if (cw > 0) {
+        own = cw - (w2 > 0 ? w2 + m->gap : 0) - (we > 0 ? we + gap_e : 0);
+        if (own < 0) own = 0;
+        int room = usable_w - m->pad - g->ctrl.x;   /* nothing past the page */
+        if (room < 0) room = 0;
+        if (g->ctrl.w > room) g->ctrl.w = room;
+    }
+
+    if (spec->extra2_w > 0) {
+        int new_w = g->ctrl.w - w2 - m->gap;
+        if (new_w < 0) new_w = 0;
+        g->extra2.x = g->ctrl.x + new_w + m->gap;
+        g->extra2.w = w2;
+        g->ctrl.w = new_w;
+    }
+    if (spec->extra_w > 0) {
+        int new_w = g->ctrl.w - we - gap_e;
+        if (new_w < 0) new_w = 0;
+        if (own >= 0 && new_w < own) {
+            /* Cut to the page: the companion gives way, the control keeps
+             * its width while the row has room for it. */
+            int room_e = g->ctrl.w - own - gap_e;
+            if (room_e < 0) room_e = 0;
+            we = room_e;
+            new_w = g->ctrl.w - we - (we > 0 ? gap_e : 0);
+            if (new_w < 0) new_w = 0;
+        }
+        g->extra.x = g->ctrl.x + new_w + m->gap;
+        g->extra.w = we;
+        g->ctrl.w = new_w;
+    }
+}
+
 int settings_page_height(int rows, const SettingsMetrics *m)
 {
     if (!m) return 0;
@@ -281,6 +337,35 @@ static const struct { int rows; int when_on; int when_off; } DBG_SLOTS[SDBG_COUN
     /* SDBG_CURRENT       */ { 1, 1, 1 },
     /* SDBG_NOTE          */ { 3, 1, 0 },
 };
+
+/* Widths at 96 dpi: ctrl_w, extra_w, extra2_w, full_w, extra_off. */
+static const SettingsRowSpec DBG_SPECS[SDBG_COUNT] = {
+    /* SDBG_ENABLE        */ {   0,   0,  0, 1, 0 },
+    /* SDBG_HINT_ON       */ {   0,   0,  0, 1, 0 },
+    /* SDBG_HINT_OFF      */ {   0,   0,  0, 1, 0 },
+    /* SDBG_LEVEL_RENDER  */ { 120,   0,  0, 0, 0 },
+    /* SDBG_LEVEL_TERM    */ { 120,   0,  0, 0, 0 },
+    /* SDBG_LEVEL_AI      */ { 120,   0,  0, 0, 0 },
+    /* SDBG_LEVEL_SSH     */ { 120,   0,  0, 0, 0 },
+    /* SDBG_LEVEL_SHELL   */ { 120,   0,  0, 0, 0 },
+    /* SDBG_LEVEL_GENERAL */ { 120,   0,  0, 0, 0 },
+    /* SDBG_RECORDER      */ { 400,  90,  0, 1, 0 },  /* tickbox + level combo */
+    /* SDBG_SCREENSHOT    */ {   0,   0,  0, 1, 0 },
+    /* SDBG_CONTENT       */ {   0,   0,  0, 1, 0 },
+    /* SDBG_CONTENT_WARN  */ {   0,   0,  0, 1, 0 },
+    /* SDBG_FOLDER        */ {   0,  84, 56, 0, 0 },  /* edit + Browse + Open  */
+    /* SDBG_MAX_FILE      */ {  70,   0,  0, 0, 0 },
+    /* SDBG_MAX_TOTAL     */ { 340, 260,  0, 0, 0 },  /* edit 70 + "using N MB in K files" */
+    /* SDBG_CURRENT       */ {   0,   0,  0, 0, 0 },
+    /* SDBG_NOTE          */ {   0,   0,  0, 1, 0 },
+};
+
+int settings_debug_slot_spec(int slot, SettingsRowSpec *spec)
+{
+    if (slot < 0 || slot >= SDBG_COUNT || !spec) return 0;
+    *spec = DBG_SPECS[slot];
+    return 1;
+}
 
 int settings_debug_slot_rows(int slot)
 {

@@ -4284,6 +4284,13 @@ int test_sl_dpi_min_window_adds_the_frame(void);
 int test_sl_dpi_min_size_regions_dont_overlap(void);
 int test_sl_dpi_rows_stay_inside_the_page(void);
 int test_sl_scroll_rescale(void);
+int test_sl_row_layout_matches_plain_rects_when_it_fits(void);
+int test_sl_row_layout_null_safe(void);
+int test_sl_debug_rows_fit_at_min_width_96(void);
+int test_sl_debug_rows_fit_at_min_width_144(void);
+int test_sl_debug_rows_fit_at_min_width_120_and_192(void);
+int test_sl_debug_keep_at_most_edit_keeps_its_width(void);
+int test_sl_row_layout_tiny_page_never_negative(void);
 
 /* test_settings_tab.c */
 int test_stab_order_top_to_bottom_then_left_to_right(void);
@@ -9088,6 +9095,13 @@ int main(void) {
     failed += test_sl_dpi_min_size_regions_dont_overlap();
     failed += test_sl_dpi_rows_stay_inside_the_page();
     failed += test_sl_scroll_rescale();
+    failed += test_sl_row_layout_matches_plain_rects_when_it_fits();
+    failed += test_sl_row_layout_null_safe();
+    failed += test_sl_debug_rows_fit_at_min_width_96();
+    failed += test_sl_debug_rows_fit_at_min_width_144();
+    failed += test_sl_debug_rows_fit_at_min_width_120_and_192();
+    failed += test_sl_debug_keep_at_most_edit_keeps_its_width();
+    failed += test_sl_row_layout_tiny_page_never_negative();
     failed += test_stab_order_top_to_bottom_then_left_to_right();
     failed += test_stab_order_skips_disabled_and_hidden();
     failed += test_stab_order_groups_nav_page_buttons();

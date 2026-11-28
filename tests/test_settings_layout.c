@@ -785,3 +785,123 @@ int test_sl_scroll_rescale(void) {
     ASSERT_TRUE(back >= 332 && back <= 334);
     TEST_END();
 }
+
+/* ---- Row layout: no row's content past the page at the minimum width ---- */
+
+/* The widest case the dialog has: the page scrolls, so the scrollbar's 14 px
+ * come off the width as well. */
+#define TEST_CSB_W 14
+
+static int usable_at_min(const SettingsMetrics *m)
+{
+    SettingsRect nav, content, buttons;
+    settings_layout_regions(m->min_w, m->min_h, m, &nav, &content, &buttons);
+    return content.w - 1 - TEST_CSB_W;   /* the page host is inset by 1 */
+}
+
+int test_sl_row_layout_matches_plain_rects_when_it_fits(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    SettingsRowSpec sp = { 340, 260, 0, 0, 0 };   /* the Keep-at-most row */
+    SettingsRowGeom g;
+    settings_row_layout(&m, 3, 1000, 0, &sp, &g);
+    ASSERT_EQ(g.ctrl.x, m.pad + m.label_w + m.gap);
+    ASSERT_EQ(g.ctrl.w, 70);                       /* asked width, kept   */
+    ASSERT_EQ(g.extra.x, g.ctrl.x + 70 + m.gap);
+    ASSERT_EQ(g.extra.w, 260);
+    SettingsRowSpec st = { 0, 84, 56, 0, 0 };     /* a stretched row     */
+    settings_row_layout(&m, 3, 1000, 0, &st, &g);
+    ASSERT_EQ(g.extra2.w, 56);
+    ASSERT_EQ(g.extra2.x + g.extra2.w, 1000 - m.pad);
+    ASSERT_EQ(g.extra.x + g.extra.w + m.gap, g.extra2.x);
+    ASSERT_EQ(g.ctrl.x + g.ctrl.w + m.gap, g.extra.x);
+    TEST_END();
+}
+
+int test_sl_row_layout_null_safe(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    SettingsRowSpec sp = { 0, 0, 0, 0, 0 };
+    SettingsRowGeom g;
+    settings_row_layout(NULL, 0, 500, 0, &sp, &g);
+    settings_row_layout(&m, 0, 500, 0, NULL, &g);
+    settings_row_layout(&m, 0, 500, 0, &sp, NULL);
+    SettingsRowSpec out;
+    ASSERT_EQ(settings_debug_slot_spec(-1, &out), 0);
+    ASSERT_EQ(settings_debug_slot_spec(SDBG_COUNT, &out), 0);
+    ASSERT_EQ(settings_debug_slot_spec(SDBG_NOTE, NULL), 0);
+    ASSERT_EQ(settings_debug_slot_spec(SDBG_MAX_TOTAL, &out), 1);
+    ASSERT_EQ(out.extra_w, 260);
+    TEST_END();
+}
+
+static int debug_rows_fit_at(int dpi)
+{
+    SettingsMetrics m; settings_metrics_init(&m, dpi);
+    int usable = usable_at_min(&m);
+    SettingsDebugPos pos[SDBG_COUNT];
+    (void)settings_debug_layout(1, pos);
+    for (int s = 0; s < SDBG_COUNT; s++) {
+        if (!pos[s].visible) continue;
+        SettingsRowSpec sp;
+        if (!settings_debug_slot_spec(s, &sp)) return 0;
+        SettingsRowGeom g;
+        settings_row_layout(&m, pos[s].row, usable, 0, &sp, &g);
+        int right = usable - m.pad;
+        if (g.ctrl.w <= 0) return 0;
+        if (g.ctrl.x + g.ctrl.w > right) return 0;                 /* past the page */
+        if (g.extra.w > 0 && g.extra.x + g.extra.w > right) return 0;
+        if (g.extra2.w > 0 && g.extra2.x + g.extra2.w > right) return 0;
+        if (g.extra.w > 0 && g.ctrl.x + g.ctrl.w > g.extra.x) return 0;   /* overlap */
+        if (g.extra2.w > 0 && g.extra.w > 0 && g.extra.x + g.extra.w > g.extra2.x) return 0;
+        if (!sp.full_w && g.label.x + g.label.w > g.ctrl.x) return 0;
+    }
+    return 1;
+}
+
+int test_sl_debug_rows_fit_at_min_width_96(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(debug_rows_fit_at(96));
+    TEST_END();
+}
+
+int test_sl_debug_rows_fit_at_min_width_144(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(debug_rows_fit_at(144));
+    TEST_END();
+}
+
+int test_sl_debug_rows_fit_at_min_width_120_and_192(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(debug_rows_fit_at(120));
+    ASSERT_TRUE(debug_rows_fit_at(192));
+    TEST_END();
+}
+
+int test_sl_debug_keep_at_most_edit_keeps_its_width(void) {
+    TEST_BEGIN();
+    /* At the minimum width the "using N MB" text gives way, not the edit. */
+    int dpis[2] = { 96, 144 };
+    for (int i = 0; i < 2; i++) {
+        SettingsMetrics m; settings_metrics_init(&m, dpis[i]);
+        SettingsRowSpec sp;
+        ASSERT_EQ(settings_debug_slot_spec(SDBG_MAX_TOTAL, &sp), 1);
+        SettingsRowGeom g;
+        settings_row_layout(&m, 14, usable_at_min(&m), 0, &sp, &g);
+        ASSERT_EQ(g.ctrl.w, ns_scale(70, dpis[i]));
+        ASSERT_TRUE(g.extra.w > ns_scale(100, dpis[i]));   /* the text still has room */
+        ASSERT_TRUE(g.extra.w < ns_scale(260, dpis[i]));   /* and was the part cut    */
+    }
+    TEST_END();
+}
+
+int test_sl_row_layout_tiny_page_never_negative(void) {
+    TEST_BEGIN();
+    SettingsMetrics m; settings_metrics_init(&m, 96);
+    SettingsRowSpec sp = { 340, 260, 0, 0, 0 };
+    SettingsRowGeom g;
+    settings_row_layout(&m, 1, 100, 0, &sp, &g);   /* narrower than the label column */
+    ASSERT_TRUE(g.ctrl.w >= 0);
+    ASSERT_TRUE(g.extra.w >= 0);
+    TEST_END();
+}
