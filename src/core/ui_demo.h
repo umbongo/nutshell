@@ -62,6 +62,9 @@
  * with the cue, with no audio thread and no COM. "settings-voice" opens
  * Settings on the Voice page (voice and AI ticked in memory only). None is
  * part of "all": it keeps its pinned shape, and the settings page is modal.
+ * "voice-read-aloud" (2026-11-28) builds "chat" then "tool" (two finished
+ * replies); the win32 side shows the Read aloud button under each, the first
+ * idle and the second reading, with no speech engine. Not part of "all".
  *
  * "header-status" (2026-11-24) builds "executing"'s content, and the win32
  * side puts the long note ui_demo_header_status() returns into the panel

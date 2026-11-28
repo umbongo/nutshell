@@ -5232,6 +5232,7 @@ int test_ui_demo_settings_debug_is_an_empty_state(void);
 int test_ui_demo_shortcuts_is_an_empty_state(void);
 int test_ui_demo_notice_states_are_empty_states(void);
 int test_ui_demo_voice_states_are_empty_states(void);
+int test_ui_demo_voice_read_aloud(void);
 int test_ui_demo_header_status_state(void);
 int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
 int test_ui_demo_policy_compact_matches_approval(void);
@@ -10363,6 +10364,7 @@ int main(void) {
     failed += test_ui_demo_shortcuts_is_an_empty_state();
     failed += test_ui_demo_notice_states_are_empty_states();
     failed += test_ui_demo_voice_states_are_empty_states();
+    failed += test_ui_demo_voice_read_aloud();
     failed += test_ui_demo_header_status_state();
     failed += test_ui_demo_policy_auto_is_executing_with_auto_on();
     failed += test_ui_demo_policy_compact_matches_approval();

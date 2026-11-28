@@ -4,6 +4,8 @@
 #include "cmd_run_log.h"
 #include "chat_copy.h"
 #include "text_runs.h"
+#include "chat_rebuild.h"
+#include "chat_turn.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "ai_panel_layout.h"
@@ -42,26 +44,27 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 28);
+    ASSERT_EQ(count, 29);
     ASSERT_STR_EQ(states[count - 1], "all");
     ASSERT_STR_EQ(states[count - 2], "header-status");     /* 2026-11-24 */
     ASSERT_STR_EQ(states[count - 3], "settings-voice");    /* modal, not part of "all" */
-    ASSERT_STR_EQ(states[count - 4], "voice-transcribing");
-    ASSERT_STR_EQ(states[count - 5], "voice-recording");
-    ASSERT_STR_EQ(states[count - 6], "notice-warning");
-    ASSERT_STR_EQ(states[count - 7], "notice-info");
-    ASSERT_STR_EQ(states[count - 8], "shortcuts");
-    ASSERT_STR_EQ(states[count - 9], "policy-compact");
-    ASSERT_STR_EQ(states[count - 10], "policy-auto");
-    ASSERT_STR_EQ(states[count - 11], "settings-debug");
-    ASSERT_STR_EQ(states[count - 12], "cmddetail");
-    ASSERT_STR_EQ(states[count - 13], "thinking-open");
-    ASSERT_STR_EQ(states[count - 14], "thinking-extended");
-    ASSERT_STR_EQ(states[count - 15], "thinking-compact");
-    ASSERT_STR_EQ(states[count - 16], "thinking");
-    ASSERT_STR_EQ(states[count - 17], "local");
-    ASSERT_STR_EQ(states[count - 18], "ansi");
-    ASSERT_STR_EQ(states[count - 19], "runlist");   /* not part of "all" */
+    ASSERT_STR_EQ(states[count - 4], "voice-read-aloud");  /* 2026-11-28 */
+    ASSERT_STR_EQ(states[count - 5], "voice-transcribing");
+    ASSERT_STR_EQ(states[count - 6], "voice-recording");
+    ASSERT_STR_EQ(states[count - 7], "notice-warning");
+    ASSERT_STR_EQ(states[count - 8], "notice-info");
+    ASSERT_STR_EQ(states[count - 9], "shortcuts");
+    ASSERT_STR_EQ(states[count - 10], "policy-compact");
+    ASSERT_STR_EQ(states[count - 11], "policy-auto");
+    ASSERT_STR_EQ(states[count - 12], "settings-debug");
+    ASSERT_STR_EQ(states[count - 13], "cmddetail");
+    ASSERT_STR_EQ(states[count - 14], "thinking-open");
+    ASSERT_STR_EQ(states[count - 15], "thinking-extended");
+    ASSERT_STR_EQ(states[count - 16], "thinking-compact");
+    ASSERT_STR_EQ(states[count - 17], "thinking");
+    ASSERT_STR_EQ(states[count - 18], "local");
+    ASSERT_STR_EQ(states[count - 19], "ansi");
+    ASSERT_STR_EQ(states[count - 20], "runlist");   /* not part of "all" */
     TEST_END();
 }
 
@@ -668,6 +671,27 @@ int test_ui_demo_voice_states_are_empty_states(void)
     }
     ASSERT_TRUE(!ui_demo_state_valid("voice"));
     ASSERT_TRUE(!ui_demo_state_valid("Settings-voice"));
+    TEST_END();
+}
+
+/* "voice-read-aloud" (2026-11-28): "chat" then "tool", two finished turns, so
+ * two Read aloud buttons. Not part of "all", not scrolled to the top. */
+int test_ui_demo_voice_read_aloud(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue a1, a2;
+    ASSERT_EQ(ui_demo_state_valid("voice-read-aloud"), 1);
+    ASSERT_EQ(ui_demo_scrolls_to_top("voice-read-aloud"), 0);
+    ASSERT_EQ(ui_demo_build("voice-read-aloud", &conv, &a1, &a2, NULL, 0), 0);
+    ASSERT_EQ(conv.msg_count, 7);          /* system; chat's user + reply; tool's four */
+    ASSERT_EQ(a1.count, 0);
+    ChatMsgList l;
+    chat_msg_list_init(&l);
+    chat_rebuild_replay(&l, &conv, NULL, NULL, NULL);
+    ASSERT_EQ(chat_turn_refresh(&l, 1, 0), 2);   /* one button per turn */
+    chat_msg_list_clear(&l);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 

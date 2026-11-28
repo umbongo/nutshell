@@ -13,19 +13,21 @@
  * always last and always means "union of the panel states" (not "ansi",
  * "local", "thinking", "thinking-compact", "thinking-extended", "thinking-open", "cmddetail", "settings-debug", "policy-auto",
  * "policy-compact", "shortcuts", "notice-info", "notice-warning",
- * "voice-recording", "voice-transcribing", "settings-voice", "header-status" or "runlist", which reuse or swap content,
+ * "voice-recording", "voice-transcribing", "voice-read-aloud", "settings-voice", "header-status" or "runlist", which reuse or swap content,
  * open a modal window or exist to show one thing). "ansi" sits before "local"
  * so the names tests/test_ui_demo.c anchors from the end of the list keep
  * their positions, "runlist" before "ansi" for the same reason; "shortcuts"
  * sits before "notice-info" and "notice-warning", the voice states after
- * them, "settings-voice" (modal) after them, "header-status" last before "all".
+ * them ("voice-read-aloud" the last of the three), "settings-voice" (modal) after
+ * them, "header-status" last before "all".
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
     "nokey", "nosession", "batches", "runlist", "ansi", "local", "thinking", "thinking-compact", "thinking-extended",
     "thinking-open", "cmddetail",
     "settings-debug", "policy-auto", "policy-compact", "shortcuts", "notice-info", "notice-warning",
-    "voice-recording", "voice-transcribing", "settings-voice", "header-status", "all"
+    "voice-recording", "voice-transcribing", "voice-read-aloud", "settings-voice",
+    "header-status", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -750,6 +752,14 @@ int ui_demo_build(const char *state, AiConversation *conv,
      * the empty-state panel, with no audio thread and no COM. "settings-voice"
      * opens Settings on the Voice page, modal. None is part of "all", which
      * keeps its pinned shape. */
+
+    /* "voice-read-aloud" (2026-11-28): "chat"'s turn then "tool"'s, two
+     * finished replies; the win32 side shows the Read aloud button under
+     * each, one idle and one reading. Not part of "all". */
+    if (strcmp(state, "voice-read-aloud") == 0) {
+        build_chat(conv);
+        build_tool(conv);
+    }
 
     /* "empty", "nokey" and "nosession" add nothing beyond the system
      * message -- their distinct look comes entirely from the forced

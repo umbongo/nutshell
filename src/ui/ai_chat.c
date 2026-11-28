@@ -8,6 +8,7 @@
 #include "dll_record.h"
 #include "notice_dlg.h"
 #include "voice_win.h"
+#include "chat_turn.h"
 #include "voice_config.h"
 #include "voice_ptt.h"
 
@@ -3100,6 +3101,21 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         } else {
             ai_chat_voice_set_ui(hwnd, AIV_TRANSCRIBING, "Transcribing\xE2\x80\xA6");
         }
+    }
+
+    /* "voice-read-aloud": the Read aloud button under both finished replies,
+     * the earlier one idle and the later one reading (accent Stop). The view
+     * is set directly: no speech engine, no reader, no COM. */
+    if (state && strcmp(state, "voice-read-aloud") == 0 && d->hChatList) {
+        int first_id = -1, later_id = -1;
+        chat_turn_refresh(&d->msg_list, 1, 0);
+        for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+            if (it->type != CHAT_ITEM_AI_TEXT || !it->u.ai.turn_btn) continue;
+            if (first_id < 0) first_id = it->id;
+            later_id = it->id;
+        }
+        if (later_id == first_id) later_id = -1;   /* fewer than two buttons: none reads */
+        chat_listview_set_read_aloud(d->hChatList, 1, later_id, 0);
     }
 
     /* The Thinking row's mode in the gallery: "thinking" collapsed,
