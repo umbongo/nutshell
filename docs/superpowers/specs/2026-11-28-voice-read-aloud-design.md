@@ -1,7 +1,8 @@
 # Read aloud: a button under each AI reply (Dictation mode)
 
 **Date**: 2026-11-28
-**Status**: DRAFT, awaiting the maintainer's approval
+**Status**: APPROVED by the maintainer on 2026-11-28, with two changes that are folded in
+(one button per turn; the control that stops dictation stays live)
 **Branch**: `feat/voice-read-aloud`
 
 ## 1. Intent
@@ -16,8 +17,9 @@ listen to the latest reply and the older ones too if needed."
 
 ## 2. What the user sees
 
-Under every finished AI reply there is a small speaker button, at the
-bottom left of the reply:
+Under every finished AI reply there is one small speaker button, at the
+bottom left of the reply. A reply is a whole turn: everything the assistant
+wrote between one user message and the next.
 
 ```
   Nutshell AI
@@ -40,29 +42,39 @@ Voice off, or in Conversation mode, the chat looks exactly as it does today.
 The button has no tooltip in this change: the code-block copy button, which
 it is modelled on, has none, and the chat list view has no tooltip code.
 
-**While a dictation is recording** the buttons are drawn disabled and a
-press does nothing. The microphone is open, and a reading would be typed
-back into the input box. (Main session's call.)
+**While a dictation is recording** the read-aloud buttons are drawn
+disabled and a press on one does nothing. The microphone is open, and a
+reading would be typed back into the input box. Only these buttons are
+disabled: the mic button and the dictation key, which stop the dictation,
+work as they do today (maintainer, 2026-11-28: "Ok, except for the button
+to stop dictation").
 
 ### Which replies get a button
 
-Every row of assistant text that has finished arriving. When one turn used
-tools it leaves several such rows ("Let me check the interface.", then the
-commands, then the answer); each has its own button, and each button reads
-its own row and nothing else. (Main session's call, for the maintainer to
-confirm: the alternative is one button per turn, under the last row only.)
+One button per turn (maintainer, 2026-11-28: "1 button per turn please").
+A turn is the run of assistant rows between one user message and the next,
+or the end of the chat. When a turn used tools it has several rows of
+assistant text ("Let me check the interface.", then the commands, then the
+answer); the button sits under the last row of assistant text in the turn.
 
-Not a row that is still streaming, not the user's own messages, and not the
-other rows of the chat (thinking, tool and command rows, approvals, error
-and status notices).
+The button appears when the turn has finished: nothing in it is still
+streaming and no command of it is still running or waiting for approval. A
+turn with no assistant text at all (an error, a stopped request) has no
+button. The user's own messages and the other rows of the chat (thinking,
+tool and command rows, approvals, error and status notices) never carry one.
 
 ### What is read
 
-The row's own text, made speakable the way Conversation mode makes a reply
-speakable: `voice_speak_text()` (`src/core/voice_speak.h`) applied to the
-row's markdown. (Conversation mode itself speaks only the last assistant
-message of a turn, up to its first command, `src/ui/ai_chat_voice.c`; the
-reader does not copy that rule, because each row has its own button.) A reply with nothing speakable (only a code block, say) still has
+All of the turn's assistant text, in the order it appears, each row made
+speakable the way Conversation mode makes a reply speakable:
+`voice_speak_text()` (`src/core/voice_speak.h`) applied to the row's
+markdown, the rows joined with a sentence break. Commands, tool output and
+thinking are not read. (Main session's call. Conversation mode itself
+speaks only the last assistant message of a turn, up to its first command,
+`src/ui/ai_chat_voice.c`; the reader reads the whole turn so that an answer
+given before a command is not lost.)
+
+A reply with nothing speakable (only a code block, say) still has
 the button; pressing it does nothing audible and the button returns to the
 speaker at once. The builder may show it disabled instead if that is cheap
 to know at paint time.
@@ -145,7 +157,10 @@ something else of ours (stop reason 6) is a stop, never an error.
   or at all while Voice is off (CLAUDE.md, "Optional features: off unless
   enabled, not loaded while off").
 - Conversation mode, merged in v1.2.99 and v1.3.1 and not yet run on
-  Windows, behaves differently because of this change.
+  Windows, behaves differently because of this change. (The maintainer's
+  separate request of 2026-11-28, that speech in Conversation mode must not
+  trigger its own listening and stop itself, is handled outside this
+  feature: here the microphone is never open during a reading.)
 
 ## 4. Approaches
 
@@ -178,8 +193,8 @@ The maintainer handed the "how" to the main session; A is its pick.
 - **Core state machine**, new `src/core/voice_read.c/.h`, native-tested.
   To the user there are two states: idle, and reading (from the press until
   the reply ends, fails or is stopped; the button shows Stop throughout).
-  It holds which reply is being read (the chat it belongs to and the
-  message id). Inputs: a press on reply X, whether a dictation is recording,
+  It holds which reply is being read (the chat it belongs to and the id of
+  the row that carries the turn's button). Inputs: a press on reply X, whether a dictation is recording,
   the engine's messages, and each stop reason of §2. Outputs: start engine,
   speak text, stop, release, repaint reply X, show error. Message handling
   ignores anything not carrying the reader's token and the current reading's
@@ -247,6 +262,11 @@ The maintainer handed the "how" to the main session; A is its pick.
 - **Dictation start stops the reading** before the microphone opens, in the
   one place a recording begins (`start_recording()`, `src/ui/voice_win.c`),
   so both the mic button and the key are covered.
+- **The turn rule lives in `src/core`**, beside the chat message list
+  (`src/core/chat_msg.c`): one function that says which row, if any,
+  carries a turn's button, and one that builds the turn's speakable text.
+  The list view and the reader both ask it; neither works a turn out for
+  itself.
 - **Hooks that exist:** `voice_on_chat_changed` (`src/ui/ai_chat.c`) and
   `voice_on_panel_closed` (`src/ui/window.c`) cover stop reason 4. Message
   ids are never reused when the chat list is rebuilt (`src/core/chat_msg.c`),
@@ -254,6 +274,11 @@ The maintainer handed the "how" to the main session; A is its pick.
 
 ## 6. Testing
 
+- Native tests for "which row carries the turn's button" and "the turn's
+  speakable text" over a chat message list, in `src/core`: a plain turn, a
+  turn with tools and three text rows, a turn still streaming, a turn with a
+  command awaiting approval, a turn with no assistant text, the last turn of
+  the chat, and a stopped turn.
 - Native tests for `voice_read`: every state and input, including press
   while starting, press on the reply being read, press on another reply, a
   late done or error from a stopped reading, an error while starting, each
@@ -264,8 +289,8 @@ The maintainer handed the "how" to the main session; A is its pick.
   Conversation rows are unchanged.
 - List view: the button's geometry and hit-testing are tested where the
   existing chat list-view tests can reach (native if the geometry is pure,
-  `wintest` otherwise): present only for a finished assistant text reply,
-  absent while streaming, absent with the feature off, and the item height
+  `wintest` otherwise): present only on the last assistant text row of a
+  finished turn, absent on the turn's earlier rows, absent while streaming, absent with the feature off, and the item height
   with the feature off equals today's.
 - `--ui-demo`: a state that shows a chat with the button idle on one reply
   and reading on another, so the gallery captures it on all four themes.
