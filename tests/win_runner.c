@@ -278,6 +278,8 @@ int test_thread_join_all_finish(void);
 int test_thread_join_is_bounded(void);
 int test_thread_join_full_list_closes_handle(void);
 int test_ai_nc_fire_wakes_blocked_winhttp_call(void);
+int test_web_fetch_trickling_head_ends_at_hop_deadline(void);
+int test_web_fetch_trickling_head_ends_on_cancel_flag(void);
 
 /* test_settings_label_win.c */
 int test_settings_label_win_labels_fit_column(void);
@@ -748,6 +750,8 @@ int main(int argc, char **argv)
     failed += test_thread_join_is_bounded();
     failed += test_thread_join_full_list_closes_handle();
     failed += test_ai_nc_fire_wakes_blocked_winhttp_call();
+    failed += test_web_fetch_trickling_head_ends_at_hop_deadline();
+    failed += test_web_fetch_trickling_head_ends_on_cancel_flag();
     failed += test_ns_slider_win_keys_and_notify();
     failed += test_ns_draw_level_meter_win_zones_fill_and_hold();
     failed += run_ns_tip_tests();

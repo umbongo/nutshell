@@ -779,3 +779,20 @@ int test_settings_help_play_sample(void) {
     }
     TEST_END();
 }
+
+int test_settings_help_search_url_says_how_the_query_is_added(void) {
+    TEST_BEGIN();
+    const SettingsHelp *e = settings_help_get((int)SH_AI_SEARCH_URL);
+    ASSERT_NOT_NULL(e);
+    if (e != NULL) {
+        ASSERT_TRUE(strstr(e->text, "without a query string") == NULL);
+        ASSERT_TRUE(strstr(e->text, "q=") != NULL);
+        ASSERT_TRUE(strstr(e->text, "after ?") != NULL);
+        ASSERT_TRUE(strstr(e->text, "after &") != NULL);
+        ASSERT_TRUE(strstr(e->text, "encode") != NULL);
+        ASSERT_TRUE(strstr(e->text, "#") != NULL);
+        ASSERT_TRUE(strstr(e->text, "spaces are not allowed") != NULL);
+        ASSERT_TRUE(strlen(e->text) <= SETTINGS_HELP_TEXT_MAX);
+    }
+    TEST_END();
+}
