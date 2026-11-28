@@ -3877,6 +3877,12 @@ int test_vlisten_set_mode_drops_turn(void);
 int test_vlisten_partial_windows_and_wipe(void);
 int test_vlisten_cutin_hd_modulated_user(void);
 int test_vlisten_cutin_aec_modulated_user(void);
+/* test_voice_listen_echo.c */
+int test_vlecho_hd_user_over_echo_cuts_within_600ms(void);
+int test_vlecho_aec_user_after_first_second_cuts_within_600ms(void);
+int test_vlecho_aec_user_inside_first_second_cuts_within_1600ms(void);
+int test_vlecho_cough_does_not_cut(void);
+int test_vlecho_hd_small_level_jump_does_not_cut(void);
 /* test_voice_transcript.c */
 int test_vt_draft_sep(void);
 int test_vt_rendered_full_text(void);
@@ -8668,6 +8674,11 @@ int main(void) {
     failed += test_vlisten_partial_windows_and_wipe();
     failed += test_vlisten_cutin_hd_modulated_user();
     failed += test_vlisten_cutin_aec_modulated_user();
+    failed += test_vlecho_hd_user_over_echo_cuts_within_600ms();
+    failed += test_vlecho_aec_user_after_first_second_cuts_within_600ms();
+    failed += test_vlecho_aec_user_inside_first_second_cuts_within_1600ms();
+    failed += test_vlecho_cough_does_not_cut();
+    failed += test_vlecho_hd_small_level_jump_does_not_cut();
     failed += test_vt_draft_sep();
     failed += test_vt_rendered_full_text();
     failed += test_vt_openai_revision();
