@@ -1275,6 +1275,29 @@ int test_sel_block_modifiers(void)
     TEST_END();
 }
 
+/* Alt+double-click is no longer a word selection: an Alt press always starts
+ * a block, whatever the click counter says, and a plain press keeps its count. */
+int test_sel_block_alt_double_click_is_not_a_word(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(selection_press_clicks(true, 1), 1);
+    ASSERT_EQ(selection_press_clicks(true, 2), 1);
+    ASSERT_EQ(selection_press_clicks(true, 3), 1);
+    ASSERT_EQ(selection_press_clicks(false, 2), 2);
+    ASSERT_EQ(selection_press_clicks(false, 3), 3);
+    /* Two quick Alt drags at one spot: the second begins a block again. */
+    Terminal *t = block_term();
+    Selection s;
+    ASSERT_TRUE(bdrag(&s, t, 0, 2, 1, 4));
+    selection_begin_block(&s, t, 0, 2, 0, 0);
+    selection_extend(&s, t, 1, 4, 100, 100, 4, 4);
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_TRUE(s.block);
+    ASSERT_TRUE(block_copy_is(&s, t, "234\r\ncde"));
+    term_free(t);
+    TEST_END();
+}
+
 /* Across the scrollback and the screen. */
 int test_sel_block_across_scrollback(void)
 {

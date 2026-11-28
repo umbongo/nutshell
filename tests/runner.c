@@ -2301,6 +2301,7 @@ int test_sel_block_trailing_empty_lines_dropped(void);
 int test_sel_block_wide_and_combining_edges(void);
 int test_sel_block_copy_past_row_len(void);
 int test_sel_block_modifiers(void);
+int test_sel_block_alt_double_click_is_not_a_word(void);
 int test_sel_block_across_scrollback(void);
 int test_sel_block_extend_keeps_block(void);
 int test_sel_block_cleared_by_plain_click(void);
@@ -7341,6 +7342,7 @@ int main(void) {
     failed += test_sel_block_wide_and_combining_edges();
     failed += test_sel_block_copy_past_row_len();
     failed += test_sel_block_modifiers();
+    failed += test_sel_block_alt_double_click_is_not_a_word();
     failed += test_sel_block_across_scrollback();
     failed += test_sel_block_extend_keeps_block();
     failed += test_sel_block_cleared_by_plain_click();

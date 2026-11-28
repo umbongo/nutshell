@@ -6446,6 +6446,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             int clicks = terminal_press_clicks(mx, my);
+            if (block_press) {          /* an Alt press is never a double or triple click */
+                clicks = selection_press_clicks(true, clicks);
+                g_last_press.count = 0;
+            }
             start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks, block_press);
             return 0;
         }

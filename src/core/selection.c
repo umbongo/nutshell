@@ -282,6 +282,11 @@ bool selection_block_modifiers(bool alt, bool ctrl)
     return alt && !ctrl;
 }
 
+int selection_press_clicks(bool block, int counted_clicks)
+{
+    return block ? 1 : counted_clicks;
+}
+
 void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
                       int px, int py, int drag_cx, int drag_cy)
 {

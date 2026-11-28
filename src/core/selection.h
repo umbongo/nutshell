@@ -62,6 +62,10 @@ void selection_begin_block(Selection *s, const Terminal *t, int screen_row, int 
  * not Ctrl (Ctrl+Alt, and AltGr, which Windows reports as Ctrl+Alt, are
  * chords of their own). */
 bool selection_block_modifiers(bool alt, bool ctrl);
+/* The click count a press starts with: a block press is always 1 (a cell),
+ * whatever the multi-click counter says, so Alt+double-click is two block
+ * presses, never a word; otherwise the counted clicks. */
+int selection_press_clicks(bool block, int counted_clicks);
 /* Shift+click / middle-click: keep the selection and its mode, move one end to
  * the screen cell and make it a live drag again (active = true, press and last
  * pixels reset, no drag threshold). Which end moves is PuTTY's rule: the click
