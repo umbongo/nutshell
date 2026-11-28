@@ -26,6 +26,8 @@ typedef struct {
     uint64_t gen;                /* the terminal's write_gen at the last change */
     bool     active;             /* button held */
     bool     valid;              /* a non-empty selection exists */
+    bool     block;              /* rectangle (Alt+drag): start/end hold the
+                                  * normalised corners, columns included */
     int      press_x, press_y;   /* client pixels of the press, drag threshold */
     int      last_x, last_y;     /* last reported pointer, auto-scroll */
 } Selection;
@@ -47,6 +49,15 @@ int  selection_autoscroll_step(int py, int top_px, int bottom_px, int char_h);
  * (click_count 1 a cell, 2 a word, 3 a line) and records the press pixel. */
 void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
                      int click_count, int px, int py);
+/* Alt+press: as selection_begin() with click_count 1, but the drag selects a
+ * rectangle: every row between the press row and the current row, the columns
+ * between the press column and the current column, whatever the text. The mode
+ * survives selection_extend() and selection_extend_from(); the next
+ * selection_begin() (a plain click) clears it. In a block, start.line/end.line
+ * are the first and last row and start.col/end.col the left and right column
+ * (both inclusive). */
+void selection_begin_block(Selection *s, const Terminal *t, int screen_row, int col,
+                           int px, int py);
 /* Shift+click / middle-click: keep the selection and its mode, move one end to
  * the screen cell and make it a live drag again (active = true, press and last
  * pixels reset, no drag threshold). Which end moves is PuTTY's rule: the click
@@ -102,5 +113,17 @@ int  selection_char_class(uint32_t cp);
  * as part of the cell before it. selection_char_class() is unchanged: a mark
  * alone keeps its own class. */
 bool selection_is_combining(uint32_t cp);
+
+/* The "lone Alt tap opens the menu" decision (Windows does it in
+ * DefWindowProc on the Alt key-up). A mouse press while Alt is down makes the
+ * Alt a modifier of that press, so its release must be swallowed, as for any
+ * chord. Pure state, one per window. */
+typedef struct { bool alt_down; bool used; } AltTap;
+void alt_tap_key_down(AltTap *a);      /* Alt pressed (auto-repeat is a no-op) */
+void alt_tap_mouse_press(AltTap *a);   /* a mouse button pressed while Alt is down */
+/* Alt released: true when the key-up must not reach DefWindowProc (it would
+ * open the menu bar). Resets the state. */
+bool alt_tap_key_up(AltTap *a);
+void alt_tap_reset(AltTap *a);         /* focus lost: forget a key-up we will not see */
 
 #endif /* NUTSHELL_SELECTION_H */

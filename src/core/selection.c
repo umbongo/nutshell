@@ -166,7 +166,7 @@ static bool sel_trim(Selection *s, const Terminal *t)
     for (int i = 0; i < 4; i++) {
         if (pts[i]->line < t->lines_recycled) {
             pts[i]->line = t->lines_recycled;
-            pts[i]->col = 0;
+            if (!s->block) pts[i]->col = 0;      /* a block keeps its columns */
             moved = true;
         }
     }
@@ -208,6 +208,16 @@ static void sb_cut(SelBuf *b, size_t len)
 static void sel_apply_point(Selection *s, const Terminal *t, SelPoint p)
 {
     SelPoint first, last;
+    if (s->block) {                                /* the rectangle of anchor and p */
+        SelPoint a = s->anchor;
+        s->start.line = (p.line < a.line) ? p.line : a.line;
+        s->end.line = (p.line > a.line) ? p.line : a.line;
+        s->start.col = (p.col < a.col) ? p.col : a.col;
+        s->end.col = (p.col > a.col) ? p.col : a.col;
+        s->valid = true;
+        s->gen = t->write_gen;
+        return;
+    }
     sel_unit(s, t, p, &first, &last);
     s->start = (sel_cmp(first, s->anchor) < 0) ? first : s->anchor;
     s->end = (sel_cmp(last, s->anchor_end) > 0) ? last : s->anchor_end;
@@ -259,6 +269,14 @@ void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
     s->press_y = s->last_y = py;
 }
 
+void selection_begin_block(Selection *s, const Terminal *t, int screen_row, int col,
+                           int px, int py)
+{
+    if (!s) return;
+    selection_begin(s, t, screen_row, col, 1, px, py);
+    s->block = (t != NULL);
+}
+
 void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
                       int px, int py, int drag_cx, int drag_cy)
 {
@@ -302,6 +320,25 @@ void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int 
     if (sel_cmp(p, s->start) < 0) move_start = true;
     else if (sel_cmp(p, s->end) > 0) move_start = false;
     else move_start = sel_nearer_start(s, p);
+    if (s->block) {
+        /* The corner nearest the click moves; the opposite one is the anchor. */
+        SelPoint c[4] = { { s->start.line, s->start.col }, { s->start.line, s->end.col },
+                          { s->end.line, s->start.col },   { s->end.line, s->end.col } };
+        int best = 0;
+        uint64_t bl = 0;
+        int bc = 0;
+        for (int i = 0; i < 4; i++) {
+            uint64_t dl = (p.line > c[i].line) ? p.line - c[i].line : c[i].line - p.line;
+            int dc = abs(p.col - c[i].col);
+            if (i == 0 || dl < bl || (dl == bl && dc < bc)) { best = i; bl = dl; bc = dc; }
+        }
+        s->anchor = s->anchor_end = c[3 - best];
+        s->press_x = s->last_x = px;
+        s->press_y = s->last_y = py;
+        s->active = true;
+        sel_apply_point(s, t, p);
+        return;
+    }
     /* The end that stays becomes the anchor unit, so a later drag extends by
      * whole units from it. */
     SelPoint keep = move_start ? s->end : s->start;
@@ -359,8 +396,12 @@ bool selection_contains(const Selection *s, const Terminal *t, int screen_row, i
     if (logical < 0) return false;
     uint64_t line = t->lines_recycled + (uint64_t)logical;
     if (line < s->start.line || line > s->end.line) return false;
-    if (line == s->start.line && col < s->start.col) return false;
-    if (line == s->end.line && col > s->end.col) return false;
+    if (s->block) {
+        if (col < s->start.col || col > s->end.col) return false;
+    } else {
+        if (line == s->start.line && col < s->start.col) return false;
+        if (line == s->end.line && col > s->end.col) return false;
+    }
     if (!s->active) {
         /* Written since the release: no longer what was selected, so the
          * highlight goes row by row as the output overwrites it. */
@@ -378,6 +419,42 @@ bool selection_in_view(const Selection *s, const Terminal *t)
     return s->start.line <= bottom && s->end.line >= top;
 }
 
+/* The rectangle as text: each row's slice is one line with trailing blanks
+ * trimmed, a row too short for the left edge an empty line, CRLF between
+ * lines. Wrapped flags are ignored (a block is by screen row). Cells hold one
+ * codepoint each, so there is no half of a wide character to cut; a combining
+ * mark sits in a cell of its own, and one at the left edge (its base lies
+ * outside the rectangle) is left out, while marks right after the last column
+ * go with their base. Like the stream copy, trailing empty lines are dropped,
+ * so a rectangle over nothing copies "". */
+static void sel_copy_block(const Selection *s, const Terminal *t, SelBuf *b)
+{
+    uint64_t first = (s->start.line < t->lines_recycled) ? t->lines_recycled : s->start.line;
+    for (uint64_t ln = first; ln <= s->end.line; ln++) {
+        const TermRow *r = sel_row(t, ln);
+        if (!r) break;
+        if (ln != first) sb_put(b, "\r\n", 2);
+        int c0 = s->start.col, c1 = s->end.col;
+        if (c1 > t->cols - 1) c1 = t->cols - 1;
+        int len = r->len < t->cols ? r->len : t->cols;
+        while (c1 + 1 < len && selection_is_combining(r->cells[c1 + 1].codepoint)) c1++;
+        if (c1 > len - 1) c1 = len - 1;            /* nothing written past len */
+        while (c0 <= c1 && selection_is_combining(r->cells[c0].codepoint)) c0++;
+        size_t keep = b->len;
+        for (int c = c0; c <= c1; c++) {
+            uint32_t cp = cell_text_codepoint(r->cells[c].codepoint);
+            char u8[4];
+            int n = utf8_encode(cp, u8);
+            if (n <= 0) continue;
+            sb_put(b, u8, (size_t)n);
+            if (cp != (uint32_t)' ') keep = b->len;
+        }
+        sb_cut(b, keep);
+    }
+    while (b->len >= 2 && b->p[b->len - 2] == '\r' && b->p[b->len - 1] == '\n')
+        sb_cut(b, b->len - 2);
+}
+
 char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len)
 {
     SelBuf b = { NULL, 0, 0 };
@@ -388,6 +465,11 @@ char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len
      * which the window calls before every copy, does. */
     if (!s->active && sel_rows_newer(s, t)) return b.p;
 
+    if (s->block) {
+        sel_copy_block(s, t, &b);
+        if (out_len) *out_len = b.len;
+        return b.p;
+    }
     uint64_t first = s->start.line;
     int first_col = s->start.col;
     if (first < t->lines_recycled) {               /* its head has been recycled */
@@ -461,4 +543,34 @@ bool selection_is_combining(uint32_t cp)
     return (cp >= 0x0300u && cp <= 0x036Fu) || (cp >= 0x1AB0u && cp <= 0x1AFFu) ||
            (cp >= 0x1DC0u && cp <= 0x1DFFu) || (cp >= 0x20D0u && cp <= 0x20FFu) ||
            (cp >= 0xFE20u && cp <= 0xFE2Fu);
+}
+
+/* ---- the lone-Alt-tap decision ------------------------------------------ */
+
+void alt_tap_key_down(AltTap *a)
+{
+    if (!a) return;
+    if (!a->alt_down) a->used = false;             /* a fresh press, not auto-repeat */
+    a->alt_down = true;
+}
+
+void alt_tap_mouse_press(AltTap *a)
+{
+    if (!a) return;
+    a->alt_down = true;
+    a->used = true;
+}
+
+bool alt_tap_key_up(AltTap *a)
+{
+    if (!a) return false;
+    bool swallow = a->used;
+    a->alt_down = false;
+    a->used = false;
+    return swallow;
+}
+
+void alt_tap_reset(AltTap *a)
+{
+    if (a) memset(a, 0, sizeof(*a));
 }
