@@ -1392,6 +1392,64 @@ int test_sel_block_recycle_keeps_columns(void)
     TEST_END();
 }
 
+/* Shift+click near each corner of a block moves that corner; the opposite one
+ * becomes the anchor, and the result is still a block. */
+int test_sel_block_extend_nearest_corner(void)
+{
+    TEST_BEGIN();
+    Terminal *t = block_term();
+    Selection s;
+    /* Rows 1-2, columns 3-6: corners (1,3) (1,6) (2,3) (2,6). */
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 0, 2, 0, 0);          /* near top-left */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 0); ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ((int)s.end.line, 2);   ASSERT_EQ(s.end.col, 6);
+    ASSERT_TRUE(selection_finish(&s, t));
+
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 0, 8, 0, 0);          /* near top-right */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 0); ASSERT_EQ(s.start.col, 3);
+    ASSERT_EQ((int)s.end.line, 2);   ASSERT_EQ(s.end.col, 8);
+    ASSERT_TRUE(selection_finish(&s, t));
+
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 3, 1, 0, 0);          /* near bottom-left */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 1); ASSERT_EQ(s.start.col, 1);
+    ASSERT_EQ((int)s.end.line, 3);   ASSERT_EQ(s.end.col, 6);
+    ASSERT_TRUE(selection_finish(&s, t));
+
+    ASSERT_TRUE(bdrag(&s, t, 1, 3, 2, 6));
+    selection_extend_from(&s, t, 3, 8, 0, 0);          /* near bottom-right */
+    ASSERT_TRUE(s.block);
+    ASSERT_EQ((int)s.start.line, 1); ASSERT_EQ(s.start.col, 3);
+    ASSERT_EQ((int)s.end.line, 3);   ASSERT_EQ(s.end.col, 8);
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_TRUE(block_copy_is(&s, t, "defghi\r\nNOPQRS\r\nxyzABC"));
+    term_free(t);
+    TEST_END();
+}
+
+/* A copy made while the drag is live, after the first rows were recycled and
+ * before any sync, skips the recycled rows and keeps the columns. */
+int test_sel_block_copy_skips_recycled_first_rows(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);                  /* capacity 6 */
+    feed_lines(t, 0, 6);
+    t->scrollback_offset = 2;
+    Selection s;
+    selection_begin_block(&s, t, 0, 1, 0, 0);           /* L00 .. L02, columns 1-2 */
+    selection_extend(&s, t, 2, 2, 100, 100, 4, 4);
+    feed(t, "\r\nL06");                                 /* recycles L00 */
+    ASSERT_TRUE(s.active);
+    ASSERT_TRUE(block_copy_is(&s, t, "01\r\n02"));
+    term_free(t);
+    TEST_END();
+}
+
 int test_sel_block_select_all_is_not_a_block(void)
 {
     TEST_BEGIN();

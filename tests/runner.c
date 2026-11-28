@@ -2307,6 +2307,8 @@ int test_sel_block_extend_keeps_block(void);
 int test_sel_block_cleared_by_plain_click(void);
 int test_sel_block_output_into_rectangle_clears(void);
 int test_sel_block_recycle_keeps_columns(void);
+int test_sel_block_extend_nearest_corner(void);
+int test_sel_block_copy_skips_recycled_first_rows(void);
 int test_sel_block_select_all_is_not_a_block(void);
 int test_alt_tap_alone_opens_menu(void);
 int test_alt_tap_mouse_press_swallows_release(void);
@@ -7348,6 +7350,8 @@ int main(void) {
     failed += test_sel_block_cleared_by_plain_click();
     failed += test_sel_block_output_into_rectangle_clears();
     failed += test_sel_block_recycle_keeps_columns();
+    failed += test_sel_block_extend_nearest_corner();
+    failed += test_sel_block_copy_skips_recycled_first_rows();
     failed += test_sel_block_select_all_is_not_a_block();
     failed += test_alt_tap_alone_opens_menu();
     failed += test_alt_tap_mouse_press_swallows_release();
