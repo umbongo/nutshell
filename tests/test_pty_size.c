@@ -196,3 +196,89 @@ int test_pty_size_apply_no_request_when_unchanged(void)
     ASSERT_EQ(pty_size_apply(&st, 90, 24, NULL, &p, PS_AGAIN), -1);
     TEST_END();
 }
+
+/* The retry the write path and the poll make: apply() with the pending size
+ * itself. EAGAIN, then the retry completes: one more send, size recorded,
+ * pending cleared. */
+int test_pty_size_retry_completes(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { PS_AGAIN, 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(pty_size_pending(&st), 1);
+    ASSERT_EQ(pty_size_apply(&st, st.pending_cols, st.pending_rows,
+                             ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(p.n, 2);                    /* exactly one further send */
+    ASSERT_EQ(st.cols, 100);
+    ASSERT_EQ(st.rows, 30);
+    ASSERT_EQ(pty_size_pending(&st), 0);
+    TEST_END();
+}
+
+/* EAGAIN, then the retry gets EAGAIN again: still pending, nothing recorded. */
+int test_pty_size_retry_again_again(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { PS_AGAIN, PS_AGAIN }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(pty_size_apply(&st, st.pending_cols, st.pending_rows,
+                             ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(p.n, 2);
+    ASSERT_EQ(st.cols, 80);
+    ASSERT_EQ(st.rows, 24);
+    ASSERT_EQ(pty_size_pending(&st), 1);
+    ASSERT_EQ(st.pending_cols, 100);
+    TEST_END();
+}
+
+/* A retry when nothing is pending sends nothing. */
+int test_pty_size_retry_nothing_pending(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_pending(&st), 0);
+    ASSERT_EQ(pty_size_apply(&st, st.pending_cols, st.pending_rows,
+                             ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(p.n, 0);
+    ASSERT_EQ(st.cols, 80);
+    TEST_END();
+}
+
+/* EAGAIN at one size, the grid then changes, the retry call names the new
+ * size: the old packet completes first, the new size goes second. */
+int test_pty_size_retry_then_grid_changed(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    pty_size_sent(&st, 80, 24);
+    PsScript p = { { PS_AGAIN, 0, 0 }, 0, {0}, {0} };
+    ASSERT_EQ(pty_size_apply(&st, 100, 30, ps_send, &p, PS_AGAIN), PS_AGAIN);
+    ASSERT_EQ(pty_size_apply(&st, 120, 40, ps_send, &p, PS_AGAIN), 0);
+    ASSERT_EQ(p.n, 3);
+    ASSERT_EQ(p.cols[1], 100);
+    ASSERT_EQ(p.cols[2], 120);
+    ASSERT_EQ(st.cols, 120);
+    ASSERT_EQ(st.rows, 40);
+    ASSERT_EQ(pty_size_pending(&st), 0);
+    TEST_END();
+}
+
+/* The pending rule itself: both dimensions positive; NULL is none. */
+int test_pty_size_pending_rule(void)
+{
+    TEST_BEGIN();
+    PtySizeState st; pty_size_init(&st);
+    ASSERT_EQ(pty_size_pending(&st), 0);
+    ASSERT_EQ(pty_size_pending(NULL), 0);
+    st.pending_cols = 100;
+    ASSERT_EQ(pty_size_pending(&st), 0);
+    st.pending_rows = 30;
+    ASSERT_EQ(pty_size_pending(&st), 1);
+    TEST_END();
+}

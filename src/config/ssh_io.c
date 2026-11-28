@@ -27,6 +27,10 @@ static void log_chunk(FILE *f, const char *data, size_t len)
 int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
     if (!channel || !term) return -1;
 
+    /* Finish a size request an earlier EAGAIN left pending (one integer
+     * test when none is). Silent: this runs every tick. */
+    (void)ssh_pty_retry_pending(channel);
+
     char buf[4096];
     size_t total_read = 0;  /* L-5: use size_t to avoid int overflow */
     int loops = 0;

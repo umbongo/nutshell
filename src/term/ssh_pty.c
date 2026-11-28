@@ -40,3 +40,11 @@ int ssh_pty_resize(SSHChannel *ch, int cols, int rows) {
     ch->pending_rows = st.pending_rows;
     return rc;
 }
+
+int ssh_pty_retry_pending(SSHChannel *ch) {
+    if (!ch || !ch->channel) return -1;
+    PtySizeState st = { ch->last_cols, ch->last_rows,
+                        ch->pending_cols, ch->pending_rows };
+    if (!pty_size_pending(&st)) return 0;
+    return ssh_pty_resize(ch, ch->pending_cols, ch->pending_rows);
+}

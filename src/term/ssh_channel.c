@@ -1,5 +1,6 @@
 #include "ssh_channel.h"
 #include "../core/xmalloc.h"
+#include "ssh_pty.h"
 #include <stdlib.h>
 
 #ifdef _WIN32
@@ -65,6 +66,10 @@ int ssh_channel_write(SSHChannel *ch, const char *data, size_t len) {
                    &tv, sizeof(tv));
 #endif
         libssh2_session_set_blocking(ch->ssh->session, 1);
+        /* A size request left half-sent by EAGAIN blocks every other packet
+         * until it is finished; finish it here, where we are blocking. A
+         * failure is not the write's failure. */
+        (void)ssh_pty_retry_pending(ch);
     }
 
     ssize_t rc = libssh2_channel_write(ch->channel, data, len);

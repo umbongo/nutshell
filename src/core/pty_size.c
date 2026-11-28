@@ -25,12 +25,18 @@ int pty_size_needs_send(const PtySizeState *st, int cols, int rows)
     return (cols != st->cols || rows != st->rows) ? 1 : 0;
 }
 
+int pty_size_pending(const PtySizeState *st)
+{
+    if (!st) return 0;
+    return (st->pending_cols > 0 && st->pending_rows > 0) ? 1 : 0;
+}
+
 int pty_size_apply(PtySizeState *st, int cols, int rows,
                    PtySizeSendFn send, void *ctx, int again_rc)
 {
     if (!st || !send) return -1;
 
-    if (st->pending_cols > 0 && st->pending_rows > 0) {
+    if (pty_size_pending(st)) {
         int rc = send(ctx, st->pending_cols, st->pending_rows);
         if (rc == again_rc) return rc;          /* still in flight */
         if (rc == 0) pty_size_sent(st, st->pending_cols, st->pending_rows);

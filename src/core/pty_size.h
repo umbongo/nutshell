@@ -26,6 +26,10 @@ void pty_size_sent(PtySizeState *st, int cols, int rows);
  * (or none was sent yet), else 0. NULL state counts as nothing sent. */
 int pty_size_needs_send(const PtySizeState *st, int cols, int rows);
 
+/* 1 when a size request returned "try again" and is not yet finished, else 0.
+ * The one rule for "a retry is owed"; NULL counts as none. */
+int pty_size_pending(const PtySizeState *st);
+
 /* Sends one size request; returns the transport's code: 0 when the request
  * went through, the caller's "try again" code when it is still in flight, any
  * other value for a hard error. */
