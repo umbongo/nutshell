@@ -6384,6 +6384,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_RBUTTONDOWN: {
+            if (GetKeyState(VK_MENU) & 0x8000) alt_tap_mouse_press(&g_alt_tap);
             /* Right-click pastes the clipboard */
             do_paste(hwnd);
             return 0;
@@ -6411,6 +6412,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_LBUTTONDOWN:
         case WM_LBUTTONDBLCLK: {
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            /* Alt is a modifier of every press, the splitter's included: no menu on release. */
+            const bool alt_press = (GetKeyState(VK_MENU) & 0x8000) != 0;
+            if (alt_press) alt_tap_mouse_press(&g_alt_tap);
             /* Splitter drag first. CS_DBLCLKS turns a quick second press
              * into WM_LBUTTONDBLCLK, so the double-click repeats the test. */
             if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
@@ -6429,8 +6433,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);  /* reclaim keyboard focus from AI panel */
             if (g_drag_session && g_drag_button != MK_LBUTTON) return 0;  /* the middle button's drag */
-            const bool alt_press = (GetKeyState(VK_MENU) & 0x8000) != 0;
-            if (alt_press) alt_tap_mouse_press(&g_alt_tap);   /* Alt is a modifier now: no menu on release */
             const bool block_press = selection_block_modifiers(alt_press, (GetKeyState(VK_CONTROL) & 0x8000) != 0);
             /* Shift+click extends the selection (PuTTY); with none it is a
              * plain press. Shift comes from the message, not GetKeyState:
@@ -6453,6 +6455,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Middle-click extends the selection like Shift+click; with none
              * it starts a cell press. */
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            if (GetKeyState(VK_MENU) & 0x8000) alt_tap_mouse_press(&g_alt_tap);
             if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
                 RECT crc;
                 GetClientRect(hwnd, &crc);
@@ -6466,7 +6469,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);
             if (g_drag_session && g_drag_button != MK_MBUTTON) return 0;  /* the left button's drag */
-            if (GetKeyState(VK_MENU) & 0x8000) alt_tap_mouse_press(&g_alt_tap);
             (void)sync_selection(hwnd, g_active_session);
             extend_terminal_drag_from(hwnd, g_active_session, mx - g_left_margin, my, MK_MBUTTON);
             return 0;
