@@ -167,7 +167,7 @@ typedef struct {
 } SettingsCtrl;
 
 /* Raise this when a page outgrows it; add_ctrl refuses to overflow. */
-#define MAX_SETTINGS_CTRLS 96
+#define MAX_SETTINGS_CTRLS 128
 
 /* ---- Dialog state ------------------------------------------------------- */
 
@@ -3169,7 +3169,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 EnumChildWindows(hwnd, SetFontProc, (LPARAM)nd->hDlgFont);
             if (nd->hBoldFont && nd->hPageTitle)
                 SendMessage(nd->hPageTitle, WM_SETFONT, (WPARAM)nd->hBoldFont, TRUE);
-            /* The Voice page's three section labels use the heading font too. */
+            /* The Voice page's four section labels use the heading font too. */
             for (int vi = 0; vi < 4; vi++)
                 if (nd->hBoldFont && nd->hVoiceHead[vi])
                     SendMessage(nd->hVoiceHead[vi], WM_SETFONT,

@@ -1445,9 +1445,9 @@ int test_voice_mode_enables(void)
     ASSERT_EQ(e.speech, 0);
     /* Voice off: everything off */
     voice_mode_enables(0, VOICE_MODE_CONVERSATION, VOICE_MODE_TOGGLE, &e);
-    ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation, 0);
+    ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation + e.speech, 0);
     voice_mode_enables(0, VOICE_MODE_DICTATION, VOICE_MODE_HOLD, &e);
-    ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation, 0);
+    ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation + e.speech, 0);
     TEST_END();
 }
 
