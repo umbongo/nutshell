@@ -186,10 +186,22 @@ void voice_trail_note(VoiceWordTrail *t, unsigned long at, size_t offset)
     t->off[idx] = offset;
 }
 
-size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
-                          unsigned long ms, char *out, size_t cap)
+#define TRAIL_AHEAD_MS 1000
+#define TRAIL_WORDS_PER_S 3
+
+/* The end of the word that starts at or after `pos` (one word moved on), or slen. */
+static size_t next_word_end(const char *spoken, size_t slen, size_t pos)
+{
+    while (pos < slen && !word_byte((unsigned char)spoken[pos])) pos++;
+    while (pos < slen && word_byte((unsigned char)spoken[pos])) pos++;
+    return pos;
+}
+
+static size_t trail_text(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
+                         unsigned long ms, unsigned long ahead_ms, char *out, size_t cap)
 {
     size_t len = 0, from = 0, to = 0, slen;
+    unsigned long t_first = 0, t_last = 0;
     int have = 0;
     if (!out || cap == 0) return 0;
     out[0] = '\0';
@@ -201,13 +213,28 @@ size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned 
         for (int i = 0; i < t->n; i++) {
             const int k = (t->head + i) % VOICE_TRAIL_MAX;
             if (t->off[k] >= slen || (long)(t->at[k] - cut_at) > 0 || (long)(t->at[k] - lo) < 0) continue;
-            if (!have) { from = t->off[k]; have = 1; }
+            if (!have) { from = t->off[k]; t_first = t->at[k]; have = 1; }
             to = t->off[k];
+            t_last = t->at[k];
         }
     }
     if (!have) return 0;
     while (to < slen && word_byte((unsigned char)spoken[to])) to++;   /* the end of the last word */
     if (to < from) return 0;
+    if (ahead_ms > 0) {
+        /* words said per second in this span, then that many more as the ones not yet reported */
+        const unsigned long span = t_last - t_first;
+        size_t nw = 0, ahead;
+        for (size_t i = from; i < to; i++)
+            if (word_byte((unsigned char)spoken[i]) && (i == from || !word_byte((unsigned char)spoken[i - 1]))) nw++;
+        if (span >= 500ul && nw >= 2)
+            ahead = (size_t)(((unsigned long)(nw - 1) * ahead_ms + span / 2) / span);
+        else
+            ahead = (size_t)(TRAIL_WORDS_PER_S * ahead_ms / 1000ul);
+        if (ahead < 1) ahead = 1;
+        if (ahead > 4) ahead = 4;
+        while (ahead-- > 0 && to < slen) to = next_word_end(spoken, slen, to);
+    }
     len = to - from;
     if (len > cap - 1) {   /* keep the tail, the words nearest the cut, from a word's start */
         from = to - (cap - 1);
@@ -219,6 +246,18 @@ size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned 
     memcpy(out, spoken + from, len);
     out[len] = '\0';
     return len;
+}
+
+size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
+                          unsigned long ms, char *out, size_t cap)
+{
+    return trail_text(t, spoken, cut_at, ms, 0ul, out, cap);
+}
+
+size_t voice_trail_heard(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
+                         char *out, size_t cap)
+{
+    return trail_text(t, spoken, cut_at, VOICE_ECHO_RECENT_MS, TRAIL_AHEAD_MS, out, cap);
 }
 
 /* ---- phrases ---- */

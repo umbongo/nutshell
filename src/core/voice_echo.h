@@ -48,6 +48,14 @@ void voice_trail_note(VoiceWordTrail *t, unsigned long at, size_t offset);
 size_t voice_trail_recent(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
                           unsigned long ms, char *out, size_t cap);
 
+/* What the user may have heard by cut_at: voice_trail_recent over VOICE_ECHO_RECENT_MS, with its
+ * end moved on by about a second of words the engine has not reported yet (the words per second
+ * are the trail's own, 3 when it holds too little to say; between 1 and 4 words are added). The
+ * speak's start is noted in the trail by whoever starts the speak (voice_trail_note with the
+ * speak's first offset), since an engine's first event can be its second word. */
+size_t voice_trail_heard(const VoiceWordTrail *t, const char *spoken, unsigned long cut_at,
+                         char *out, size_t cap);
+
 typedef enum { VPH_NONE = 0, VPH_REPEAT, VPH_CONTINUE } VoicePhrase;
 
 /* A short whole-utterance command: at most 6 words, optional leading

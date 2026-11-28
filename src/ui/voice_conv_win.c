@@ -405,7 +405,7 @@ static VoiceTurnClass classify_text(const char *text)
     ctx.cut_in = g_c.cut_turn;
     ctx.recent = NULL;
     if (g_c.cut_turn && g_spoken) {
-        (void)voice_trail_recent(&g_trail, g_spoken, g_cut_at, VOICE_ECHO_RECENT_MS, recent, sizeof recent);
+        (void)voice_trail_heard(&g_trail, g_spoken, g_cut_at, recent, sizeof recent);
         ctx.recent = recent;
     }
     cls = voice_turn_classify(text, &ctx, now_ms());
@@ -525,6 +525,9 @@ static void speak_with_context(const char *text, size_t from, int is_reply)
     g_cur_id = ++g_reply_seq;
     g_cur_is_reply = is_reply;
     voice_trail_reset(&g_trail);
+    /* the speak's own first word: an engine's first event can be its second (AI speech starts
+     * its offset tracking at `from`), so the trail would never hold the first one */
+    voice_trail_note(&g_trail, now_ms(), from);
     if (is_reply) {
         g_cut = from;
         g_read_to_end = 0;

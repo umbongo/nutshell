@@ -448,3 +448,37 @@ int test_vtrail_recent_across_the_tick_wrap(void)
     ASSERT_STR_EQ(out, "one two");
     TEST_END();
 }
+
+int test_vtrail_heard_includes_the_start_and_a_second_of_lookahead(void)
+{
+    TEST_BEGIN();
+    const char *spoken = "one two three four five six seven eight nine ten";
+    static const size_t off[10] = { 0, 4, 8, 14, 19, 24, 28, 34, 40, 45 };
+    VoiceWordTrail t;
+    char out[128];
+    voice_trail_reset(&t);
+    /* the AI engine's first event is its second word: the speak's own start is noted by the glue */
+    voice_trail_note(&t, 1000, off[0]);
+    voice_trail_note(&t, 1500, off[2]);
+    voice_trail_note(&t, 2000, off[3]);
+    voice_trail_note(&t, 2500, off[4]);
+    /* what the engine reported: the first word is there with the start noted */
+    voice_trail_recent(&t, spoken, 2500, VOICE_ECHO_RECENT_MS, out, sizeof out);
+    ASSERT_STR_EQ(out, "one two three four five");
+    /* and about a second of words it has not yet reported (2.7 words a second: three) */
+    ASSERT_EQ((int)voice_trail_heard(&t, spoken, 2500, out, sizeof out), (int)strlen("one two three four five six seven eight"));
+    ASSERT_STR_EQ(out, "one two three four five six seven eight");
+    /* never past the end of the text */
+    ASSERT_EQ((int)voice_trail_heard(&t, "one two three four five six", 2500, out, sizeof out), 27);
+    ASSERT_STR_EQ(out, "one two three four five six");
+    /* a single note: three words a second assumed */
+    voice_trail_reset(&t);
+    voice_trail_note(&t, 1000, off[0]);
+    voice_trail_heard(&t, spoken, 1000, out, sizeof out);
+    ASSERT_STR_EQ(out, "one two three four");
+    /* nothing reported: nothing heard */
+    voice_trail_reset(&t);
+    ASSERT_EQ((int)voice_trail_heard(&t, spoken, 2500, out, sizeof out), 0);
+    ASSERT_STR_EQ(out, "");
+    TEST_END();
+}
