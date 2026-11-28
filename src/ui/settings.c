@@ -214,6 +214,7 @@ typedef struct {
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
     int      demo;        /* --ui-demo: 1 = settings-debug (debugging ticked in memory), 2 = settings-voice (AI and voice ticked, no device list); Save never writes */
     HWND     tip_focus;   /* the control whose F1 help is showing, or NULL */
+    int      tip_scroll;  /* the page scroll offset when that help was shown */
     int      cues_shown;  /* keyboard focus cues have been switched on (first Tab or F1) */
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
     struct FetchModelsCtx *models;   /* the Refresh Models request in flight (UI's reference), or NULL */
@@ -299,6 +300,7 @@ typedef struct {
 } SettingsDlgData;
 
 static void relayout(HWND hwnd, SettingsDlgData *d);
+static void help_pop_hide(SettingsDlgData *d);
 static void ai_url_warn_sync(SettingsDlgData *d);
 static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
@@ -678,6 +680,9 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
     d->scroll = settings_scroll_clamp(d->scroll, scroll_max);
     d->page_h = page_h;
     d->view_h = content_h;
+    /* The F1 help is anchored to a screen spot: scrolling the page leaves it
+     * behind, so it goes. */
+    if (d->tip_focus && d->scroll != d->tip_scroll) help_pop_hide(d);
 
     int show_scroll = scroll_max > 0;
     int usable_w = content_w - (show_scroll ? CSB_WIDTH : 0);
@@ -2455,6 +2460,7 @@ static void help_pop_show(SettingsDlgData *d)
         }
         if (e && ns_tip_pop(d->hTip, d->hPage, e->text, &rc)) {
             d->tip_focus = f;
+            d->tip_scroll = d->scroll;
             SetTimer(d->hDlg, IDT_HELP_POP, 100, NULL);
         }
         return;
@@ -3499,6 +3505,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         return 0;
     }
+
+    case WM_MOVE:
+        /* The F1 help is a screen-anchored pop-up: it does not follow. */
+        if (d) help_pop_hide(d);
+        break;
 
     case WM_SIZE:
         if (d && wParam != SIZE_MINIMIZED) {

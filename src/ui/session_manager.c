@@ -1195,6 +1195,11 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         }
         break;
 
+    case WM_MOVE:
+        /* The F1 help is a screen-anchored pop-up: it does not follow. */
+        if (st) help_pop_hide(hwnd, st);
+        break;
+
     case WM_DESTROY:
         if (st) {
             KillTimer(hwnd, IDT_AINOTES_SCROLL);
