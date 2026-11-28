@@ -410,7 +410,7 @@ int test_vais_resolve_refuses_hostile_base_urls(void)
         "http://h.example?mail=a@b", "http://h.example#[x]", "http://h?x=1", "http://h#f",
         "http://h/v1?key=1", "http://h/v1#frag", "http://h?", "http://h#", "http://h/v1/?",
         "HTTP://h/v1", "Https://h/v1", "ftp://h/v1", "//h/v1", "h/v1", "http:/h/v1", "http://",
-        "https://", "http:///v1", "http://:8880/v1", "http://h:/v1", "http://h:abc/v1",
+        "https://", "http:///v1", "http://:8880/v1", "http://h:abc/v1",
         "http://h:0/v1", "http://h:65536/v1", "http://h:99999999999/v1", "http://h:80:81/v1",
         "http://h :80/v1", "http://h ost/v1", "http://h/v 1", "http://h\tost/v1", "http://h/v1\x01",
         "http://h\n/v1", "http://h/v1\r\nHost: x", "http://h\\v1", "http://h/v1\\x",
@@ -432,6 +432,14 @@ int test_vais_resolve_refuses_hostile_base_urls(void)
     set_custom(&s, "http://h:65535", "kokoro", "bf_emma");
     ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
     ASSERT_STR_EQ(t.host, "h:65535");
+    /* an empty port means the default, as parse_url reads it (atoi of "" is 0): accepted, and the
+     * host the line names is "h" */
+    set_custom(&s, "http://h:/v1", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h");
+    set_custom(&s, "http://h:", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h");
     TEST_END();
 }
 
