@@ -27,7 +27,7 @@ typedef enum { VCARD_COMMAND = 0, VCARD_WRITE, VCARD_OTHER } VoiceCardKind;
 typedef enum { VCX_PANEL_CLOSED = 1, VCX_OFF, VCX_SETTINGS, VCX_LOCK, VCX_CHAT_CHANGED,
                VCX_DEVICE_LOST } VoiceConvEnd;
 typedef enum {
-    VCE_START,        /* a = live provider (1/0) */
+    VCE_START,        /* a = live provider (1/0), b = mute the microphone while speech plays (1/0) */
     VCE_PRESS,        /* the key or the mic button */
     VCE_ESCAPE,       /* Escape with focus in the AI panel */
     VCE_STOP,         /* the panel's Stop (or Send showing Stop while Speaking) */
@@ -75,7 +75,8 @@ enum {  /* action bits */
 typedef enum { VCH_NONE = 0, VCH_LISTENING, VCH_HEARING, VCH_SENDING, VCH_TRANSCRIBING,
                VCH_WORKING, VCH_SPEAKING, VCH_PAUSED_BG, VCH_PAUSED_DIALOG, VCH_APPROVAL,
                VCH_DIDNT_CATCH, VCH_IGNORED_ECHO, VCH_REPEATING, VCH_CARRYING_ON,
-               VCH_LIVE_UNAVAILABLE, VCH_LIVE_STOPPED, VCH_AI_FAILED } VoiceConvHeader;
+               VCH_LIVE_UNAVAILABLE, VCH_LIVE_STOPPED, VCH_AI_FAILED,
+               VCH_SPEAKING_MUTED } VoiceConvHeader;
 typedef enum { VCN_NONE = 0, VCN_END_SETTINGS, VCN_END_LOCK, VCN_END_SILENCE, VCN_END_CHAT,
                VCN_END_STUCK, VCN_BUSY, VCN_NO_SESSION, VCN_FULL, VCN_LAUNCH, VCN_NO_SPEECH } VoiceConvNote;
 typedef enum { VCPH_NONE = 0, VCPH_APPROVE_COMMAND, VCPH_APPROVE_WRITE, VCPH_APPROVE_OTHER,
@@ -93,6 +94,10 @@ typedef struct {
     int idle_seen;                /* IDLE_POLL has seen the chat idle since idle_since */
     int local_speech;             /* the speech is a local repeat or continue, not the chat's reply */
     int speaking_reply;           /* SPEAKING a reply (1) or a phrase (0) */
+    int mute_speaking;            /* the setting: the microphone is not heard while speech plays */
+    int muted;                    /* this speech is being played with the microphone held */
+    int guard;                    /* the speech ended; the room rings on until guard_at */
+    unsigned long guard_at;
     int held, held_continue;      /* a held reply (held_phrase: the WENT_WRONG phrase) */
     int held_phrase;
     int held_local;               /* the held speech was a local repeat or continue */
@@ -115,6 +120,10 @@ typedef struct {
 #define VOICE_CONV_HEARING_MAX_MS  130000
 #define VOICE_CONV_ENDING_MAX_MS   180000
 #define VOICE_CONV_SPEAKING_MAX_MS 600000
+/* With the microphone muted while speech plays, listening resumes this long after the engine
+ * reports the speech done: the room and the loudspeaker ring on for a moment, and the first
+ * 300 ms of listening would otherwise hear the tail of the assistant's own voice. */
+#define VOICE_CONV_MUTE_GUARD_MS   300
 void         voice_conv_init(VoiceConv *c);
 /* The glue calls this when it submits a turn's upload: the Ending deadline becomes
  * max(VOICE_CONV_ENDING_MAX_MS, upload_ms + 10000), upload_ms being the upload's own timeouts
