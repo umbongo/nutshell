@@ -1040,10 +1040,12 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         }
 
         if (id == IDCANCEL) {
-            /* Escape first closes an F1 help that is showing. */
+            /* Escape first closes an F1 help that is showing; the close
+             * button and a click on Cancel also arrive as IDCANCEL and
+             * still close the dialog. */
             if (st && st->tip_focus) {
                 help_pop_hide(hwnd, st);
-                return TRUE;
+                if (GetKeyState(VK_ESCAPE) & 0x8000) return TRUE;
             }
             EndDialog(hwnd, IDCANCEL);
             return TRUE;
