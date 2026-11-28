@@ -13,6 +13,7 @@
 #include "secure_zero.h"
 #include "voice_gate.h"
 #include "voice_net_win.h"
+#include "winhttp_open.h"
 #include "voice_stt.h"
 
 #define STT_MAX_JOBS 8
@@ -161,8 +162,8 @@ static DWORD WINAPI stt_thread(LPVOID arg)
         if (le == ERROR_ACCESS_DENIED || !voice_gate_on()) {
             set_fail(j, "Voice input is turned off.");
         } else {
-            char why[64];
-            snprintf(why, sizeof(why), "WinHttpOpen failed: %lu", (unsigned long)le);
+            char why[128];   /* "WinHttpOpen failed: <n>", or the TLS refusal in words */
+            ns_winhttp_failure_text((unsigned long)le, why, sizeof(why));
             voice_stt_http_error(0, why, j->res->err, sizeof(j->res->err));
             j->res->ok = 0;
         }

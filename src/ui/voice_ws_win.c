@@ -12,6 +12,7 @@
 #include "dlog.h"
 #include "secure_zero.h"
 #include "voice_net_win.h"
+#include "winhttp_open.h"
 
 #ifndef WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET
 #define WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET 114
@@ -109,7 +110,11 @@ VoiceWs *voice_ws_connect(const char *host, int port, int secure, const char *pa
 
     ws->session = voice_net_open(VNK_LIVE_WS);
     if (!ws->session) {
-        set_err(err, errcap, "websocket session unavailable", GetLastError());
+        DWORD le = GetLastError();
+        if (le == NS_ERR_TLS_UNAVAILABLE)
+            ns_winhttp_failure_text((unsigned long)le, err, errcap);   /* plain words */
+        else
+            set_err(err, errcap, "websocket session unavailable", le);
         ws_destroy(ws);
         return NULL;
     }
