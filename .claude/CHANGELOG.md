@@ -4,6 +4,34 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-28 — merge when ready; the Windows test log
+
+Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
+Models: claude-fable-5-2 (main session, the edits); claude-sonnet-5-5 (the test log's first files).
+
+With PR #123 green and waiting and PR #124 open, the maintainer said: "Always Merge when
+ready, keep a log of what needs to be tested that you can guide me on when I say I'm ready to
+test". #123 and #124 were merged under it the same hour.
+
+- **CLAUDE.md**, "Branches, pull requests and the merge gate": the per-merge go-ahead
+  (2026-11-12) is replaced by merge when ready, with "ready" spelled out as the gate already
+  was (every check green on the latest commit, up to date, review findings fixed after the
+  maintainer has seen them, the main session's check of the diff). A design's approval and a
+  release tag are stated as outside the rule: that limit is the main session's reading of
+  "merge", not the maintainer's words. New paragraph: the Windows test log.
+- **`skills/feature-workflow/SKILL.md`**: step 8 is the test log (a `docs/test-log/` file per
+  code pull request; the notes' Open list points at it); step 9 is merge when ready;
+  Allocation's "Finish means" follows.
+- **`memory/MEMORY.md`**: the classifier note says what the rule is now; "Open items" names
+  the test log and is corrected to v1.3.3 and to "since v1.2.94": the notes record the
+  maintainer trying v1.2.94 on 2026-11-24, where the retrospective and the first wording
+  said v1.2.93.
+- **`docs/test-log/`** (new): a README and ten files, 200 checks, built from the notes' Open
+  list and the bodies of PRs #104 to #123.
+
+No critique was run: the rule is the maintainer's own sentence, and "ready" restates the gate
+without changing what it enforces.
+
 ## 2026-11-28 — retrospective of PRs #102 to #122 (20 merges)
 
 Session: https://claude.ai/code/session_01AHuBtEd8Zi2fpsjiKHXZt4, on `automaton`.
