@@ -819,6 +819,7 @@ static Session *g_drag_session = NULL;
  * The other button's press is ignored and its release does not end the drag,
  * so a left drag is not hijacked by a stray middle click. */
 static int g_drag_button = 0;
+static AltTap g_alt_tap;   /* a mouse press while Alt is down: its release must not open the menu */
 
 /* The last press in the terminal, from either message, so the next press can
  * continue the click cycle 1, 2, 3, 1, ... (spec section 1). A Shift or
@@ -892,7 +893,7 @@ static bool sel_point_same(SelPoint a, SelPoint b)
 /* The press in the terminal: clear what was selected, take the capture and
  * start a selection of `clicks` (1 cell, 2 word, 3 line) at client pixel
  * (px, py). px has the left margin already taken off. */
-static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int clicks)
+static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int clicks, bool block)
 {
     if (s->sel.valid || s->sel.active)
         DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.clear", "reason=%s", "click");
@@ -905,7 +906,10 @@ static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int click
     int row = 0, col = 0;
     selection_pixel_to_cell(px, py, g_renderer.charWidth, g_renderer.charHeight,
                             g_tab_height, s->term->rows, s->term->cols, &row, &col);
-    selection_begin(&s->sel, s->term, row, col, clicks, px, py);
+    if (block && clicks == 1)       /* Alt+drag: a rectangle */
+        selection_begin_block(&s->sel, s->term, row, col, px, py);
+    else
+        selection_begin(&s->sel, s->term, row, col, clicks, px, py);
     DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.begin", "line=%llu col=%d mode=%d",
          (unsigned long long)s->sel.anchor.line, s->sel.anchor.col, (int)s->sel.mode);
     force_full_terminal_repaint(hwnd, s->term);
@@ -6303,6 +6307,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_SYSKEYDOWN: {
             session_mark_terminal_input();
+            if (wParam == VK_MENU) alt_tap_key_down(&g_alt_tap);
             SysKeyDownResult r = key_on_syskeydown(hwnd, wParam, lParam);
             if (r == SYSKEYDOWN_HANDLED) return 0;
             if (r == SYSKEYDOWN_SENT_AND_PASS)
@@ -6314,6 +6319,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_SYSKEYUP:
+            /* Alt released after a mouse press made it a modifier (Alt+drag):
+             * not a lone tap, so DefWindowProc must not open the menu bar. */
+            if (wParam == VK_MENU && alt_tap_key_up(&g_alt_tap)) return 0;
             /* F10's key-up is where DefWindowProc would enter menu mode for
              * it; keep it consumed like the key-down. A lone Alt tap's
              * release, and the release after a chord passed through above,
@@ -6329,6 +6337,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * window) must not leave an armed one-shot for a keystroke that
              * lands somewhere else entirely. */
             key_oneshot_clear();
+            alt_tap_reset(&g_alt_tap);
             break;
 
         case WM_MOUSEWHEEL: {
@@ -6414,6 +6423,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);  /* reclaim keyboard focus from AI panel */
             if (g_drag_session && g_drag_button != MK_LBUTTON) return 0;  /* the middle button's drag */
+            const bool alt_press = (GetKeyState(VK_MENU) & 0x8000) != 0;
+            if (alt_press) alt_tap_mouse_press(&g_alt_tap);   /* Alt is a modifier now: no menu on release */
             /* Shift+click extends the selection (PuTTY); with none it is a
              * plain press. Shift comes from the message, not GetKeyState:
              * the harness posts its clicks from another thread. */
@@ -6426,7 +6437,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             int clicks = terminal_press_clicks(mx, my);
-            start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks);
+            start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks, alt_press);
             return 0;
         }
 
@@ -6448,6 +6459,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);
             if (g_drag_session && g_drag_button != MK_MBUTTON) return 0;  /* the left button's drag */
+            if (GetKeyState(VK_MENU) & 0x8000) alt_tap_mouse_press(&g_alt_tap);
             (void)sync_selection(hwnd, g_active_session);
             extend_terminal_drag_from(hwnd, g_active_session, mx - g_left_margin, my, MK_MBUTTON);
             return 0;
