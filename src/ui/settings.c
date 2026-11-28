@@ -222,7 +222,7 @@ typedef struct {
     /* The Voice page: the rows that come and go, and the dim notes. */
     HWND     hVoiceBlock;    /* dim "Needs the AI assistant" under Enable voice */
     HWND     hVoiceAiNote;   /* dim reason "Use current AI assistant" cannot be ticked */
-    HWND     hVoiceHead[3];  /* "Speech to Text" / "Microphone" / "Conversation" section labels */
+    HWND     hVoiceHead[4];  /* "Speech to Text" / "Microphone" / "Conversation" / "Speech" section labels */
     HWND     hVoiceUrlWarn;  /* warning-coloured "not encrypted" line under the voice Base URL */
     SettingsCtrl *ctrl_voice_block;
     SettingsCtrl *ctrl_voice_ai_note;
@@ -1180,8 +1180,8 @@ static void voice_tts_key_show(SettingsDlgData *d, const char *text)
 /* The speech rows for the page's own state: which show, the key edit following
  * the provider binding while the user has not touched it (a saved key shows
  * only for the provider it was entered for, R43), and the privacy line.
- * conv is the Conversation section's state. Returns 1 when a row came or went. */
-static int voice_speech_apply(SettingsDlgData *d, int conv)
+ * speech is the Speech section's state (Voice on, either mode). Returns 1 when a row came or went. */
+static int voice_speech_apply(SettingsDlgData *d, int speech)
 {
     if (!d->ctrl_tts_provider) return 0;
     Settings *c = voice_page_copy(d);
@@ -1196,7 +1196,7 @@ static int voice_speech_apply(SettingsDlgData *d, int conv)
     }
     const int shared = voice_ais_key_shared(c) != VAIS_KEY_OWN;
     VoiceSpeechEnables en;
-    voice_speech_enables(conv, c->voice_speech_engine, c->voice_tts_provider, shared,
+    voice_speech_enables(speech, c->voice_speech_engine, c->voice_tts_provider, shared,
                          d->voice_uk_installed, &en);
     char host[256];
     host[0] = '\0';
@@ -1295,7 +1295,8 @@ static void voice_enable_sync(SettingsDlgData *d)
     if (test)
         EnableWindow(test, (on && d->voice_dev_listed) ? TRUE : FALSE);
     /* Mode: Conversation greys Key mode, the Mic start delay and auto-send;
-     * Dictation greys the whole Conversation section, Play sample included. */
+     * Dictation greys the Conversation section; the Speech section (Windows
+     * voice, AI speech rows, Play sample) is live whenever Voice is on. */
     {
         VoiceModeEnables en;
         voice_mode_enables(on, voice_mode_selected(d),
@@ -1305,11 +1306,12 @@ static void voice_enable_sync(SettingsDlgData *d)
         voice_row_enable(d, IDC_VOICE_MIC_DELAY, en.mic_delay);
         voice_row_enable(d, IDC_VOICE_AUTO_SEND, en.auto_send);
         voice_row_enable(d, IDC_VOICE_PAUSE, en.conversation);
-        voice_row_enable(d, IDC_VOICE_WIN_VOICE, en.conversation);
-        voice_row_enable(d, IDC_VOICE_PLAY_SAMPLE, en.conversation);
+        voice_row_enable(d, IDC_VOICE_WIN_VOICE, en.speech);
+        voice_row_enable(d, IDC_VOICE_PLAY_SAMPLE, en.speech);
         if (d->hVoiceHead[2]) EnableWindow(d->hVoiceHead[2], en.conversation ? TRUE : FALSE);
-        if (d->hVoiceNoteVoice) EnableWindow(d->hVoiceNoteVoice, en.conversation ? TRUE : FALSE);
-        if (d->hVoiceNoteUk) EnableWindow(d->hVoiceNoteUk, en.conversation ? TRUE : FALSE);
+        if (d->hVoiceHead[3]) EnableWindow(d->hVoiceHead[3], en.speech ? TRUE : FALSE);
+        if (d->hVoiceNoteVoice) EnableWindow(d->hVoiceNoteVoice, en.speech ? TRUE : FALSE);
+        if (d->hVoiceNoteUk) EnableWindow(d->hVoiceNoteUk, en.speech ? TRUE : FALSE);
         if (d->hVoiceNoteAec) EnableWindow(d->hVoiceNoteAec, en.conversation ? TRUE : FALSE);
         /* The ducking line is for Conversation mode only. */
         if (d->ctrl_voice_note_duck) {
@@ -1317,7 +1319,7 @@ static void voice_enable_sync(SettingsDlgData *d)
             if (d->ctrl_voice_note_duck->visible != show) changed = 1;
             d->ctrl_voice_note_duck->visible = show;
         }
-        if (voice_speech_apply(d, en.conversation)) changed = 1;
+        if (voice_speech_apply(d, en.speech)) changed = 1;
     }
     if (changed && d->cur_page == SETTINGS_PAGE_VOICE) {
         relayout(GetParent(d->hPage), d);
@@ -2899,19 +2901,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
             }
             {
-                nd->hVoiceHead[2] = make_hint(nd, "Conversation");
-                add_ctrl(nd, NULL, nd->hVoiceHead[2], NULL, SETTINGS_PAGE_VOICE,
+                nd->hVoiceHead[3] = make_hint(nd, "Speech");
+                add_ctrl(nd, NULL, nd->hVoiceHead[3], NULL, SETTINGS_PAGE_VOICE,
                          0, 0, 1, 0, 1, 1);
-            }
-            {
-                /* Pause before sending: seconds with one decimal; Save clamps to 0.5..3.0. */
-                char pbuf[16];
-                voice_pause_format(vs->voice_pause_ms, pbuf, sizeof(pbuf));
-                HWND lbl = make_label2(nd, SH_VOICE_PAUSE);
-                HWND ed = make_edit2(nd, pbuf, IDC_VOICE_PAUSE, 0, SH_VOICE_PAUSE);
-                SendMessage(ed, EM_SETLIMITTEXT, 8, 0);
-                HWND secs = make_hint(nd, "seconds");
-                add_ctrl(nd, lbl, ed, secs, SETTINGS_PAGE_VOICE, 140, 70, 1, 0, 1, 0);
             }
             {
                 HWND lbl = make_label2(nd, SH_VOICE_SPEECH);
@@ -3060,6 +3052,21 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, NULL, btn, NULL, SETTINGS_PAGE_VOICE, 140, 0, 1, 0, 1, 1);
             }
             {
+                nd->hVoiceHead[2] = make_hint(nd, "Conversation");
+                add_ctrl(nd, NULL, nd->hVoiceHead[2], NULL, SETTINGS_PAGE_VOICE,
+                         0, 0, 1, 0, 1, 1);
+            }
+            {
+                /* Pause before sending: seconds with one decimal; Save clamps to 0.5..3.0. */
+                char pbuf[16];
+                voice_pause_format(vs->voice_pause_ms, pbuf, sizeof(pbuf));
+                HWND lbl = make_label2(nd, SH_VOICE_PAUSE);
+                HWND ed = make_edit2(nd, pbuf, IDC_VOICE_PAUSE, 0, SH_VOICE_PAUSE);
+                SendMessage(ed, EM_SETLIMITTEXT, 8, 0);
+                HWND secs = make_hint(nd, "seconds");
+                add_ctrl(nd, lbl, ed, secs, SETTINGS_PAGE_VOICE, 140, 70, 1, 0, 1, 0);
+            }
+            {
                 nd->hVoiceNoteAec = make_hint(nd,
                     "Your microphone reports no echo cancellation: a headset works best");
                 nd->ctrl_voice_note_aec = add_ctrl(nd, NULL, nd->hVoiceNoteAec, NULL,
@@ -3163,7 +3170,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             if (nd->hBoldFont && nd->hPageTitle)
                 SendMessage(nd->hPageTitle, WM_SETFONT, (WPARAM)nd->hBoldFont, TRUE);
             /* The Voice page's three section labels use the heading font too. */
-            for (int vi = 0; vi < 3; vi++)
+            for (int vi = 0; vi < 4; vi++)
                 if (nd->hBoldFont && nd->hVoiceHead[vi])
                     SendMessage(nd->hVoiceHead[vi], WM_SETFONT,
                                 (WPARAM)nd->hBoldFont, TRUE);

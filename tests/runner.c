@@ -3887,6 +3887,7 @@ int test_voice_pause_parse(void);
 int test_voice_pause_format(void);
 int test_voice_mode_enables(void);
 int test_voice_speech_enables(void);
+int test_voice_speech_rows_follow_voice_on(void);
 int test_voice_config_stt_key_foreign_blob_preserved(void);
 int test_voice_config_save_aborts_when_stt_encrypt_fails(void);
 int test_voice_config_validate_clamps(void);
@@ -4229,6 +4230,7 @@ int test_settings_help_labels_match_sources(void);
 int test_settings_help_every_id_in_settings_c(void);
 int test_settings_help_ai_enable_entry(void);
 int test_settings_help_voice_entries(void);
+int test_settings_help_speech_both_modes(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -8685,6 +8687,7 @@ int main(void) {
     failed += test_voice_pause_format();
     failed += test_voice_mode_enables();
     failed += test_voice_speech_enables();
+    failed += test_voice_speech_rows_follow_voice_on();
     failed += test_voice_config_stt_key_foreign_blob_preserved();
     failed += test_voice_config_save_aborts_when_stt_encrypt_fails();
     failed += test_voice_config_validate_clamps();
@@ -9112,6 +9115,7 @@ int main(void) {
     failed += test_settings_help_every_id_in_settings_c();
     failed += test_settings_help_ai_enable_entry();
     failed += test_settings_help_voice_entries();
+    failed += test_settings_help_speech_both_modes();
 
     printf("\n--- Design System: scale & type ---\n");
     failed += test_ns_scale_identity_at_96();

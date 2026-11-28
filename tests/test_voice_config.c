@@ -1436,6 +1436,13 @@ int test_voice_mode_enables(void)
     ASSERT_EQ(e.mic_delay, 0);
     ASSERT_EQ(e.auto_send, 0);
     ASSERT_EQ(e.conversation, 1);
+    /* The Speech section follows Voice on, in either mode */
+    voice_mode_enables(1, VOICE_MODE_DICTATION, VOICE_MODE_TOGGLE, &e);
+    ASSERT_EQ(e.speech, 1);
+    voice_mode_enables(1, VOICE_MODE_CONVERSATION, VOICE_MODE_HOLD, &e);
+    ASSERT_EQ(e.speech, 1);
+    voice_mode_enables(0, VOICE_MODE_DICTATION, VOICE_MODE_HOLD, &e);
+    ASSERT_EQ(e.speech, 0);
     /* Voice off: everything off */
     voice_mode_enables(0, VOICE_MODE_CONVERSATION, VOICE_MODE_TOGGLE, &e);
     ASSERT_EQ(e.key_mode + e.mic_delay + e.auto_send + e.conversation, 0);
@@ -1448,7 +1455,7 @@ int test_voice_speech_enables(void)
 {
     TEST_BEGIN();
     VoiceSpeechEnables e;
-    /* Dictation (the Conversation section off): everything off */
+    /* Voice off (the Speech section off): everything off */
     voice_speech_enables(0, VOICE_SPEECH_AI, "custom", 0, 0, &e);
     ASSERT_EQ(e.speech + e.ai_rows + e.url + e.key + e.style + e.uk_line + e.privacy, 0);
     /* Windows speech, no British woman's voice installed: the line, nothing of AI */
@@ -1485,6 +1492,23 @@ int test_voice_speech_enables(void)
     voice_speech_enables(1, VOICE_SPEECH_AI, NULL, 0, 0, &e);
     ASSERT_EQ(e.ai_rows, 1);
     ASSERT_EQ(e.url, 0);
+    TEST_END();
+}
+
+int test_voice_speech_rows_follow_voice_on(void)
+{
+    TEST_BEGIN();
+    VoiceModeEnables m; VoiceSpeechEnables e;
+    voice_mode_enables(1, VOICE_MODE_DICTATION, VOICE_MODE_TOGGLE, &m);
+    ASSERT_EQ(m.conversation, 0);                      /* the Conversation rows unchanged */
+    voice_speech_enables(m.speech, VOICE_SPEECH_AI, "custom", 0, 0, &e);
+    ASSERT_EQ(e.speech, 1); ASSERT_EQ(e.ai_rows, 1); ASSERT_EQ(e.privacy, 1);
+    ASSERT_EQ(e.url, 1); ASSERT_EQ(e.style, 1);
+    voice_speech_enables(m.speech, VOICE_SPEECH_WINDOWS, "mistral", 0, 0, &e);
+    ASSERT_EQ(e.speech, 1); ASSERT_EQ(e.uk_line, 1);
+    voice_mode_enables(0, VOICE_MODE_DICTATION, VOICE_MODE_TOGGLE, &m);
+    voice_speech_enables(m.speech, VOICE_SPEECH_AI, "custom", 0, 0, &e);
+    ASSERT_EQ(e.speech + e.ai_rows + e.url + e.key + e.style + e.uk_line + e.privacy, 0);
     TEST_END();
 }
 

@@ -767,6 +767,18 @@ int test_settings_help_voice_entries(void) {
     TEST_END();
 }
 
+int test_settings_help_speech_both_modes(void) {
+    TEST_BEGIN();
+    const SettingsHelp *e = settings_help_get((int)SH_VOICE_SPEECH);
+    ASSERT_TRUE(strstr(e->text, "Conversation mode only") == NULL);
+    ASSERT_TRUE(strstr(e->text, "speaker button") != NULL);
+    e = settings_help_get((int)SH_VOICE_WIN_VOICE);
+    ASSERT_TRUE(strstr(e->text, "speaker button") != NULL);
+    e = settings_help_get((int)SH_VOICE_MODE);
+    ASSERT_TRUE(strstr(e->text, "speaker button") != NULL);
+    TEST_END();
+}
+
 int test_settings_help_play_sample(void) {
     TEST_BEGIN();
     const SettingsHelp *e = settings_help_get((int)SH_VOICE_PLAY_SAMPLE);

@@ -127,13 +127,14 @@ void voice_mode_enables(int voice_on, int mode, int ptt_mode, VoiceModeEnables *
     out->mic_delay = voice_on && !conv && ptt_mode == VOICE_MODE_HOLD;
     out->auto_send = voice_on && !conv;
     out->conversation = voice_on && conv;
+    out->speech = voice_on;
 }
 
-void voice_speech_enables(int conversation_enabled, int engine, const char *provider,
+void voice_speech_enables(int speech_enabled, int engine, const char *provider,
                           int key_shared, int uk_voice_installed, VoiceSpeechEnables *out)
 {
     memset(out, 0, sizeof(*out));
-    if (!conversation_enabled) return;
+    if (!speech_enabled) return;
     const int ai = engine == VOICE_SPEECH_AI;
     const int custom = provider && strcmp(provider, "custom") == 0;
     out->speech = 1;

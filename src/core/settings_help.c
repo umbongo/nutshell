@@ -537,8 +537,10 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Mode:",
       NULL,
       "Mode:\n\nDictation puts your words in the message box for you to read "
-      "and send with Send. Conversation sends each turn by itself after a "
-      "pause and reads the assistant's replies aloud. In Conversation mode "
+      "and send with Send, and each finished reply has a speaker button "
+      "under it that reads that reply aloud. Conversation sends each turn "
+      "by itself after a pause and reads the assistant's replies aloud. In "
+      "Conversation mode "
       "the voice key always toggles: press it to start a conversation, "
       "press it again to end it, or press it to stop a spoken reply. A "
       "conversation also ends on Escape while the AI panel has the keyboard "
@@ -559,7 +561,7 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "Windows voice:",
       NULL,
       "Windows voice:\n\nThe voice that reads the assistant's replies aloud "
-      "in Conversation mode. Automatic picks an English (UK) woman's voice "
+      "with Windows speech, in Conversation mode and when you press a reply's speaker button. Automatic picks an English (UK) woman's voice "
       "when one is installed, and otherwise the Windows default. To add a "
       "voice, open Windows Settings, then Time & language, then Speech, "
       "and choose Add voices."
@@ -578,10 +580,14 @@ static const SettingsHelp k_help[SH_COUNT] = {
     E(SH_VOICE_SPEECH, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Speech:",
       NULL,
-      "Speech:\n\nWindows speech uses a voice installed on this PC. AI speech "
-      "sends each reply's text to the speech provider and plays the "
-      "AI-generated voice it returns. If AI speech fails, the rest of the "
-      "reply is read with Windows speech. Conversation mode only."
+      "Speech:\n\nWho reads the assistant's replies aloud: every reply in "
+      "Conversation mode, and in Dictation mode the reply whose speaker "
+      "button you press. Windows speech uses a voice installed on this PC. "
+      "AI speech sends the reply's text to the speech provider and plays the "
+      "AI-generated voice it returns; every reply read this way is a new "
+      "request to the provider. If AI speech fails in Conversation mode, the "
+      "rest of the reply is read with Windows speech; in Dictation mode the "
+      "reading stops and the chat says why."
       "\nDefault: Windows speech.",
       "Windows speech",
       0, 0, 0u),
