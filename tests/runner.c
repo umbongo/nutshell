@@ -4284,6 +4284,7 @@ int test_sl_scroll_to_show_above_scrolls_up(void);
 int test_sl_scroll_to_show_below_scrolls_just_enough(void);
 int test_sl_scroll_to_show_taller_than_view_top_aligned(void);
 int test_sl_scroll_to_show_clamped_at_both_ends(void);
+int test_settings_ctrl_table_has_room(void);
 int test_sl_scroll_clamp_zero_max(void);
 int test_sl_initial_1080p_fits_behaviour(void);
 int test_sl_initial_scroll_expectations(void);
@@ -9103,6 +9104,7 @@ int main(void) {
     failed += test_sl_scroll_to_show_below_scrolls_just_enough();
     failed += test_sl_scroll_to_show_taller_than_view_top_aligned();
     failed += test_sl_scroll_to_show_clamped_at_both_ends();
+    failed += test_settings_ctrl_table_has_room();
     failed += test_sl_scroll_clamp_zero_max();
     failed += test_sl_initial_1080p_fits_behaviour();
     failed += test_sl_initial_scroll_expectations();

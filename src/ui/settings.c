@@ -169,7 +169,7 @@ typedef struct {
 } SettingsCtrl;
 
 /* Raise this when a page outgrows it; add_ctrl refuses to overflow. */
-#define MAX_SETTINGS_CTRLS 96
+#define MAX_SETTINGS_CTRLS 128
 
 /* ---- Dialog state ------------------------------------------------------- */
 
@@ -408,7 +408,12 @@ static SettingsCtrl *add_ctrl(SettingsDlgData *d, HWND lbl, HWND ctrl, HWND extr
                                int page, int ctrl_w, int extra_w, int rows,
                                int stretch_v, int visible, int full_w)
 {
-    if (d->n_ctrls >= MAX_SETTINGS_CTRLS) return NULL;
+    if (d->n_ctrls >= MAX_SETTINGS_CTRLS) {
+        DLOG(DLOG_GENERAL, DLOG_ERROR, 0u, "settings.ctrls",
+             "control table full (MAX_SETTINGS_CTRLS=%d): a row was dropped",
+             MAX_SETTINGS_CTRLS);
+        return NULL;
+    }
     SettingsCtrl *c = &d->ctrls[d->n_ctrls++];
     c->hLabel    = lbl;
     c->hCtrl     = ctrl;

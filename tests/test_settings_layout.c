@@ -1,6 +1,9 @@
 #include "test_framework.h"
 #include "settings_layout.h"
 #include "ns_scale.h"
+#include "dlog_types.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- ns_scale (settings_layout's own scale alias was removed in the
@@ -604,6 +607,78 @@ int test_sl_scroll_to_show_clamped_at_both_ends(void) {
     ASSERT_EQ(settings_scroll_to_show(50, -20, 30, 200, 1000), 0);
     ASSERT_EQ(settings_scroll_to_show(0, 990, 30, 200, 1000), 800);
     ASSERT_EQ(settings_scroll_to_show(10, 50, 30, 200, 100), 0);
+    TEST_END();
+}
+
+/* Source-reading gate: the Settings window registers its controls in a fixed
+ * table (MAX_SETTINGS_CTRLS) and add_ctrl() refuses one when it is full, so a
+ * row past the cap is silently dropped. Count the registrations in the source
+ * and keep a margin of 8 under the cap. */
+#define SETTINGS_CTRL_MARGIN 8
+
+static char *sl_read_whole(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long len = ftell(f);
+    if (len < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = (char *)malloc((size_t)len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t rd = fread(buf, 1, (size_t)len, f);
+    buf[rd] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static int sl_count_in(const char *line, const char *needle)
+{
+    int n = 0;
+    for (const char *p = line; (p = strstr(p, needle)) != NULL; p += strlen(needle))
+        n++;
+    return n;
+}
+
+int test_settings_ctrl_table_has_room(void) {
+    TEST_BEGIN();
+    char *src = sl_read_whole("src/ui/settings.c");
+    if (!src) {
+        const char *ci = getenv("CI");
+        if (ci && ci[0]) {
+            printf("  src/ui/settings.c not readable under CI\n");
+            ASSERT_TRUE(0);
+        } else {
+            printf("  [settings] src/ui/settings.c not readable from cwd -- skipping\n");
+        }
+        TEST_END();
+    }
+    int cap = 0, count = 0;
+    for (char *line = src; line && *line; ) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        const char *t = line;
+        while (*t == ' ' || *t == '\t') t++;
+        if (strncmp(t, "#define MAX_SETTINGS_CTRLS", 26) == 0) {
+            cap = atoi(t + 26);
+        } else if (strncmp(t, "/*", 2) != 0 && *t != '*' && strncmp(t, "//", 2) != 0) {
+            /* Creation sites pass the window data as `nd`; the helpers'
+             * own `d` calls (inside dbg_add) are not registrations. */
+            count += sl_count_in(t, "add_ctrl(nd,");
+            int dbg = sl_count_in(t, "dbg_add(nd,");
+            if (dbg && strstr(t, "SDBG_LEVEL_RENDER + cat"))
+                count += dbg * (int)DLOG_CAT_COUNT;   /* the per-category loop */
+            else
+                count += dbg;
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    free(src);
+    ASSERT_TRUE(cap > 0);
+    ASSERT_TRUE(count > 0);
+    if (count > cap - SETTINGS_CTRL_MARGIN)
+        printf("  Settings registers %d controls; MAX_SETTINGS_CTRLS is %d "
+               "(needs a margin of %d)\n", count, cap, SETTINGS_CTRL_MARGIN);
+    ASSERT_TRUE(count <= cap - SETTINGS_CTRL_MARGIN);
     TEST_END();
 }
 
