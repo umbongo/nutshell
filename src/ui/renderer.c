@@ -128,12 +128,13 @@ static void resolve_cell(const TermPalette *pal, const TermCell *cell,
  * [from, to) of a row, in `colour`, merging neighbours into one bar. The
  * geometry is term_underline_geom()'s. The bar is a background-colour fill
  * (an empty ETO_OPAQUE text out), as the other solid fills here are. The
- * caller's SetBkColor is replaced; each run sets its own before drawing. */
+ * background colour is restored to what the caller had set. */
 static void draw_underlines(HDC hdc, const Renderer *r, const TermRow *row,
                             int from, int to, int x, LONG py, COLORREF colour)
 {
     int ul_top, ul_h;
     term_underline_geom(r->charHeight, r->charAscent, r->dpi, &ul_top, &ul_h);
+    COLORREF saved_bk = GetBkColor(hdc);
     for (int ci = from; ci < to; ) {
         if (!(row->cells[ci].attr.flags & TERM_ATTR_UNDERLINE)) { ci++; continue; }
         int cj = ci;
@@ -144,6 +145,7 @@ static void draw_underlines(HDC hdc, const Renderer *r, const TermRow *row,
         ExtTextOutW(hdc, bar.left, bar.top, ETO_OPAQUE, &bar, L"", 0, NULL);
         ci = cj;
     }
+    SetBkColor(hdc, saved_bk);
 }
 
 void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const RECT *paintRect, const Selection *sel) {
@@ -374,14 +376,6 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             ExtTextOutW(hdc, (int)px, (int)py, ETO_OPAQUE | ETO_CLIPPED, &runRect,
                         run_buf, (UINT)run_len, run_dx);
 
-            /* Underline (SGR 4): a bar across the full cell width, in the
-             * cell's resolved foreground (run_fg: after reverse video, and
-             * the cursor's or selection's colour on those cells), so it reads
-             * against whatever background the cell has and adjacent
-             * underlined cells join. Redrawn after the fallback overdraw
-             * below, whose opaque cell rectangles would cover it. */
-            draw_underlines(hdc, r, row, run_start, col_idx, x, py, run_fg);
-
             /* Overdraw missing-glyph cells using the Unicode fallback font.
              * Each missing character is redrawn individually, clipped to its cell,
              * so the proportional fallback font stays within the terminal grid. */
@@ -405,10 +399,16 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
                     }
                     /* Restore primary font — cur_bold remains valid */
                     SelectObject(hdc, run_bold ? r->hBoldFont : r->hFont);
-                    /* The opaque cell rectangles above covered the bars. */
-                    draw_underlines(hdc, r, row, run_start, col_idx, x, py, run_fg);
                 }
             }
+
+            /* Underline (SGR 4): a bar across the full cell width, in the
+             * cell's resolved foreground (run_fg: after reverse video, and
+             * the cursor's or selection's colour on those cells), so it reads
+             * against whatever background the cell has and adjacent
+             * underlined cells join. Drawn after the fallback overdraw,
+             * whose opaque cell rectangles would cover it. */
+            draw_underlines(hdc, r, row, run_start, col_idx, x, py, run_fg);
         }
 
         if (covered)
