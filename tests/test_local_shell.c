@@ -747,6 +747,74 @@ int test_local_shell_resolve_bare_rejects_relative_path_quoted(void)
     TEST_END();
 }
 
+/* =========================================================================
+ * Forward-slash and UNC custom paths
+ * ========================================================================= */
+
+int test_local_shell_custom_forward_slash_absolute_path_accepted(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:/tools/shell.exe\" -i", NULL, &spec);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    ASSERT_STR_EQ(spec.exe, "C:/tools/shell.exe");
+    /* "C:/..." counts as absolute: no relative-path error. */
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
+    ASSERT_STR_EQ(spec.error, "");
+    ASSERT_STR_EQ(spec.command, "\"C:/tools/shell.exe\" -i");
+    TEST_END();
+}
+
+int test_local_shell_custom_unc_path_accepted(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    local_shell_resolve("\\\\fileserver\\tools\\shell.exe", NULL, &spec);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    ASSERT_STR_EQ(spec.exe, "\\\\fileserver\\tools\\shell.exe");
+    ASSERT_STR_EQ(spec.dir, "\\\\fileserver\\tools");
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
+    ASSERT_STR_EQ(spec.error, "");
+    TEST_END();
+}
+
+int test_local_shell_custom_quoted_forward_slash_with_spaces_exact(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:/Program Files/My Shell/shell.exe\" --arg", NULL, &spec);
+    ASSERT_STR_EQ(spec.exe, "C:/Program Files/My Shell/shell.exe");
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
+    ASSERT_STR_EQ(spec.command, "\"C:/Program Files/My Shell/shell.exe\" --arg");
+    TEST_END();
+}
+
+int test_local_shell_custom_unc_unquoted_spaced_resolves_existing(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "\\\\srv\\share\\my shell.exe");
+    LocalShellProbe p = fake_probe(&d);
+    LocalShellSpec spec;
+    local_shell_resolve("\\\\srv\\share\\my shell.exe -i", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "\\\\srv\\share\\my shell.exe");
+    ASSERT_STR_EQ(spec.command, "\"\\\\srv\\share\\my shell.exe\" -i");
+    TEST_END();
+}
+
+int test_local_shell_custom_single_leading_backslash_is_relative(void)
+{
+    TEST_BEGIN();
+    /* "\\tools\\shell.exe" (one backslash) is drive-relative, not UNC. */
+    LocalShellSpec spec;
+    local_shell_resolve("\\tools\\shell.exe", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 0);
+    ASSERT_TRUE(spec.error[0] != '\0');
+    TEST_END();
+}
+
 int test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces(void)
 {
     TEST_BEGIN();
