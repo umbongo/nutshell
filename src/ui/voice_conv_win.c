@@ -1038,7 +1038,7 @@ static void ai_turn_off(long hr)
     if (hr == VOICE_AIS_HR_RESOLVE && g_ops->ai_resolve_error
         && !g_ops->ai_resolve_error(resolve_err, sizeof resolve_err))
         resolve_err[0] = '\0';
-    voice_ais_failure_reason(hr, resolve_err, reason, sizeof reason);
+    voice_ais_failure_reason_for(ui_current_settings() ? ui_current_settings()->voice_tts_provider : NULL, hr, resolve_err, reason, sizeof reason);
     snprintf(text, sizeof text, "AI speech is off for this conversation: %s. "
              "Replies are read with Windows speech.", reason);
     g_ai_off = 1;

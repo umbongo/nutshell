@@ -1538,7 +1538,7 @@ void settings_voice_sample_failed(long hr)
     SettingsDlgData *d = g_voice_dlg;   /* cleared in WM_DESTROY before the dialog's data is freed */
     if (!d || !d->hDlg || !IsWindow(d->hDlg) || !d->hPage || d->cur_page != SETTINGS_PAGE_VOICE) return;
     char note[256];
-    voice_ais_sample_failure_note(hr, note, sizeof(note));
+    voice_ais_sample_failure_note_for(voice_ais_page_provider(d) ? voice_ais_page_provider(d)->id : NULL, hr, note, sizeof(note));
     voice_test_note(d, note);
 }
 
