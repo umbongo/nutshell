@@ -1,6 +1,7 @@
 /* src/core/chat_rebuild.c -- the rules of the rebuilt AI display. */
 #include "chat_rebuild.h"
 #include "ai_agentic.h"
+#include "ai_conv_guard.h"
 #include "ai_tool_web_fetch.h"
 #include "run_command.h"
 #include <stdio.h>
@@ -257,6 +258,7 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
     memset(earlier, 0, sizeof(earlier));
     for (int j = 2; j < conv->msg_count && j < AI_MAX_MESSAGES; j++) {
         if (conv->messages[j].role != AI_ROLE_ASSISTANT) continue;
+        if (ai_msg_stop_status(&conv->messages[j])) continue;   /* no cards */
         int hr, cr, lc, nc;
         (void)turn_cards(conv, j, rlog, batches, &hr, &cr, &lc, &nc);
         if (hr || lc) mark_earlier_rounds(conv, j, earlier);
@@ -278,6 +280,18 @@ void chat_rebuild_replay(ChatMsgList *list, const AiConversation *conv,
         }
 
         if (msg->role != AI_ROLE_ASSISTANT) continue;   /* a mid-conversation system message */
+
+        /* A reply the user stopped: its partial text as the stream showed it
+         * (never split at an [EXEC] marker, never matched to a card or a run
+         * record), then the status row Stop shows; with no text, the status
+         * row alone. */
+        const char *stop_status = ai_msg_stop_status(msg);
+        if (stop_status) {
+            if (ai_msg_stop_has_text(msg))
+                chat_msg_append(list, CHAT_ITEM_AI_TEXT, ai_msg_content(msg));
+            chat_msg_append(list, CHAT_ITEM_STATUS, stop_status);
+            continue;
+        }
 
         const char *content = ai_msg_content(msg);
         const AiToolCall *calls = msg->tool_calls;

@@ -493,6 +493,7 @@ static void conv_press(void)
     voice_live_reap(0);
     g_digest = voice_settings_digest(s);
     ai_chat_voice_binding(ui_ai_panel(), &g_conv_bind);
+    voice_conv_set_mute_speaking(s->voice_conv_mute_speaking);
     voice_conv_start(voice_live_resolve(s, &t));
 }
 
@@ -850,6 +851,14 @@ static int rc_speech_engine(void)
                ? VOICE_SPEECH_AI : VOICE_SPEECH_WINDOWS;
 }
 
+/* The configured AI speech provider id ("mistral", "custom", ...), for the wording of a
+ * failure; NULL before the settings exist. */
+static const char *rc_ai_provider(void)
+{
+    const Settings *s = ui_current_settings();
+    return s ? s->voice_tts_provider : NULL;
+}
+
 /* 1 with the reason in out when AI speech cannot resolve on the current settings. */
 static int rc_ai_resolve_error(char *out, size_t cap)
 {
@@ -972,7 +981,7 @@ static const VoiceConvOps k_conv_ops = {
     rc_live_begin, rc_live_replace, rc_drop_words, rc_lock_typing, rc_send_caption, rc_mic_ui,
     rc_box_has_text, rc_notice_voice,
     rc_notice_due, rc_level, NULL, rc_dialog_open, rc_chat_same,
-    rc_speech_engine, rc_ai_resolve_error
+    rc_speech_engine, rc_ai_resolve_error, rc_ai_provider
 };
 
 /* What window.c and the panel route to the conversation (each is a no-op with none running). */

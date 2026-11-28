@@ -28,6 +28,7 @@ void      tabs_set_callbacks(HWND hwnd,
 void      tabs_clear      (HWND hwnd);
 void      tabs_set_active (HWND hwnd, int index);
 int       tabs_get_active (HWND hwnd);
+int       tabs_count      (HWND hwnd);   /* 0 when there is no strip */
 void     *tabs_get_user_data(HWND hwnd, int index);
 void      tabs_set_status (HWND hwnd, int index, TabStatus status);
 TabStatus tabs_get_status (HWND hwnd, int index);

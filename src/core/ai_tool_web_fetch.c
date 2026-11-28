@@ -1,4 +1,5 @@
 #include "ai_tool_web_fetch.h"
+#include "ai_watchdog.h"
 #include "html_util.h"
 #include "json_parser.h"
 #include <string.h>
@@ -320,6 +321,13 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
         }
         if (got != 0) {
             free(body);
+            if (got == WEB_FETCH_GET_NO_TLS)
+                return fetch_fail(result_buf, result_len,
+                                  "A secure connection could not be set up: TLS 1.2 or newer "
+                                  "is not available on this system, so nothing was sent");
+            if (got == WEB_FETCH_GET_TIMEOUT)
+                return fetch_fail(result_buf, result_len,
+                                  "The page did not answer in time");
             return fetch_fail(result_buf, result_len, "HTTP request failed");
         }
 
@@ -452,6 +460,16 @@ static int wf_stopped(volatile int *cancel, const AiNetCancel *nc)
     return (cancel && *cancel) || ai_nc_cancelled(nc);
 }
 
+/* True when the worker must make no further call on its request handle: the
+ * caller cancelled, the token was fired, the watchdog already closed the
+ * handle (expired), or the hop's end has passed (the watchdog is about to). */
+static int wf_dead(volatile int *cancel, const AiNetCancel *tok,
+                   unsigned long long hop_end)
+{
+    return wf_stopped(cancel, tok) || ai_nc_ended(tok) ||
+           (unsigned long long)GetTickCount64() >= hop_end;
+}
+
 static void wf_close_cb(uintptr_t h)
 {
     WinHttpCloseHandle((HINTERNET)h);
@@ -491,16 +509,26 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     AiNetCancel *nc = fetch ? fetch->nc : NULL;
     HINTERNET session = NULL, connect = NULL, req = NULL;
     int own_session = 0;   /* opened here, so closed here */
-    int armed = 0;         /* req is registered on nc: fire may close it */
+    AiNetCancel hop_nc;    /* stands in for nc when the caller has none */
+    AiNetCancel *tok;      /* the token req is armed on: nc, or hop_nc */
+    AiWatchdog *wd = NULL; /* closes req at hop_end or on the cancel flag */
+    int armed = 0;         /* req is registered on tok: it may be closed from elsewhere */
+    int tls_refused = 0;   /* no session: TLS 1.2 could not be enforced */
+    int timed_out = 0;     /* the hop's own time ran out */
     char *buf = NULL;
     size_t len = 0, cap = 0;
     const size_t max_body = (size_t)AI_TOOL_RESULT_MAX * 4;
+    ai_nc_init(&hop_nc);
+    tok = nc ? nc : &hop_nc;
 
     if (fetch && fetch->session) {
         session = fetch->session;
     } else {
         session = ns_winhttp_open(WIDEN(AI_TOOL_USER_AGENT));
-        if (!session) goto fail;
+        if (!session) {
+            tls_refused = (GetLastError() == NS_ERR_TLS_UNAVAILABLE);
+            goto fail;
+        }
         if (fetch) fetch->session = session;   /* kept for the next hop */
         else own_session = 1;
     }
@@ -517,28 +545,46 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     /* From here a fire from the UI thread closes req and the blocked call
      * returns an error. After any failure the token is read before req is
      * touched again; only the disarm decides who closes it. */
-    if (ai_nc_arm(nc, (uintptr_t)req, wf_close_cb) != 0) goto fail;   /* fired: closed below */
-    armed = nc != NULL;
+    if (ai_nc_arm(tok, (uintptr_t)req, wf_close_cb) != 0) goto fail;   /* fired: closed below */
+    armed = 1;
+    /* A read can block past the hop's end (a server that trickles bytes), and
+     * the checks between calls cannot interrupt it: the watchdog closes req
+     * at hop_end or when the cancel flag rises, through the token, so it is
+     * closed exactly once. It is joined before req is disarmed or closed. If
+     * the thread cannot start the fetch goes on as it did before. */
+    {
+        unsigned long long t0 = (unsigned long long)GetTickCount64();
+        unsigned long long left0 = hop_end > t0 ? hop_end - t0 : 1;
+        wd = ai_wd_start(tok, left0 > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (unsigned long)left0, cancel);
+    }
 
+    /* From here the watchdog may close req at any moment, so every call on it
+     * is preceded by wf_dead(): after the watchdog (or a fire) has closed it
+     * no call is made. A check followed by a close before the call is a few
+     * instructions wide and accepted (ai_netcancel.h); the call fails. */
     DWORD no_redirects = WINHTTP_DISABLE_REDIRECTS;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSetOption(req, WINHTTP_OPTION_DISABLE_FEATURE,
                           &no_redirects, sizeof(no_redirects)))
         goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSetTimeouts(req, t, t, t, t)) goto fail;
     /* WinHttpSetTimeouts leaves the wait for the response headers at the
      * system default (90 s): bound it by the hop's time too, or a server that
      * accepts the request and then trickles holds WinHttpReceiveResponse. */
     DWORD resp_ms = (DWORD)t;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSetOption(req, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT,
                           &resp_ms, sizeof(resp_ms)))
         goto fail;
 
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
         goto fail;
-    if (wf_stopped(cancel, nc)) goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (!WinHttpReceiveResponse(req, NULL)) goto fail;
-    if (wf_stopped(cancel, nc)) goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
 
     DWORD code = 0, code_sz = sizeof(code);
     if (!WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
@@ -548,6 +594,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
 
     wchar_t w_loc[NET_URL_MAX];
     DWORD loc_sz = (DWORD)sizeof(w_loc);
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
     if (WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
                             w_loc, &loc_sz, WINHTTP_NO_HEADER_INDEX)) {
         /* A Location that does not fit or is not valid UTF-8 is reported as
@@ -566,7 +613,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     /* Body, capped; cancel between reads, and the hop's own time limit so a
      * server that trickles bytes cannot outlast it. */
     for (;;) {
-        if (wf_stopped(cancel, nc)) goto fail;
+        if (wf_dead(cancel, tok, hop_end)) goto fail;
         unsigned long long now = (unsigned long long)GetTickCount64();
         if (now >= hop_end) goto fail;
 
@@ -578,6 +625,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         if (!WinHttpSetTimeouts(req, r, r, r, r)) goto fail;
 
         DWORD avail = 0;
+        if (wf_dead(cancel, tok, hop_end)) goto fail;
         if (!WinHttpQueryDataAvailable(req, &avail)) goto fail;
         if (avail == 0) break;
 
@@ -595,12 +643,13 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         }
 
         DWORD got = 0;
+        if (wf_dead(cancel, tok, hop_end)) goto fail;
         if (!WinHttpReadData(req, buf + len, avail, &got)) goto fail;
         if (got == 0) break;
         len += got;
         if (len >= max_body) break;
     }
-    if (wf_stopped(cancel, nc)) goto fail;
+    if (wf_dead(cancel, tok, hop_end)) goto fail;
 
     if (!buf) {
         buf = malloc(1);
@@ -608,7 +657,9 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     }
     buf[len] = '\0';
 
-    if (!armed || ai_nc_disarm(nc)) WinHttpCloseHandle(req);
+    (void)ai_wd_stop(wd);   /* joined: nothing can close req behind the disarm */
+    wd = NULL;
+    if (!armed || ai_nc_disarm(tok)) WinHttpCloseHandle(req);
     WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);
     *status   = (int)code;
@@ -617,15 +668,23 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     return 0;
 
 fail:
+    /* Read before anything else can change them: did this hop run out of its
+     * own time (the watchdog closed req, the hop's end passed, or WinHTTP's own
+     * timeout fired) rather than being cancelled or failing outright? */
+    timed_out = !(cancel && *cancel) && !ai_nc_cancelled(tok) &&
+                (ai_nc_expired(tok) || (unsigned long long)GetTickCount64() >= hop_end ||
+                 GetLastError() == ERROR_WINHTTP_TIMEOUT);
     free(buf);
+    (void)ai_wd_stop(wd);   /* NULL when never started; joined before the disarm */
     if (req) {
-        /* armed: fire may already have closed it (disarm says 0) */
-        if (!armed || ai_nc_disarm(nc)) WinHttpCloseHandle(req);
+        /* armed: fire or the watchdog may already have closed it (disarm says 0) */
+        if (!armed || ai_nc_disarm(tok)) WinHttpCloseHandle(req);
     }
     if (connect) WinHttpCloseHandle(connect);
     if (own_session) WinHttpCloseHandle(session);   /* a shared one stays for wf_end() */
     *status = 0;
-    return -1;
+    if (tls_refused) return WEB_FETCH_GET_NO_TLS;
+    return timed_out ? WEB_FETCH_GET_TIMEOUT : -1;
 }
 
 /* Stateless: every hop opens and closes its own session. */

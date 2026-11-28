@@ -10,6 +10,7 @@
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
 #include "settings_layout.h"
+#include "settings_tab.h"
 #include "ai_prompt.h"
 #include "thinking_mode.h"
 #include "ai_http.h"
@@ -78,6 +79,7 @@
 #define IDC_SSH_IDLE_EDIT   1030
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
+#define IDT_HELP_POP        52  /* F1 help showing: hide it when the focus moves */
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 static const char *PAGE_CLASS     = "Nutshell_SettingsPage";
@@ -211,6 +213,9 @@ typedef struct {
     int      n_dbg_dim;
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
     int      demo;        /* --ui-demo: 1 = settings-debug (debugging ticked in memory), 2 = settings-voice (AI and voice ticked, no device list); Save never writes */
+    HWND     tip_focus;   /* the control whose F1 help is showing, or NULL */
+    int      tip_scroll;  /* the page scroll offset when that help was shown */
+    int      cues_shown;  /* keyboard focus cues have been switched on (first Tab or F1) */
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
     struct FetchModelsCtx *models;   /* the Refresh Models request in flight (UI's reference), or NULL */
     ThreadJoinList models_thread;    /* its thread's handle, kept so closing can join it */
@@ -283,6 +288,8 @@ typedef struct {
 
     int      cur_page; /* SETTINGS_PAGE_* currently shown */
     int      scroll;   /* current page scroll offset, px */
+    int      page_h;   /* content height of the current page, px */
+    int      view_h;   /* height of the page viewport, px */
     int      initial_page; /* SETTINGS_PAGE_* to open on, or -1 for default */
 
     SettingsCtrl ctrls[MAX_SETTINGS_CTRLS];
@@ -293,6 +300,7 @@ typedef struct {
 } SettingsDlgData;
 
 static void relayout(HWND hwnd, SettingsDlgData *d);
+static void help_pop_hide(SettingsDlgData *d);
 static void ai_url_warn_sync(SettingsDlgData *d);
 static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
@@ -403,7 +411,12 @@ static SettingsCtrl *add_ctrl(SettingsDlgData *d, HWND lbl, HWND ctrl, HWND extr
                                int page, int ctrl_w, int extra_w, int rows,
                                int stretch_v, int visible, int full_w)
 {
-    if (d->n_ctrls >= MAX_SETTINGS_CTRLS) return NULL;
+    if (d->n_ctrls >= MAX_SETTINGS_CTRLS) {
+        DLOG(DLOG_GENERAL, DLOG_ERROR, 0u, "settings.ctrls",
+             "control table full (MAX_SETTINGS_CTRLS=%d): a row was dropped",
+             MAX_SETTINGS_CTRLS);
+        return NULL;
+    }
     SettingsCtrl *c = &d->ctrls[d->n_ctrls++];
     c->hLabel    = lbl;
     c->hCtrl     = ctrl;
@@ -599,6 +612,12 @@ static void draw_nav_item(SettingsDlgData *d, LPDRAWITEMSTRUCT dis)
                      : (e->is_header ? th->text_dim : th->text_main);
     SetTextColor(hdc, theme_cr(fg));
 
+    /* The keyboard focus is on the list: ring its row (the list clears
+     * ODS_FOCUS / sets ODS_NOFOCUSRECT while the cues are hidden). */
+    if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT) &&
+        !e->is_header)
+        ns_draw_focus_ring(hdc, &rc, theme_cr(ns_tokens()->focus), d->dpi);
+
     HFONT useFont = e->is_header ? d->hBoldFont : d->hDlgFont;
     HGDIOBJ old = useFont ? SelectObject(hdc, useFont) : NULL;
 
@@ -659,6 +678,11 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
     int page_h = settings_page_height(total_rows + extra_rows, m);
     int scroll_max = settings_scroll_max(content_h, page_h);
     d->scroll = settings_scroll_clamp(d->scroll, scroll_max);
+    d->page_h = page_h;
+    d->view_h = content_h;
+    /* The F1 help is anchored to a screen spot: scrolling the page leaves it
+     * behind, so it goes. */
+    if (d->tip_focus && d->scroll != d->tip_scroll) help_pop_hide(d);
 
     int show_scroll = scroll_max > 0;
     int usable_w = content_w - (show_scroll ? CSB_WIDTH : 0);
@@ -700,44 +724,36 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
         }
 
         int eff_rows = c->rows + ((c == stretch) ? extra_rows : 0);
-        int ctrl_w_scaled = (c->ctrl_w > 0) ? ns_scale(c->ctrl_w, m->dpi) : 0;
 
-        SettingsRect lrc, crc;
-        settings_row_rects(row, usable_w, ctrl_w_scaled, d->scroll, m, &lrc, &crc);
-
-        if (c->full_w) {
-            /* No label column. An explicit ctrl_w still sizes the control
-             * (a tickbox with a combo beside it); 0 spans the pane. */
-            crc.x = m->pad;
-            crc.w = ctrl_w_scaled > 0 ? ctrl_w_scaled : usable_w - 2 * m->pad;
-            if (crc.w < 0) crc.w = 0;
-        }
+        /* The row's geometry is settings_row_layout() (settings_layout.c):
+         * the label, the control and up to two companions, none of them
+         * past the page. */
+        SettingsRowSpec spec;
+        spec.ctrl_w    = c->ctrl_w;
+        spec.extra_w   = c->hExtra ? c->extra_w : 0;
+        spec.extra2_w  = c->hExtra2 ? c->extra2_w : 0;
+        spec.full_w    = c->full_w;
+        spec.extra_off = c->extra_off;
+        SettingsRowGeom g;
+        settings_row_layout(m, row, usable_w, d->scroll, &spec, &g);
+        SettingsRect lrc = g.label, crc = g.ctrl;
 
         if (eff_rows > 1)
             crc.h = eff_rows * m->row_h - (m->row_h - m->ctrl_h);
 
         if (c->hExtra2) {
-            /* Rightmost control, carved off first; hExtra then sits left of it. */
-            int w2 = ns_scale(c->extra2_w, m->dpi);
-            int new_w = crc.w - w2 - m->gap;
-            if (new_w < 0) new_w = 0;
-            SetWindowPos(c->hExtra2, NULL, crc.x + new_w + m->gap, crc.y, w2, crc.h,
+            SettingsRect r2 = g.extra2;
+            r2.h = crc.h;
+            SetWindowPos(c->hExtra2, NULL, r2.x, r2.y, r2.w, r2.h,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(c->hExtra2, SW_SHOW);
-            crc.w = new_w;
         }
 
         if (c->hExtra) {
-            /* A hidden extra (the Other language box) reserves no width. */
-            int extra_w_scaled = c->extra_off ? 0 : ns_scale(c->extra_w, m->dpi);
-            int new_w = crc.w - extra_w_scaled - (c->extra_off ? 0 : m->gap);
-            if (new_w < 0) new_w = 0;
-            SettingsRect erc = crc;
-            erc.x = crc.x + new_w + m->gap;
-            erc.w = extra_w_scaled;
+            SettingsRect erc = g.extra;
+            erc.h = crc.h;
             if (is_combo_class(c->hExtra))
                 erc.h = m->ctrl_h + ns_scale(200, m->dpi);
-            crc.w = new_w;
             SetWindowPos(c->hExtra, NULL, erc.x, erc.y, erc.w, erc.h,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(c->hExtra, c->extra_off ? SW_HIDE : SW_SHOW);
@@ -1306,6 +1322,7 @@ static void voice_enable_sync(SettingsDlgData *d)
         voice_row_enable(d, IDC_VOICE_MIC_DELAY, en.mic_delay);
         voice_row_enable(d, IDC_VOICE_AUTO_SEND, en.auto_send);
         voice_row_enable(d, IDC_VOICE_PAUSE, en.conversation);
+        voice_row_enable(d, IDC_VOICE_MUTE_SPEAKING, en.conversation);
         voice_row_enable(d, IDC_VOICE_WIN_VOICE, en.speech);
         voice_row_enable(d, IDC_VOICE_PLAY_SAMPLE, en.speech);
         if (d->hVoiceHead[2]) EnableWindow(d->hVoiceHead[2], en.conversation ? TRUE : FALSE);
@@ -1540,7 +1557,7 @@ void settings_voice_sample_failed(long hr)
     SettingsDlgData *d = g_voice_dlg;   /* cleared in WM_DESTROY before the dialog's data is freed */
     if (!d || !d->hDlg || !IsWindow(d->hDlg) || !d->hPage || d->cur_page != SETTINGS_PAGE_VOICE) return;
     char note[256];
-    voice_ais_sample_failure_note(hr, note, sizeof(note));
+    voice_ais_sample_failure_note_for(voice_ais_page_provider(d) ? voice_ais_page_provider(d)->id : NULL, hr, note, sizeof(note));
     voice_test_note(d, note);
 }
 
@@ -1843,10 +1860,16 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
  * and number rules are settings_debug.c; this is only the Win32 glue. */
 
 static SettingsCtrl *dbg_add(SettingsDlgData *d, int slot, HWND lbl, HWND ctrl,
-                             HWND extra, int ctrl_w, int extra_w, int full_w)
+                             HWND extra)
 {
-    SettingsCtrl *c = add_ctrl(d, lbl, ctrl, extra, SETTINGS_PAGE_DEBUG, ctrl_w,
-                               extra_w, settings_debug_slot_rows(slot), 0, 1, full_w);
+    /* The widths are the slot's recipe in settings_layout.c, where a native
+     * test checks that every row fits the page at the minimum width. */
+    SettingsRowSpec sp;
+    if (!settings_debug_slot_spec(slot, &sp)) memset(&sp, 0, sizeof(sp));
+    SettingsCtrl *c = add_ctrl(d, lbl, ctrl, extra, SETTINGS_PAGE_DEBUG, sp.ctrl_w,
+                               sp.extra_w, settings_debug_slot_rows(slot), 0, 1,
+                               sp.full_w);
+    if (c) c->extra2_w = sp.extra2_w;
     if (slot >= 0 && slot < SDBG_COUNT) d->dbg[slot] = c;
     return c;
 }
@@ -1957,21 +1980,21 @@ static void debug_build_page(SettingsDlgData *nd)
     {
         HWND chk = make_check2(nd, IDC_DBG_ENABLE, SH_DBG_ENABLE);
         SendMessage(chk, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
-        dbg_add(nd, SDBG_ENABLE, NULL, chk, NULL, 0, 0, 1);
+        dbg_add(nd, SDBG_ENABLE, NULL, chk, NULL);
     }
     dbg_add(nd, SDBG_HINT_ON, NULL,
             dbg_dim_static(nd, "Records what Nutshell does so an AI can diagnose a "
-                               "problem you mark."), NULL, 0, 0, 1);
+                               "problem you mark."), NULL);
     dbg_add(nd, SDBG_HINT_OFF, NULL,
             dbg_dim_static(nd, "Errors are still written to the log folder."),
-            NULL, 0, 0, 1);
+            NULL);
 
     for (int cat = 0; cat < DLOG_CAT_COUNT; cat++) {
         HWND lbl = make_label2(nd, k_dbg_level_help[cat]);
         HWND cmb = make_combo2(nd, IDC_DBG_LEVEL_BASE + cat, CBS_DROPDOWNLIST,
                                k_dbg_level_help[cat]);
         dbg_fill_level_combo(cmb, st->debug_levels[cat]);
-        dbg_add(nd, SDBG_LEVEL_RENDER + cat, lbl, cmb, NULL, 120, 0, 0);
+        dbg_add(nd, SDBG_LEVEL_RENDER + cat, lbl, cmb, NULL);
     }
 
     {
@@ -1982,23 +2005,23 @@ static void debug_build_page(SettingsDlgData *nd)
                                SH_DBG_RECORDER);
         dbg_fill_level_combo(cmb, st->debug_recorder_level);
         EnableWindow(cmb, st->debug_recorder ? TRUE : FALSE);
-        dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb, 300 + 10 + 90, 90, 1);
+        dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb);
     }
     {
         HWND chk = make_check2(nd, IDC_DBG_SCREENSHOT, SH_DBG_SCREENSHOT);
         SendMessage(chk, BM_SETCHECK, st->debug_screenshot ? BST_CHECKED : BST_UNCHECKED, 0);
-        dbg_add(nd, SDBG_SCREENSHOT, NULL, chk, NULL, 0, 0, 1);
+        dbg_add(nd, SDBG_SCREENSHOT, NULL, chk, NULL);
     }
     {
         HWND chk = make_check2(nd, IDC_DBG_CONTENT, SH_DBG_CONTENT);
         SendMessage(chk, BM_SETCHECK, st->debug_include_content ? BST_CHECKED : BST_UNCHECKED, 0);
-        dbg_add(nd, SDBG_CONTENT, NULL, chk, NULL, 0, 0, 1);
+        dbg_add(nd, SDBG_CONTENT, NULL, chk, NULL);
     }
     dbg_add(nd, SDBG_CONTENT_WARN, NULL,
             dbg_dim_static(nd, "Adds terminal text and the echo of what you type, AI "
                                "commands, chat text and host names. Passwords and "
                                "keys are never logged."),
-            NULL, 0, 0, 1);
+            NULL);
 
     {
         HWND lbl = make_label2(nd, SH_DBG_FOLDER);
@@ -2008,15 +2031,15 @@ static void debug_build_page(SettingsDlgData *nd)
                                 IDC_DBG_BROWSE, SH_DBG_BROWSE);
         HWND open = page_ctrl(nd, "BUTTON", "Open", BS_OWNERDRAW,
                               IDC_DBG_OPEN, SH_DBG_OPEN);
-        SettingsCtrl *c = dbg_add(nd, SDBG_FOLDER, lbl, ed, browse, 0, 84, 0);
-        if (c) { c->hExtra2 = open; c->extra2_w = 56; }
+        SettingsCtrl *c = dbg_add(nd, SDBG_FOLDER, lbl, ed, browse);
+        if (c) c->hExtra2 = open;
     }
     {
         char buf[16];
         (void)snprintf(buf, sizeof(buf), "%d", st->debug_max_file_mb);
         HWND lbl = make_label2(nd, SH_DBG_MAX_FILE);
         HWND ed  = make_edit2(nd, buf, IDC_DBG_MAX_FILE, ES_NUMBER, SH_DBG_MAX_FILE);
-        dbg_add(nd, SDBG_MAX_FILE, lbl, ed, NULL, 70, 0, 0);
+        dbg_add(nd, SDBG_MAX_FILE, lbl, ed, NULL);
     }
     {
         char buf[16];
@@ -2028,19 +2051,19 @@ static void debug_build_page(SettingsDlgData *nd)
                              SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, 0, SH_DBG_USAGE);
         if (nd->n_dbg_dim < (int)(sizeof(nd->hDbgDim) / sizeof(nd->hDbgDim[0])))
             nd->hDbgDim[nd->n_dbg_dim++] = use;
-        dbg_add(nd, SDBG_MAX_TOTAL, lbl, ed, use, 70 + 10 + 260, 260, 0);
+        dbg_add(nd, SDBG_MAX_TOTAL, lbl, ed, use);
     }
     {
         HWND lbl = make_label2(nd, SH_DBG_CURRENT);
         (void)settings_debug_current_text(line, sizeof(line), &dst);
         HWND ed = make_edit2(nd, line, IDC_DBG_CURRENT, ES_READONLY, SH_DBG_CURRENT);
-        dbg_add(nd, SDBG_CURRENT, lbl, ed, NULL, 0, 0, 0);
+        dbg_add(nd, SDBG_CURRENT, lbl, ed, NULL);
     }
     dbg_add(nd, SDBG_NOTE, NULL,
             dbg_dim_static(nd, "Give this folder to a Claude Code session. AI Assist can "
                                "read it too; what it reads goes to your AI provider. "
                                "Mark issue: Ctrl+Shift+M"),
-            NULL, 0, 0, 1);
+            NULL);
 
     debug_apply_visibility(nd);
 }
@@ -2214,6 +2237,8 @@ static void voice_page_read(SettingsDlgData *d, Settings *s)
     s->voice_mic_gain_db = voice_gain_now(d);
     s->voice_auto_send = (IsDlgButtonChecked(d->hPage, IDC_VOICE_AUTO_SEND)
                           == BST_CHECKED) ? 1 : 0;
+    s->voice_conv_mute_speaking = (IsDlgButtonChecked(d->hPage, IDC_VOICE_MUTE_SPEAKING)
+                                   == BST_CHECKED) ? 1 : 0;
     {
         /* Speech (PR 3). A provider the page shows no selection for (an unknown id,
          * R38) keeps the stored id. A voice or model equal to Mistral's default is
@@ -2269,6 +2294,225 @@ static void voice_page_read(SettingsDlgData *d, Settings *s)
 }
 
 /* ---- Main window procedure ------------------------------------------------ */
+
+/* AdjustWindowRectExForDpi is Windows 10 1607+; resolved at run time, with
+ * the system-DPI call as the fallback. */
+static void settings_adjust_rect(RECT *rc, DWORD style, int dpi)
+{
+    typedef BOOL (WINAPI *AdjustForDpi_fn)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    static AdjustForDpi_fn pfn = NULL;
+    static int resolved = 0;
+    if (!resolved) {
+        HMODULE h = GetModuleHandleA("user32.dll");
+        if (h) pfn = (AdjustForDpi_fn)(void (*)(void))GetProcAddress(h, "AdjustWindowRectExForDpi");
+        resolved = 1;
+    }
+    if (pfn && pfn(rc, style, FALSE, 0, (UINT)dpi)) return;
+    AdjustWindowRect(rc, style, FALSE);
+}
+
+/* After d->dpi changed: re-fetch every font from the cache at the new DPI
+ * and redo what was sized from the DPI when the controls were created. */
+static void dpi_refresh_fonts(SettingsDlgData *d)
+{
+    d->hDlgFont = ns_font(FONT_BODY, d->dpi);
+    d->hBoldFont = ns_font(FONT_TITLE, d->dpi);
+    if (d->hDlgFont)
+        EnumChildWindows(d->hDlg, SetFontProc, (LPARAM)d->hDlgFont);
+    if (d->hBoldFont && d->hPageTitle)
+        SendMessage(d->hPageTitle, WM_SETFONT, (WPARAM)d->hBoldFont, TRUE);
+    for (size_t vi = 0; vi < sizeof(d->hVoiceHead) / sizeof(d->hVoiceHead[0]); vi++)
+        if (d->hBoldFont && d->hVoiceHead[vi])
+            SendMessage(d->hVoiceHead[vi], WM_SETFONT, (WPARAM)d->hBoldFont, TRUE);
+    ns_tip_set_dpi(d->hTip, d->dpi, d->hDlgFont);
+
+    SettingsMetrics m;
+    settings_metrics_init(&m, d->dpi);
+    SendMessage(d->hNav, LB_SETITEMHEIGHT, 0, (LPARAM)MAKELONG(m.nav_item_h, 0));
+    HWND hLang = GetDlgItem(d->hPage, IDC_VOICE_LANG);
+    if (hLang)
+        SendMessage(hLang, CB_SETDROPPEDWIDTH, (WPARAM)ns_scale(170, d->dpi), 0);
+
+    HWND hEdit = GetDlgItem(d->hPage, IDC_AI_SYSTEM_NOTES);
+    if (hEdit && d->hDlgFont) {
+        HDC hdc = GetDC(hEdit);
+        HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)d->hDlgFont);
+        TEXTMETRIC tm;
+        GetTextMetrics(hdc, &tm);
+        d->sys_notes_line_h = tm.tmHeight + tm.tmExternalLeading;
+        if (d->sys_notes_line_h < 1) d->sys_notes_line_h = 16;
+        SelectObject(hdc, old);
+        ReleaseDC(hEdit, hdc);
+    }
+}
+
+/* ---- Keyboard path: Tab order and F1 help --------------------------------
+ * The dialog is a plain window, not a dialog box, so it does its own key
+ * navigation. The order and the stepping are in settings_tab (portable,
+ * tested); this is the wiring. */
+
+/* The control a focus window stands for: the edit inside an editable combo
+ * is the combo. */
+static HWND focus_owner(HWND h)
+{
+    HWND p = h ? GetParent(h) : NULL;
+    if (p && is_combo_class(p)) return p;
+    return h;
+}
+
+/* Can this control take focus by Tab? Labels, hints and the meter are statics. */
+static int tab_focusable(HWND h)
+{
+    char cls[32];
+    if (!h) return 0;
+    GetClassNameA(h, cls, (int)sizeof(cls));
+    return _stricmp(cls, "Static") != 0;
+}
+
+static void tab_item_add(SettingsTabItem *it, HWND *hw, int *n, HWND h,
+                         int group, HWND coord_parent)
+{
+    if (!h || *n >= 2 * MAX_SETTINGS_CTRLS + 8) return;
+    RECT rc;
+    GetWindowRect(h, &rc);
+    /* One common space: the dialog's client coordinates. */
+    POINT pt = { rc.left, rc.top };
+    ScreenToClient(coord_parent, &pt);
+    it[*n].group = group;
+    it[*n].x = pt.x;
+    it[*n].y = pt.y;
+    it[*n].enabled = IsWindowEnabled(h) ? 1 : 0;
+    it[*n].visible = IsWindowVisible(h) ? 1 : 0;
+    hw[*n] = h;
+    (*n)++;
+}
+
+/* Tab / Shift+Tab: move the focus to the next control in visual order. */
+static void tab_move(SettingsDlgData *d, int dir)
+{
+    SettingsTabItem it[2 * MAX_SETTINGS_CTRLS + 8];
+    HWND hw[2 * MAX_SETTINGS_CTRLS + 8];
+    int n = 0;
+    tab_item_add(it, hw, &n, d->hNav, STAB_GROUP_NAV, d->hDlg);
+    for (int i = 0; i < d->n_ctrls; i++) {
+        const SettingsCtrl *c = &d->ctrls[i];
+        if (c->page != d->cur_page || !c->visible) continue;
+        HWND hs[3] = { c->hCtrl, c->hExtra, c->hExtra2 };
+        for (int k = 0; k < 3; k++)
+            if (tab_focusable(hs[k]))
+                tab_item_add(it, hw, &n, hs[k], STAB_GROUP_PAGE, d->hDlg);
+    }
+    tab_item_add(it, hw, &n, d->hBtnOK, STAB_GROUP_BUTTONS, d->hDlg);
+    tab_item_add(it, hw, &n, d->hBtnCancel, STAB_GROUP_BUTTONS, d->hDlg);
+
+    int order[2 * MAX_SETTINGS_CTRLS + 8];
+    int count = settings_tab_order(it, n, order);
+    HWND cur = focus_owner(GetFocus());
+    int cur_idx = -1;
+    for (int i = 0; i < n; i++)
+        if (hw[i] == cur) { cur_idx = i; break; }
+    int next = settings_tab_step(order, count, cur_idx, dir);
+    if (next >= 0) {
+        SetFocus(hw[next]);
+        /* As a dialog does: Tab into a single-line edit selects its text. */
+        char cls[16];
+        GetClassNameA(hw[next], cls, (int)sizeof(cls));
+        if (_stricmp(cls, "Edit") == 0 &&
+            !(GetWindowLongPtr(hw[next], GWL_STYLE) & ES_MULTILINE))
+            SendMessage(hw[next], EM_SETSEL, 0, -1);
+        /* A control scrolled out of the page is still "visible" (clipped):
+         * bring the new focus into view. */
+        if (d->cur_page >= 0 && IsChild(d->hPage, hw[next])) {
+            RECT rc;
+            GetWindowRect(hw[next], &rc);
+            POINT pt = { rc.left, rc.top };
+            ScreenToClient(d->hPage, &pt);
+            int want = settings_scroll_to_show(d->scroll, pt.y + d->scroll,
+                                               rc.bottom - rc.top, d->view_h,
+                                               d->page_h);
+            if (want != d->scroll) {
+                d->scroll = want;
+                relayout(d->hDlg, d);
+            }
+        }
+    }
+}
+
+static void help_pop_hide(SettingsDlgData *d)
+{
+    if (!d->tip_focus) return;
+    d->tip_focus = NULL;
+    KillTimer(d->hDlg, IDT_HELP_POP);
+    ns_tip_unpop(d->hTip, d->hPage);
+}
+
+/* F1: show the help of the focused control, if it has any. */
+static void help_pop_show(SettingsDlgData *d)
+{
+    HWND f = focus_owner(GetFocus());
+    help_pop_hide(d);
+    if (!f || !d->hTip) return;
+    for (int i = 0; i < d->n_tips; i++) {
+        if (d->tips[i].hwnd != f) continue;
+        const SettingsHelp *e = settings_help_get((int)d->tips[i].help);
+        RECT rc;
+        GetWindowRect(f, &rc);
+        /* A combo's window is tall (its drop-down): anchor to the closed box. */
+        if (is_combo_class(f)) {
+            SettingsMetrics m;
+            settings_metrics_init(&m, d->dpi);
+            rc.bottom = rc.top + m.ctrl_h;
+        }
+        if (e && ns_tip_pop(d->hTip, d->hPage, e->text, &rc)) {
+            d->tip_focus = f;
+            d->tip_scroll = d->scroll;
+            SetTimer(d->hDlg, IDT_HELP_POP, 100, NULL);
+        }
+        return;
+    }
+}
+
+/* Called for every message before it is translated. Returns non-zero when
+ * the key was handled here. */
+static int settings_key_pretranslate(HWND hwnd, const MSG *msg)
+{
+    if (msg->message != WM_KEYDOWN) return 0;
+    if (msg->hwnd != hwnd && !IsChild(hwnd, msg->hwnd)) return 0;
+    SettingsDlgData *d = (SettingsDlgData *)(LONG_PTR)
+                         GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d || d->saving) return 0;
+    int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    int alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    if (ctrl || alt) return 0;
+
+    /* Nothing here calls IsDialogMessage, so the controls are never told to
+     * show focus cues: the first Tab or F1 switches them on. */
+    if (!d->cues_shown && (msg->wParam == VK_TAB || msg->wParam == VK_F1)) {
+        d->cues_shown = 1;
+        SendMessage(hwnd, WM_CHANGEUISTATE,
+                    MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+    }
+
+    switch (msg->wParam) {
+    case VK_TAB: {
+        /* An open drop-down list uses the key itself. */
+        HWND f = focus_owner(GetFocus());
+        if (f && is_combo_class(f) && SendMessage(f, CB_GETDROPPEDSTATE, 0, 0))
+            return 0;
+        help_pop_hide(d);
+        tab_move(d, (GetKeyState(VK_SHIFT) & 0x8000) ? -1 : +1);
+        return 1;
+    }
+    case VK_F1:
+        help_pop_show(d);
+        return 1;
+    case VK_ESCAPE:
+        if (d->tip_focus) { help_pop_hide(d); return 1; }
+        return 0;
+    default:
+        return 0;
+    }
+}
 
 static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                                         WPARAM wParam, LPARAM lParam)
@@ -3067,6 +3311,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, lbl, ed, secs, SETTINGS_PAGE_VOICE, 140, 70, 1, 0, 1, 0);
             }
             {
+                HWND chk = make_check2(nd, IDC_VOICE_MUTE_SPEAKING, SH_VOICE_MUTE_SPEAKING);
+                SendMessage(chk, BM_SETCHECK,
+                            vs->voice_conv_mute_speaking ? BST_CHECKED : BST_UNCHECKED, 0);
+                add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_VOICE, 0, 0, 1, 0, 1, 1);
+            }
+            {
                 nd->hVoiceNoteAec = make_hint(nd,
                     "Your microphone reports no echo cancellation: a headset works best");
                 nd->ctrl_voice_note_aec = add_ctrl(nd, NULL, nd->hVoiceNoteAec, NULL,
@@ -3272,6 +3522,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         return 0;
     }
 
+    case WM_MOVE:
+        /* The F1 help is a screen-anchored pop-up: it does not follow. */
+        if (d) help_pop_hide(d);
+        break;
+
     case WM_SIZE:
         if (d && wParam != SIZE_MINIMIZED) {
             relayout(hwnd, d);
@@ -3281,15 +3536,43 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mmi = (MINMAXINFO *)lParam;
-        int ddpi = d ? d->dpi : 96;
+        /* The monitor the dialog is on: before WM_CREATE has stored it, ask
+         * the window. The frame is measured at that DPI too, not the system's. */
+        int ddpi = d ? d->dpi : get_window_dpi(hwnd);
         SettingsMetrics m;
         settings_metrics_init(&m, ddpi);
         RECT wr = {0, 0, m.min_w, m.min_h};
-        AdjustWindowRect(&wr, (DWORD)GetWindowLong(hwnd, GWL_STYLE), FALSE);
-        mmi->ptMinTrackSize.x = wr.right - wr.left;
-        mmi->ptMinTrackSize.y = wr.bottom - wr.top;
+        settings_adjust_rect(&wr, (DWORD)GetWindowLong(hwnd, GWL_STYLE), ddpi);
+        int mw = 0, mh = 0;
+        settings_min_window_size(&m, (int)(wr.right - wr.left) - m.min_w,
+                                 (int)(wr.bottom - wr.top) - m.min_h, &mw, &mh);
+        mmi->ptMinTrackSize.x = mw;
+        mmi->ptMinTrackSize.y = mh;
         return 0;
     }
+
+    case WM_DPICHANGED:
+        if (d) {
+            /* Moved to a monitor with another scale: fonts at the new DPI
+             * come from the shared cache (never ns_font_flush(): the main
+             * window, disabled behind this one, still uses its own), every
+             * pixel size is recomputed from d->dpi by relayout(), and the
+             * window takes the rectangle Windows suggests. */
+            int old_dpi = d->dpi;
+            help_pop_hide(d);
+            d->dpi = (int)HIWORD(wParam);
+            d->scroll = settings_scroll_rescale(d->scroll, old_dpi, d->dpi);
+            dpi_refresh_fonts(d);
+            const RECT *sr = (const RECT *)lParam;
+            if (sr)
+                SetWindowPos(hwnd, NULL, sr->left, sr->top,
+                             sr->right - sr->left, sr->bottom - sr->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            relayout(hwnd, d);   /* WM_SIZE does not fire when the size is unchanged */
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+        break;
 
     case WM_AI_MODELS_DONE: {
         FetchModelsCtx *ctx = (FetchModelsCtx *)lParam;
@@ -3345,6 +3628,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
     case WM_TIMER:
         if (wParam == IDT_SYSNOTES_SCROLL && d) {
             sys_notes_sync_scroll(d);
+            return 0;
+        }
+        if (wParam == IDT_HELP_POP && d) {
+            /* The F1 help follows the focus: it goes when the focus moves. */
+            if (focus_owner(GetFocus()) != d->tip_focus) help_pop_hide(d);
             return 0;
         }
         break;
@@ -4139,6 +4427,7 @@ static int settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
 
         MSG msg;
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
+            if (settings_key_pretranslate(hwnd, &msg)) continue;
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }

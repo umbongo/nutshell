@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.3.4"
-#define APP_VERSION_BINARY  1,3,4,0
+#define APP_VERSION        "1.3.7"
+#define APP_VERSION_BINARY  1,3,7,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -148,5 +148,6 @@
 #define IDC_VOICE_AI_VOICE       3125 /* AI speech: voice (editable combo) */
 #define IDC_VOICE_AI_MODEL       3126 /* AI speech: model (editable combo) */
 #define IDC_VOICE_AI_STYLE       3127 /* AI speech: accent and style (multi-line edit) */
+#define IDC_VOICE_MUTE_SPEAKING  3128 /* Conversation: "Mute the microphone while a reply is spoken" tickbox */
 
 #endif

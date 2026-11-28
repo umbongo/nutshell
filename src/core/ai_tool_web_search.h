@@ -1,6 +1,7 @@
 #ifndef NUTSHELL_AI_TOOL_WEB_SEARCH_H
 #define NUTSHELL_AI_TOOL_WEB_SEARCH_H
 
+#include <stddef.h>
 #include "ai_tools.h"
 #include "ai_netcancel.h"
 
@@ -17,6 +18,26 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
                             volatile int *cancel_flag,
                             char **result_buf, size_t *result_len,
                             int *was_truncated);
+
+#define WS_URL_MAX 1024   /* the built URL, and every buffer that holds it (also wide) */
+
+/* Plain words for a non-zero ws_build_search_url result (-1 and anything
+ * unknown: too long). Never NULL. */
+const char *ws_url_error_text(int rc);
+
+/* Build the search URL for `provider` with `query` percent-encoded (every
+ * byte but A-Z a-z 0-9 - . _ ~ as %XX, upper-case hex; a space is %20).
+ * provider "custom" with a non-empty custom_url uses it, joined with '?' or,
+ * when it already has a '?', '&'; "duckduckgo-html" and force_html != 0 use
+ * the HTML endpoint; anything else the Instant Answer API.
+ * Returns 0; -1 when the result does not fit out_max (out is left empty,
+ * nothing is truncated); -2 when custom_url has a '#' fragment (refused: it
+ * would swallow the query); -3 when custom_url has a byte at or below 0x20
+ * or 0x7F (a space or control byte cannot go into a request line). `out` is
+ * empty on every failure. */
+int ws_build_search_url(const char *provider, const char *custom_url,
+                        int force_html, const char *query,
+                        char *out, size_t out_max);
 
 /* --- Testable parsing functions (exposed for unit tests) --- */
 

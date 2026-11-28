@@ -299,6 +299,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/stick_scroll.c src/core/ai_panel_layout.c \
                    src/core/ai_panel_states.c src/core/chat_activity.c \
                    src/core/tool_decision.c src/core/thinking_mode.c \
+                   src/core/main_chords.c src/core/chat_cursor.c \
                    tests/test_icons.c tests/test_local_pty.c tests/conpty_expect.c \
                    tests/test_md_render_win.c tests/test_chat_select_win.c \
                    src/ui/pw_reveal.c src/core/pw_reveal_state.c src/ui/pw_prompt.c src/ui/dwm_util.c \
@@ -313,7 +314,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/notice_dlg.c src/core/notice.c src/core/notice_layout.c src/core/opt_feature.c \
                    src/core/winhttp_open.c src/core/ai_gate.c tests/test_winhttp_open_win.c \
                    tests/test_notice_dlg_win.c \
-                   src/ui/thread_join.c src/core/ai_netcancel.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
+                   src/ui/thread_join.c src/core/ai_netcancel.c src/core/ai_watchdog.c src/core/ai_tool_web_fetch.c src/core/net_guard.c src/core/paste_filter.c src/core/html_util.c src/core/dll_record.c tests/test_ai_netcancel_win.c \
                    tests/test_settings_label_win.c \
                    src/ui/voice_audio_win.c src/core/wav.c src/core/voice_vad.c src/core/voice_listen.c src/core/voice_playq.c tests/test_voice_audio_win.c tests/test_voice_render_win.c \
                    src/ui/voice_stt_win.c src/ui/ai_http_win.c src/core/ai_http.c src/core/voice_stt.c src/core/json_scan.c src/core/voice_lang.c src/core/voice_gate.c \

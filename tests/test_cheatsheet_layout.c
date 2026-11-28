@@ -271,6 +271,42 @@ int test_cheatsheet_layout_every_action_fits_360(void)
     TEST_END();
 }
 
+/* The voice rows are skipped by the 360 px check above (their Conversation
+ * wording is long by design), so nothing measured them. This does: it prints
+ * how far over 360 px each one is, and asserts the layout widens the action
+ * column to hold the widest of them rather than clipping or overlapping it. */
+int test_cheatsheet_layout_voice_rows_are_measured_and_held(void)
+{
+    TEST_BEGIN();
+    static const int dpis[] = { 96, 144, 192 };
+    for (size_t d = 0; d < sizeof(dpis) / sizeof(dpis[0]); d++) {
+        int dpi = dpis[d];
+        size_t n = 0;
+        const Shortcut *t = shortcuts_table(&n);
+        int widest = 0;
+        int voice_rows = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (!(t[i].flags & SC_VOICE)) continue;
+            int w = est_w(t[i].action, EST_BODY_CHAR_W_96, dpi);
+            voice_rows++;
+            if (w > widest) widest = w;
+            if (dpi == 96)
+                printf("  [cheatsheet] voice row \"%.30s...\": %d px (360 allowed)\n",
+                       t[i].action, w);
+        }
+        ASSERT_EQ(voice_rows, 2);
+        CsInput in;
+        CsLayout l;
+        fill_input_v(&in, dpi, 4000, 4000, 1);
+        cheatsheet_layout_compute(&l, &in);
+        ASSERT_TRUE(in.text_w >= widest);
+        ASSERT_EQ(check_geometry(&l), 0);
+        for (int i = 0; i < l.n_rows; i++)
+            ASSERT_TRUE(l.action[i].w >= widest);
+    }
+    TEST_END();
+}
+
 /* Not an assertion about a number the spec fixes: it reports where two
  * columns stop fitting a 1920 x 1040 work area, so a change to the table
  * that moves the threshold shows up in the test log. */

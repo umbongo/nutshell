@@ -95,7 +95,7 @@ static const struct { SettingsHelpId id; const char *name; } k_names[] = {
     N(SH_VOICE_STT_URL), N(SH_VOICE_STT_MODEL), N(SH_VOICE_STT_LIVE_MODEL), N(SH_VOICE_LANGUAGE), N(SH_VOICE_LANGUAGE_OTHER), N(SH_VOICE_DEVICE),
     N(SH_VOICE_TEST), N(SH_VOICE_MIC_GAIN), N(SH_VOICE_PTT_KEY), N(SH_VOICE_PTT_MODE), N(SH_VOICE_MIC_DELAY),
     N(SH_VOICE_AUTO_SEND),
-    N(SH_VOICE_MODE), N(SH_VOICE_PAUSE), N(SH_VOICE_WIN_VOICE), N(SH_VOICE_WIN_VOICE_NAME),
+    N(SH_VOICE_MODE), N(SH_VOICE_PAUSE), N(SH_VOICE_MUTE_SPEAKING), N(SH_VOICE_WIN_VOICE), N(SH_VOICE_WIN_VOICE_NAME),
     N(SH_VOICE_SPEECH), N(SH_VOICE_TTS_PROVIDER), N(SH_VOICE_TTS_URL), N(SH_VOICE_TTS_KEY),
     N(SH_VOICE_AI_VOICE), N(SH_VOICE_AI_MODEL), N(SH_VOICE_AI_STYLE), N(SH_VOICE_PLAY_SAMPLE),
     N(SH_AI_WEB_FETCH), N(SH_AI_SEARCH), N(SH_AI_SEARCH_URL), N(SH_AI_MAX_RESULTS),
@@ -113,7 +113,7 @@ int test_settings_help_table_matches_enum(void) {
     const SettingsHelp *t = settings_help_table(&n);
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(n, (size_t)SH_COUNT);
-    ASSERT_EQ(SH_COUNT, 77);
+    ASSERT_EQ(SH_COUNT, 78);
     ASSERT_EQ(sizeof(k_names) / sizeof(k_names[0]), (size_t)SH_COUNT);
     ASSERT_NOT_NULL(settings_help_table(NULL));
     if (t != NULL && n == (size_t)SH_COUNT) {
@@ -320,9 +320,12 @@ static int render_default(const Settings *s, int id, char *out, size_t n)
         (void)snprintf(out, n, "%s", s->ai_enabled ? "On" : "Off");
         return 1;
     }
-    if (id == SH_VOICE_ENABLE || id == SH_VOICE_AUTO_SEND || id == SH_VOICE_STT_USE_AI) {
+    if (id == SH_VOICE_ENABLE || id == SH_VOICE_AUTO_SEND || id == SH_VOICE_STT_USE_AI
+        || id == SH_VOICE_MUTE_SPEAKING) {
         int on = id == SH_VOICE_ENABLE ? s->voice_enabled
-               : id == SH_VOICE_AUTO_SEND ? s->voice_auto_send : s->voice_stt_use_ai;
+               : id == SH_VOICE_AUTO_SEND ? s->voice_auto_send
+               : id == SH_VOICE_MUTE_SPEAKING ? s->voice_conv_mute_speaking
+               : s->voice_stt_use_ai;
         (void)snprintf(out, n, "%s", on ? "On" : "Off");
         return 1;
     }
@@ -731,8 +734,8 @@ int test_settings_help_voice_entries(void) {
         ASSERT_EQ(e->kind, (id == (int)SH_VOICE_TEST || id == (int)SH_VOICE_PLAY_SAMPLE)
                          ? SH_KIND_ACTION : SH_KIND_SETTING);
     }
-    ASSERT_EQ((int)SH_VOICE_WIN_VOICE_NAME - (int)SH_VOICE_ENABLE + 1, 20);
-    ASSERT_EQ((int)SH_VOICE_PLAY_SAMPLE - (int)SH_VOICE_ENABLE + 1, 28);
+    ASSERT_EQ((int)SH_VOICE_WIN_VOICE_NAME - (int)SH_VOICE_ENABLE + 1, 21);
+    ASSERT_EQ((int)SH_VOICE_PLAY_SAMPLE - (int)SH_VOICE_ENABLE + 1, 29);
     /* between the AI Behaviour and the AI Web entries */
     ASSERT_EQ(settings_help_get((int)SH_VOICE_ENABLE - 1)->page, SETTINGS_PAGE_AI_BEHAVIOUR);
     ASSERT_EQ(settings_help_get((int)SH_VOICE_PLAY_SAMPLE + 1)->page, SETTINGS_PAGE_AI_WEB);
@@ -788,6 +791,43 @@ int test_settings_help_play_sample(void) {
         ASSERT_EQ(e->kind, SH_KIND_ACTION);
         ASSERT_STR_EQ(e->label, "Play sample");
         ASSERT_NULL(e->default_text);
+    }
+    TEST_END();
+}
+
+int test_settings_help_search_url_says_how_the_query_is_added(void) {
+    TEST_BEGIN();
+    const SettingsHelp *e = settings_help_get((int)SH_AI_SEARCH_URL);
+    ASSERT_NOT_NULL(e);
+    if (e != NULL) {
+        ASSERT_TRUE(strstr(e->text, "without a query string") == NULL);
+        ASSERT_TRUE(strstr(e->text, "q=") != NULL);
+        ASSERT_TRUE(strstr(e->text, "after ?") != NULL);
+        ASSERT_TRUE(strstr(e->text, "after &") != NULL);
+        ASSERT_TRUE(strstr(e->text, "encode") != NULL);
+        ASSERT_TRUE(strstr(e->text, "#") != NULL);
+        ASSERT_TRUE(strstr(e->text, "spaces are not allowed") != NULL);
+        ASSERT_TRUE(strlen(e->text) <= SETTINGS_HELP_TEXT_MAX);
+    }
+    TEST_END();
+}
+
+int test_settings_help_voice_mute_text(void) {
+    TEST_BEGIN();
+    const SettingsHelp *e = settings_help_get((int)SH_VOICE_MUTE_SPEAKING);
+    ASSERT_NOT_NULL(e);
+    if (e != NULL) {
+        ASSERT_EQ(e->page, SETTINGS_PAGE_VOICE);
+        ASSERT_EQ(e->kind, SH_KIND_SETTING);
+        ASSERT_STR_EQ(e->label, "Mute the microphone while a reply is spoken");
+        ASSERT_STR_EQ(e->default_text, "Off");
+        ASSERT_TRUE(strstr(e->text,
+            "While the assistant is speaking, nothing the microphone picks up is used, "
+            "so the assistant's own voice cannot interrupt it. Listening starts again "
+            "when the reply ends. To interrupt a reply, press the voice key (Right Shift "
+            "unless you changed it). Turn this on if replies keep cutting themselves off "
+            "on this PC.") != NULL);
+        ASSERT_TRUE(strlen(e->text) <= SETTINGS_HELP_TEXT_MAX);
     }
     TEST_END();
 }

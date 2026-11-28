@@ -78,6 +78,7 @@ static VoiceConvOut go_idle(VoiceConv *c, VoiceConvNote note, int cancel_work)
     c->sending = 0;
     c->idle_seen = 0;
     c->speaking_reply = 0;
+    c->muted = c->guard = 0;
     c->held = 0;
     c->held_continue = 0;
     c->held_phrase = 0;
@@ -120,14 +121,17 @@ static void hold(VoiceConv *c, int continue_from, int phrase, unsigned long now)
 static VoiceConvOut enter_speaking(VoiceConv *c, unsigned speak, VoiceConvPhrase ph, int reply)
 {
     VoiceConvOut o;
-    unsigned a = speak | open_capture(c) | VCA_MODE_SPEAK;
+    /* the setting on: the listener holds (no events, no audio) for the whole speech */
+    unsigned a = speak | open_capture(c) | (c->mute_speaking ? VCA_MODE_HOLD : VCA_MODE_SPEAK);
     c->state = VCS_SPEAKING;
+    c->muted = c->mute_speaking;
+    c->guard = 0;
     c->turn = 0;   /* the turn that led here is over; a cut-in sets it again */
     c->speaking_reply = reply;
     c->local_speech = 0;
     c->idle_seen = 0;
     if (!c->stopcap) { c->stopcap = 1; a |= VCA_STOP_CAPTION; }
-    o = out(a, VCH_SPEAKING);
+    o = out(a, c->muted ? VCH_SPEAKING_MUTED : VCH_SPEAKING);
     o.phrase = ph;
     return o;
 }
@@ -180,7 +184,7 @@ static VoiceConvOut on_transcript(VoiceConv *c, int cls)
         o = enter_speaking(c, cls == VTC_REPEAT ? VCA_SPEAK_REPEAT : VCA_SPEAK_CONTINUE,
                            VCPH_NONE, 1);
         o.actions |= x;
-        o.header = cls == VTC_REPEAT ? VCH_REPEATING : VCH_CARRYING_ON;
+        if (!c->muted) o.header = cls == VTC_REPEAT ? VCH_REPEATING : VCH_CARRYING_ON;
         c->local_speech = 1;
         c->turn = 0;
         c->sending = 0;
@@ -233,6 +237,7 @@ static VoiceConvOut speaking_stopped(VoiceConv *c, unsigned extra, VoiceConvNote
                                      unsigned long now)
 {
     VoiceConvOut o;
+    c->muted = c->guard = 0;
     /* a cut-in turn already open (AEC) carries on as the turn being heard */
     c->state = c->turn ? VCS_HEARING : VCS_LISTENING;
     /* the silence clock restarts when listening resumes after a reply from the chat, not after
@@ -275,6 +280,7 @@ static VoiceConvOut external_send(VoiceConv *c, unsigned long now)
     c->turn = 0;
     c->sending = 0;
     c->speaking_reply = 0;
+    c->muted = c->guard = 0;
     c->local_speech = 0;
     c->sent_at = now;
     c->idle_seen = 0;
@@ -306,7 +312,7 @@ static VoiceConvOut on_pause(VoiceConv *c, int reason, unsigned long now)
         break;
     case VCS_SPEAKING:
         x |= VCA_STOP_SPEECH | release_caption(c);
-        if (c->speaking_reply) {         /* held from its cut-off */
+        if (c->speaking_reply && !c->guard) {   /* held from its cut-off (not a reply read to the end) */
             hold(c, 1, 0, now);
             x |= VCA_HOLD_REPLY;
         }
@@ -325,6 +331,7 @@ static VoiceConvOut on_pause(VoiceConv *c, int reason, unsigned long now)
     }
     c->pause = (VoiceConvPause)reason;
     c->state = VCS_LISTENING;
+    c->muted = c->guard = 0;
     if (c->capture) { c->capture = 0; x |= VCA_CLOSE_CAPTURE; }
     return out(x, pause_header(c));
 }
@@ -368,12 +375,20 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
     if (st == VCS_IDLE) {
         if (ev != VCE_START) return none;
         c->live = a ? 1 : 0;
+        c->mute_speaking = b ? 1 : 0;
         c->engine = c->lock = c->capture = 1;
         c->sent_at = c->idle_at = now;
         c->state = VCS_LISTENING;
         return out(VCA_ENGINE_START | VCA_LOCK_REG | VCA_OPEN_CAPTURE | VCA_MODE_LISTEN,
                    VCH_LISTENING);
     }
+
+    /* The microphone is held: nothing it picked up (a late message from before the hold
+     * included) has any effect on the speech or starts a turn. */
+    if (st == VCS_SPEAKING && c->muted
+        && (ev == VCE_DUCK || ev == VCE_UNDUCK || ev == VCE_CUT
+            || ev == VCE_TURN_START || ev == VCE_TURN_ABANDON))
+        return none;
 
     switch (ev) {
     case VCE_START:
@@ -506,9 +521,21 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
 
     case VCE_SPEECH_DONE:
         if (st != VCS_SPEAKING) return none;
+        if (c->muted) {   /* listening resumes after the guard (a TICK); the header stays */
+            if (!c->guard) { c->guard = 1; c->guard_at = now + VOICE_CONV_MUTE_GUARD_MS; }
+            return none;
+        }
         return speaking_stopped(c, 0, VCN_NONE, now);
     case VCE_SPEECH_FAILED:
         if (st != VCS_SPEAKING) return none;
+        if (c->guard) return none;   /* the reply was read to the end: a late engine error is no news */
+        if (c->muted) {              /* the room may still ring: listen after the guard, note now */
+            VoiceConvOut o = out(0, VCH_NONE);
+            c->guard = 1;
+            c->guard_at = now + VOICE_CONV_MUTE_GUARD_MS;
+            o.note = c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE;
+            return o;
+        }
         return speaking_stopped(c, 0, c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE, now);
 
     case VCE_EXTERNAL_SEND:
@@ -527,6 +554,8 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
             return none;
         }
         if (st == VCS_SPEAKING) {
+            if (c->guard && (long)(now - c->guard_at) >= 0)
+                return speaking_stopped(c, 0, VCN_NONE, now);
             if (now - c->state_at >= VOICE_CONV_SPEAKING_MAX_MS)
                 return speaking_stopped(c, VCA_STOP_SPEECH, VCN_NONE, now);
             return none;
@@ -578,6 +607,7 @@ long voice_conv_next_deadline(const VoiceConv *c, unsigned long now)
         return left < 0 ? 0 : left;
     case VCS_SPEAKING:
         left = (long)(c->state_at + VOICE_CONV_SPEAKING_MAX_MS - now);
+        if (c->guard && (long)(c->guard_at - now) < left) left = (long)(c->guard_at - now);
         return left < 0 ? 0 : left;
     case VCS_ENDING:
         left = (long)(c->state_at + c->ending_max - now);
@@ -617,6 +647,7 @@ const char *voice_conv_header_text(VoiceConvHeader h)
     case VCH_LIVE_UNAVAILABLE: return "Live text is unavailable: the words will appear when you stop";
     case VCH_LIVE_STOPPED:     return "Live text stopped: the rest will appear when you stop";
     case VCH_AI_FAILED:        return "AI speech failed: using Windows speech";
+    case VCH_SPEAKING_MUTED:   return "Microphone off while the assistant speaks. Press the voice key to interrupt.";
     case VCH_NONE:
     default:                   return "";
     }

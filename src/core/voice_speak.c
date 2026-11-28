@@ -244,6 +244,12 @@ static size_t fence_run(const char *s, size_t n, char *ch, size_t *at)
     size_t k = i;
     while (k < n && s[k] == c) k++;
     if (k - i < 3) return 0;
+    /* A backtick fence's info string holds no backtick (CommonMark): "```x``` text" is an
+     * inline span, and treating it as an opener would hide the rest of the reply. In column 0
+     * (i == 0) the chat renderer toggles on the first three bytes alone, so the speech does too. */
+    if (c == '`' && i > 0)
+        for (size_t j = k; j < n; j++)
+            if (s[j] == '`') return 0;
     *ch = c;
     if (at) *at = i;
     return k - i;
@@ -306,7 +312,9 @@ char *voice_speak_text(const char *markdown)
         size_t at = 0;
         size_t run = fence_run(line, ql, &rc, &at);
         if (in_fence) {
-            if (run >= flen && rc == fch) {
+            if (fch == '`' && md_classify_line(line, 1).type == MD_LINE_CODE_FENCE) {
+                in_fence = 0;   /* the renderer closes on any column-0 line starting with ``` */
+            } else if (run >= flen && rc == fch) {
                 size_t k = at + run;
                 while (k < ql && (line[k] == ' ' || line[k] == '\t')) k++;
                 if (k == ql) in_fence = 0;

@@ -204,7 +204,7 @@ int test_shortcuts_readme_block_shape(void)
         static const char HEAD[] =
             "\n\n#### Sessions and tabs\n\n| Shortcut | Action | Note |\n| --- | --- | --- |\n";
         ASSERT_TRUE(strncmp(buf, HEAD, sizeof(HEAD) - 1u) == 0);
-        ASSERT_TRUE(strstr(buf, "| **Ctrl+Shift+T** | New session (opens the Session Manager) | from the terminal, not the AI panel |\n") != NULL);
+        ASSERT_TRUE(strstr(buf, "| **Ctrl+Shift+T** | New session (opens the Session Manager) | |\n") != NULL);
         ASSERT_TRUE(strstr(buf, "| **Alt+F4** | Exit | |\n") != NULL);
         ASSERT_TRUE(strchr(buf, '\r') == NULL);
         ASSERT_TRUE(need >= 2u && buf[need - 1] == '\n' && buf[need - 2] == '\n');

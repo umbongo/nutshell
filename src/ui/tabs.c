@@ -922,6 +922,13 @@ int tabs_get_active(HWND hwnd)
     return tabmgr_get_active(&data->m);
 }
 
+int tabs_count(HWND hwnd)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return 0;
+    return tabmgr_count(&data->m);
+}
+
 void *tabs_get_user_data(HWND hwnd, int index)
 {
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);

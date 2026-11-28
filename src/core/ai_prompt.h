@@ -142,6 +142,14 @@ typedef struct {
      * ignores the mark (spec decision 22, review of B1-B11 and of the fix wave,
      * 2026-11-11, R48). */
     int nutshell_note;
+
+    /* 1 on an ASSISTANT turn that records a reply the user stopped (see
+     * ai_conv_add_stopped_reply, ai_conv_guard.h): its content is the partial
+     * text streamed so far, or the stop marker when nothing had arrived. In
+     * memory only, never saved. ai_conv_add clears it; a struct copy carries
+     * it. It is how a stopped turn is told from a finished one, so nothing
+     * reads its [EXEC] blocks as commands. */
+    int stopped_reply;
 } AiMessage;
 
 /* Cap on a stored reasoning text, terminating NUL included: the same 16 KiB

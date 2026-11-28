@@ -31,4 +31,11 @@ int app_font_snap_size(int raw_size);
  * Returns current size if already at boundary. */
 int app_font_zoom(int current_size, int delta);
 
+/* The CreateFont character height for `pt` points at `dpi`: -MulDiv(pt, dpi,
+ * 72), rounded to the nearest pixel, negative (a character height, not a cell
+ * height). 0 for pt <= 0; dpi <= 0 is read as 96. The AI panel's zoomable
+ * fonts are rebuilt from the user's point size with this when the panel moves
+ * to a monitor with another scale. */
+int app_font_px_height(int pt, int dpi);
+
 #endif

@@ -26,9 +26,17 @@ typedef struct {
     unsigned int indicator_red;      /* Stalled activity dot */
     unsigned int send_btn;           /* Send button background (pastel blue) */
     unsigned int stop_btn;           /* Stop button background (pastel red) */
-    unsigned int thinking_compact;   /* Thinking label, compact mode (pastel green); text on bg_primary */
-    unsigned int thinking_collapsed; /* Thinking label, collapsed mode (pastel brown) */
-    unsigned int thinking_open;      /* Thinking label, open mode (pastel grey) */
+    unsigned int thinking_compact;   /* Thinking label, compact mode (dark themes: pastel text on bg_primary; light: text_main on the pill) */
+    unsigned int thinking_collapsed; /* Thinking label, collapsed mode (dark: pastel sand text; light: text_main) */
+    unsigned int thinking_open;      /* Thinking label, open mode (dark: pastel periwinkle text; light: text_main) */
+    unsigned int thinking_extended;  /* Thinking label, extended mode (dark: pastel teal or sage text; light: text_main) */
+    /* Light themes only: a pastel pill painted behind the Thinking label, per
+     * mode, with the label drawn in text_main.  0 = no pill (the dark themes,
+     * whose label is pastel text).  Appended at the end of the struct. */
+    unsigned int thinking_collapsed_pill;
+    unsigned int thinking_compact_pill;
+    unsigned int thinking_extended_pill;
+    unsigned int thinking_open_pill;
 } ThemeChatColors;
 
 /* Explicit per-theme overrides for a handful of derived tokens.  0 means

@@ -818,6 +818,7 @@ static Session *g_drag_session = NULL;
  * The other button's press is ignored and its release does not end the drag,
  * so a left drag is not hijacked by a stray middle click. */
 static int g_drag_button = 0;
+static AltTap g_alt_tap;   /* a mouse press while Alt is down: its release must not open the menu */
 
 /* The last press in the terminal, from either message, so the next press can
  * continue the click cycle 1, 2, 3, 1, ... (spec section 1). A Shift or
@@ -891,7 +892,7 @@ static bool sel_point_same(SelPoint a, SelPoint b)
 /* The press in the terminal: clear what was selected, take the capture and
  * start a selection of `clicks` (1 cell, 2 word, 3 line) at client pixel
  * (px, py). px has the left margin already taken off. */
-static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int clicks)
+static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int clicks, bool block)
 {
     if (s->sel.valid || s->sel.active)
         DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.clear", "reason=%s", "click");
@@ -904,7 +905,10 @@ static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int click
     int row = 0, col = 0;
     selection_pixel_to_cell(px, py, g_renderer.charWidth, g_renderer.charHeight,
                             g_tab_height, s->term->rows, s->term->cols, &row, &col);
-    selection_begin(&s->sel, s->term, row, col, clicks, px, py);
+    if (block && clicks == 1)       /* Alt+drag: a rectangle */
+        selection_begin_block(&s->sel, s->term, row, col, px, py);
+    else
+        selection_begin(&s->sel, s->term, row, col, clicks, px, py);
     DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.begin", "line=%llu col=%d mode=%d",
          (unsigned long long)s->sel.anchor.line, s->sel.anchor.col, (int)s->sel.mode);
     force_full_terminal_repaint(hwnd, s->term);
@@ -3385,6 +3389,8 @@ static void update_scrollbar(HWND hwnd)
 /* ---- Cell-snapping helpers ----------------------------------------------- */
 #include "snap.h"
 #include "zoom.h"
+#include "main_chords.h"
+#include "main_chord_win.h"
 #include "connect_anim.h"
 
 /* Return total non-client pixel size (border + title bar) for hwnd. */
@@ -3403,10 +3409,9 @@ static void get_nc_size(HWND hwnd, int *nc_w, int *nc_h)
 
 /* Step to the next/previous discrete font size.
  * delta is +1 (zoom in / larger) or -1 (zoom out / smaller). */
-static void apply_zoom(HWND hwnd, int delta)
+static void apply_zoom_size(HWND hwnd, int new_size)
 {
     int cur = g_config->settings.font_size;
-    int new_size = app_font_zoom(cur, delta);
     if (new_size == cur)
         return;
 
@@ -3428,6 +3433,11 @@ static void apply_zoom(HWND hwnd, int delta)
     SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(rc.right, rc.bottom));
     invalidate_terminal(hwnd);
+}
+
+static void apply_zoom(HWND hwnd, int delta)
+{
+    apply_zoom_size(hwnd, app_font_zoom(g_config->settings.font_size, delta));
 }
 
 /* ---- Owner-draw menu for colour-scheme integration ---- */
@@ -4233,6 +4243,45 @@ static void open_debug_log_folder(HWND hwnd)
     (void)open_dir_in_explorer(hwnd, dir, "Debug Log Folder", g_theme);
 }
 
+/* Perform main-window chord `mc`. The one place a chord's action lives: the
+ * keyboard (key_on_keydown) and the AI panel's forwarded chords
+ * (WM_APP_MAIN_CHORD) both call it, so a forwarded chord never touches the
+ * key encoder, the Send Next Key one-shot or the terminal-input mark. The
+ * toggles and the new/close actions fire once per press (`is_repeat` is the
+ * key's auto-repeat bit); switching tabs and zoom reset repeat while held. */
+static void main_chord_run(HWND hwnd, MainChord mc, bool is_repeat)
+{
+    switch (mc) {
+    case MCHORD_FULLSCREEN:
+        if (!is_repeat) SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
+        break;
+    case MCHORD_NEW_TAB:
+        if (!is_repeat) on_tab_new();
+        break;
+    case MCHORD_CLOSE_TAB:
+        if (!is_repeat) close_active_tab();
+        break;
+    case MCHORD_AI_PANEL:
+        if (!is_repeat) on_ai_clicked();
+        break;
+    case MCHORD_MARK_ISSUE:
+        if (!is_repeat) mark_issue(hwnd, "key");
+        break;
+    case MCHORD_TAB_NEXT:
+    case MCHORD_TAB_PREV: {
+        int to = tab_chord_target(tabs_count(g_hwndTabs), tabs_get_active(g_hwndTabs),
+                                  mc == MCHORD_TAB_NEXT ? 1 : -1);
+        if (to >= 0) tabs_set_active(g_hwndTabs, to);
+        break;
+    }
+    case MCHORD_ZOOM_RESET:
+        apply_zoom_size(hwnd, zoom_reset_size(0));
+        break;
+    case MCHORD_NONE:
+        break;
+    }
+}
+
 /* WM_KEYDOWN. Returns true when the key was handled (WndProc returns 0). */
 static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
 {
@@ -4270,41 +4319,16 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
         return true;
     }
 
-    /* F11 -- toggle fullscreen; with any modifier it goes to the shell.
-     * Auto-repeat is consumed but ignored, so holding F11 toggles once. */
-    if (vk == VK_F11 && !shift && !ctrl && !alt) {
-        if (!is_repeat) SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
-        return true;
-    }
-    /* Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Shift+Space AI
-     * panel. Plain Ctrl+T (transpose), Ctrl+W (kill word) and Ctrl+Space
-     * (NUL) belong to the shell. Each still drops the queued character on
-     * auto-repeat (so it never leaks to the shell) but skips the action
-     * itself, so holding the chord fires it once. */
-    if (ctrl_only && shift) {
-        if (vk == (WPARAM)'T') {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) on_tab_new();
-            return true;
-        }
-        if (vk == (WPARAM)'W') {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) close_active_tab();
-            return true;
-        }
-        /* While the AI assistant is off the chord is unbound: it falls
-         * through to the terminal like any other key. */
-        if (vk == VK_SPACE && ai_gate_on()) {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) on_ai_clicked();
-            return true;
-        }
-        /* Ctrl+Shift+M: Mark Issue. The terminal only ever sent a plain CR
-         * for it (indistinguishable from Ctrl+M and Enter), so no shell or
-         * full-screen program loses anything. */
-        if (vk == (WPARAM)'M') {
-            drop_queued_char(hwnd, lParam);
-            if (!is_repeat) mark_issue(hwnd, "key");
+    /* The main window's own chords (F11, Ctrl+Shift+T/W/M/Space, Ctrl+Tab,
+     * Ctrl+Shift+Tab, Ctrl+0): one table in main_chords.c decides which key
+     * is one, main_chord_run() performs it, taken before the key encoder so
+     * none reaches the shell. Each drops the queued character, also on
+     * auto-repeat, so it never leaks to the shell. */
+    {
+        const MainChord mc = main_chord_classify((unsigned)vk, shift, ctrl, alt, ai_gate_on());
+        if (mc != MCHORD_NONE) {
+            if (mc != MCHORD_FULLSCREEN) drop_queued_char(hwnd, lParam);
+            main_chord_run(hwnd, mc, is_repeat);
             return true;
         }
     }
@@ -5464,6 +5488,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             on_tab_new();
             return 0;
 
+        case WM_APP_MAIN_CHORD:
+            /* A chord the AI panel forwarded: its action only, never the
+             * key path (no one-shot, no terminal-input mark, no encoder).
+             * Ignored while a modal has this window disabled. */
+            if (IsWindowEnabled(hwnd))
+                main_chord_run(hwnd, (MainChord)wParam, lParam != 0);
+            return 0;
+
         case WM_OPEN_DEMO_SETTINGS:
             settings_dlg_show_demo_debug(hwnd, g_config);
             return 0;
@@ -6351,8 +6383,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (key_on_keydown(hwnd, wParam, lParam)) return 0;
             break;  /* a character key: TranslateMessage has queued its WM_CHAR */
 
+        case WM_KEYUP:
+            /* With Ctrl also held (Ctrl+Alt, AltGr) Alt's key-up is not a
+             * system message: forget the tap state it would have ended. */
+            if (wParam == VK_MENU) alt_tap_reset(&g_alt_tap);
+            break;
+
         case WM_SYSKEYDOWN: {
             session_mark_terminal_input();
+            if (wParam == VK_MENU) alt_tap_key_down(&g_alt_tap, (lParam & (1 << 30)) != 0);
             SysKeyDownResult r = key_on_syskeydown(hwnd, wParam, lParam);
             if (r == SYSKEYDOWN_HANDLED) return 0;
             if (r == SYSKEYDOWN_SENT_AND_PASS)
@@ -6364,6 +6403,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_SYSKEYUP:
+            /* Alt released after a mouse press made it a modifier (Alt+drag):
+             * not a lone tap, so DefWindowProc must not open the menu bar. */
+            if (wParam == VK_MENU && alt_tap_key_up(&g_alt_tap)) return 0;
             /* F10's key-up is where DefWindowProc would enter menu mode for
              * it; keep it consumed like the key-down. A lone Alt tap's
              * release, and the release after a chord passed through above,
@@ -6379,6 +6421,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * window) must not leave an armed one-shot for a keystroke that
              * lands somewhere else entirely. */
             key_oneshot_clear();
+            alt_tap_reset(&g_alt_tap);
             break;
 
         case WM_MOUSEWHEEL: {
@@ -6419,6 +6462,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_RBUTTONDOWN: {
+            if (GetKeyState(VK_MENU) & 0x8000) alt_tap_mouse_press(&g_alt_tap);
             /* Right-click pastes the clipboard */
             do_paste(hwnd);
             return 0;
@@ -6446,6 +6490,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_LBUTTONDOWN:
         case WM_LBUTTONDBLCLK: {
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            /* Alt is a modifier of every press, the splitter's included: no menu on release. */
+            const bool alt_press = (GetKeyState(VK_MENU) & 0x8000) != 0;
+            if (alt_press) alt_tap_mouse_press(&g_alt_tap);
             /* Splitter drag first. CS_DBLCLKS turns a quick second press
              * into WM_LBUTTONDBLCLK, so the double-click repeats the test. */
             if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
@@ -6464,6 +6511,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);  /* reclaim keyboard focus from AI panel */
             if (g_drag_session && g_drag_button != MK_LBUTTON) return 0;  /* the middle button's drag */
+            const bool block_press = selection_block_modifiers(alt_press, (GetKeyState(VK_CONTROL) & 0x8000) != 0);
             /* Shift+click extends the selection (PuTTY); with none it is a
              * plain press. Shift comes from the message, not GetKeyState:
              * the harness posts its clicks from another thread. */
@@ -6476,7 +6524,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             int clicks = terminal_press_clicks(mx, my);
-            start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks);
+            if (block_press) {          /* an Alt press is never a double or triple click */
+                clicks = selection_press_clicks(true, clicks);
+                g_last_press.count = 0;
+            }
+            start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks, block_press);
             return 0;
         }
 
@@ -6485,6 +6537,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Middle-click extends the selection like Shift+click; with none
              * it starts a cell press. */
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            if (GetKeyState(VK_MENU) & 0x8000) alt_tap_mouse_press(&g_alt_tap);
             if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
                 RECT crc;
                 GetClientRect(hwnd, &crc);

@@ -12,6 +12,7 @@
 #ifdef _WIN32
 
 #include "ai_prompt.h"
+#include "ai_conv_guard.h"
 #include "thinking_mode.h"
 #include "ai_tools.h"
 #include "ai_tool_web_search.h"
@@ -646,6 +647,7 @@ void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state,
                                   int keep_free);
 void ai_chat_drain_stream_messages(HWND hwnd);
 void ai_chat_cancel_active_stream(AiChatData *d);
+void ai_chat_cancel_active_stream_why(AiChatData *d, AiReplyEnd why);
 void ai_chat_send_user_message(AiChatData *d);
 VoiceSendStatus ai_chat_send_user_message_ex(AiChatData *d, int voice_turn);
 void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
@@ -700,6 +702,8 @@ void ai_chat_header_sync(AiChatData *d);
 const char *ai_chat_header_text(const AiChatData *d, int *is_word);
 void ai_chat_header_invalidate(AiChatData *d);
 void ai_chat_apply_zoom(AiChatData *d, int delta);
+void ai_chat_zoom_to(AiChatData *d, int new_size);
+void ai_chat_apply_dpi(AiChatData *d, int dpi);   /* monitor scale changed */
 
 /* ai_chat_send.c: the box's text as UTF-8, LF line ends; heap, caller frees. */
 char *ai_chat_input_text_utf8(HWND hInput);

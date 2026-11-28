@@ -3393,7 +3393,7 @@ int test_config_keys_match_saved_file(void)
     size_t n = 0;
     const ConfigSettingKey *keys = config_setting_keys(&n);
     ASSERT_TRUE(n <= CFG_KEYS_MAX);
-    ASSERT_EQ(n, (size_t)69);
+    ASSERT_EQ(n, (size_t)70);
     /* the table plus the internal voice_defaults_rev marker, always last */
     ASSERT_EQ(vec_size(&jset->as.obj.keys), n + 1u);
     ASSERT_STR_EQ((const char *)vec_get(&jset->as.obj.keys, n), "voice_defaults_rev");
@@ -3460,3 +3460,116 @@ int test_config_report_missing_and_unreadable_status(void)
     ASSERT_NULL(config_load_report(TMP_CFG, NULL));
     TEST_END();
 }
+
+/* ---- config_save() failure paths (POSIX; Windows has no chmod/rlimit) ----- */
+#ifndef _WIN32
+#include <sys/resource.h>
+#include <signal.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+static int cfg_file_has(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char buf[256] = {0};
+    size_t n = fread(buf, 1, sizeof(buf) - 1u, f);
+    buf[n] = '\0';
+    fclose(f);
+    return strcmp(buf, text) == 0;
+}
+
+static int cfg_exists(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
+/* The temp file cannot be created (directory not writable): save fails, the
+ * existing config is untouched, no ".tmp" is left. Skipped as root, which
+ * ignores directory permissions. */
+int test_config_save_fails_when_dir_unwritable(void)
+{
+    TEST_BEGIN();
+    if (geteuid() == 0) { TEST_END(); }
+    const char *dir = TEST_TMP_DIR "/nutshell_ro_dir";
+    const char *path = TEST_TMP_DIR "/nutshell_ro_dir/cfg";
+    const char *tmp = TEST_TMP_DIR "/nutshell_ro_dir/cfg.tmp";
+    (void)mkdir(dir, 0700);
+    remove(path);
+    FILE *f = test_fopen_private(path);
+    ASSERT_NOT_NULL(f);
+    if (f) { fputs("ORIGINAL", f); fclose(f); }
+    /* The directory is opened once and its mode changed through that handle, so
+     * the object checked above is the object changed here. */
+    int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+    ASSERT_TRUE(dfd >= 0);
+    ASSERT_EQ(dfd >= 0 ? fchmod(dfd, 0500) : -1, 0);
+    Config *cfg = config_new_default();
+    int rc = config_save(cfg, path);
+    if (dfd >= 0) { (void)fchmod(dfd, 0700); close(dfd); }
+    ASSERT_EQ(rc, -1);
+    ASSERT_TRUE(cfg_file_has(path, "ORIGINAL"));
+    ASSERT_TRUE(!cfg_exists(tmp));
+    config_free(cfg);
+    remove(path);
+    remove(tmp);
+    (void)rmdir(dir);
+    TEST_END();
+}
+
+/* The rename onto the real path fails (a directory sits there): save fails
+ * and the ".tmp" is cleaned up rather than orphaned. */
+int test_config_save_rename_failure_removes_tmp(void)
+{
+    TEST_BEGIN();
+    const char *path = TEST_TMP_DIR "/nutshell_rename_fail.config";
+    const char *tmp = TEST_TMP_DIR "/nutshell_rename_fail.config.tmp";
+    remove(tmp);
+    (void)rmdir(path);
+    ASSERT_EQ(mkdir(path, 0700), 0);
+    Config *cfg = config_new_default();
+    int rc = config_save(cfg, path);
+    ASSERT_EQ(rc, -1);
+    ASSERT_TRUE(!cfg_exists(tmp));
+    config_free(cfg);
+    (void)rmdir(path);
+    remove(tmp);
+    TEST_END();
+}
+
+/* A write error that only surfaces at flush/close time (file size limit):
+ * save fails, the existing config is untouched, the truncated ".tmp" is
+ * removed. */
+int test_config_save_write_failure_keeps_original(void)
+{
+    TEST_BEGIN();
+    const char *path = TEST_TMP_DIR "/nutshell_write_fail.config";
+    const char *tmp = TEST_TMP_DIR "/nutshell_write_fail.config.tmp";
+    remove(tmp);
+    FILE *f = test_fopen_private(path);
+    ASSERT_NOT_NULL(f);
+    if (f) { fputs("ORIGINAL", f); fclose(f); }
+    Config *cfg = config_new_default();
+
+    struct rlimit old, lim;
+    ASSERT_EQ(getrlimit(RLIMIT_FSIZE, &old), 0);
+    void (*old_h)(int) = signal(SIGXFSZ, SIG_IGN);
+    lim = old;
+    lim.rlim_cur = 64;
+    int limited = (setrlimit(RLIMIT_FSIZE, &lim) == 0);
+    ASSERT_TRUE(limited);
+    int rc = config_save(cfg, path);
+    (void)setrlimit(RLIMIT_FSIZE, &old);
+    (void)signal(SIGXFSZ, old_h);
+
+    ASSERT_EQ(rc, -1);
+    ASSERT_TRUE(cfg_file_has(path, "ORIGINAL"));
+    ASSERT_TRUE(!cfg_exists(tmp));
+    config_free(cfg);
+    remove(path);
+    remove(tmp);
+    TEST_END();
+}
+#endif

@@ -521,6 +521,26 @@ Done, in order (details in the commit messages and the specs named):
   a stream posting during the AI panel's destruction no longer leaks its payload (f2cb01d:
   a failed post frees its payload, and `WM_DESTROY` drains the queued stream messages);
   the integration suite's case count corrected from 84 to 94 (counted from the cases).
+- v1.3.5 (PR pending; combined close-out of five reviewed branches, hand checks in
+  `docs/test-log/v1.3.5-*.md`): the AI panel shows an I-beam over text, a stopped reply keeps
+  its partial text and no longer leaves two user turns in a row, NX-OS and ASA `do CMD` have
+  their own tables, a sensitive row is in `--ui-demo`, class reasons are full phrases, and
+  the panel rescales on a monitor move; Thinking modes each have their own colour, the
+  reasoning box smart-scrolls while streaming (the "minimise the earlier stream" item was
+  closed on 2026-11-28 as already met under Automatic); new shortcuts Ctrl+Tab,
+  Ctrl+Shift+Tab and Ctrl+0, and the main-window chords forwarded from the AI panel; Settings
+  has a Tab order, F1 help, `WM_DPICHANGED`, `WM_GETMINMAXINFO`, no Debugging overflow and
+  help tips in the profile editor. Approve/deny keys were decided against on 2026-11-28.
+- v1.3.7 (PR pending; second combined close-out build of 2026-11-28, hand checks in
+  `docs/test-log/v1.3.7-*.md`): Alt+drag block selection; `ESC c` is a full reset; EL, ED,
+  ECH, DCH and ICH keep `TermRow.len` right, with the reflow rule for a row followed by a
+  continuation; the Session Manager's empty list shows its hint; `web_search` URL-encodes its
+  query; `web_fetch` has a watchdog that closes the request at the hop's deadline or on
+  cancel; `winhttp_open` fails closed when TLS 1.2 cannot be enforced; AI speech honours a
+  finite WAV size, refuses `?` and `#` in a speech Base URL, has a wall-clock cap and a
+  clearer redirect reason, and a one-line triple-backtick span in a list item no longer
+  opens a fence. New setting "Mute the microphone while a reply is spoken" (the maintainer's
+  request of 2026-11-28, a fallback for PCs where echo cancellation does not work).
 
 Open, in priority order:
 - [ ] **Windows hand checks never recorded as run** (2026-11-12 retrospective, F1). Each PR
@@ -779,9 +799,7 @@ Open, in priority order:
       10 minutes is cut silently by the Speaking watchdog ("continue" resumes it; refreshing
       the clock on each spoken word would avoid it) [fixed in code in PR 3; hand check pending]; a Hearing or Ending watchdog expiry
       restarts the 3-minute silence clock, against the rule that a failed turn must not, so
-      with uploads hanging a noisy room can keep a conversation alive [fixed in code in PR 3; hand check pending]; a list item or
-      indented line that starts with a one-line triple-backtick span opens a fence and the
-      rest of the reply is not read (fails closed); after a pause cuts an approval
+      with uploads hanging a noisy room can keep a conversation alive [fixed in code in PR 3; hand check pending]; after a pause cuts an approval
       announcement the header returns to "Working..." although a card waits, and the
       announcement is not repeated; Settings is destroyed before its owner is re-enabled, so
       Windows may activate another application for a moment and the conversation would show
@@ -870,27 +888,11 @@ Open, in priority order:
       v1.3.1 every reply failed in passing). That is the capture's question (R25) answered by
       ear: report it and the fix is the `pcm` path.
 - [ ] Follow-ups from the final review of AI speech, not built:
-      a valid WAV `data` chunk size is ignored (R25), so a finite WAV with a trailing LIST or
-      id3 chunk has the trailer played as PCM and an odd trailer length fails the reply after it
-      was heard (`src/core/voice_wavstream.c:88-97`; spec section 8.4 says only 0 and
-      0xFFFFFFFF mean "until the end").
       The typed-key decision in `src/ui/settings.c` (`voice_tts_key_touched`,
       `voice_tts_key_bound`, the reset in `voice_page_read`) has no test; move it to a pure
       function in `src/core/voice_aispeech.c`.
-      `The speech Base URL is too long` also refuses a keyless Custom server, or one sharing the
-      speech-to-text key, where the binding is never read (`src/core/voice_aispeech.c:155-161`):
-      refuse only when the speech key is its own and one is typed.
       `settings_voice_sample_failed` (`src/ui/settings.c:1539`) drops the failure when another
       Settings page is showing; drop the `cur_page` condition.
-      The redirect reason says "check the Base URL" for Mistral too, which has no Base URL row
-      (`src/core/voice_aispeech.c:321-322`).
-      `http://host?x=a@b` passes the authority check but `parse_url`
-      (`src/ui/ai_http_win.c:36-46`) ends the host only at `:` or `/`, so the connect fails;
-      refuse `?` and `#` in a base, and correct the comment at `src/core/voice_aispeech.c:71-73`.
-      `test_voice_ais_sse_error_event`'s first half would pass with the error event ignored;
-      split or rename it. Only the native parser tests cover the error event.
-      The 5-minute cap counts decoded frames, so a Mistral stream that never ends and carries no
-      audio stays open until the user stops it or the 10-minute Speaking watchdog fires.
 - [ ] Live dictation follow-ups (PR #112, parked minors; nothing run on Windows): an error
       followed by a ready timeout gives two chat lines; a READY and the 10 s timeout landing
       at the same moment shows "stopped" instead of "unavailable"; teardown can stall the UI
@@ -952,19 +954,6 @@ Open, in priority order:
       candidates are a growable message list, or compacting or dropping the oldest turns
       when the slots run low. `thinking_history` (`ai_chat_internal.h`) is sized by the
       same constant.
-- [ ] Thinking view: each mode (collapsed, compact, extended, open) needs its own colour as
-      it cycles; two of them are both green today (maintainer, 2026-11-25).
-- [ ] Thinking view: when a reasoning stream has ended and a new one begins, minimise the
-      earlier one so it stops taking screen space; streaming the reasoning live stays as it
-      is. The user can reopen an earlier stream to read it, and a thinking box opened by
-      hand stays open until it is closed by hand (maintainer, 2026-11-25).
-- [ ] Thinking view: while the reasoning is streaming, scrolling with the mouse wheel, and
-      the equivalent keystrokes, should trigger smart-scroll (maintainer, 2026-11-25,
-      *reported*, not investigated). Read here as: a scroll up stops the view following the
-      tail and holds the reader's place, and returning to the bottom resumes following, the
-      rule `src/core/stick_scroll.c` already gives the chat list and the terminal; confirm
-      that reading with the maintainer, and which of the box and the chat list it covers,
-      before building.
 - [ ] Thinking row follow-ups (PR #96; the spec's "Flagged to the maintainer", to confirm):
       under Automatic a click on a streaming row goes extended to open (the next mode in
       the cycle; compact to open before 2026-11-21), so hiding the text takes two clicks; Save under Automatic never includes
@@ -984,13 +973,9 @@ Open, in priority order:
       reasoning on plain replies is not kept; history carries no tool turns (spec non-goal);
       the four v1.2.74 review leftovers (a font left selected in one header paint path, the
       status dot's size written twice, the rounds note's spare row, two "web_fetch is off"
-      rows in one round). From PR #88: NX-OS and ASA `do CMD` should use their own tables; a
-      sensitive row in `--ui-demo`; blank class reasons (`sh -c: `).
-- [ ] Terminal escapes (PR #94's nano work): replay vim, htop, mc and less against tmux as
-      nano was. Since v1.3.3 the tab stops (HT, CHT `CSI I`, CBT `CSI Z`, HTS, TBC), auto-wrap
-      inside a scroll region and the alternate screen keeping the primary's scroll region are
-      done. Left: `ESC c` (RIS) resets only the tab stops; a full reset also clears the
-      screen, the attributes, the modes, the scroll region and the cursor.
+      rows in one round).
+- [ ] Terminal escapes: replay `mc` against tmux as vim, htop and less were (PR #128; mc is not
+      installed on `automaton`); ED 3 (erase scrollback) is not handled.
 - [ ] Terminal attributes (found 2026-11-12 while checking this list): underline is drawn
       since v1.3.3 (Windows hand check not run: `printf '\033[4munderlined\033[0m plain\n'`
       at 100 % and 150 % scaling, on a line with a missing glyph too, and a line under
@@ -998,25 +983,16 @@ Open, in priority order:
       though the in-app guide lists it; the OSC 0/2 window title is parsed into
       `term->title` and nothing reads it, so it is never shown (a tab title or the window
       caption could).
-- [ ] Settings follow-ups (PR #93 and its spec's non-goals): keyboard path to the help (Tab
-      order, F1); `WM_DPICHANGED` in Settings and `WM_GETMINMAXINFO` on mixed scaling; at
-      the minimum width the widest Debugging row overflows; hover help for the profile
-      editor; a generated README settings block (*reported*); the automatic log opened at
-      connect (`open_session_log`) still fails silently (Start Logging tells the user since
-      v1.3.4).
+- [ ] Settings follow-ups (PR #93 and its spec's non-goals): a generated README settings
+      block (*reported*); the automatic log opened at connect (`open_session_log`) still
+      fails silently (Start Logging tells the user since v1.3.4); Enter and Escape do not
+      act as OK and Cancel in Settings; the main window's `ns_font_flush` on its own
+      `WM_DPICHANGED` can delete fonts an open dialog still holds (found in the v1.3.5
+      review, not fixed).
 - [ ] Other, from the PR #94 session (*reported*): resize cost with a full history (PR #93
       measured 14 ms at 10,000 lines and 66 ms at 50,000 for 200 columns); a user-supplied
       issue log can hold a typed secret, so `term.rx`/`term.key` payloads are never printed
       and tests use synthetic text.
-- [ ] web_search does not URL-encode the query (`src/core/ai_tool_web_search.c`, all four
-      URL builders): a query with spaces, `&`, `#` or `+` reaches DuckDuckGo or the custom
-      URL mangled; found 2026-11-13.
-- [ ] web_fetch: a watchdog that closes the request handle at hop end or on cancel; one
-      hop can still exceed its timeout against a trickling server (the final review of
-      the guard rails branch; the header wait is bounded, the body loop checks the hop's
-      clock only between reads).
-- [ ] winhttp_open: fail closed when TLS 1.2 cannot be enforced (today the session keeps
-      the OS defaults if the TLS 1.2-only retry is refused).
 - [ ] `ssh_channel_write` blocks the UI thread for up to its 5 s send timeout per write
       when the remote window is full (found by PR #79, left alone). The same class of
       symptom as #79's lost input: keys stop while the UI thread waits. Move SSH writes off
@@ -1042,7 +1018,7 @@ Open, in priority order:
       the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
       combining marks and the reflow drop order in PR #76; middle-click now extends, so
       middle-button paste is off the list; the scrollback-size setting and lazy allocation
-      shipped in PR #93): Alt+drag block selection (mouse reporting to applications: see
+      shipped in PR #93): mouse reporting to applications is what is left (see
       "Local shell follow-ups").
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
@@ -1077,7 +1053,7 @@ Open, in priority order:
       two smaller follow-ups: the classifier's reason string as a "why this level" line in
       the popup, and a Unicode input box.
 - [ ] AI panel selection follow-ups (spec `2026-10-18-ai-panel-text-selection-design.md`
-      section 8 and the plan's notes): an I-beam cursor over text; Shift+arrow keyboard
+      section 8 and the plan's notes): Shift+arrow keyboard
       selection; grapheme-safe boundaries (a combining mark or an emoji sequence can
       split); dragging past the Thinking box's edge does not scroll the box; the message
       box is still an ANSI EDIT, so text outside the code page cannot be typed (the
@@ -1126,8 +1102,20 @@ Open, in priority order:
       provenance, secret scanning -- the settings changes need the maintainer's
       say-so; PR #87 added the release checksum); then Medium and Low. The web_fetch
       destination filter shipped in PR #85.
-- [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
-      two user turns in a row in the conversation.
+- [ ] v1.3.7 follow-ups (second combined close-out build of 2026-11-28; hand checks in
+      `docs/test-log/v1.3.7-*.md`): Alt+drag block selection is in the README but not on
+      the in-app shortcut sheet (a row or note for it breaks the one-page rule at 1080p:
+      the maintainer decides); a block selection is cleared by output anywhere in its rows;
+      web fetch keeps a few-instruction window between its last check and a WinHTTP call on
+      a handle the watchdog may close (the design `ai_netcancel.h` already accepts for
+      cancel); the custom search URL may still be `http://`; a finite WAV size that is
+      fully delivered on a connection the server keeps open waits for the close, the
+      receive timeout or the 6-minute cap; the AI speech time cap does not cover an error
+      body; with "Mute the microphone while a reply is spoken" on, anything said during a
+      reply or the 300 ms after it is lost, and a key press just after that ends the
+      conversation instead of interrupting; the Wine harness's source list
+      (`WIN_TEST_SRCS`) must gain every new `src/core` file a harness-linked `src/ui` file
+      calls, and nothing checks that before the build.
 - [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
       device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
       than device rulesets -- keep detecting on strict-locked sessions and add a
@@ -1170,10 +1158,6 @@ Open, in priority order:
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row
       shadow poisoning now makes harmless.
-- [ ] The AI panel never refreshes `d->dpi` after `WM_CREATE`: paint, hit and tooltip
-      rects stay consistent with each other, but the panel does not rescale on a monitor
-      move (found 2026-10-18 during the Auto-approve review). Still true on 2026-11-12:
-      only the chat list view remeasures on `WM_DPICHANGED` (07953d2).
 - [ ] Scrolled-back repaint storm (2026-10-18 `issue3.log` lines 11761-12797, out of scope of
       `2026-10-18-conpty-resize-anchor-design.md`): with `scrollback_offset` 12..6, 186 paints
       in 4.4 s had `dirty_rows` equal to the offset, driven by `poll.invalidate poll_rc=0`
@@ -1186,17 +1170,14 @@ Open, in priority order:
 - [ ] Wide characters: the parser gives every codepoint one cell, ConPTY and most terminals
       give East Asian wide characters and most emoji two, so such rows drift from the shell's
       idea of the cursor column. Pre-existing; needs a width table and two-cell rendering.
-- [ ] Parser quirk (pre-existing, left alone by the ConPTY resize spec because fixing it changes
-      SSH rendering): EL and ED never update `TermRow.len`, so `len` can exceed the written
-      width. The `wrapped` half was settled by PR #74: a whole-row erase (EL 2, EL 0 from
-      column 0, EL 1 to the last column, ED over a whole row) clears it, and a line feed
-      never does, by design (readline moves onto a continuation row with a bare LF).
-- [ ] Chords asked about that do not exist: Ctrl+Tab (switch tabs), Ctrl+0 (zoom reset),
-      approve/deny keys in the AI panel. The cheat-sheet spec (2026-10-20, "Not changed")
-      left them out; decide whether any is wanted, then add it to `src/core/shortcuts.c`.
-- [ ] Main-window chords (Ctrl+Shift+T/W/M, F11, Ctrl+Shift+Space) fire only while the main
-      window has focus; from the AI panel's input they are dead. The cheat sheet states the
-      condition per row ("from the terminal"); forwarding them is a separate change.
+- [ ] v1.3.5 follow-ups (combined close-out build of 2026-11-28; hand checks in
+      `docs/test-log/v1.3.5-*.md`): an empty key path makes the SSH login ask for a
+      passphrase and report "Wrong passphrase for ." (found in the Settings review, in the
+      connect code, not fixed); a tool round sent as text followed by a typed message still
+      gives two user turns in a row (older than v1.3.5); the I-beam's drag case probably
+      never runs while the mouse is captured; tests that write fixed file names under the
+      shared temp directory collide when several worktrees test at once (give each run its
+      own directory).
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the

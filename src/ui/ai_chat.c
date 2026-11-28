@@ -4,6 +4,7 @@
 
 #include "ai_chat_internal.h"
 #include "ai_conv_guard.h"
+#include "main_chord_win.h"
 #include "dll_record.h"
 #include "notice_dlg.h"
 #include "voice_win.h"
@@ -531,6 +532,21 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
     }
+
+    case WM_DPICHANGED:
+        if (d) {
+            /* The panel's scale changed (the owner moved to another monitor):
+             * a floating panel is a top-level window and takes the rectangle
+             * Windows suggests; a docked one is sized by the main window. */
+            ai_chat_apply_dpi(d, (int)HIWORD(wParam));
+            const RECT *sr = (const RECT *)lParam;
+            if (sr && !(GetWindowLong(hwnd, GWL_STYLE) & WS_CHILD))
+                SetWindowPos(hwnd, NULL, sr->left, sr->top,
+                             sr->right - sr->left, sr->bottom - sr->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            return 0;
+        }
+        break;
 
     case WM_NCHITTEST: {
         /* When docked, make the left edge transparent to mouse clicks
@@ -1991,9 +2007,9 @@ next_coalesce:;
             void *lost;
             while ((lost = ai_stream_table_lost_owner(&d->streams)) != NULL) {
                 if (lost == (void *)d->active_state) {
-                    ai_chat_cancel_active_stream(d);
+                    ai_chat_cancel_active_stream_why(d, AI_REPLY_LOST);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                    "[the AI reply was lost]");
+                                    AI_LOST_STATUS_TEXT);
                     if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 } else {
                     ai_chat_abort_session_stream(d, (AiSessionState *)lost, 0);
@@ -2064,7 +2080,23 @@ next_coalesce:;
         }
         break;
 
-    case WM_KEYDOWN:
+    case WM_KEYDOWN: {
+        /* Ctrl+0 resets the chat zoom; the main window's other chords (tabs,
+         * fullscreen, the panel toggle, Mark Issue) go on to it, which owns
+         * the panel (GA_ROOTOWNER: its parent when docked, its owner when
+         * floating). The input box and the list send their chords here. */
+        const MainChord mc = main_chord_now(wParam);
+        if (mc == MCHORD_ZOOM_RESET) {
+            if (d) ai_chat_zoom_to(d, zoom_reset_size(1));
+            return 0;
+        }
+        if (main_chord_forwarded_from_panel(mc)) {
+            /* Sent as WM_APP_MAIN_CHORD, not as the key: the main window runs
+             * the action and nothing else. Swallowed while it is disabled
+             * (a modal is up over a floating panel). */
+            main_chord_forward(hwnd, mc, lParam);
+            return 0;
+        }
         if (d && (GetKeyState(VK_CONTROL) & 0x8000)) {
             if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
                 ai_chat_apply_zoom(d, 1);
@@ -2076,6 +2108,7 @@ next_coalesce:;
             }
         }
         break;
+    }
 
     case WM_MOUSEWHEEL:
         if (d) {
@@ -2547,6 +2580,14 @@ void ai_chat_refresh_fonts(HWND hwnd)
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
+
+    /* The main window calls this after its own DPI change: the panel's
+     * scale, its layout and its own fonts follow the window's. */
+    int wdpi = get_window_dpi(hwnd);
+    if (wdpi > 0 && wdpi != d->dpi) {
+        ai_chat_apply_dpi(d, wdpi);
+        return;
+    }
 
     d->hFont = ns_font(FONT_BODY, d->dpi);
     /* The session label's font comes from the same cache (ns_font_flush()

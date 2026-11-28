@@ -180,6 +180,7 @@ void voice_settings_default(Settings *s)
     s->voice_auto_send = 0;
     s->voice_mode = VOICE_MODE_DICTATION;
     s->voice_pause_ms = VOICE_PAUSE_DEFAULT_MS;
+    s->voice_conv_mute_speaking = 0;
     s->voice_windows_voice[0] = '\0';
     s->voice_windows_voice_name[0] = '\0';
     s->voice_speech_engine = VOICE_SPEECH_WINDOWS;
@@ -206,6 +207,7 @@ void voice_settings_validate(Settings *s)
     if (s->voice_speech_engine != VOICE_SPEECH_AI) s->voice_speech_engine = VOICE_SPEECH_WINDOWS;
     if (s->voice_mode != VOICE_MODE_CONVERSATION) s->voice_mode = VOICE_MODE_DICTATION;
     s->voice_pause_ms = voice_pause_clamp(s->voice_pause_ms);
+    s->voice_conv_mute_speaking = s->voice_conv_mute_speaking ? 1 : 0;
     if (s->voice_ptt_key < 0 || s->voice_ptt_key >= (int)VOICE_PTT_COUNT)
         s->voice_ptt_key = (int)VOICE_PTT_RIGHT_SHIFT;
     if (s->voice_ptt_mode < 0 || s->voice_ptt_mode >= (int)VOICE_MODE_COUNT)
@@ -272,6 +274,7 @@ uint64_t voice_settings_digest(const Settings *s)
     h = fnv_int(h, s->voice_auto_send);
     h = fnv_int(h, s->voice_mode);
     h = fnv_int(h, s->voice_pause_ms);
+    h = fnv_int(h, s->voice_conv_mute_speaking);
     h = fnv_str(h, s->voice_windows_voice);
     h = fnv_str(h, s->voice_windows_voice_name);
     h = fnv_int(h, s->voice_speech_engine);
