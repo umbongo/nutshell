@@ -1039,6 +1039,7 @@ void chat_listview_set_tail_busy(HWND hwnd, int busy)
     busy = busy != 0;
     if (lv->tail_busy == busy) return;
     lv->tail_busy = busy;
+    if (!lv->read_on) return;   /* kept; chat_listview_set_read_aloud(1) relays out with it */
     recalc_layout(lv);
     update_scrollbar(lv);
     InvalidateRect(hwnd, NULL, FALSE);

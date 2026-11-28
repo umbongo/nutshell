@@ -1685,6 +1685,62 @@ int test_chat_read_win_tail_busy_hides_last(void)
     TEST_END();
 }
 
+int test_chat_read_win_tail_busy_off_no_relayout(void)
+{
+    TEST_BEGIN();
+    /* Feature off: a busy flip stores the flag and relays out nothing. A
+     * sentinel in total_height survives it (a relayout rewrites it), and no
+     * row height moves. */
+    ChatMsgList la;
+    ReadFix fa;
+    fill_read_fixture(&la, &fa);
+    TestView ta;
+    ASSERT_TRUE(read_view_open(&ta, &la, 96, 1));
+    view_paint(&ta, READ_W);
+    int h0[8];
+    read_heights(&la, h0);
+    int total0 = lv_of(ta.lv)->total_height;
+    lv_of(ta.lv)->total_height = total0 + 12345;
+    chat_listview_set_tail_busy(ta.lv, 1);
+    ASSERT_EQ(lv_of(ta.lv)->total_height, total0 + 12345);
+    chat_listview_set_tail_busy(ta.lv, 0);
+    ASSERT_EQ(lv_of(ta.lv)->total_height, total0 + 12345);
+    lv_of(ta.lv)->total_height = total0;
+    int h1[8];
+    read_heights(&la, h1);
+    for (int i = 0; i < 6; i++) ASSERT_EQ(h0[i], h1[i]);
+
+    /* Turning it on after a flip made while off equals flipping after. */
+    ChatMsgList lb, lc;
+    ReadFix fb, fc;
+    fill_read_fixture(&lb, &fb);
+    fill_read_fixture(&lc, &fc);
+    TestView tb, tc;
+    ASSERT_TRUE(read_view_open(&tb, &lb, 96, 1));
+    ASSERT_TRUE(read_view_open(&tc, &lc, 96, 1));
+    chat_listview_set_tail_busy(tb.lv, 1);          /* while off */
+    chat_listview_set_read_aloud(tb.lv, 1, 0, 0);
+    view_paint(&tb, READ_W);
+    chat_listview_set_read_aloud(tc.lv, 1, 0, 0);
+    chat_listview_set_tail_busy(tc.lv, 1);          /* while on */
+    view_paint(&tc, READ_W);
+    int hb[8], hc[8];
+    read_heights(&lb, hb);
+    read_heights(&lc, hc);
+    for (int i = 0; i < 6; i++) ASSERT_EQ(hb[i], hc[i]);
+    ASSERT_EQ(lv_of(tb.lv)->total_height, lv_of(tc.lv)->total_height);
+    ASSERT_EQ(fb.a3->u.ai.turn_btn, 0);
+    ASSERT_EQ(fb.a3->u.ai.turn_btn, fc.a3->u.ai.turn_btn);
+    ASSERT_EQ(lv_of(tb.lv)->n_read_hits, lv_of(tc.lv)->n_read_hits);
+    view_close(&ta);
+    view_close(&tb);
+    view_close(&tc);
+    chat_msg_list_clear(&la);
+    chat_msg_list_clear(&lb);
+    chat_msg_list_clear(&lc);
+    TEST_END();
+}
+
 int test_chat_read_win_click_posts_id(void)
 {
     TEST_BEGIN();

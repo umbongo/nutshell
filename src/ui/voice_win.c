@@ -142,7 +142,9 @@ static void set_ui(AiVoiceUi st, const char *cue)
     g_ui = st;
     ai_chat_voice_set_ui(ui_ai_panel(), st, cue);
     /* The Read aloud buttons stay disabled from the recording's start until the mic button is
-     * idle again (transcribing included); starting one stops a reading, here and nowhere else. */
+     * idle again (transcribing included). start_recording() stops a reading first, so that stop
+     * is queued ahead of the capture and the reader's own audio is never recorded; the call
+     * below stops it too, as a safety net. */
     voice_read_win_set_recording(st != AIV_IDLE);
 }
 
@@ -454,6 +456,7 @@ static void start_recording(void)
     const Settings *s = ui_current_settings();
     HWND panel = ui_ai_panel();
     int need_sep = 0;
+    voice_read_win_stop(VRX_DICTATION);   /* before the capture is queued, never after it */
     voice_live_reap(0);
     g_token = next_token();
     ai_chat_voice_binding(panel, &g_bind);
@@ -631,6 +634,7 @@ void voice_on_deactivate(void)
 void voice_on_session_change(WPARAM wp)
 {
     if (!voice_lock_is_lock_event(wp)) return;
+    voice_read_win_stop(VRX_PANEL);   /* a locked screen must not go on reading a reply aloud */
     /* Dictation: a lock ends the recording softly (what was heard is kept). Task 13
      * adds the conversation (VCE_END, VCX_LOCK). */
     if (g_audio_up && g_dict.state != VDS_IDLE) dict_event(VDE_END_SOFT, 0, 0);

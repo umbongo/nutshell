@@ -13,6 +13,7 @@
 #include "voice_aispeech_win.h"
 #include "voice_aispeech.h"
 #include "voice_config.h"
+#include "voice_conv_win.h"
 
 #define HR_FAIL ((long)(int)0x80004005u)
 
@@ -520,6 +521,44 @@ int test_vread_win_exited_while_reading(void)
     ASSERT_EQ(voice_read_win_active(), 0);
     voice_read_win_press(&s, 7, 0);                 /* a fresh start, not a lost press */
     ASSERT_EQ(g.start, 2);
+    done();
+    TEST_END();
+}
+
+static int g_conv_quits;
+static void f_conv_quit(unsigned token) { (void)token; g_conv_quits++; }
+
+/* One exit message goes through both handlers, in voice_on_tts's order: the reader
+ * releases its context once and notes the failure; the conversation, not running and
+ * not owning the token, quits nothing. */
+int test_vread_win_exited_through_both_handlers(void)
+{
+    TEST_BEGIN();
+    Settings s = S(VOICE_SPEECH_WINDOWS);
+    begin(&s);
+    VoiceConvOps co;
+    memset(&co, 0, sizeof co);
+    co.tts_quit = f_conv_quit;
+    voice_conv_set_ops(&co);
+    g_conv_quits = 0;
+    voice_read_win_press(&s, 7, 0);
+    msg(VTT_READY, VOICE_READ_TOKEN, 10, 0, 0);
+    ASSERT_EQ(voice_read_win_active(), 1);
+    VoiceTtsMsg m;
+    memset(&m, 0, sizeof m);
+    m.token = VOICE_READ_TOKEN; m.gen = 10; m.kind = VTT_EXITED;
+    voice_read_win_on_tts(&m);
+    voice_conv_on_tts(&m);
+    ASSERT_EQ(g.quit, 1);
+    ASSERT_EQ(g_conv_quits, 0);
+    ASSERT_EQ(voice_read_win_active(), 0);
+    ASSERT_EQ(g.note, 1);
+    ASSERT_STR_EQ(g.note_text, NOTE_WIN);
+    voice_read_win_on_tts(&m);               /* a repeat finds no context: nothing again */
+    voice_conv_on_tts(&m);
+    ASSERT_EQ(g.quit, 1);
+    ASSERT_EQ(g_conv_quits, 0);
+    voice_conv_set_ops(NULL);
     done();
     TEST_END();
 }

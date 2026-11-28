@@ -103,7 +103,7 @@ static long fake_fetch(void *job, const VoiceAisTarget *t, const char *key, cons
 
 /* ---- the pump and the log ---- */
 
-typedef struct { VoiceTtsKind kind; unsigned token, reply; size_t offset; long hr; ULONGLONG tick; } VaLog;
+typedef struct { VoiceTtsKind kind; unsigned token, reply, gen; size_t offset; long hr; ULONGLONG tick; } VaLog;
 #define VA_LOG_MAX 512
 static VaLog g_log[VA_LOG_MAX];
 static int g_nlog;
@@ -150,7 +150,7 @@ static void va_pump(DWORD ms)
                 VoiceTtsMsg *m = (VoiceTtsMsg *)msg.lParam;
                 if (g_nlog < VA_LOG_MAX) {
                     g_log[g_nlog].kind = m->kind; g_log[g_nlog].token = m->token;
-                    g_log[g_nlog].reply = m->reply_id; g_log[g_nlog].offset = m->offset;
+                    g_log[g_nlog].reply = m->reply_id; g_log[g_nlog].gen = m->gen; g_log[g_nlog].offset = m->offset;
                     g_log[g_nlog].hr = m->hr; g_log[g_nlog].tick = GetTickCount64();
                     g_nlog++;
                 }
@@ -287,7 +287,8 @@ int test_voice_ais_fake_done(void)
     VoiceAisTarget t = va_target();
     ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
     ASSERT_EQ(voice_ais_owns(VA_TOKEN), 1);
-    ASSERT_TRUE(voice_ais_gen(VA_TOKEN) != 0u);
+    const unsigned held_gen = voice_ais_gen(VA_TOKEN);
+    ASSERT_TRUE(held_gen != 0u);
     ASSERT_EQ(voice_ais_gen(VA_TOKEN + 1u), 0u);
 
     /* one chunk: "One. Two." */
@@ -308,6 +309,14 @@ int test_voice_ais_fake_done(void)
     ASSERT_TRUE(words >= 1);
     ASSERT_EQ(nondecr, 1);
     ASSERT_EQ(past_two, 1);
+    /* the getter is the generation every posted message of this context carries */
+    int carried = 0;
+    for (int i = 0; i < g_nlog; i++) {
+        if (g_log[i].token != VA_TOKEN) continue;
+        carried++;
+        ASSERT_EQ(g_log[i].gen, held_gen);
+    }
+    ASSERT_TRUE(carried >= 1);
     ASSERT_EQ(va_count(VTT_DONE, 1) == 1 && va_find(VTT_DONE, 1) > 0, 1);
 
     /* two chunks: a first sentence of about 144 bytes, then the same again */
