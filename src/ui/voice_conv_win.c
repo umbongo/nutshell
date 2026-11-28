@@ -1047,7 +1047,9 @@ static void ai_turn_off(long hr)
     if (hr == VOICE_AIS_HR_RESOLVE && g_ops->ai_resolve_error
         && !g_ops->ai_resolve_error(resolve_err, sizeof resolve_err))
         resolve_err[0] = '\0';
-    voice_ais_failure_reason_for(ui_current_settings() ? ui_current_settings()->voice_tts_provider : NULL, hr, resolve_err, reason, sizeof reason);
+    /* The provider comes through the ops (the settings live in window.c, which this file
+     * must not depend on: the Wine harness links it without the main window). */
+    voice_ais_failure_reason_for(g_ops->ai_provider ? g_ops->ai_provider() : NULL, hr, resolve_err, reason, sizeof reason);
     snprintf(text, sizeof text, "AI speech is off for this conversation: %s. "
              "Replies are read with Windows speech.", reason);
     g_ai_off = 1;

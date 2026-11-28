@@ -34,6 +34,7 @@ enum {
     HLS_WAV_ENDLESS,    /* 200, a WAV header, then silence until the client goes away (or hl_stop) */
     HLS_NOTWAV,         /* 200 audio/mpeg whose body is an ID3 tag (HlAudio.sse_file: unused) */
     HLS_500_ENDLESS,    /* 500 with a body that never ends (until the client goes away or hl_stop) */
+    HLS_SSE_KEEPALIVE,  /* 200 text/event-stream, then a keep-alive comment every 50 ms (no audio) until the client goes away or hl_stop */
     HLS_TRICKLE_HEAD    /* answers one byte of the response head every 100 ms, for up to a minute (until the client goes away or hl_stop) */
 };
 

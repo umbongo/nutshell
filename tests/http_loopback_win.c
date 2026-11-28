@@ -281,6 +281,16 @@ static void answer(HttpLoop *h, SOCKET c)
         free(w);
         break;
     }
+    case HLS_SSE_KEEPALIVE:
+        /* Slow and audio-free: only a wall-clock cap can end it (an unthrottled audio stream
+         * trips the frame cap first and queues minutes of audio). */
+        if (send_head(c, "200 OK", "text/event-stream", "", -1) == 0) {
+            while (!h->stop) {
+                if (send_chunk(c, ": keep-alive\n\n", 14) != 0) break;
+                Sleep(50);
+            }
+        }
+        break;
     case HLS_NOTWAV: {
         static const char id3[] = "ID3\4\0\0\0\0\0\0 this is an mp3, not a WAV stream";
         if (send_head(c, "200 OK", "audio/mpeg", "", (long)sizeof(id3) - 1) == 0)

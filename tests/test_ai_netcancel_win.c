@@ -200,7 +200,8 @@ int test_ai_nc_fire_wakes_blocked_winhttp_call(void)
 /* One raw hop (the default backend's get, which does no address checks) at a
  * loopback server that trickles its response head, one byte per 100 ms: each
  * byte restarts WinHTTP's receive timeout, so only the watchdog ends the
- * wait. Not run by the author (no Wine on the authoring session). */
+ * wait. Skipped under Wine (running_under_wine above): there the blocked call ignores both the
+ * watchdog's handle close and the receive timeout and returns only when the server ends. */
 typedef struct {
     int  port;
     int  timeout_ms;
@@ -236,6 +237,11 @@ static DWORD WINAPI trickle_thread(LPVOID p)
 int test_web_fetch_trickling_head_ends_at_hop_deadline(void)
 {
     TEST_BEGIN();
+    if (running_under_wine()) {
+        TEST_SKIP("Wine does not abort a synchronous WinHTTP call on handle close or on the receive"
+                  " timeout (measured: the blocked hop returned only when the server ended, after"
+                  " 62 s); runs on a Windows host only");
+    }
     /* ns_winhttp_open refuses while the AI gate is off (an earlier test leaves
      * it off), which would fail the hop at once without reaching the watchdog:
      * the lower bound below catches that. */
@@ -268,6 +274,11 @@ int test_web_fetch_trickling_head_ends_at_hop_deadline(void)
 int test_web_fetch_trickling_head_ends_on_cancel_flag(void)
 {
     TEST_BEGIN();
+    if (running_under_wine()) {
+        TEST_SKIP("Wine does not abort a synchronous WinHTTP call on handle close or on the receive"
+                  " timeout (measured: the blocked hop returned only when the server ended, after"
+                  " 62 s); runs on a Windows host only");
+    }
     ai_gate_set_enabled(1);                            /* see the test above */
     HttpLoop *h = hl_start(HLS_TRICKLE_HEAD, NULL);
     ASSERT_NOT_NULL(h);
