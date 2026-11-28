@@ -1057,6 +1057,46 @@ int test_ai_stream_openai_no_finish_reason_with_pending_call(void)
     TEST_END();
 }
 
+int test_ai_stream_openai_empty_later_id_keeps_id(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"call_1\",\"function\":{\"name\":\"web_search\","
+        "\"arguments\":\"\"}}]}}]}", &st), 0);
+    /* Later chunk of the same call carries "id":"" */
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"\",\"function\":{\"arguments\":\"{}\"}}]}}]}", &st), 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_1");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{}");
+    /* The same non-empty id again is accepted and unchanged */
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"call_1\"}]}}]}", &st), 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_1");
+    /* A different non-empty id on the slot overflows it (existing rule) */
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"call_2\"}]}}]}", &st), 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_1");
+    ASSERT_TRUE(st.pending_tool_calls[0].overflowed);
+    ai_tools_stream_reset(&st);
+
+    /* A call whose only id is empty stays empty */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(ai_parse_tool_stream_openai(
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"\",\"function\":{\"name\":\"x\"}}]}}]}", &st), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "x");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
 int test_ai_stream_openai_whole_call_in_finish_chunk(void)
 {
     TEST_BEGIN();

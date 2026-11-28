@@ -794,7 +794,7 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
         openai_take_signature(state, tc_node);
 
         /* First chunk: id and function.name */
-        if (id) {
+        if (id && id[0]) {   /* later chunks may repeat the id as "" */
             snprintf(state->pending_tool_calls[slot].id,
                      sizeof(state->pending_tool_calls[slot].id), "%s", id);
         }
