@@ -51,6 +51,7 @@
 #include "voice_gate.h"
 #include "settings_layout.h"
 #include "voice_win.h"
+#include "voice_read_win.h"
 #include "voice_conv_win.h"
 #include "voice_tts_win.h"
 #include "voice_aispeech_win.h"
@@ -2537,6 +2538,7 @@ static HWND create_ai_chat(HWND parent)
         ai_chat_set_thinking_pref(hwnd, g_config->settings.ai_thinking_mode);
         if (voice_feature_running())
             ai_chat_voice_attach(hwnd, 1);   /* the mic button, while voice is on */
+        voice_read_win_view_sync(hwnd);      /* g_hwndAiChat is not set yet: tell the new panel */
     }
     return hwnd;
 }

@@ -415,6 +415,12 @@ void voice_tts_reap(unsigned token, unsigned gen)
     voice_tts_quit(token, 1000);
 }
 
+unsigned voice_tts_gen(unsigned token)
+{
+    TtsCtx *c = find(token);
+    return c != NULL ? c->gen : 0;
+}
+
 void voice_tts_stop(unsigned token)
 {
     TtsCtx *c = find(token);

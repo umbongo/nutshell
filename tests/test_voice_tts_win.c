@@ -401,11 +401,16 @@ int test_voice_tts_reap_by_generation(void)
     HWND w = tt_window();
     ASSERT_TRUE(w != NULL);
     gates(1);
+    ASSERT_EQ(voice_tts_gen(31u), 0u);                     /* none held: 0 */
     ASSERT_EQ(voice_tts_start(w, 31u, NULL), 1);
+    const unsigned held_gen = voice_tts_gen(31u);
+    ASSERT_TRUE(held_gen != 0u);
+    ASSERT_EQ(voice_tts_gen(32u), 0u);                     /* another token: 0 */
     VoiceTtsMsg *m = wait_msg(31u, 1u << VTT_EXITED | 1u << VTT_READY, 5000);
     ASSERT_TRUE(m != NULL);
     const int exited = (m->kind == VTT_EXITED);
     const unsigned gen1 = m->gen;
+    ASSERT_EQ(gen1, held_gen);                             /* the getter is the message's gen */
     free(m);
     if (!exited) {
         printf("  SKIP: SAPI is present: no start-time exit to restart over\n");

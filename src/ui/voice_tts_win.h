@@ -74,6 +74,9 @@ void voice_tts_quit(unsigned token, unsigned wait_ms);
  * stays for deliberate teardown. */
 void voice_tts_reap(unsigned token, unsigned gen);
 
+/* The generation (VoiceTtsMsg.gen) of the context held under `token`; 0 when none. */
+unsigned voice_tts_gen(unsigned token);
+
 /* voice_tts_quit for every context held (conversation, Play sample, any whose thread
  * stayed in its loop after an error): voice off and shutdown. */
 void voice_tts_quit_all(unsigned wait_ms);

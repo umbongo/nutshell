@@ -45,6 +45,7 @@
 #include "voice_stt.h"
 #include "voice_live.h"
 #include "voice_win.h"
+#include "voice_read_win.h"
 #include "voice_conv_win.h"
 #include "voice_tts_win.h"
 #include "voice_voices_win.h"
@@ -1256,6 +1257,7 @@ static int voice_speech_apply(SettingsDlgData *d, int speech)
  * shows in the dim note under the meter; nothing is sent when it fails. */
 static void voice_play_sample(SettingsDlgData *d)
 {
+    voice_read_win_stop(VRX_SAMPLE);   /* the reading stops cleanly before the sample takes the voice */
     HWND owner = GetWindow(GetParent(d->hPage), GW_OWNER);
     if (!owner) return;
     if (voice_speech_selected(d) == VOICE_SPEECH_AI) {

@@ -40,6 +40,9 @@ void voice_on_timer(void);
 /* The mic button was clicked. */
 void voice_mic_clicked(void);
 
+/* A Read aloud button was pressed; item_id is its row. Refused unless Voice is on. */
+void voice_read_clicked(int item_id);
+
 /* The live settings, owned by window.c; NULL before the config is loaded. */
 const Settings *ui_current_settings(void);
 

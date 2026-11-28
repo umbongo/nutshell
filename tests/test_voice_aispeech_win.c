@@ -262,6 +262,7 @@ int test_voice_ais_gate_off(void)
     ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 0);
     ASSERT_EQ(voice_ais_running(), 0);
     ASSERT_EQ(voice_ais_owns(VA_TOKEN), 0);
+    ASSERT_EQ(voice_ais_gen(VA_TOKEN), 0u);
     VoiceAisTarget t = va_target();
     ASSERT_EQ(voice_ais_sample(w, &t, "k"), 0);
     voice_ais_speak(VA_TOKEN, 1, "Hello.", 0, &t, "k");   /* no context: nothing */
@@ -286,6 +287,8 @@ int test_voice_ais_fake_done(void)
     VoiceAisTarget t = va_target();
     ASSERT_EQ(voice_ais_start(w, VA_TOKEN), 1);
     ASSERT_EQ(voice_ais_owns(VA_TOKEN), 1);
+    ASSERT_TRUE(voice_ais_gen(VA_TOKEN) != 0u);
+    ASSERT_EQ(voice_ais_gen(VA_TOKEN + 1u), 0u);
 
     /* one chunk: "One. Two." */
     voice_ais_speak(VA_TOKEN, 1, "One. Two.", 0, &t, "key");

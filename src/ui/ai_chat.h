@@ -292,5 +292,16 @@ void ai_chat_voice_send_caption(HWND panel, int stop);
  * existing ns_motion cycle. A frac below 0 or a call with the mic idle clears it (the dictation swing). */
 void ai_chat_voice_set_level(HWND panel, double frac);
 
+/* ---- Read aloud (voice_read_win.c drives these) ---- */
+
+/* The speakable text of the turn whose button row is item_id (chat_turn_text over the
+ * panel's list, the chat's busy flag as the tail rule), malloc'd (the caller secure_zero()s
+ * and frees); NULL with no panel or when the row carries no button now. */
+char *ai_chat_voice_turn_text(HWND panel, int item_id);
+
+/* The buttons under finished turns: on shows them, reading_id is the row whose glyph is
+ * Stop (0 none), disabled dims them (a recording). A NULL panel does nothing. */
+void ai_chat_voice_read_view(HWND panel, int on, int reading_id, int disabled);
+
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */

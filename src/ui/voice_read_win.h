@@ -1,7 +1,6 @@
 #ifndef NUTSHELL_VOICE_READ_WIN_H
 #define NUTSHELL_VOICE_READ_WIN_H
 
-#include <winsock2.h>
 #include <windows.h>
 #include <stddef.h>
 #include "config.h"

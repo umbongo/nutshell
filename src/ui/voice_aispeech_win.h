@@ -66,6 +66,7 @@ void voice_ais_quit_all(unsigned wait_ms);           /* before voice_audio_stop 
 int  voice_ais_sample(HWND notify, const VoiceAisTarget *t, const char *key);
 int  voice_ais_running(void);                        /* contexts held */
 int  voice_ais_owns(unsigned token);                 /* 1 when an AI context holds this token */
+unsigned voice_ais_gen(unsigned token);              /* its generation (VoiceTtsMsg.gen), 0 when none */
 
 /* The window procedure's hooks. on_audio takes ownership of (frees) the VoiceRenderMsg of
  * VAM_PLAYED and VAM_PLAY_DONE and ignores every other kind. on_msg does not free m. */

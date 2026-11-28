@@ -11,6 +11,8 @@
 #ifdef _WIN32
 #include "voice_config.h"
 #include "voice_win.h"
+#include "chat_turn.h"
+#include "secure_zero.h"
 #include "main_chord_win.h"
 #include <math.h>
 #include <stdio.h>
@@ -431,7 +433,21 @@ void ai_chat_voice_card_posted(AiChatData *d, const char *tool_name)
 void ai_chat_voice_busy_changed(AiChatData *d)
 {
     if (d && d->hMicBtn) InvalidateRect(d->hMicBtn, NULL, FALSE);
+    if (d && d->hChatList) chat_listview_set_tail_busy(d->hChatList, busy_of(d));   /* the last turn is open while busy */
     voice_turn_check(d);
+}
+
+char *ai_chat_voice_turn_text(HWND panel, int item_id)
+{
+    const AiChatData *d = panel_data(panel);
+    if (!d) return NULL;
+    return chat_turn_text(&d->msg_list, item_id, busy_of(d));
+}
+
+void ai_chat_voice_read_view(HWND panel, int on, int reading_id, int disabled)
+{
+    const AiChatData *d = panel_data(panel);
+    if (d && d->hChatList) chat_listview_set_read_aloud(d->hChatList, on, reading_id, disabled);
 }
 
 VoiceSendStatus ai_chat_voice_send_turn(HWND panel, int voice_turn)

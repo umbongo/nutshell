@@ -526,6 +526,12 @@ int voice_ais_running(void)
 
 int voice_ais_owns(unsigned token) { return ctx_find(token) != NULL; }
 
+unsigned voice_ais_gen(unsigned token)
+{
+    AisCtx *c = ctx_find(token);
+    return c != NULL ? c->gen : 0;
+}
+
 void voice_ais_volume(unsigned token, int percent)
 {
     AisCtx *c = ctx_find(token);

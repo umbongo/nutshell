@@ -1240,6 +1240,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
 
+            /* IDC_CHAT_READ_ALOUD → the Read aloud button under a finished turn
+             * (lParam is the button row's item id; the reader decides). */
+            if (d && ctl_id == IDC_CHAT_READ_ALOUD) {
+                voice_read_clicked((int)lParam);
+                return 0;
+            }
+
             /* IDC_CMD_EXPAND_ALL → toggle command list expand/collapse */
             if (d && ctl_id == IDC_CMD_EXPAND_ALL) {
                 if (d->hChatList) chat_listview_toggle_cmd_expand(d->hChatList);

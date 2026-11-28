@@ -15,6 +15,7 @@
 #include "voice_live_win.h"
 #include "voice_lock_win.h"
 #include "voice_ptt.h"
+#include "voice_read_win.h"
 #include "voice_stt.h"
 #include "voice_stt_win.h"
 #include "voice_transcript.h"
@@ -40,6 +41,7 @@
 
 static HWND g_main;
 static int g_audio_up;       /* the audio thread was started by voice_feature_apply */
+static int g_read_attached;  /* the Read aloud reader has its ops (set once, dropped at shutdown) */
 static VoicePtt g_ptt;
 static unsigned g_token_seq;
 static unsigned g_token;     /* the current recording; 0 = none (IDLE) */
@@ -139,6 +141,9 @@ static void set_ui(AiVoiceUi st, const char *cue)
 {
     g_ui = st;
     ai_chat_voice_set_ui(ui_ai_panel(), st, cue);
+    /* The Read aloud buttons stay disabled from the recording's start until the mic button is
+     * idle again (transcribing included); starting one stops a reading, here and nowhere else. */
+    voice_read_win_set_recording(st != AIV_IDLE);
 }
 
 static void chat_error(const char *text)
@@ -583,6 +588,11 @@ int voice_pump_filter(const MSG *m)
         dict_event(VDE_ESCAPE, 0, 0);
         return 1;
     }
+    if (in == VI_ESCAPE && in_panel && voice_read_win_active()) {
+        /* Escape in the panel stops a reading; out of it, it goes to the terminal. */
+        voice_read_win_stop(VRX_ESCAPE);
+        return 1;
+    }
     if (in == VI_ESCAPE && conv_mode(s) && voice_conv_running()) {
         /* Escape in the panel ends the turn or the conversation; out of it, it goes to the terminal. */
         if (!in_panel) return 0;
@@ -625,6 +635,12 @@ void voice_on_session_change(WPARAM wp)
      * adds the conversation (VCE_END, VCX_LOCK). */
     if (g_audio_up && g_dict.state != VDS_IDLE) dict_event(VDE_END_SOFT, 0, 0);
     if (g_audio_up && voice_conv_running()) voice_conv_event(VCE_END, VCX_LOCK, 0);
+}
+
+void voice_read_clicked(int item_id)
+{
+    if (!g_audio_up) return;
+    voice_read_win_press(ui_current_settings(), item_id, g_ui != AIV_IDLE);
 }
 
 void voice_mic_clicked(void)
@@ -670,12 +686,13 @@ void voice_on_chat_stop(void)
 void voice_on_chat_changed(void)
 {
     /* Called from inside ai_chat: only a post, never a synchronous re-entry. */
-    if (g_main && g_audio_up && (g_dict.state != VDS_IDLE || voice_conv_running()))
+    if (g_main && g_audio_up && (g_dict.state != VDS_IDLE || voice_conv_running() || voice_read_win_active()))
         PostMessage(g_main, WM_VOICE_CHAT, 0, 0);
 }
 
 void voice_on_chat_changed_msg(void)
 {
+    voice_read_win_chat_check();   /* a reading of the chat that was active stops, before anything returns */
     /* A batch recording keeps today's rule: dropped at delivery when the
      * binding changed. A live one writes into the box as it goes, so it ends. */
     if (g_audio_up && voice_conv_running()) {
@@ -844,6 +861,22 @@ static void rc_tts_quit(unsigned token)
     else voice_tts_quit(token, 3000);
 }
 
+/* The generation of the context just started under token: each engine numbers its own (SAPI
+ * from 1, AI speech from 0x40000000), so whichever holds the token is the owner. */
+static unsigned rd_context_gen(unsigned token)
+{
+    return voice_ais_owns(token) ? voice_ais_gen(token) : voice_tts_gen(token);
+}
+
+static char *rd_turn_text(int item_id) { return ai_chat_voice_turn_text(ui_ai_panel(), item_id); }
+
+static void rd_view(HWND panel, int on, int reading_id, int disabled)
+{
+    ai_chat_voice_read_view(panel ? panel : ui_ai_panel(), on, reading_id, disabled);
+}
+
+static void rd_binding(VoiceBinding *out) { ai_chat_voice_binding(ui_ai_panel(), out); }
+
 static int rc_speech_engine(void)
 {
     const Settings *s = ui_current_settings();
@@ -984,6 +1017,12 @@ static const VoiceConvOps k_conv_ops = {
     rc_speech_engine, rc_ai_resolve_error, rc_ai_provider
 };
 
+/* The Read aloud reader's real ops (voice_read_win.h): the speech router above, the panel below. */
+static const VoiceReadOps k_read_ops = {
+    rc_tts_start, rc_tts_speak, rc_tts_stop, rc_tts_quit,
+    rd_turn_text, rd_view, rc_note, rd_binding, rc_ai_resolve_error, rd_context_gen
+};
+
 /* What window.c and the panel route to the conversation (each is a no-op with none running). */
 void voice_on_activation(void)
 {
@@ -1007,6 +1046,7 @@ void voice_on_tts(LPARAM lp)
     /* A Play sample that failed after it started: its message is the conversation's no concern
      * (its token is never the conversation's), so the Settings page, if open, shows why. */
     if (m->kind == VTT_ERROR && m->token == VOICE_AIS_SAMPLE_TOKEN) settings_voice_sample_failed(m->hr);
+    voice_read_win_on_tts(m);   /* observes its own token and generation only; nothing is diverted */
     voice_conv_on_tts(m);
     free(m);
 }
@@ -1048,6 +1088,7 @@ void voice_on_conv_timer(void)
 
 void voice_on_panel_closed(void)
 {
+    voice_read_win_stop(VRX_PANEL);   /* nothing keeps speaking, and the context is released */
     if (g_audio_up && voice_conv_running()) voice_conv_event(VCE_END, VCX_PANEL_CLOSED, 0);
 }
 
@@ -1077,6 +1118,10 @@ void voice_feature_apply(HWND main)
     voice_gate_set_enabled(on);
     if (main) g_main = main;
     voice_conv_attach(g_main, &k_conv_ops);
+    if (!g_read_attached) {            /* once: re-setting the ops would end a reading at every save */
+        voice_read_win_set_ops(&k_read_ops);
+        g_read_attached = 1;
+    }
     if (on) {
         /* Idempotent: it is called more than once at startup. */
         if (!g_audio_up && voice_audio_start(main)) g_audio_up = 1;
@@ -1090,8 +1135,11 @@ void voice_feature_apply(HWND main)
             g_voice_filter = voice_pump_filter;
             ai_chat_voice_attach(ui_ai_panel(), 1);
         }
+        voice_read_win_apply(s, g_audio_up);   /* shows the buttons; stops a reading a setting made stale */
     } else {
         g_voice_filter = NULL;
+        voice_read_win_stop(VRX_SETTINGS);     /* before its engine contexts are quit below */
+        voice_read_win_apply(s, 0);
         voice_conv_event(VCE_END, VCX_OFF, 0);   /* capture ended, speech quit, link closed, lock unregistered */
         voice_tts_quit_all(3000);   /* every speech context: a Play sample, or a thread left after an error */
         voice_ais_quit_all(3000);   /* R36: no AI speech push can begin once the audio thread is asked to stop */
@@ -1110,6 +1158,11 @@ void voice_feature_shutdown(void)
 {
     voice_gate_set_enabled(0);
     g_voice_filter = NULL;
+    voice_read_win_stop(VRX_SETTINGS);   /* stops and releases its context before the ops go */
+    if (g_read_attached) {
+        voice_read_win_set_ops(NULL);
+        g_read_attached = 0;
+    }
     voice_conv_event(VCE_END, VCX_OFF, 0);
     voice_tts_quit_all(3000);   /* every speech context: a Play sample, or a thread left after an error */
     voice_ais_quit_all(3000);   /* R36: before voice_audio_stop */
