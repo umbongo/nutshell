@@ -528,6 +528,14 @@ static VoiceConvOut step_inner(VoiceConv *c, VoiceConvEvent ev, int a, int b, un
         return speaking_stopped(c, 0, VCN_NONE, now);
     case VCE_SPEECH_FAILED:
         if (st != VCS_SPEAKING) return none;
+        if (c->guard) return none;   /* the reply was read to the end: a late engine error is no news */
+        if (c->muted) {              /* the room may still ring: listen after the guard, note now */
+            VoiceConvOut o = out(0, VCH_NONE);
+            c->guard = 1;
+            c->guard_at = now + VOICE_CONV_MUTE_GUARD_MS;
+            o.note = c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE;
+            return o;
+        }
         return speaking_stopped(c, 0, c->speaking_reply ? VCN_NO_SPEECH : VCN_NONE, now);
 
     case VCE_EXTERNAL_SEND:
