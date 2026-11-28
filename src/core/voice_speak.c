@@ -244,6 +244,11 @@ static size_t fence_run(const char *s, size_t n, char *ch, size_t *at)
     size_t k = i;
     while (k < n && s[k] == c) k++;
     if (k - i < 3) return 0;
+    /* A backtick fence's info string holds no backtick (CommonMark): "```x``` text" is an
+     * inline span, and treating it as an opener would hide the rest of the reply. */
+    if (c == '`')
+        for (size_t j = k; j < n; j++)
+            if (s[j] == '`') return 0;
     *ch = c;
     if (at) *at = i;
     return k - i;

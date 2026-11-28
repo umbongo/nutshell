@@ -275,6 +275,34 @@ int test_vspeak_fence_in_quote(void)
     TEST_END();
 }
 
+/* A line that starts with a one-line triple-backtick span (a backtick after the run, so no info
+ * string) is inline code in a list item or an indented line, not a fence: the reply after it is
+ * still read. A real fence is unchanged, and a tilde fence may hold a backtick in its info. */
+int test_vspeak_one_line_triple_backtick_span_is_not_a_fence(void)
+{
+    TEST_BEGIN();
+    char *r = voice_speak_text("- ```x``` is the span.\nThen more prose here.\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_TRUE(r != NULL && strstr(r, "Then more prose here.") != NULL);
+    ASSERT_TRUE(r != NULL && strstr(r, "The code is on screen") == NULL);
+    free(r);
+    r = voice_speak_text("Intro.\n    ```x``` indented.\nAfter it.\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_TRUE(r != NULL && strstr(r, "After it.") != NULL);
+    free(r);
+    r = voice_speak_text("1. ```a`b``` item\nTail text.\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_TRUE(r != NULL && strstr(r, "Tail text.") != NULL);
+    free(r);
+    /* real fences still hide their code: with an info string, bare, in a list, tilde */
+    ASSERT_TRUE(speak_eq("- ```bash\n  rm x\n  ```\nDone.", "The code is on screen. Done."));
+    ASSERT_TRUE(speak_eq("```\nrm x\n```\nDone.", "The code is on screen. Done."));
+    ASSERT_TRUE(speak_eq("~~~a`b\nrm x\n~~~\nDone.", "The code is on screen. Done."));
+    /* a fence closed by a line with a trailing backtick is not closed by it */
+    ASSERT_TRUE(speak_eq("```\nrm x\n``` `\nstill code\n```\nDone.", "The code is on screen. Done."));
+    TEST_END();
+}
+
 int test_vspeak_unterminated_think(void)
 {
     TEST_BEGIN();

@@ -3806,6 +3806,7 @@ int test_vspeak_fence_after_list_marker(void);
 int test_vspeak_unclosed_fence(void);
 int test_vspeak_pipeless_table(void);
 int test_vspeak_fence_in_quote(void);
+int test_vspeak_one_line_triple_backtick_span_is_not_a_fence(void);
 int test_vspeak_unterminated_think(void);
 int test_vspeak_unterminated_exec(void);
 int test_vspeak_minor_links_and_questions(void);
@@ -8603,6 +8604,7 @@ int main(void) {
     failed += test_vspeak_unclosed_fence();
     failed += test_vspeak_pipeless_table();
     failed += test_vspeak_fence_in_quote();
+    failed += test_vspeak_one_line_triple_backtick_span_is_not_a_fence();
     failed += test_vspeak_unterminated_think();
     failed += test_vspeak_unterminated_exec();
     failed += test_vspeak_minor_links_and_questions();
