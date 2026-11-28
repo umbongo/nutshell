@@ -3086,6 +3086,7 @@ int test_vais_redirect_reason_per_provider(void);
 int test_vais_decoder_failure_hr(void);
 int test_vais_resolve_base_url_binding_boundary(void);
 int test_vais_resolve_refuses_userinfo_and_ipv6(void);
+int test_vais_resolve_refuses_hostile_base_urls(void);
 int test_framework_skip_counts(void);
 int test_vais_capture_error_check_not_empty(void);
 int test_vais_sse_unknown_event_non_json_ignored(void);
@@ -8809,6 +8810,7 @@ int main(void) {
     failed += test_vais_decoder_failure_hr();
     failed += test_vais_resolve_base_url_binding_boundary();
     failed += test_vais_resolve_refuses_userinfo_and_ipv6();
+    failed += test_vais_resolve_refuses_hostile_base_urls();
     failed += test_framework_skip_counts();
     failed += test_vais_capture_error_check_not_empty();
     failed += test_vais_sse_unknown_event_non_json_ignored();

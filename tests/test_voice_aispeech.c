@@ -396,6 +396,45 @@ int test_vais_binding_too_long_never_matches(void)
     TEST_END();
 }
 
+/* The Base URL comes from a settings file or a paste. WinHTTP's parser in ai_http_win.c ends the
+ * host only at ":" or "/", so a "?" or "#" would make the connect fail; and a space, a control
+ * character, a backslash, an empty host or a port that is not 1 to 65535 would not be read the
+ * way the privacy line reads it. All are refused up front, as "not valid". */
+int test_vais_resolve_refuses_hostile_base_urls(void)
+{
+    TEST_BEGIN();
+    static Settings s;
+    VoiceAisTarget t;
+    char err[200];
+    const char *const bad[] = {
+        "http://h.example?mail=a@b", "http://h.example#[x]", "http://h?x=1", "http://h#f",
+        "http://h/v1?key=1", "http://h/v1#frag", "http://h?", "http://h#", "http://h/v1/?",
+        "HTTP://h/v1", "Https://h/v1", "ftp://h/v1", "//h/v1", "h/v1", "http:/h/v1", "http://",
+        "https://", "http:///v1", "http://:8880/v1", "http://h:/v1", "http://h:abc/v1",
+        "http://h:0/v1", "http://h:65536/v1", "http://h:99999999999/v1", "http://h:80:81/v1",
+        "http://h :80/v1", "http://h ost/v1", "http://h/v 1", "http://h\tost/v1", "http://h/v1\x01",
+        "http://h\n/v1", "http://h/v1\r\nHost: x", "http://h\\v1", "http://h/v1\\x",
+        "http://h\x7f/v1", "http://\xc3\xa9.example/v1", "http://[::1]/v1", "http://u:p@h/v1"
+    };
+    base_settings(&s);
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        set_custom(&s, bad[i], "kokoro", "bf_emma");
+        err[0] = '\0';
+        ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 0);
+        ASSERT_TRUE(strcmp(err, "The speech Base URL is not valid") == 0 ||
+                    strcmp(err, "Enter the speech Base URL") == 0);
+    }
+    /* what is accepted, and the host the privacy line names */
+    set_custom(&s, "http://h.example./v1", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h.example.");
+    ASSERT_STR_EQ(t.url, "http://h.example./v1/audio/speech");
+    set_custom(&s, "http://h:65535", "kokoro", "bf_emma");
+    ASSERT_EQ(voice_ais_resolve(&s, &t, err, sizeof err), 1);
+    ASSERT_STR_EQ(t.host, "h:65535");
+    TEST_END();
+}
+
 /* F4: the host the privacy line names is the host the request goes to. WinHTTP's URL parsing
  * does not take userinfo or an IPv6 literal the way the line's reader does, so a Base URL whose
  * authority has an "@" or a "[" is refused. An "@" or "[" after the authority is a path. */
@@ -419,7 +458,8 @@ int test_vais_resolve_refuses_userinfo_and_ipv6(void)
     }
     const char *const good[] = {
         "http://host:8880/v1", "http://host", "https://h.example/v1/a@b", "http://h/v1/[x]",
-        "http://h.example?mail=a@b", "http://h.example#[x]"
+        "http://h.example.", "http://h.example./v1", "http://localhost:8880/v1/",
+        "  http://h/v1  ", "http://h/v1/audio/speech"
     };
     for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
         set_custom(&s, good[i], "kokoro", "bf_emma");

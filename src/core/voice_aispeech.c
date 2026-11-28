@@ -58,7 +58,7 @@ static int blank(const char *s)
     return 1;
 }
 
-/* host[:port] of an http(s) URL whose authority has no userinfo (authority_unreadable). */
+/* host[:port] of an http(s) URL whose authority passed base_unreadable(). */
 static void url_host(const char *url, char *out, size_t cap)
 {
     const char *p = strstr(url, "://");
@@ -68,16 +68,37 @@ static void url_host(const char *url, char *out, size_t cap)
     if (cap) { memcpy(out, p, n); out[n] = '\0'; }
 }
 
-/* 1 when the authority (between "://" and the next "/", "?" or "#") has an "@" or a "[": a
- * userinfo or an IPv6 literal, which the privacy line's reader and WinHTTP's URL parser read
- * differently, so the line could name a host the request does not go to. */
-static int authority_unreadable(const char *url)
+/* 1 when the normalised base cannot be sent as it reads. The privacy line's reader and the
+ * request's URL parser (parse_url in ai_http_win.c, which ends the host only at ":" or "/" and
+ * reads the port with atoi) must see the same host, so refused are: a "?" or "#" anywhere (a
+ * query or fragment would also swallow the "/audio/speech" appended after it), a space, a
+ * control character, a byte of 0x80 or more or a backslash anywhere, and in the authority (up
+ * to the first "/") an "@" (userinfo), a "[" (IPv6 literal), an empty host and a port that is
+ * not 1 to 65535. A trailing dot on the host is a valid name and is kept as typed. */
+static int base_unreadable(const char *url)
 {
     const char *p = strstr(url, "://");
     p = p ? p + 3 : url;
-    size_t n = strcspn(p, "/?#");
-    for (size_t i = 0; i < n; i++)
+    for (const char *c = url; *c; c++) {
+        unsigned char u = (unsigned char)*c;
+        if (u <= 0x20 || u >= 0x7F || u == '?' || u == '#' || u == '\\') return 1;
+    }
+    size_t n = strcspn(p, "/");
+    size_t host = n;
+    for (size_t i = 0; i < n; i++) {
         if (p[i] == '@' || p[i] == '[') return 1;
+        if (p[i] == ':' && host == n) host = i;
+    }
+    if (host == 0) return 1;
+    if (host < n) {
+        unsigned long port = 0;
+        if (n - host - 1 == 0 || n - host - 1 > 5) return 1;
+        for (size_t i = host + 1; i < n; i++) {
+            if (p[i] < '0' || p[i] > '9') return 1;
+            port = port * 10 + (unsigned long)(p[i] - '0');
+        }
+        if (port == 0 || port > 65535) return 1;
+    }
     return 0;
 }
 
@@ -147,7 +168,7 @@ int voice_ais_resolve(const Settings *s, VoiceAisTarget *t, char *err, size_t ca
         char base[512];
         if (blank(s->voice_tts_url)) { put_err(err, cap, "Enter the speech Base URL"); return 0; }
         if (!voice_base_url_normalise(s->voice_tts_url, base, sizeof base) ||
-            authority_unreadable(base) ||
+            base_unreadable(base) ||
             snprintf(t->url, sizeof t->url, "%s" SPEECH_SUFFIX, base) >= (int)sizeof t->url) {
             put_err(err, cap, "The speech Base URL is not valid");
             return 0;
