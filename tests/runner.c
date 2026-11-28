@@ -421,6 +421,11 @@ int test_config_roundtrip_settings(void);
 int test_config_roundtrip_profile(void);
 int test_config_roundtrip_multiple_profiles(void);
 int test_config_save_null(void);
+#ifndef _WIN32
+int test_config_save_fails_when_dir_unwritable(void);
+int test_config_save_rename_failure_removes_tmp(void);
+int test_config_save_write_failure_keeps_original(void);
+#endif
 int test_config_default_colour_scheme(void);
 int test_config_roundtrip_colour_scheme(void);
 int test_config_default_ai_provider(void);
@@ -5459,6 +5464,11 @@ int main(void) {
     failed += test_config_roundtrip_profile();
     failed += test_config_roundtrip_multiple_profiles();
     failed += test_config_save_null();
+#ifndef _WIN32
+    failed += test_config_save_fails_when_dir_unwritable();
+    failed += test_config_save_rename_failure_removes_tmp();
+    failed += test_config_save_write_failure_keeps_original();
+#endif
     failed += test_config_default_colour_scheme();
     failed += test_config_roundtrip_colour_scheme();
     failed += test_config_default_ai_provider();
