@@ -1334,6 +1334,97 @@ int test_voice_conv_settings_digest(void)
     TEST_END();
 }
 
+/* ---- Mute the microphone while a reply is spoken ---- */
+
+int test_voice_mute_setting_default_and_old_config(void)
+{
+    TEST_BEGIN();
+    Settings d;
+    config_default_settings(&d);
+    ASSERT_EQ(d.voice_conv_mute_speaking, 0);
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    cfg->settings.voice_conv_mute_speaking = 1;
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (!txt) { TEST_END(); }
+    conv_drop_line(txt, "voice_conv_mute_speaking");
+    ASSERT_TRUE(strstr(txt, "voice_conv_mute_speaking") == NULL);
+    ASSERT_TRUE(vcfg_write(txt));
+    free(txt);
+    ConfigLoadReport rep;
+    Config *l = config_load_report(VCFG, &rep);
+    ASSERT_NOT_NULL(l);
+    if (l) {
+        ASSERT_EQ(l->settings.voice_conv_mute_speaking, 0);
+        config_free(l);
+    }
+    ASSERT_EQ(rep.missing_count, (size_t)1);
+    ASSERT_EQ(rep.missing[0], vkey_index("voice_conv_mute_speaking"));
+    Notice n;
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(notice_upgrade(&n, "1.3.2", &rep, &s), 1);
+    ASSERT_EQ(n.item_count, 1);
+    if (n.item_count == 1) {
+        ASSERT_STR_EQ(n.items[0].label, "Voice: mute the microphone while a reply is spoken");
+        ASSERT_STR_EQ(n.items[0].value, "Off");
+    }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_mute_setting_roundtrip(void)
+{
+    TEST_BEGIN();
+    remove(VCFG);
+    Config *cfg = config_new_default();
+    cfg->settings.voice_conv_mute_speaking = 1;
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    char *txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (txt) {
+        ASSERT_TRUE(strstr(txt, "\"voice_conv_mute_speaking\": true") != NULL);
+        free(txt);
+    }
+    Config *l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) { ASSERT_EQ(l->settings.voice_conv_mute_speaking, 1); config_free(l); }
+    cfg->settings.voice_conv_mute_speaking = 0;
+    ASSERT_EQ(config_save(cfg, VCFG), 0);
+    config_free(cfg);
+    txt = vcfg_read();
+    ASSERT_NOT_NULL(txt);
+    if (txt) {
+        ASSERT_TRUE(strstr(txt, "\"voice_conv_mute_speaking\": false") != NULL);
+        free(txt);
+    }
+    l = config_load(VCFG);
+    ASSERT_NOT_NULL(l);
+    if (l) { ASSERT_EQ(l->settings.voice_conv_mute_speaking, 0); config_free(l); }
+    remove(VCFG);
+    TEST_END();
+}
+
+int test_voice_mute_setting_validate_and_digest(void)
+{
+    TEST_BEGIN();
+    Settings a, b;
+    config_default_settings(&a);
+    const uint64_t base = voice_settings_digest(&a);
+    config_default_settings(&b);
+    b.voice_conv_mute_speaking = 1;
+    ASSERT_TRUE(voice_settings_digest(&b) != base);
+    b.voice_conv_mute_speaking = 7;
+    voice_settings_validate(&b);
+    ASSERT_EQ(b.voice_conv_mute_speaking, 1);
+    b.voice_conv_mute_speaking = 0;
+    ASSERT_EQ(voice_settings_digest(&b), base);
+    TEST_END();
+}
+
 int test_voice_conv_auto_send_unchanged(void)
 {
     TEST_BEGIN();

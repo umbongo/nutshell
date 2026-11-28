@@ -103,6 +103,7 @@ typedef struct Settings {
     int  voice_auto_send;                /* 1 = send a transcript as soon as it arrives; 0 = put it in the input for review */
     int  voice_mode;                     /* VOICE_MODE_DICTATION (0) or VOICE_MODE_CONVERSATION (1); JSON "dictation"/"conversation" */
     int  voice_pause_ms;                 /* Conversation: silence that ends a turn, 500-3000, default 1200 */
+    int  voice_conv_mute_speaking;       /* Conversation: 1 = the microphone is not heard while a reply is spoken; default 0 */
     char voice_windows_voice[256];       /* SAPI token id of the spoken-reply voice; empty = Automatic */
     char voice_windows_voice_name[128];  /* its friendly name, for display */
     /* AI speech (PR 3): spoken replies from a speech provider instead of a Windows voice. */

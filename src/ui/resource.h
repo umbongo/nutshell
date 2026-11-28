@@ -148,5 +148,6 @@
 #define IDC_VOICE_AI_VOICE       3125 /* AI speech: voice (editable combo) */
 #define IDC_VOICE_AI_MODEL       3126 /* AI speech: model (editable combo) */
 #define IDC_VOICE_AI_STYLE       3127 /* AI speech: accent and style (multi-line edit) */
+#define IDC_VOICE_MUTE_SPEAKING  3128 /* Conversation: "Mute the microphone while a reply is spoken" tickbox */
 
 #endif

@@ -555,6 +555,17 @@ static const SettingsHelp k_help[SH_COUNT] = {
       "applies in Conversation mode only.\nDefault: 1.2 seconds.",
       "1.2 seconds",
       0, 0, 0u),
+    E(SH_VOICE_MUTE_SPEAKING, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
+      "Mute the microphone while a reply is spoken",
+      NULL,
+      "Mute the microphone while a reply is spoken\n\nWhile the assistant is "
+      "speaking, nothing the microphone picks up is used, so the assistant's "
+      "own voice cannot interrupt it. Listening starts again when the reply "
+      "ends. To interrupt a reply, press the voice key (Right Shift unless "
+      "you changed it). Turn this on if replies keep cutting themselves off "
+      "on this PC.\nDefault: Off.",
+      "Off",
+      0, 0, 0u),
     E(SH_VOICE_WIN_VOICE, SETTINGS_PAGE_VOICE, SH_KIND_SETTING,
       "Windows voice:",
       NULL,

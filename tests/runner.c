@@ -4137,6 +4137,9 @@ int test_voice_conv_settings_roundtrip(void);
 int test_voice_conv_settings_clamp(void);
 int test_voice_conv_settings_notice_lines(void);
 int test_voice_conv_settings_digest(void);
+int test_voice_mute_setting_default_and_old_config(void);
+int test_voice_mute_setting_roundtrip(void);
+int test_voice_mute_setting_validate_and_digest(void);
 int test_voice_conv_auto_send_unchanged(void);
 int test_voice_ais_settings_defaults(void);
 int test_voice_ais_settings_roundtrip(void);
@@ -4421,6 +4424,7 @@ int test_settings_help_labels_match_sources(void);
 int test_settings_help_every_id_in_settings_c(void);
 int test_settings_help_ai_enable_entry(void);
 int test_settings_help_voice_entries(void);
+int test_settings_help_voice_mute_text(void);
 
 /* test_profile_help.c */
 int test_profile_help_table_matches_enum(void);
@@ -9166,6 +9170,9 @@ int main(void) {
     failed += test_voice_conv_settings_clamp();
     failed += test_voice_conv_settings_notice_lines();
     failed += test_voice_conv_settings_digest();
+    failed += test_voice_mute_setting_default_and_old_config();
+    failed += test_voice_mute_setting_roundtrip();
+    failed += test_voice_mute_setting_validate_and_digest();
     failed += test_voice_conv_auto_send_unchanged();
     failed += test_voice_ais_settings_defaults();
     failed += test_voice_ais_settings_roundtrip();
@@ -9570,6 +9577,7 @@ int main(void) {
     failed += test_settings_help_ai_enable_entry();
     failed += test_settings_help_search_url_says_how_the_query_is_added();
     failed += test_settings_help_voice_entries();
+    failed += test_settings_help_voice_mute_text();
 
     printf("\n--- Design System: scale & type ---\n");
     failed += test_ns_scale_identity_at_96();
