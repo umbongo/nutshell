@@ -286,6 +286,8 @@ typedef struct {
 
     int      cur_page; /* SETTINGS_PAGE_* currently shown */
     int      scroll;   /* current page scroll offset, px */
+    int      page_h;   /* content height of the current page, px */
+    int      view_h;   /* height of the page viewport, px */
     int      initial_page; /* SETTINGS_PAGE_* to open on, or -1 for default */
 
     SettingsCtrl ctrls[MAX_SETTINGS_CTRLS];
@@ -662,6 +664,8 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
     int page_h = settings_page_height(total_rows + extra_rows, m);
     int scroll_max = settings_scroll_max(content_h, page_h);
     d->scroll = settings_scroll_clamp(d->scroll, scroll_max);
+    d->page_h = page_h;
+    d->view_h = content_h;
 
     int show_scroll = scroll_max > 0;
     int usable_w = content_w - (show_scroll ? CSB_WIDTH : 0);
@@ -2386,7 +2390,24 @@ static void tab_move(SettingsDlgData *d, int dir)
     for (int i = 0; i < n; i++)
         if (hw[i] == cur) { cur_idx = i; break; }
     int next = settings_tab_step(order, count, cur_idx, dir);
-    if (next >= 0) SetFocus(hw[next]);
+    if (next >= 0) {
+        SetFocus(hw[next]);
+        /* A control scrolled out of the page is still "visible" (clipped):
+         * bring the new focus into view. */
+        if (d->cur_page >= 0 && IsChild(d->hPage, hw[next])) {
+            RECT rc;
+            GetWindowRect(hw[next], &rc);
+            POINT pt = { rc.left, rc.top };
+            ScreenToClient(d->hPage, &pt);
+            int want = settings_scroll_to_show(d->scroll, pt.y + d->scroll,
+                                               rc.bottom - rc.top, d->view_h,
+                                               d->page_h);
+            if (want != d->scroll) {
+                d->scroll = want;
+                relayout(d->hDlg, d);
+            }
+        }
+    }
 }
 
 static void help_pop_hide(SettingsDlgData *d)

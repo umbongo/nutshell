@@ -572,6 +572,41 @@ int test_sl_scroll_clamp_over_max_pins_max(void) {
     TEST_END();
 }
 
+int test_sl_scroll_to_show_in_view_unchanged(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(100, 150, 30, 200, 1000), 100);
+    ASSERT_EQ(settings_scroll_to_show(100, 100, 200, 200, 1000), 100);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_above_scrolls_up(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(300, 120, 30, 200, 1000), 120);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_below_scrolls_just_enough(void) {
+    TEST_BEGIN();
+    /* bottom at 500 must land on the viewport's bottom edge: 500 - 200 */
+    ASSERT_EQ(settings_scroll_to_show(0, 470, 30, 200, 1000), 300);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_taller_than_view_top_aligned(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(0, 400, 300, 200, 1000), 400);
+    ASSERT_EQ(settings_scroll_to_show(900, 400, 300, 200, 1000), 400);
+    TEST_END();
+}
+
+int test_sl_scroll_to_show_clamped_at_both_ends(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(settings_scroll_to_show(50, -20, 30, 200, 1000), 0);
+    ASSERT_EQ(settings_scroll_to_show(0, 990, 30, 200, 1000), 800);
+    ASSERT_EQ(settings_scroll_to_show(10, 50, 30, 200, 100), 0);
+    TEST_END();
+}
+
 int test_sl_scroll_clamp_zero_max(void) {
     TEST_BEGIN();
     ASSERT_EQ(settings_scroll_clamp(0, 0), 0);

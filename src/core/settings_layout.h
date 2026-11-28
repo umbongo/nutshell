@@ -162,6 +162,13 @@ int settings_scroll_max(int view_h, int content_h);
 /* Clamp pos into [0, max]. */
 int settings_scroll_clamp(int pos, int max);
 
+/* The scroll offset that shows the span y..y+h (page coordinates, before
+ * scrolling) in a viewport view_h tall, given the current offset `scroll` and
+ * the page's content height. Already in view: unchanged. Above: scrolls up to
+ * y. Below: scrolls down just enough. Taller than the viewport: top aligned.
+ * The result is clamped to 0..settings_scroll_max(view_h, content_h). */
+int settings_scroll_to_show(int scroll, int y, int h, int view_h, int content_h);
+
 /* ---- The Debugging page (spec 2026-10-17-debug-logging-design.md, section 9)
  *
  * Every control on the page below the "Enable debugging" tickbox appears only

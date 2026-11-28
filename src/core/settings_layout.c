@@ -315,6 +315,17 @@ int settings_scroll_clamp(int pos, int max)
     return pos;
 }
 
+int settings_scroll_to_show(int scroll, int y, int h, int view_h, int content_h)
+{
+    int max = settings_scroll_max(view_h, content_h);
+    int pos = scroll;
+    if (h >= view_h || y < pos)
+        pos = y;
+    else if (y + h > pos + view_h)
+        pos = y + h - view_h;
+    return settings_scroll_clamp(pos, max);
+}
+
 /* ---- The Debugging page ----------------------------------------------------- */
 
 static const struct { int rows; int when_on; int when_off; } DBG_SLOTS[SDBG_COUNT] = {
