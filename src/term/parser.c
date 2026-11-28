@@ -706,6 +706,15 @@ static void handle_csi(Terminal *term, char final, bool after_home) {
                     ich_row->cells[ic].codepoint = 0;
                     ich_row->cells[ic].attr = term->current_attr;
                 }
+                /* Content at or right of the cursor moves right by n; what
+                 * passes the last column is lost. Blanks past the content
+                 * are not content. */
+                if (term->cursor.col < ich_row->len) {
+                    int nl = ich_row->len + ich_n;
+                    if (nl > term->cols) nl = term->cols;
+                    while (nl > 0 && ich_row->cells[nl - 1].codepoint == 0) nl--;
+                    ich_row->len = nl;
+                }
                 ich_row->dirty = true;
             }
             break;

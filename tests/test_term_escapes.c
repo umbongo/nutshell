@@ -602,3 +602,33 @@ int test_term_ech_dch_match_el_on_resize(void) {
     term_free(t);
     TEST_END();
 }
+
+int test_term_ich_raises_len(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 20);
+    feed(t, "hello world\x1B[1G\x1B[5@");
+    ASSERT_EQ(row_len(t, 0), 16);
+    char buf[128];
+    term_extract_visible(t, buf, sizeof buf);
+    ASSERT_TRUE(strstr(buf, "hello world") != NULL);
+    ASSERT_EQ(strlen(buf), (size_t)16);
+    /* cells pushed past the right edge are lost: len stops at cols */
+    feed(t, "\x1B[2;1Habcdefghijklmnopqrs\x1B[1G\x1B[9@");
+    ASSERT_EQ(row_len(t, 1), 20);
+    /* inserting at or past the content adds only blanks */
+    feed(t, "\x1B[3;1Hab\x1B[5G\x1B[3@");
+    ASSERT_EQ(row_len(t, 2), 2);
+    /* the head erase leaves the text still on screen counted */
+    feed(t, "\x1B[2J\x1B[1;1Hhello world\x1B[1G\x1B[5@\x1B[14G\x1B[1K");
+    ASSERT_EQ(row_len(t, 0), 16);
+    term_free(t);
+
+    /* reflow after an insert keeps the shifted text */
+    t = term_init(4, 20, 20);
+    feed(t, "hello world\x1B[1G\x1B[5@");
+    ASSERT_TRUE(term_resize(t, 4, 8));
+    term_extract_visible(t, buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "     hel\nlo world");
+    term_free(t);
+    TEST_END();
+}
