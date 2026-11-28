@@ -1555,7 +1555,7 @@ int test_paint_poll_background_disconnected_dirty(void);
 int test_paint_poll_background_critical_ignored(void);
 int test_paint_poll_cooldown_edges(void);
 int test_paint_poll_critical_bypasses_cooldown(void);
-int test_paint_poll_independent_cooldowns(void);
+int test_paint_poll_cooldown_boundary_scales_with_cooldown(void);
 
 /* test_log_open_error.c */
 int test_log_open_error_names_path_and_reason(void);
@@ -7119,7 +7119,7 @@ int main(void) {
     failed += test_paint_poll_background_critical_ignored();
     failed += test_paint_poll_cooldown_edges();
     failed += test_paint_poll_critical_bypasses_cooldown();
-    failed += test_paint_poll_independent_cooldowns();
+    failed += test_paint_poll_cooldown_boundary_scales_with_cooldown();
 
     printf("\n--- Log open error ---\n");
     failed += test_log_open_error_names_path_and_reason();

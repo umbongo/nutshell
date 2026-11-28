@@ -79,13 +79,18 @@ int test_paint_poll_critical_bypasses_cooldown(void)
     TEST_END();
 }
 
-/* The decision depends only on the session's own since-paint time, so one
- * session inside its cooldown never holds back another that is outside its
- * own. */
-int test_paint_poll_independent_cooldowns(void)
+/* The cooldown boundary follows the cooldown given: one tick short skips,
+ * exactly the cooldown paints, for several cooldowns. */
+int test_paint_poll_cooldown_boundary_scales_with_cooldown(void)
 {
     TEST_BEGIN();
-    ASSERT_EQ(paint_poll_decide(1, 1, 1, 0, 2, CD), PAINT_POLL_COOLDOWN_SKIP);
-    ASSERT_EQ(paint_poll_decide(1, 1, 1, 0, 500, CD), PAINT_POLL_INVALIDATE);
+    const unsigned long cds[] = { 1ul, 16ul, 100ul, 5000ul };
+    for (size_t i = 0; i < sizeof cds / sizeof cds[0]; i++) {
+        ASSERT_EQ(paint_poll_decide(1, 1, 1, 0, cds[i] - 1, cds[i]), PAINT_POLL_COOLDOWN_SKIP);
+        ASSERT_EQ(paint_poll_decide(1, 1, 1, 0, cds[i], cds[i]), PAINT_POLL_INVALIDATE);
+        ASSERT_EQ(paint_poll_decide(1, 1, 1, 0, cds[i] + 1, cds[i]), PAINT_POLL_INVALIDATE);
+    }
+    /* A zero cooldown never skips. */
+    ASSERT_EQ(paint_poll_decide(1, 1, 1, 0, 0, 0), PAINT_POLL_INVALIDATE);
     TEST_END();
 }
