@@ -233,6 +233,14 @@ static bool term_reflow_buffer(
             /* Only reflow up to the written content width */
             int cell_limit = old_row->len < old_cols ? old_row->len : old_cols;
 
+            /* A row followed by a continuation reflows all its columns: the
+             * wrap is recorded on the next row, and an erase may have cut len
+             * below the width the continuation was wrapped at. */
+            if (i + 1 < old_count) {
+                const TermRow *nx = old_lines[(old_start + i + 1) % old_capacity];
+                if (nx && nx->wrapped) cell_limit = old_cols;
+            }
+
             /* A continuation row that holds the cursor but no cells still gets
              * its own output row when the row before it ended exactly at
              * new_cols, so the cursor keeps its row (spec section 2). */

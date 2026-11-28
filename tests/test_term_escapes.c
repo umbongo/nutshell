@@ -500,3 +500,63 @@ int test_term_el_extract_and_reflow(void) {
     term_free(t);
     TEST_END();
 }
+
+/* The screen as text: every row's cells (blank as '.') and its wrapped flag. */
+static void screen_snapshot(Terminal *t, char *out, size_t cap) {
+    size_t n = 0;
+    out[0] = '\0';
+    for (int r = 0; r < t->rows && n + (size_t)t->cols + 8 < cap; r++) {
+        TermRow *row = t->lines[term_screen_to_phys(t, r)];
+        for (int c = 0; c < t->cols; c++) {
+            uint32_t v = row->cells[c].codepoint;
+            out[n++] = v == 0 ? '.' : (char)v;
+        }
+        out[n++] = row->wrapped ? '~' : '|';
+        out[n++] = '\n';
+    }
+    out[n] = '\0';
+}
+
+/* Feed `input`, resize to 14 columns and back to 20: the screen is unchanged. */
+static int round_trip_keeps_screen(const char *input) {
+    Terminal *t = term_init(6, 20, 50);
+    feed(t, input);
+    char before[1024], after[1024];
+    screen_snapshot(t, before, sizeof before);
+    int ok = term_resize(t, 6, 14) && term_resize(t, 6, 20);
+    screen_snapshot(t, after, sizeof after);
+    if (!ok || strcmp(before, after) != 0)
+        fprintf(stderr, "round trip changed the screen for input\nbefore:\n%s\nafter:\n%s\n",
+                before, after);
+    term_free(t);
+    return ok && strcmp(before, after) == 0;
+}
+
+int test_term_erase_keeps_continuation_on_resize(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(round_trip_keeps_screen(
+        "old content long line\r\nold2 long long\r\nold3\x1B[1;1Hrow one\x1B[K"
+        "\x1B[2;1Hrow two two\x1B[K"));
+    ASSERT_TRUE(round_trip_keeps_screen(
+        "$ abcdefghijklmnopqrstuvwxyz0123456789\x1B[1;4H\x1B[K"));
+    ASSERT_TRUE(round_trip_keeps_screen("abcdefghijklmnopqrst\x1B[2KX"));
+    /* EL 1 up to the last column of a wrapped row */
+    ASSERT_TRUE(round_trip_keeps_screen(
+        "abcdefghijklmnopqrstuvwxyz\x1B[1;20H\x1B[1K"));
+    TEST_END();
+}
+
+int test_term_extract_wrapped_pair_after_erase(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 20);
+    feed(t, "abcdefghijklmnop\x1B[1;4H\x1B[K");      /* row 1 wraps onto row 0, then is cut */
+    /* The echo test joins a wrapped pair; row 0 is blank from column 3 on,
+     * so "abcklmnop" is not what the screen holds. */
+    size_t n = 0;
+    char *s = term_extract_abs_range_dup(t, 0, 2, "abcklmnop", &n, NULL);
+    ASSERT_NOT_NULL(s);
+    ASSERT_TRUE(strstr(s, "klmnop") != NULL);        /* the row was not taken as the echo */
+    free(s);
+    term_free(t);
+    TEST_END();
+}
