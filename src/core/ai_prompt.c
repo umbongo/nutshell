@@ -420,6 +420,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->parts = NULL;
     m->n_parts = 0;
     m->nutshell_note = 0;
+    m->stopped_reply = 0;
     conv->msg_count++;
     return 0;
 }

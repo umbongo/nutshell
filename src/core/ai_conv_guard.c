@@ -278,7 +278,6 @@ const char *ai_body_failure_text(const AiConversation *conv)
 
 int ai_conv_add_stopped_reply(AiConversation *conv, const char *partial, size_t len)
 {
-    static const char mark[] = AI_STOPPED_REPLY_TEXT;
     if (!conv || conv->msg_count <= 0) return 0;
     if (conv->messages[conv->msg_count - 1].role != AI_ROLE_USER) return 0;
     if (conv->msg_count >= AI_MAX_MESSAGES) return 0;
@@ -286,17 +285,33 @@ int ai_conv_add_stopped_reply(AiConversation *conv, const char *partial, size_t 
     while (len > 0 && (partial[len - 1] == ' ' || partial[len - 1] == '\n' ||
                        partial[len - 1] == '\r' || partial[len - 1] == '\t'))
         len--;
-    char *text = (char *)malloc(len + sizeof mark + 2);
+    /* The turn is the partial text alone, or the marker alone when nothing
+     * arrived: the marker is never appended to a model's words. */
+    char *text = (char *)malloc(len + 1);
     if (!text) return -1;
-    size_t n = 0;
-    if (len > 0) {
-        memcpy(text, partial, len);
-        n = len;
-        text[n++] = '\n';
-        text[n++] = '\n';
-    }
-    memcpy(text + n, mark, sizeof mark);
-    int rc = ai_conv_add(conv, AI_ROLE_ASSISTANT, text);
+    if (len > 0) memcpy(text, partial, len);
+    text[len] = '\0';
+    int rc = ai_conv_add(conv, AI_ROLE_ASSISTANT, len > 0 ? text : AI_STOPPED_REPLY_TEXT);
     free(text);
-    return rc == 0 ? 1 : -1;
+    if (rc != 0) return -1;
+    conv->messages[conv->msg_count - 1].stopped_reply = 1;
+    return 1;
+}
+
+static int is_marker_only(const AiMessage *msg)
+{
+    return strcmp(ai_msg_content(msg), AI_STOPPED_REPLY_TEXT) == 0;
+}
+
+const char *ai_msg_stop_status(const AiMessage *msg)
+{
+    if (!msg || msg->role != AI_ROLE_ASSISTANT) return NULL;
+    if (msg->stopped_reply || is_marker_only(msg)) return AI_STOPPED_STATUS_TEXT;
+    return NULL;
+}
+
+int ai_msg_stop_has_text(const AiMessage *msg)
+{
+    if (!ai_msg_stop_status(msg)) return 0;
+    return !is_marker_only(msg);
 }

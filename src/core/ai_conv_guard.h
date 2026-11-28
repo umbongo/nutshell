@@ -7,8 +7,8 @@
 
 #include "ai_prompt.h"
 
-/* The line that ends a stopped reply, and the whole assistant turn the body
- * builder puts between two user turns that follow each other. */
+/* The whole assistant turn recorded when a reply is stopped before any text
+ * arrived. It is never appended to partial text. */
 #define AI_STOPPED_REPLY_TEXT "[reply stopped by the user]"
 
 /* 1 while some assistant turn with tool calls is followed, up to the end of
@@ -119,13 +119,30 @@ void ai_conv_snapshot_frame(const AiConversation *conv, AiBodyFrame *frame);
 /* Record a reply the user stopped (the Stop button) so the next typed message
  * does not follow a user turn directly. Only when the conversation's last
  * message is a USER turn (the reply was never stored): appends an assistant
- * turn holding the partial text streamed so far, if any, then the line
- * "[reply stopped by the user]". Returns 1 when appended, 0 when nothing was
+ * turn holding the partial text streamed so far (trailing blanks cut), or, when
+ * nothing arrived, the line "[reply stopped by the user]" alone. The turn's
+ * stopped_reply flag is set. Returns 1 when appended, 0 when nothing was
  * owed (a NULL conv, an empty conversation, the last message is not a USER
  * turn: a second Stop, or a stop after a tool round whose results are the last
  * turn), the conversation is full, or -1 when an allocation failed. `partial`
  * may be NULL or empty (`len` 0). */
 int ai_conv_add_stopped_reply(AiConversation *conv, const char *partial, size_t len);
+
+/* The status row that stands for a stopped turn, in the chat as live and in a
+ * rebuild: "[cancelled]". */
+#define AI_STOPPED_STATUS_TEXT "[cancelled]"
+
+/* The one rule for "is this turn a stopped reply": the status row's text for
+ * an ASSISTANT turn that ai_conv_add_stopped_reply recorded (stopped_reply set)
+ * or whose whole content is the stop marker, else NULL. NULL-safe. */
+const char *ai_msg_stop_status(const AiMessage *msg);
+
+/* 1 when `msg` is a stopped turn (ai_msg_stop_status non-NULL) that holds
+ * partial reply text, 0 for the marker-only turn, a finished turn and NULL.
+ * Such a turn is drawn as AI text (then its status row) and is never read for
+ * [EXEC] commands: the chat extracts commands only from a reply that finished
+ * streaming, and a stopped reply never does. */
+int ai_msg_stop_has_text(const AiMessage *msg);
 
 /* The status row that says why a request body could not be built (the builder
  * returns 0 for pairing, overflow and allocation alike): the pairing text when

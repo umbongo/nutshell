@@ -476,10 +476,18 @@ void ai_chat_cancel_active_stream(AiChatData *d)
         chat_listview_invalidate(d->hChatList);
     }
 
-    /* Remove the incomplete streaming AI item */
+    /* The partial reply stays in the chat as a finished AI item (as the
+     * stream showed it, never split or read for commands); the caller's
+     * "[cancelled]" row follows. With no text there is nothing to keep. */
     if (d->stream_ai_item) {
-        chat_msg_remove(&d->msg_list, d->stream_ai_item);
+        if (partial && partial[strspn(partial, " \t\r\n")]) {
+            d->stream_ai_item->u.ai.thinking_complete = 1;
+            d->stream_ai_item->dirty = 1;
+        } else {
+            chat_msg_remove(&d->msg_list, d->stream_ai_item);
+        }
         d->stream_ai_item = NULL;
+        d->stream_display_start = -1;
     }
 
     /* Reset streaming state */

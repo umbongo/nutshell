@@ -153,6 +153,7 @@ int test_stopped_reply_before_any_text(void)
         ASSERT_NOT_NULL(c);
         if (!c) continue;
         ASSERT_EQ(ai_conv_add_stopped_reply(c, "", 0), 1);
+        ASSERT_STR_EQ(ai_msg_content(&c->messages[c->msg_count - 1]), STOP_MARK);
         ASSERT_EQ(ai_conv_add(c, AI_ROLE_USER, "again please"), 0);
         ASSERT_TRUE(roles_for(c, providers[k], roles, sizeof roles, body, sizeof body));
         ASSERT_TRUE(!roles_have_uu(roles));
@@ -179,15 +180,63 @@ int test_stopped_reply_after_partial_text(void)
         ASSERT_EQ(ai_conv_add_stopped_reply(c, partial, strlen(partial)), 1);
         const AiMessage *last = &c->messages[c->msg_count - 1];
         ASSERT_EQ((int)last->role, (int)AI_ROLE_ASSISTANT);
-        /* the partial text is kept, then the marker */
-        ASSERT_EQ(strncmp(ai_msg_content(last), partial, strlen(partial)), 0);
-        ASSERT_NOT_NULL(strstr(ai_msg_content(last), STOP_MARK));
+        /* the turn is the partial text and nothing else: the marker is the
+         * status row's job, never part of what the model "said" */
+        ASSERT_STR_EQ(ai_msg_content(last), partial);
+        ASSERT_EQ(ai_msg_stop_has_text(last), 1);
+        ASSERT_STR_EQ(ai_msg_stop_status(last), "[cancelled]");
         ai_conv_add(c, AI_ROLE_USER, "carry on");
         ASSERT_TRUE(roles_for(c, providers[k], roles, sizeof roles, body, sizeof body));
         ASSERT_TRUE(!roles_have_uu(roles));
         ASSERT_NOT_NULL(strstr(body, "/var/log/ngi"));
+        ASSERT_TRUE(strstr(body, "reply stopped") == NULL);
         free_conv(c);
     }
+    /* trailing blanks are cut; whitespace-only text counts as no text */
+    {
+        AiConversation *c = new_conv();
+        ASSERT_NOT_NULL(c);
+        if (c) {
+            ASSERT_EQ(ai_conv_add_stopped_reply(c, "half \n\n", 7), 1);
+            ASSERT_STR_EQ(ai_msg_content(&c->messages[c->msg_count - 1]), "half");
+        }
+        free_conv(c);
+        c = new_conv();
+        ASSERT_NOT_NULL(c);
+        if (c) {
+            ASSERT_EQ(ai_conv_add_stopped_reply(c, " \n", 2), 1);
+            const AiMessage *m = &c->messages[c->msg_count - 1];
+            ASSERT_STR_EQ(ai_msg_content(m), STOP_MARK);
+            ASSERT_EQ(ai_msg_stop_has_text(m), 0);
+        }
+        free_conv(c);
+    }
+    TEST_END();
+}
+
+/* One place decides what a stopped turn is: the marker-only turn, the partial
+ * turn, and a turn that is neither. */
+int test_stopped_reply_rule_is_one_function(void)
+{
+    TEST_BEGIN();
+    AiConversation *c = new_conv();
+    ASSERT_NOT_NULL(c);
+    if (c) {
+        ASSERT_TRUE(ai_msg_stop_status(&c->messages[1]) == NULL);   /* a user turn */
+        ASSERT_TRUE(ai_msg_stop_status(NULL) == NULL);
+        ASSERT_EQ(ai_msg_stop_has_text(NULL), 0);
+        ASSERT_EQ(ai_conv_add_stopped_reply(c, "", 0), 1);
+        const AiMessage *m = &c->messages[c->msg_count - 1];
+        ASSERT_STR_EQ(ai_msg_content(m), STOP_MARK);
+        ASSERT_STR_EQ(ai_msg_stop_status(m), "[cancelled]");
+        ASSERT_EQ(ai_msg_stop_has_text(m), 0);
+        /* an ordinary reply is not stopped, whatever it says */
+        ai_conv_add(c, AI_ROLE_USER, "q");
+        ai_conv_add(c, AI_ROLE_ASSISTANT, "a finished reply");
+        ASSERT_TRUE(ai_msg_stop_status(&c->messages[c->msg_count - 1]) == NULL);
+        ASSERT_EQ(ai_msg_stop_has_text(&c->messages[c->msg_count - 1]), 0);
+    }
+    free_conv(c);
     TEST_END();
 }
 
