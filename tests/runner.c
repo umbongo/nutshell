@@ -3459,6 +3459,14 @@ int test_pairs_plain_ok(void);
 int test_pairs_tool_round_ok(void);
 int test_pairs_legacy_tool_messages_ok(void);
 int test_pairs_note_between_fails(void);
+int test_pairs_exec_continue_between_fails(void);
+int test_pairs_missing_results_fails(void);
+int test_pairs_partial_results_fails(void);
+int test_pairs_wrong_id_fails(void);
+int test_pairs_orphan_result_fails(void);
+int test_pairs_open_at_end_fails(void);
+
+/* test_ai_conv_guard.c: stopped and lost replies, the body builder */
 int test_stopped_reply_before_any_text(void);
 int test_stopped_reply_after_partial_text(void);
 int test_stopped_reply_rule_is_one_function(void);
@@ -3466,12 +3474,7 @@ int test_lost_reply_has_its_own_text(void);
 int test_stopped_reply_twice_is_one_turn(void);
 int test_stopped_reply_in_a_tool_round(void);
 int test_body_does_not_invent_a_stopped_reply(void);
-int test_pairs_exec_continue_between_fails(void);
-int test_pairs_missing_results_fails(void);
-int test_pairs_partial_results_fails(void);
-int test_pairs_wrong_id_fails(void);
-int test_pairs_orphan_result_fails(void);
-int test_pairs_open_at_end_fails(void);
+
 int test_conv_note_queued_while_open(void);
 int test_conv_note_deferred_while_busy(void);
 int test_conv_note_refusals(void);
@@ -4907,11 +4910,13 @@ int test_md_blocks_indented_fence_not_counted(void);
 int test_md_blocks_max_smaller_than_count_returns_full_count(void);
 int test_md_blocks_respects_len_not_nul(void);
 
+/* test_chat_cursor.c */
+int test_chat_cursor_every_hit_kind(void);
+int test_chat_cursor_unknown_kind_is_arrow(void);
+
 /* test_ui_demo.c */
 int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
 int test_ui_demo_approval_has_a_sensitive_row(void);
-int test_chat_cursor_every_hit_kind(void);
-int test_chat_cursor_unknown_kind_is_arrow(void);
 int test_ui_demo_cmddetail_matches_approval(void);
 int test_ui_demo_chat_selection_spans_every_kind(void);
 int test_ui_demo_chat_drag_across_items_golden(void);
@@ -9757,10 +9762,12 @@ int main(void) {
     failed += test_md_blocks_max_smaller_than_count_returns_full_count();
     failed += test_md_blocks_respects_len_not_nul();
 
-    failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
-    failed += test_ui_demo_approval_has_a_sensitive_row();
+    /* test_chat_cursor.c */
     failed += test_chat_cursor_every_hit_kind();
     failed += test_chat_cursor_unknown_kind_is_arrow();
+
+    failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
+    failed += test_ui_demo_approval_has_a_sensitive_row();
     failed += test_ui_demo_cmddetail_matches_approval();
     failed += test_ui_demo_chat_selection_spans_every_kind();
     failed += test_ui_demo_chat_drag_across_items_golden();
@@ -10037,6 +10044,14 @@ int main(void) {
         failed += test_pairs_tool_round_ok();
         failed += test_pairs_legacy_tool_messages_ok();
         failed += test_pairs_note_between_fails();
+        failed += test_pairs_exec_continue_between_fails();
+        failed += test_pairs_missing_results_fails();
+        failed += test_pairs_partial_results_fails();
+        failed += test_pairs_wrong_id_fails();
+        failed += test_pairs_orphan_result_fails();
+        failed += test_pairs_open_at_end_fails();
+
+        /* test_ai_conv_guard.c: stopped and lost replies, the body builder */
         failed += test_stopped_reply_before_any_text();
         failed += test_stopped_reply_after_partial_text();
         failed += test_stopped_reply_rule_is_one_function();
@@ -10044,12 +10059,7 @@ int main(void) {
         failed += test_stopped_reply_twice_is_one_turn();
         failed += test_stopped_reply_in_a_tool_round();
         failed += test_body_does_not_invent_a_stopped_reply();
-        failed += test_pairs_exec_continue_between_fails();
-        failed += test_pairs_missing_results_fails();
-        failed += test_pairs_partial_results_fails();
-        failed += test_pairs_wrong_id_fails();
-        failed += test_pairs_orphan_result_fails();
-        failed += test_pairs_open_at_end_fails();
+
         failed += test_conv_note_queued_while_open();
         failed += test_conv_note_deferred_while_busy();
         failed += test_conv_note_refusals();
