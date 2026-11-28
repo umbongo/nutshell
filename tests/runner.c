@@ -4147,6 +4147,7 @@ int test_vwav_second_header_fails(void);
 int test_vwav_finish_states(void);
 int test_vwav_small_cap_is_an_error(void);
 int test_vwav_wipe(void);
+int test_vwav_after_end_decision(void);
 int test_vwav_data_size_honoured(void);
 int test_vwav_data_size_split_everywhere(void);
 int test_voice_live_parse_openai(void);
@@ -8988,6 +8989,7 @@ int main(void) {
     failed += test_vwav_finish_states();
     failed += test_vwav_small_cap_is_an_error();
     failed += test_vwav_wipe();
+    failed += test_vwav_after_end_decision();
     failed += test_vwav_data_size_honoured();
     failed += test_vwav_data_size_split_everywhere();
     failed += test_ai_gate_default_off();

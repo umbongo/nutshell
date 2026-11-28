@@ -362,6 +362,9 @@ static int fetch_feed(AisFetch *f, const unsigned char *p, size_t n)
             f->notwav_err = voice_wavs_error_is_notwav(&f->wav);
             return 1;
         }
+        /* More than a trailer's worth of bytes after the declared end is audio the header did not
+         * declare: fail as a stream rather than hold the request open until the time cap. */
+        if (voice_wavs_after_end(&f->wav, 0) == VWS_AFTER_FAIL) { f->failed = 1; return 1; }
         if (got > 0) {
             /* An endless body must not become endless queued audio: past the cap the request is
              * closed (the stream callback's 1 ends the read) and the chunk fails as a stream. */
@@ -456,6 +459,9 @@ static long ais_fetch(void *job, const VoiceAisTarget *t, const char *key, const
         }
         secure_zero(err, sizeof(err));                    /* it may hold the server's reply body */
         DLOG(DLOG_AI, DLOG_INFO, 0, "voice.speech_request", "kind=%s status=%d", t->provider, status);
+        if (voice_wavs_trailer(&f->wav) > 0)              /* a count only, never the bytes */
+            DLOG(DLOG_AI, DLOG_INFO, 0, "voice.speech_trailer", "bytes=%llu",
+                 (unsigned long long)voice_wavs_trailer(&f->wav));
 
         if (rc != 0) {
             r = status >= 300 ? (long)status : VOICE_AIS_HR_NET;

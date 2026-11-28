@@ -164,7 +164,10 @@ static size_t process(VoiceWavStream *w, const unsigned char *p, size_t n,
     size_t fs = (size_t)w->channels * (w->bits / 8), k, produced = 0;
 
     if (w->bounded) {                  /* bytes past the chunk are a trailer */
-        if ((uint64_t)n > w->data_left) n = (size_t)w->data_left;
+        if ((uint64_t)n > w->data_left) {
+            w->trailer += (uint64_t)n - w->data_left;
+            n = (size_t)w->data_left;
+        }
         w->data_left -= n;
     }
     /* second-header window over the raw bytes, before any is decoded */
@@ -230,4 +233,21 @@ size_t voice_wavs_feed(VoiceWavStream *w, const unsigned char *in, size_t n,
         produced += more;
     }
     return produced;
+}
+
+int voice_wavs_done(const VoiceWavStream *w)
+{
+    return w->state == VWS_DATA && w->bounded && w->data_left == 0;
+}
+
+uint64_t voice_wavs_trailer(const VoiceWavStream *w)
+{
+    return w->trailer;
+}
+
+VoiceWavAfter voice_wavs_after_end(const VoiceWavStream *w, int stream_ended)
+{
+    if (!voice_wavs_done(w)) return VWS_AFTER_CONTINUE;
+    if (w->trailer > VOICE_WAVS_TRAILER_MAX) return VWS_AFTER_FAIL;
+    return stream_ended ? VWS_AFTER_END_OK : VWS_AFTER_CONTINUE;
 }
